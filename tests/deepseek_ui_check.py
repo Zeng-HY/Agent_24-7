@@ -15,7 +15,7 @@ def main():
         'permission':'workspace-write','permission_name':'工作区内修改','queued':[{'id':'q1','text':'做完后整理成表格'}],
         'questions':[{'callId':'call','questions':[{'id':'q','question':'选择测试选项','options':[{'label':'甲','description':'第一项'},{'label':'乙'}]}]}],
         'interactions':[{'eventId':'approval','agentId':'d1','event':'approval/request','request':{'toolName':'pwsh','reason':'测试批准'}}], 'inbox':{},
-        'subagents':[{'id':'c1','label':'答 quote-0009 至 0022','running':False,'mode':'continuable','created':0}]}
+        'subagents':[{'id':'c1','label':'子任务 0009 至 0022','running':False,'mode':'continuable','created':0}]}
     presets={'options':[{'value':'read-only','name':'仅可查看','description':'只读','confirm':False},{'value':'workspace-write','name':'工作区内修改','description':'改工作区','confirm':False},
                         {'value':'danger-full-access','name':'完全权限','description':'不经批准','confirm':True}]}
     def route(r,req):
@@ -28,9 +28,9 @@ def main():
         if path=='/api/deepseek/permissions':return reply({**presets,'current':state['permission']})
         if path=='/api/chat' and parse_qs(urlsplit(req.url).query).get('id',[''])[0]=='d1':
             return reply({'app':'deepseek','id':'d1','title':'DeepSeek Test','folder':'x','status':'idle','runtime':{'model':'deepseek-flash'},
-                'messages':[{'id':'subagent:c1','role':'subagent','child':'c1','label':'答 quote-0009 至 0022','status':'done','order':1,'time':'2026-10-19T12:00:00+00:00','text':'子智能体：答 quote-0009 至 0022'},
+                'messages':[{'id':'subagent:c1','role':'subagent','child':'c1','label':'子任务 0009 至 0022','status':'done','order':1,'time':'2026-10-19T12:00:00+00:00','text':'子智能体：子任务 0009 至 0022'},
                             {'id':'2','role':'assistant','text':'完成','order':2,'time':'2026-10-19T12:01:00+00:00'}],
-                'subagents':[{'id':'c1','label':'答 quote-0009 至 0022','running':False,'mode':'continuable','created':0}],
+                'subagents':[{'id':'c1','label':'子任务 0009 至 0022','running':False,'mode':'continuable','created':0}],
                 'has_more':False,'next_cursor':None,'has_newer':False,'size':2,'total':2})
         if path=='/api/deepseek/models':return reply({'groups':[{'id':'deepseek-account','models':[{'id':'deepseek-flash','name':'DeepSeek Flash','reasoning':{'efforts':[{'id':'high','name':'高'},{'id':'max','name':'最高'}]}}]}]})
         if path.startswith('/api/deepseek/') and req.method=='POST':
@@ -39,7 +39,6 @@ def main():
             if path.endswith('/approval'):state['interactions']=[]
             if path.endswith('/queue'):state['queued']=[]
             if path.endswith('/permission'):state['permission']=body['preset'];state['permission_name']='完全权限';return reply({'accepted':True,'text':'已切换为「完全权限」'})
-            if path.endswith('/create'):return reply({'app':'deepseek','id':'d2','title':'new','folder':'test'})
             return reply({'accepted':True,'text':'已处理'})
         return handle(r,req)
     with sync_playwright() as p:
@@ -47,12 +46,12 @@ def main():
         page.route('**/*',route);page.on('pageerror',lambda e:errors.append(str(e)));page.goto(ORIGIN);page.wait_for_function('!!window.deepseekUI')
         page.evaluate("openConv({app:'deepseek',id:'d1',title:'DeepSeek Test',status:'running'})")
         page.locator('.sub-card').first.wait_for()
-        assert '答 quote-0009 至 0022' in page.locator('.sub-card').first.inner_text()
+        assert '子任务 0009 至 0022' in page.locator('.sub-card').first.inner_text()
         page.wait_for_function("!document.getElementById('deepseekSubBar').hidden")
         assert '子智能体 1 个' in page.locator('#deepseekSubBar').inner_text()
         page.locator('#deepseekSubBar').click()
         page.wait_for_function("!!document.querySelector('#deepseekSubList .codex-card')")
-        assert '答 quote-0009 至 0022' in page.locator('#deepseekSubList').inner_text()
+        assert '子任务 0009 至 0022' in page.locator('#deepseekSubList').inner_text()
         page.evaluate("closeSheet('deepseekSubList')")
         # the message box carries ＋, the model and the permission; 停止这一轮 sits in the title bar
         page.wait_for_function("document.getElementById('deepseekModel').textContent==='DeepSeek Flash · 高'")
@@ -88,11 +87,8 @@ def main():
         assert posts[-1]==('/api/deepseek/permission',{'id':'d1','preset':'danger-full-access','confirmed':True})
         page.wait_for_function("document.getElementById('deepseekPermission').classList.contains('is-full')")
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-        page.evaluate("newChatUI.open({app:'deepseek',folder:'D:/Projects/示例项目'})")
-        page.get_by_role('button',name='创建对话',exact=True).click();page.wait_for_function("cur?.id==='d2'")
-        assert sum(path.endswith('/create') for path,_ in posts)==1
         assert not errors,errors
         browser.close()
-    print('DeepSeek phone UI: composer like Codex/Claude, ask sheet, spaced approval, queue tray, model, permission with confirm, creation, no overflow PASS')
+    print('DeepSeek phone UI: composer like Codex/Claude, ask sheet, spaced approval, queue tray, model, permission with confirm, no overflow PASS (a new conversation: new_chat_deepseek_ui_check.py)')
 
 if __name__=='__main__':main()

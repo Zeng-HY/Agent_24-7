@@ -3,7 +3,8 @@ touches real chats.
 
 For each kind of computer (window.MACHINE.apps, as remote.py puts it into the page): the filter chips above the list
 (no row when one app is left), the new-conversation sheet's app buttons (no row when one is left, and the picked app is
-one that is there), DeepSeek alone opening its own sheet from 新建, and with no app found the list and 新建 saying so.
+one that is there; DeepSeek alone too, since the shared sheet makes DeepSeek conversations), and with no app found the
+list and 新建 saying so.
 Each kind gets a fresh browser, so a draft one leaves in the page's storage cannot steer the next.
 """
 import json
@@ -22,7 +23,7 @@ CASES = [
     (['claude', 'deepseek'], ['claude', 'deepseek'], ['Claude', 'DeepSeek'], 'newSheet'),
     (['codex'], None, None, 'newSheet'),
     (['claude'], None, None, 'newSheet'),
-    (['deepseek'], None, None, 'deepseekNew'),
+    (['deepseek'], None, None, 'newSheet'),
     ([], None, None, 'toast'),
 ]
 CHIPS = """(() => { const row = document.querySelector('.conversation-home .chips');
@@ -31,7 +32,7 @@ CHIPS = """(() => { const row = document.querySelector('.conversation-home .chip
     .map(c => c.dataset.app); })()"""
 SHEET = """(() => { const row = document.querySelector('#newSheet .new-apps');
   const shown = row.hidden ? null : [...row.children].filter(b => !b.hidden).map(b => b.textContent.trim());
-  const picked = ['newCodex', 'newClaude'].filter(id => document.getElementById(id).getAttribute('aria-checked') === 'true')
+  const picked = ['newCodex', 'newClaude', 'newDeepseek'].filter(id => document.getElementById(id).getAttribute('aria-checked') === 'true')
     .map(id => document.getElementById(id).textContent.trim());
   return {shown, picked}; })()"""
 
@@ -79,13 +80,9 @@ def check(browser, apps, chips, buttons, opens):
             sheet = page.evaluate(SHEET)
             if sheet['shown'] != buttons:
                 problems.append(f"sheet buttons {sheet['shown']}, wanted {buttons}")
-            installed = [NAMES[a] for a in apps if a != 'deepseek']
+            installed = [NAMES[a] for a in apps]
             if len(sheet['picked']) != 1 or sheet['picked'][0] not in installed:
                 problems.append(f"picked {sheet['picked']}, wanted one of {installed}")
-    elif opens == 'deepseekNew':
-        waited("getComputedStyle(document.getElementById('deepseekNew')).display !== 'none'", "新建 did not open DeepSeek's sheet")
-        if page.evaluate("getComputedStyle(document.getElementById('newSheet')).display") != 'none':
-            problems.append('the Codex/Claude sheet opened on a computer with DeepSeek alone')
     else:
         waited("document.getElementById('toast').textContent.includes('没找到')", '新建 did not say no desktop app was found')
         if page.evaluate("getComputedStyle(document.getElementById('newSheet')).display") != 'none':

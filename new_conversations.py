@@ -1,6 +1,6 @@
 """Durable, one-shot new chat submissions. A timeout never creates a second chat."""
 from __future__ import annotations
-import json,os,queue,re,sqlite3,subprocess,threading,time,uuid
+import hashlib,json,os,queue,re,sqlite3,subprocess,threading,time,uuid
 from pathlib import Path
 from contextlib import contextmanager
 from urllib.parse import quote
@@ -25,6 +25,9 @@ SETTINGS_SECONDS = 15
 # 19:09 Codex answered with thread-follower-start-turn-timeout after 5 s, and the message was in the record 5 s later.
 LATE_RECEIPT_SECONDS = 30
 CLAUDE_SCRATCH = re.compile(r'[\\/]scratch-workspaces[\\/][^\\/]+[\\/][^\\/]+[\\/]scratch-\d{4}-\d{2}-\d{2}-[0-9a-f]{6}(?:[\\/]|$)')
+APP_NAMES = {'codex': 'Codex', 'claude': 'Claude', 'deepseek': 'DeepSeek'}
+# DeepSeek's reasoning steps, named as its own composer names them (static/deepseek-ui.js)
+DEEPSEEK_EFFORTS = {'off': '关', 'none': '关', 'minimal': '最低', 'low': '低', 'medium': '中', 'high': '高', 'xhigh': '很高', 'max': '最高'}
 
 
 def codex_cli():
@@ -120,9 +123,10 @@ class NewConversations:
         return list(rows.values())
 
     def context(self,app,folder):
-        if app not in ('codex','claude'):raise chats.ChatError('请选择 Codex 或 Claude')
+        if app not in APP_NAMES:raise chats.ChatError('请选择 Codex、Claude 或 DeepSeek')
         key=str(Path(str(folder)).resolve()).casefold() if folder else ''
-        selected=next((v for v in self.folders() if v['path'].casefold()==key),None)
+        # DeepSeek picks from its own workspaces, the list the sheet shows it (folders('deepseek'))
+        selected=next((v for v in self.folders('deepseek' if app=='deepseek' else '') if v['path'].casefold()==key),None)
         if not selected:raise chats.ChatError('文件夹已移除或不存在，请重新选择项目文件夹')
         return selected['path']
 
@@ -149,7 +153,7 @@ class NewConversations:
     def search(self,q):
         app=q.get('app','codex')
         if q.get('projectless')=='1':
-            if app not in ('codex','claude'):raise chats.ChatError('请选择 Codex 或 Claude')
+            if app not in ('codex','claude'):raise chats.ChatError('DeepSeek 的新对话要选一个工作区')
             folder=''  # no project folder: personal and built-in skills only
         else:folder=self.context(app,q.get('folder',''))
         return self.references.search(app,'',q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),cwd=folder)
@@ -166,13 +170,23 @@ class NewConversations:
 
     def options(self,app):
         """The models and effort steps the new-conversation sheet offers (10-14). Codex: its model list, each with the
-        steps it takes. Claude: what its menus showed before (claude_control.new_options). Default: the desktop's own."""
+        steps it takes. Claude: what its menus showed before (claude_control.new_options). DeepSeek: its catalog, a model's
+        id carrying its provider (provider/model), the steps named as DeepSeek names them (10-20). Default: the desktop's own."""
         if app=='codex':
             return {'models':[{'id':m['id'],'label':m['name'],'efforts':[{'id':e,'label':e} for e in m['efforts']],'default_effort':m.get('default_effort')}
                               for m in codex_control.catalog()['models']],'note':''}
         if app=='claude':
             return self.claude.new_options() if self.claude else {'models':[],'note':'Claude 的模型列表暂时读不到'}
-        raise chats.ChatError('请选择 Codex 或 Claude')
+        if app=='deepseek':
+            import deepseek_control
+            try:catalog=deepseek_control.bridge().models()
+            except deepseek_control.DeepSeekError as exc:return {'models':[],'note':'DeepSeek 的模型列表暂时读不到：'+str(exc)[:100]}
+            routable=set(catalog.get('routableProviders') or [])
+            groups=[g for g in catalog.get('groups') or [] if not routable or g.get('id') in routable]
+            return {'models':[{'id':f"{g['id']}/{m['id']}",'label':(m.get('name') or m['id'])+(' · '+(g.get('name') or g['id']) if len(groups)>1 else ''),
+                               'efforts':[{'id':e['id'],'label':DEEPSEEK_EFFORTS.get(e['id'],e.get('name') or e['id'])} for e in (m.get('reasoning') or {}).get('efforts') or []],
+                               'default_effort':(m.get('reasoning') or {}).get('defaultEffort')} for g in groups for m in g.get('models') or []],'note':''}
+        raise chats.ChatError('请选择 Codex、Claude 或 DeepSeek')
 
     def _settings(self,app,wanted):
         """The model and effort picked on the phone, checked against what options() offers; None: the desktop's own."""
@@ -200,10 +214,11 @@ class NewConversations:
             app=body.get('app');projectless=body.get('projectless') is True
             chosen=self._settings(app,body.get('settings'))
             if projectless:
-                if app not in ('codex','claude'):raise chats.ChatError('请选择 Codex 或 Claude')
+                if app not in ('codex','claude'):raise chats.ChatError('DeepSeek 的新对话要选一个工作区')
                 folder=''  # Codex gets its folder below, once the request is known to be sound
             else:folder=self.context(app,body.get('folder'))
             ids=body.get('attachments') or [];refs=body.get('references') or []
+            if app=='deepseek' and any(isinstance(r,dict) and r.get('kind')!='chat' for r in refs):raise chats.ChatError('DeepSeek 暂时只能引用对话，不能用技能')
             if not isinstance(ids,list) or len(ids)>5 or any(not isinstance(v,str) for v in ids) or len(set(ids))!=len(ids):raise chats.ChatError('最多添加 5 张不重复的图片')
             images=[self.bridge.attachment(i,'new:'+rid) for i in ids]
             if sum(v['original_size'] for v in images)>50<<20:raise chats.ChatError('图片合计不能超过 50 MB')
@@ -232,6 +247,10 @@ class NewConversations:
                 if data.get('app')=='claude' and state in ('dispatching','unconfirmed'):
                     item=self._find_claude(data)
                     if item:data.update(id=item['id'],title=item['title']);state='accepted';result={'message':'首条消息已送达'};self._bind(rid,data);self._record_claude(rid,data);self._save(rid,state,data,result)
+                if data.get('app')=='deepseek' and data.get('id') and state in ('dispatching','unconfirmed') and self._deepseek_receipt(rid)=='accepted':
+                    state='accepted';result={'message':'首条消息已送达'};self._save(rid,state,data,result)
+                if data.get('app')=='deepseek' and state=='prepared':  # the conversation is made and its first message not begun
+                    state='failed';result={'message':'对话已建好，第一句话还没发出；可以继续发送','not_submitted':True};self._save(rid,state,data,result)
                 if state in ('creating','prepared'):state='unconfirmed';result={'message':'创建过程被中断，请核对电脑；不会重复创建或发送'}
             timing=self.traces[rid].report() if rid in self.traces else data.get('timing')
             return {'request_id':rid,'state':state,'app':data.get('app'),'id':data.get('id'),'title':data.get('title') or '新对话','folder':Path(data.get('folder') or '').name,**result,'timing':timing}
@@ -331,8 +350,10 @@ class NewConversations:
         trace.data=data;self.traces[rid]=trace
         try:
             trace.phase('prepare','准备创建对话')
-            chats.require_send_desktop()
-            if data['app']=='codex':
+            if data['app']!='deepseek':chats.require_send_desktop()  # DeepSeek goes through its local interface, not the screen
+            if data['app']=='deepseek':
+                self._run_deepseek(rid,data,trace)
+            elif data['app']=='codex':
                 if not data.get('id'):self._empty_codex(rid,data)
                 self._save(rid,'prepared',data,{'message':'正在连接桌面端的新对话…'})
                 trace.phase('desktop_open','在桌面打开新对话')
@@ -391,11 +412,58 @@ class NewConversations:
             if state=='dispatching' and data.get('app')=='codex' and data.get('id'):
                 try:safe=self.bridge.receipt(data['id'],rid).get('state')=='unknown'
                 except Exception:pass
+            if data.get('app')=='deepseek':  # made but the first message not begun, or begun and DeepSeek never took it
+                if state=='prepared':safe=True
+                elif state=='dispatching' and data.get('id'):safe=self._deepseek_receipt(rid)=='unknown'
             self._save(rid,'failed' if safe else 'unconfirmed',data,{'message':str(exc)[:350],'not_submitted':safe})
         finally:
             try:trace.finish()
             finally:
                 with self.lock:self.active.discard(rid);self.traces.pop(rid,None)
+
+    def _run_deepseek(self,rid,data,trace):
+        """A new DeepSeek conversation in one go (10-20): made in the chosen workspace with the model picked, then its
+        first message sent. Both go through DeepSeek's own request ledger, the conversation under this request's id and
+        the first message under one made from it, so 继续发送 after a failure reaches the same conversation and never
+        sends the first message twice. DeepSeek not answering at all happens before anything, so the request can go again."""
+        import deepseek_control
+        ds=deepseek_control.bridge()
+        trace.phase('deepseek_connect','连接 DeepSeek')
+        try:ds.models()
+        except deepseek_control.DeepSeekError as exc:
+            raise chats.SendNotSubmitted('DeepSeek 没有回应，请确认电脑上的 DeepSeek Harness 开着：'+str(exc)[:120]) from None
+        trace.phase('deepseek_create','在 DeepSeek 里建对话')
+        settings=self._deepseek_settings(data.get('settings'))
+        created=ds.create({'request_id':rid,'folder':data['folder'],**({'settings':settings} if settings else {})})
+        data.update(id=created['id'],title=created.get('title') or '新对话')
+        self._save(rid,'prepared',data,{'message':'对话已建好，正在发出第一句话…'})
+        trace.phase('bind','准备首条消息与附件')
+        self._bind(rid,data)
+        self._save(rid,'dispatching',data,{'message':'正在提交首条消息…'})
+        if self._deepseek_receipt(rid)!='accepted':  # the references are in the text already (compiled)
+            answer=ds.send({'id':data['id'],'request_id':self._deepseek_first(rid),'text':data['compiled'],
+                            'attachments':data['attachments'],'intent':'steer'})
+            if not answer.get('accepted'):raise chats.ChatError(answer.get('text') or '首条消息结果尚未确认')
+
+    @staticmethod
+    def _deepseek_first(rid):
+        """The request id of a new DeepSeek conversation's first message: made from the creation's own, so it is the same
+        every time the request is sent, and different from it (DeepSeek's ledger keeps one entry per id)."""
+        return hashlib.sha256(('first-message:'+rid).encode()).hexdigest()[:32]
+
+    def _deepseek_receipt(self,rid):
+        """What DeepSeek's ledger says of the first message: accepted, unconfirmed, or unknown (never begun)."""
+        import deepseek_control
+        try:return deepseek_control.bridge().receipt(self._deepseek_first(rid)).get('state') or 'unknown'
+        except Exception:return 'unconfirmed'
+
+    @staticmethod
+    def _deepseek_settings(chosen):
+        """The model picked on the phone ({model: 'provider/model', effort}) as DeepSeek's selectModel takes it; None for
+        DeepSeek's own default."""
+        if not chosen:return None
+        provider,_,model=str(chosen['model']).partition('/')
+        return {'provider':provider,'model':model,**({'reasoningEffort':chosen['effort']} if chosen.get('effort') else {})}
 
     @staticmethod
     def _picked(settings,chosen):
@@ -437,7 +505,7 @@ class NewConversations:
             for stage in report['stages']+([report['active']] if report.get('active') else []):
                 spent[stage['label']]=spent.get(stage['label'],0)+stage['ms']
             steps='，'.join(f'{label} {ms/1000:.1f} 秒' for label,ms in spent.items() if ms>=300)
-            app='Codex' if data.get('app')=='codex' else 'Claude'
+            app=APP_NAMES.get(data.get('app'),'Claude')
             log(f"新建 {app} 对话{outcome}（共 {report['total_ms']/1000:.1f} 秒：{steps}）")
         except Exception:
             pass

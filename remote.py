@@ -65,7 +65,7 @@ import machines  # this computer's name and apps, and the other computers the pa
 import notify  # a notification on the phone (Bark) when a conversation is done
 import re
 
-VERSION = "0.20.8"  # the page shows only the desktop apps this computer has, looked at again each time it opens
+VERSION = "0.20.9"  # a new DeepSeek conversation comes from the shared sheet: workspace, model and first message in one go
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -539,7 +539,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/chat") and chats is None:
             self._json({"error": "对话功能不可用：" + CHATS_ERROR}, 500)
             return
-        if body.get('app')=='deepseek' and path in ('/api/chat/send','/api/chat/enter','/api/chat/check','/api/chat/new'):
+        # a new DeepSeek conversation goes through /api/chat/new like the others (10-20); the rest has its own channel
+        if body.get('app')=='deepseek' and path in ('/api/chat/send','/api/chat/enter','/api/chat/check'):
             self._json({'error':'DeepSeek 请使用专用控制通道；草稿已保留','not_submitted':True},400)
             return
         if path == "/api/chat/send":

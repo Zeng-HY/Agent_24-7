@@ -8,7 +8,7 @@
   const active=me=>cur?.app==='deepseek'&&cur.id===me.id;
   const uid=()=>crypto.randomUUID();
   const questionDrafts=new Map();
-  let state=null,busy=false,timer=null,askSig='',newRequest=null,modelCatalog=null,asking=new Set();
+  let state=null,busy=false,timer=null,askSig='',modelCatalog=null,asking=new Set();
   const css=el('style');css.textContent=`
     .ds-ask+.ds-ask{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
     .ds-ask h3{margin:0;font-size:16px;font-weight:600;line-height:1.5}.ds-ask .hint{margin:4px 0 0}
@@ -43,11 +43,8 @@
   const models=panel('deepseekModels','模型与推理强度');
   const perms=panel('deepseekPermissions','权限');
   const askBody=panel('deepseekAskSheet','DeepSeek 在等你');
-  const newBox=panel('deepseekNew','新建 DeepSeek 对话');
   const subsBody=panel('deepseekSubList','这个对话的子智能体');
   const askOpen=()=>overlays.some(o=>o.id==='deepseekAskSheet');
-  const folder=el('select','field'),newInfo=el('p','hint'),create=el('button','big','创建对话');folder.setAttribute('aria-label','项目文件夹');
-  newBox.append(el('p','hint','选择电脑上 DeepSeek 侧边栏里的工作区（文件夹即工作区），创建后可以选择模型、添加图片并发送消息。'),folder,newInfo,create);
   stop.onclick=async()=>{const me=cur;if(!active(me)||busy)return;stop.disabled=true;stop.textContent='正在停止…';try{await api('/api/deepseek/stop',{id:me.id,expected_turn:state?.turn_id});toast('已请求停止，排队消息仍保留');}catch(e){toast(e.message,true);}finally{stop.disabled=false;stop.textContent='停止这一轮';await refresh(me);}};
   const EFFORT={off:'关',none:'关',minimal:'最低',low:'低',medium:'中',high:'高',xhigh:'很高',max:'最高'};
   const PERMISSION={'read-only':'仅可查看','workspace-write':'工作区内修改','danger-full-access':'完全权限',auto:'自动审查'};  // the Harness's own names
@@ -218,13 +215,8 @@
       if(explicit)showNote('仍未确认送达。已保留草稿和请求编号，请核对 DeepSeek 对话。','warn');
     }catch(e){if(explicit&&active(me))showNote(e.message,'warn');}
   }
-  async function openNew(context={}){
-    dismissOverlays();newInfo.textContent='读取文件夹…';openSheet('deepseekNew');
-    try{const data=await api('/api/chat/folders?app=deepseek');folder.replaceChildren();for(const item of data.items||[]){const option=el('option','',item.name+' — '+item.path);option.value=item.path;folder.append(option);}if(context.folder)folder.value=context.folder;newInfo.textContent='';try{newRequest=JSON.parse(localStorage.getItem('lbr_deepseek_create')||'null');}catch{}if(newRequest){folder.value=newRequest.folder;newInfo.textContent='上次创建待核对；点击创建会核对同一请求。';}}catch(e){newInfo.textContent=e.message;}
-  }
-  create.onclick=async()=>{if(!folder.value)return;create.disabled=true;newRequest ||= {request_id:uid(),folder:folder.value};try{localStorage.setItem('lbr_deepseek_create',JSON.stringify(newRequest));const result=await api('/api/deepseek/create',newRequest);newRequest=null;localStorage.removeItem('lbr_deepseek_create');closeSheet('deepseekNew');openConv(result);await chooseModel();}catch(e){newInfo.textContent='创建结果待核对：'+e.message;}finally{create.disabled=false;}};
-  const originalNew=window.newChatUI.open;window.newChatUI.open=function(context,...rest){if(context?.app==='deepseek')return openNew(context);return originalNew.call(this,context,...rest);};
-  if(window.MACHINE?.apps?.includes('deepseek')){const button=el('button','','DeepSeek');button.id='newDeepseek';button.onclick=()=>openNew();$('newSheet').querySelector('.new-apps').append(button);}  // the sheet shows the row when it holds more than one app (new-chat-ui.js paint)
+  // A new DeepSeek conversation comes from the shared sheet (new-chat-ui.js) like the others: workspace, model and first
+  // message in one go (10-20; there was a sheet here that made an empty conversation in a folder).
   function reset(){clearTimeout(timer);state=null;askSig='';subs=[];tray.dataset.sig='';tray.replaceChildren();tray.hidden=runBar.hidden=stop.hidden=subBar.hidden=true;if($('cvOpts').dataset.owner==='deepseek'){$('cvOpts').replaceChildren();delete $('cvOpts').dataset.owner;}}
   window.deepseekUI={send,refresh,onOpen(me){reset();controls();if(me.app==='deepseek'){if(!modelCatalog)api('/api/deepseek/models').then(v=>{modelCatalog=v;if(active(me))controls();}).catch(()=>{});refresh(me);}},onClose(){reset();tools.hidden=true;}};
   if(cur)deepseekUI.onOpen(cur);

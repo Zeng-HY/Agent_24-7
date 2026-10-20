@@ -82,10 +82,15 @@ class AdapterTests(unittest.TestCase):
     def test_legacy_route_never_touches_claude_for_deepseek(self):
         import remote
         from types import SimpleNamespace
-        for path in ('/api/chat/send','/api/chat/enter','/api/chat/check','/api/chat/new'):
+        for path in ('/api/chat/send','/api/chat/enter','/api/chat/check'):
             handler=object.__new__(remote.Handler);handler.path=path;handler._authorized=lambda:True;handler._body=lambda:{'app':'deepseek','id':SID}
             handler.server=SimpleNamespace(machine={'voice':False},desktop=Mock());handler._json=Mock()
             handler.do_POST();self.assertEqual(handler._json.call_args.args[1],400);handler.server.desktop.assert_not_called()
+        # a new conversation goes to the shared new-conversation flow, which drives DeepSeek through its interface (10-20)
+        handler=object.__new__(remote.Handler);handler.path='/api/chat/new';handler._authorized=lambda:True;handler._body=lambda:{'app':'deepseek','request_id':'r'}
+        handler.server=SimpleNamespace(machine={'voice':False},desktop=Mock(),new_chats=Mock());handler._json=Mock()
+        handler.server.new_chats.submit.return_value={'state':'creating'}
+        handler.do_POST();handler.server.new_chats.submit.assert_called_once_with({'app':'deepseek','request_id':'r'});handler.server.desktop.assert_not_called()
     def test_image_cross_session_rejected_before_prompt(self):
         self.bridge.uploads=Mock();self.bridge.uploads.attachment.return_value={'app':'claude'}
         with patch.object(self.bridge,'find',return_value={}):
