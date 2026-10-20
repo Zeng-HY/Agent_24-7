@@ -61,6 +61,22 @@ class OwnerTests(unittest.TestCase):
         clock[0]=15;self.assertEqual(owner.login(),'me@example.com')
         clock[0]=314;owner.login();self.assertEqual(len(answers),1)  # kept
         clock[0]=315;owner.login();self.assertEqual(answers,[])
+    def test_the_refusal_says_when_this_computers_account_is_not_known(self):
+        import remote
+        from types import SimpleNamespace
+        handler=object.__new__(remote.Handler);handler.headers={'Tailscale-User-Login':'me@example.com'}
+        handler.server=SimpleNamespace(machine={'name':'家里电脑'},owner=SimpleNamespace(login=lambda:''),cfg={'bind':'127.0.0.1'})
+        self.assertIn('暂时没读到',handler._refusal());self.assertNotIn('allowed_logins',handler._refusal())
+        handler.server.owner=SimpleNamespace(login=lambda:'someone@example.com')
+        self.assertIn('allowed_logins',handler._refusal())
+    def test_a_failed_read_keeps_the_account_known(self):  # 10-20: the owner's phone was turned away
+        clock=[0.0];answers=[STATUS,{},{},STATUS]
+        owner=machines.Owner(status=lambda:answers.pop(0),clock=lambda:clock[0])
+        self.assertEqual(owner.login(),'me@example.com')
+        clock[0]=300;self.assertEqual(owner.login(),'me@example.com');self.assertEqual(len(answers),2)  # Tailscale did not answer
+        clock[0]=310;owner.login();self.assertEqual(len(answers),2)  # not before 15 s
+        clock[0]=315;self.assertEqual(owner.login(),'me@example.com');self.assertEqual(len(answers),1)
+        clock[0]=330;self.assertEqual(owner.login(),'me@example.com');self.assertEqual(answers,[])
 
 class AppsTests(unittest.TestCase):
     def test_desktop_apps_found_by_their_folders(self):

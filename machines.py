@@ -87,7 +87,14 @@ class Owner:
     def login(self) -> str:
         with self.lock:
             if self.at is None or self.clock() - self.at >= (OWNER_SECONDS if self.value else OWNER_RETRY_SECONDS):
-                self.value, self.at = owner_login(self.status()), self.clock()
+                found = owner_login(self.status())
+                if found or not self.value:
+                    self.value, self.at = found, self.clock()
+                else:
+                    # A read that failed (Tailscale busy for a moment) keeps the account known and is tried again soon.
+                    # 10-20 such a read, five minutes after the last, emptied it: the owner's phone was turned away for
+                    # 15 s and told to add its own account to allowed_logins.
+                    self.at = self.clock() - OWNER_SECONDS + OWNER_RETRY_SECONDS
             return self.value
 
 

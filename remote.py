@@ -70,7 +70,7 @@ import notify  # a notification on the phone (Bark, ntfy) when a conversation is
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.22.0"  # a left swipe archives a Codex or DeepSeek conversation, with 撤销; 设置 → 已归档对话
+VERSION = "0.22.1"  # a Tailscale read that fails keeps this computer's account known; the phone was turned away
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -272,6 +272,10 @@ class Handler(BaseHTTPRequestHandler):
     def _refusal(self) -> str:
         """What a refused page says: which account is not let in and how to let it in, or how to get the token."""
         name, login = self.server.machine["name"], self._visitor()  # type: ignore[attr-defined]
+        if login is not None and not self.server.owner.login():  # type: ignore[attr-defined]
+            # 10-20 the phone was told to add its own account to allowed_logins: the PC had not read its account then
+            return (f"这台电脑（{name}）暂时没读到自己登录的是哪个 Tailscale 账号（Tailscale 可能正在启动，或者忙了一下），"
+                    "所以先没放行。过十几秒刷新这个页面就好；一直这样的话，看看这台电脑上的 Tailscale 是不是登录着。")
         if login is not None:
             return (f"这台电脑（{name}）只让它自己登录的 Tailscale 账号用，你现在用的账号是 {login}。\n"
                     f"要放行这个账号：在这台电脑的 remote_config.json 里把 \"{login}\" 加进 \"allowed_logins\"，再重启遥控服务。")
