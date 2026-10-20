@@ -70,7 +70,9 @@ class AppsTests(unittest.TestCase):
                 self.assertEqual(machines.installed_apps(),['codex'])
                 (local/'Packages'/'Claude_pzs8sxrjxfjjc').mkdir()
                 self.assertEqual(machines.installed_apps(),['codex','claude'])
-                (Path(temp)/'.dsh').mkdir()
+                (Path(temp)/'.dsh').mkdir()  # the command-line dsh alone: the phone cannot drive it
+                self.assertEqual(machines.installed_apps(),['codex','claude'])
+                (roaming/'@deepseek-ai'/'dsh-desktop').mkdir(parents=True)  # the DeepSeek Harness desktop app
                 self.assertEqual(machines.installed_apps(),['codex','claude','deepseek'])
 
 class PageTests(unittest.TestCase):
@@ -78,13 +80,27 @@ class PageTests(unittest.TestCase):
     def handler(self,path,headers=None):
         handler=object.__new__(remote.Handler);sent=[]
         handler.path=path;handler.headers=headers or {};handler.close_connection=False
-        handler.server=SimpleNamespace(machine=self.MACHINE,cfg={'token':'secret'})
+        handler.server=SimpleNamespace(machine=self.MACHINE,cfg={'token':'secret','apps':['codex']})
         handler._send=lambda code,body,ctype,extra=None:sent.append((code,body))
         return handler,sent
     def test_facts_from_the_config(self):
         self.assertEqual(remote.machine_facts({'name':'公司电脑','voice':False,'apps':['codex']}),self.MACHINE)
         with patch.object(remote.machines,'installed_apps',return_value=['codex','claude']),patch.object(remote.socket,'gethostname',return_value='DESKTOP-1'):
             self.assertEqual(remote.machine_facts({}),{'name':'DESKTOP-1','apps':['codex','claude'],'voice':True})
+    def test_no_desktop_app_found_is_no_app_not_codex_and_claude(self):
+        with patch.object(remote.machines,'installed_apps',return_value=[]):
+            self.assertEqual(remote.machine_facts({'name':'x'})['apps'],[])
+    def test_the_page_looks_again_at_the_apps_each_time_it_opens(self):
+        handler,sent=self.handler('/?t=secret');handler.server.cfg={'token':'secret'}  # no "apps": what is found counts
+        with patch.object(remote.machines,'installed_apps',return_value=['codex','deepseek']):handler.do_GET()
+        self.assertIn('"apps": ["codex", "deepseek"]',sent[0][1].decode('utf-8'))
+        self.assertEqual(handler.server.machine['apps'],['codex','deepseek']);self.assertEqual(self.MACHINE['apps'],['codex'])  # a new dict
+    def test_the_list_holds_only_the_apps_this_computer_has(self):
+        handler,sent=self.handler('/api/chats?t=secret')
+        rows=[{'app':a,'id':a+'1','title':a} for a in ('codex','claude','deepseek')]
+        handler.server.history=SimpleNamespace(conversations=lambda app,limit,cursor,query:{'items':list(rows),'has_more':False})
+        handler.server.tasks=SimpleNamespace(apply_status=lambda items:items)
+        handler.do_GET();self.assertEqual([v['app'] for v in json.loads(sent[0][1])['items']],['codex'])
     def test_hello_tells_only_the_name_and_wants_what_the_page_wants(self):
         handler,sent=self.handler('/api/hello?t=secret');handler.do_GET()
         self.assertEqual(sent[0][0],200);self.assertEqual(json.loads(sent[0][1]),{'app':'agent_remote','name':'公司电脑','version':remote.VERSION})
@@ -116,7 +132,7 @@ class AccessTests(unittest.TestCase):
         handler=object.__new__(remote.Handler);sent=[]
         handler.path=path;handler.headers={'Tailscale-User-Login':login} if login else {};handler.close_connection=False
         handler.server=SimpleNamespace(machine=self.MACHINE,owner=SimpleNamespace(login=lambda:owner),
-                                       cfg={'token':'secret','bind':bind,'allowed_logins':allowed or []})
+                                       cfg={'token':'secret','bind':bind,'allowed_logins':allowed or [],'apps':['codex']})
         handler._send=lambda code,body,ctype,extra=None:sent.append((code,body.decode('utf-8'),extra or {}))
         handler.do_POST() if method=='POST' else handler.do_GET()
         return sent[0]

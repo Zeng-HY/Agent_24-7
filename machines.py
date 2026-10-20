@@ -146,7 +146,9 @@ def funnel_on(config: dict, port: int) -> bool:
 
 
 def installed_apps() -> list[str]:
-    """The desktop apps on this computer: Codex (Store package or not) and Claude (Store package or installer)."""
+    """The desktop apps on this computer: Codex (Store package or not), Claude (Store package or installer) and
+    DeepSeek Harness (its desktop app's own folder: ~/.dsh alone may be only the command-line dsh, which the phone
+    cannot drive). A few folder checks; remote.py looks again each time the page opens."""
     packages = LOCALAPPDATA / "Packages"
 
     def package(prefix: str) -> bool:
@@ -157,7 +159,8 @@ def installed_apps() -> list[str]:
         apps.append("codex")
     if package("Claude") or (LOCALAPPDATA / "AnthropicClaude").is_dir() or (APPDATA / "Claude").is_dir():
         apps.append("claude")
-    if (Path.home()/'.dsh').is_dir():apps.append('deepseek')
+    if (APPDATA / "@deepseek-ai" / "dsh-desktop").is_dir():
+        apps.append("deepseek")
     return apps
 
 

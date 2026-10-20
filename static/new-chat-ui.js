@@ -29,7 +29,11 @@
     <button id="newFolderChoice" class="new-folder"><span>${icon('folder')}</span><span><strong id="newFolderName">选择项目文件夹</strong><small id="newFolderPath">读取电脑上的项目…</small></span><span>⌄</span></button>
     <button id="newModelChoice" class="new-folder"><span>${SPARK}</span><span><strong id="newModelName">默认模型</strong><small id="newModelDetail">跟电脑当前设置走；点这里选</small></span><span>⌄</span></button>
     <p class="hint new-caption" id="newStatus" role="status" aria-live="polite"></p>`;
-  if(window.MACHINE?.apps&&!MACHINE.apps.includes('claude')){box.querySelector('.new-apps').hidden=true;if(d.app==='claude')d.app='codex';}  // a computer with only Codex (10-13)
+  // Only the desktop apps this computer has (MACHINE.apps, looked at again each time the page opens); DeepSeek's button
+  // comes from deepseek-ui.js, and paint() hides the row when one button is left (10-20; it used to look only for Claude).
+  const hasNew=app=>!Array.isArray(window.MACHINE?.apps)||MACHINE.apps.includes(app),other=app=>app==='codex'?'claude':'codex';
+  $('newCodex').hidden=!hasNew('codex');$('newClaude').hidden=!hasNew('claude');
+  if(!hasNew(d.app)&&hasNew(other(d.app)))d.app=other(d.app);
   const dock=el('div');dock.id='newJobDock';dock.hidden=true;$('convList').before(dock);  // one row per job not on screen
   const css=el('style');css.textContent=`
     #newSheet .box{max-height:calc(var(--overlay-height,100dvh) - 16px)}#newSheet .sh-body{gap:16px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
@@ -160,6 +164,7 @@
   async function ensureDraft(){if(d.request_id)return d.request_id;if(!opening)opening=api('/api/chat/new/draft',{}).then(v=>{d.request_id=v.request_id;save();return v.request_id;}).finally(()=>opening=null);return opening;}
   function paint(){
     for(const app of ['codex','claude'])$('new'+(app==='codex'?'Codex':'Claude')).setAttribute('aria-checked',String(d.app===app));
+    const apps=box.querySelector('.new-apps');apps.hidden=[...apps.children].filter(b=>!b.hidden).length<2;  // one app: nothing to pick
     const folder=folders.find(v=>v.path===d.folder);$('newFolderName').textContent=d.projectless?'无项目':d.label||folder?.name||(d.folder?d.folder.split(/[\\/]/).pop():'选择项目文件夹');$('newFolderPath').textContent=d.projectless?'不放进任何项目':d.folder||'电脑端的项目与对话目录';
     const pick=chosen();$('newModelName').textContent=pick?pick.modelLabel+(pick.effortLabel?' · '+pick.effortLabel:''):'默认模型';
     $('newModelDetail').textContent=pick?'新对话用这个模型；点这里换':'跟电脑当前设置走；点这里选';
@@ -253,6 +258,9 @@
   $('newDismiss').onclick=()=>{if(sheetJob)remove(sheetJob);};
   window.openNewSheet=async function(place){
     // place {app, folder, projectless, name}: a project's ＋ in the sidebar. A job under way no longer holds the sheet (10-16).
+    if(!hasNew('codex')&&!hasNew('claude')){  // DeepSeek alone: its own sheet (deepseek-ui.js wraps open); nothing: say so
+      if(hasNew('deepseek')&&window.newChatUI&&window.newChatUI.open!==window.openNewSheet)return window.newChatUI.open({app:'deepseek'});
+      toast('这台电脑上没找到 Codex、Claude 或 DeepSeek Harness 桌面版',true);return;}
     if(place){const folder=place.projectless?'':place.folder||'';if(d.app!==place.app||d.folder!==folder||d.projectless!==!!place.projectless){d.references=d.references.filter(v=>v.kind!=='skill');searchSeq++;$('newSuggestions').hidden=true;}
       d.app=place.app;d.folder=folder;d.projectless=!!place.projectless;d.label=place.projectless?'':place.name||'';save();}
     openSheet('newSheet');paint();

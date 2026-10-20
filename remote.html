@@ -407,7 +407,13 @@ async function openComputers(anchor) {
   if (!(j.others || []).length) list.append(el('p', 'hint', '还没有别的电脑。别的电脑装好、开着时会出现在这里。'));
 }
 if (MACHINE.name) { document.title = '电脑遥控 · ' + MACHINE.name; $('appSubtitle').disabled = false; }
-if (!hasApp('claude')) document.querySelector('.conversation-home .chips').style.display = 'none'; // 全部 / Codex alone says nothing
+// Only the desktop apps this computer has (MACHINE.apps, looked at again each time the page opens): a chip for each, and no
+// row at all with one app, where 全部 says nothing more (10-20; it used to look only for Claude, so a DeepSeek chip stood
+// on a computer without DeepSeek). With none found the list says so.
+for (const chip of document.querySelectorAll('.conversation-home .chip[data-app]')) if (chip.dataset.app !== 'all' && !hasApp(chip.dataset.app)) chip.style.display = 'none';
+if (Array.isArray(MACHINE.apps) && MACHINE.apps.length < 2) document.querySelector('.conversation-home .chips').style.display = 'none';
+const NO_APPS = Array.isArray(MACHINE.apps) && !MACHINE.apps.length
+  ? '这台电脑上没找到 Codex、Claude 或 DeepSeek Harness 桌面版。装好后刷新这个页面；也可以在 remote_config.json 里用 "apps" 指定。' : '';
 addEventListener('load', () => { if (!$('settingsBody').children.length) $('settingsBtn').style.display = 'none'; }); // no voice: nothing to set
 
 // ---------------------------------------------------------------- modes
@@ -494,7 +500,7 @@ function convRow(c, child = false) {
 }
 function renderConvs() {
   const box = $('convList'); box.innerHTML = '';
-  if (!convItems.length) box.appendChild(el('div', 'hint', '没有对话。'));
+  if (!convItems.length) box.appendChild(el('div', 'hint', NO_APPS || '没有对话。'));
   for (const c of convItems) {
     const row = convRow(c), k = convKey(c), open = convFolds.has(k), count = c.child_count || 0;
     pressable(row, c.group ? () => toggleFold(c) : c.kind ? () => openChild(c, null) : () => openConv(c));

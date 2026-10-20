@@ -224,7 +224,7 @@
   }
   create.onclick=async()=>{if(!folder.value)return;create.disabled=true;newRequest ||= {request_id:uid(),folder:folder.value};try{localStorage.setItem('lbr_deepseek_create',JSON.stringify(newRequest));const result=await api('/api/deepseek/create',newRequest);newRequest=null;localStorage.removeItem('lbr_deepseek_create');closeSheet('deepseekNew');openConv(result);await chooseModel();}catch(e){newInfo.textContent='创建结果待核对：'+e.message;}finally{create.disabled=false;}};
   const originalNew=window.newChatUI.open;window.newChatUI.open=function(context,...rest){if(context?.app==='deepseek')return openNew(context);return originalNew.call(this,context,...rest);};
-  if(window.MACHINE?.apps?.includes('deepseek')){const button=el('button','','DeepSeek');button.id='newDeepseek';button.onclick=()=>openNew();$('newSheet').querySelector('.new-apps').append(button);$('newSheet').querySelector('.new-apps').hidden=false;}
+  if(window.MACHINE?.apps?.includes('deepseek')){const button=el('button','','DeepSeek');button.id='newDeepseek';button.onclick=()=>openNew();$('newSheet').querySelector('.new-apps').append(button);}  // the sheet shows the row when it holds more than one app (new-chat-ui.js paint)
   function reset(){clearTimeout(timer);state=null;askSig='';subs=[];tray.dataset.sig='';tray.replaceChildren();tray.hidden=runBar.hidden=stop.hidden=subBar.hidden=true;if($('cvOpts').dataset.owner==='deepseek'){$('cvOpts').replaceChildren();delete $('cvOpts').dataset.owner;}}
   window.deepseekUI={send,refresh,onOpen(me){reset();controls();if(me.app==='deepseek'){if(!modelCatalog)api('/api/deepseek/models').then(v=>{modelCatalog=v;if(active(me))controls();}).catch(()=>{});refresh(me);}},onClose(){reset();tools.hidden=true;}};
   if(cur)deepseekUI.onOpen(cur);

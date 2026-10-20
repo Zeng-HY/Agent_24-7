@@ -65,7 +65,7 @@ import machines  # this computer's name and apps, and the other computers the pa
 import notify  # a notification on the phone (Bark) when a conversation is done
 import re
 
-VERSION = "0.20.7"  # the phone link (QR code) and the microphone's https link carry no token: the account lets the phone in
+VERSION = "0.20.8"  # the page shows only the desktop apps this computer has, looked at again each time it opens
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -276,6 +276,15 @@ class Handler(BaseHTTPRequestHandler):
         login = self._visitor()
         self._json({"error": f"这台电脑没放行 Tailscale 账号 {login}" if login is not None else "口令不对"}, 403)
 
+    def _recheck_apps(self) -> None:
+        """Which desktop apps this computer has, looked at again each time the page opens (a few folder checks), so an
+        app installed after the service started shows on the next load. A new dict, not a change to the shared one."""
+        apps = machine_facts(self.cfg)["apps"]
+        self.server.machine = {**self.server.machine, "apps": apps}  # type: ignore[attr-defined]
+        deepseek = getattr(self.server, "deepseek", None)
+        if deepseek is not None and "deepseek" in apps and deepseek_control.HOME.is_dir():
+            deepseek.events.start()  # its live events, if DeepSeek came after the service; started once, later calls do nothing
+
     def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -324,6 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             page_file = HERE / "static" / "input-diagnostics.html" if path == "/input-diagnostics" else PAGE_FILE
             page = page_file.read_bytes()
             if page_file == PAGE_FILE:  # which computer this is and what it has, before any of the page's scripts run
+                self._recheck_apps()
                 page = stamp_page(page)  # each script's URL carries this version; the file itself holds none
                 # version: the page compares it with what /api/status says later, and reloads itself after an update
                 facts = json.dumps({**self.server.machine, "version": VERSION}, ensure_ascii=False).replace("<", "\\u003c")
@@ -403,7 +413,8 @@ class Handler(BaseHTTPRequestHandler):
             limit = max(5, min(100, int(q.get("limit", "40") or 40)))
             try:
                 result=self.history.conversations(q.get("app", "all"),limit,q.get("cursor", ""),q.get("query", ""))
-                result['items']=self.server.tasks.apply_status(result['items'])
+                apps=self.server.machine["apps"]  # an app this computer lacks lists nothing, even with files left behind (10-20)
+                result['items']=[v for v in self.server.tasks.apply_status(result['items']) if v.get('app') in apps]
                 self._json(result)
             except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chats/children":  # past the first children a row carries (10-20)
@@ -833,10 +844,12 @@ def local_addresses() -> list[str]:
 
 
 def machine_facts(cfg: dict) -> dict:
-    """What the page is told about this computer (window.MACHINE): its name, its desktop apps, whether it has voice."""
+    """What the page is told about this computer (window.MACHINE): its name, its desktop apps, whether it has voice.
+    The apps are the ones found here, or "apps" in remote_config.json; none found is an empty list and the page says
+    so (it used to pretend Codex and Claude)."""
     apps = cfg.get("apps")
     if not (isinstance(apps, list) and apps):
-        apps = machines.installed_apps() or ["codex", "claude"]
+        apps = machines.installed_apps()
     return {"name": str(cfg.get("name") or socket.gethostname()), "apps": [str(a) for a in apps],
             "voice": cfg.get("voice") is not False}
 
