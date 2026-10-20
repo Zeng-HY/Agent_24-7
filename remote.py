@@ -67,7 +67,7 @@ import notify  # a notification on the phone (Bark, ntfy) when a conversation is
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.20.12"  # an Android phone gets done-notifications in the ntfy app, from this service over Tailscale
+VERSION = "0.20.13"  # the bar under a waiting DeepSeek conversation's title says DeepSeek, not Claude
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);

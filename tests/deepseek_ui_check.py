@@ -2,7 +2,7 @@
 
 10-20: the conversation is laid out as Codex's and Claude's — ＋ / model / permission in the message box, 停止这一轮 in the
 title bar, 发送会立即补充给这一轮 with 排队稍后发送 while a turn runs, the queue in a tray, a question or an approval as one
-strip above the box that opens a sheet.
+strip above the box that opens a sheet, and the bar under the title naming DeepSeek while it waits (it said Claude).
 """
 import json
 from urllib.parse import urlsplit,parse_qs
@@ -62,6 +62,8 @@ def main():
         assert '做完后整理成表格' in page.locator('#deepseekQueue').inner_text()
         # a question and an approval: one strip, then the sheet
         pill=page.locator('#cvOpts .ask-pill');pill.wait_for();assert '共 2 项' in pill.inner_text(),pill.inner_text()
+        page.wait_for_function("!document.getElementById('cvPending').hidden")
+        assert page.locator('#cvPending').inner_text()=='DeepSeek 有待处理操作 · 查看',page.locator('#cvPending').inner_text()
         pill.click();page.wait_for_function("overlays.some(o=>o.id==='deepseekAskSheet')")
         page.locator('#deepseekAskSheet .option-card',has_text='甲').click();assert not posts
         page.get_by_role('button',name='提交答案',exact=True).click()
@@ -71,6 +73,7 @@ def main():
         assert gap>=8,f'approval buttons {gap}px apart'
         page.get_by_role('button',name='仅允许本次',exact=True).click();page.wait_for_function("!document.querySelector('#cvOpts .ask-pill')")
         assert posts[-1][1]['event_id']=='approval' and posts[-1][1]['choice']=='allowed-once'
+        assert page.locator('#cvPending').is_hidden(),'the bar stays after everything was answered'
         # the queued message handed to the running turn
         page.locator('#deepseekQueue button',has_text='立即补充').click();page.wait_for_function("document.getElementById('deepseekQueue').hidden")
         assert posts[-1]==('/api/deepseek/queue',{'id':'d1','item_id':'q1','action':'steer'})

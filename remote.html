@@ -1149,11 +1149,11 @@ function updateConnection() {
   $('cvConnection').textContent=text || chatReadError; $('cvConnection').hidden=!(text||chatReadError);
 }
 
-// While Claude or Codex waits for an answer, a bar under the chat title says so (claude-ui.js and codex-ui.js open the
-// question from it).
+// While Claude, Codex or DeepSeek waits for an answer, a bar under the chat title says which (claude-ui.js, codex-ui.js
+// and deepseek-ui.js open the question from it). It named Claude for every app but Codex until 10-20.
 function updatePending() {
   const waiting=!!cur && !!$('cvOpts').querySelector('.optbox');
-  $('cvPending').hidden=!waiting; $('cvPending').textContent=(cur?.app==='codex'?'Codex':'Claude')+' 有待处理操作 · 查看';
+  $('cvPending').hidden=!waiting; $('cvPending').textContent=({codex:'Codex',deepseek:'DeepSeek'}[cur?.app]||'Claude')+' 有待处理操作 · 查看';
 }
 function showPending() { $('cvOpts').scrollIntoView({block:'nearest'}); }
 new MutationObserver(updatePending).observe($('cvOpts'),{childList:true,subtree:true});
