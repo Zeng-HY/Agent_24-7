@@ -65,56 +65,146 @@ def main():
         def swipe(key, distance, steps=12, step=16, hold=None):
             x, y, w = box(key); start = x + w - 30
             finger.drag([(start - distance * i / steps, y + i * 0.4) for i in range(steps + 1)], step=step, hold=hold)
+        def out(key):  # how far the row is out to the left, px
+            return -page.evaluate("k => new DOMMatrixReadOnly(getComputedStyle(document.querySelector('#convList .conv[data-key=\"' + k + '\"]')).transform).m41", key)
+        def is_open(): return page.evaluate("!!document.querySelector('.swipe-under.open')")
+        def bar_shown(): return page.evaluate("document.getElementById('archiveUndo').classList.contains('show')")
+        def settle(): page.wait_for_timeout(450)
+        def tap_button():  # the 归档 button of the open row
+            b = page.locator('.swipe-under.open .swipe-btn').bounding_box(); finger.tap(b['x'] + b['width'] / 2, b['y'] + b['height'] / 2)
+        def tap_off_list():  # the page title, off the list
+            b = page.locator('header').first.bounding_box(); finger.tap(b['x'] + b['width'] / 2, b['y'] + b['height'] - 12)
 
-        # a full swipe: the row slides off, the list closes up, the bar offers 撤销, the computer is asked once
+        # first stop: a short slow slide settles open on the 归档 button and archives nothing
+        swipe('codex:cx1', 70, steps=10, step=30); settle()
+        assert is_open() and abs(out('codex:cx1') - 88) < 1, out('codex:cx1')
+        assert not calls['archive'] and not bar_shown()
+        if shots: page.screenshot(path=str(shots / 'swipe_open.png'))
+        # a refresh meanwhile leaves it open; the list is rebuilt once it is shut
+        old = page.evaluate_handle("document.querySelector('#convList .conv[data-key=\"codex:cx1\"]')")
+        page.evaluate('renderConvs()'); page.wait_for_timeout(500)  # what a refresh with news does
+        assert is_open() and abs(out('codex:cx1') - 88) < 1, 'a refresh shut the open row'
+        # a tap on the open row shuts it and does not open the conversation
+        x, y, w = box('codex:cx1'); finger.tap(x + w / 2, y); settle()
+        assert not page.locator('.swipe-under').count() and abs(out('codex:cx1')) < 1 and page.evaluate('cur') is None
+        assert page.evaluate("o => document.querySelector('#convList .conv[data-key=\"codex:cx1\"]') !== o", old), 'the list was not rebuilt after the row shut'
+        print('PASS a short slide stops on 归档; a refresh waits; a tap shuts it without opening the conversation')
+
+        # the hold at the button, and 归档 keeping beside the row's edge with no lag (no CSS transition on it)
+        seen = {}
+        def probe(name):
+            seen[name] = page.evaluate("""() => { const u = document.querySelector('.swipe-under'), l = u.querySelector('.swipe-label'), r = u.nextElementSibling;
+              return {out: -new DOMMatrixReadOnly(getComputedStyle(r).transform).m41, gap: l.getBoundingClientRect().left - r.getBoundingClientRect().right,
+                      trans: getComputedStyle(l).transitionDuration, armed: u.classList.contains('armed')}; }""")
+        x, y, w = box('deepseek:session-ds1'); sx = x + w - 30
+        finger._send('touchStart', [(sx, y)])
+        for d in (20, 40, 60, 80, 88, 100, 112, 118, 150, 180, 214):
+            page.wait_for_timeout(40); finger._send('touchMove', [(sx - d, y)]); page.wait_for_timeout(40)
+            if d in (88, 112, 150, 214): probe(d)
+        page.wait_for_timeout(300); probe('still')
+        if shots: page.screenshot(path=str(shots / 'swipe_armed.png'))
+        finger._send('touchMove', [(sx - 60, y)]); page.wait_for_timeout(60); finger._send('touchEnd', []); settle()  # back short of the mark: open
+        assert abs(seen[88]['out'] - 88) < 1.5, seen[88]
+        assert 88 < seen[112]['out'] < 97, seen[112]               # 24 px of finger, about 7 of row
+        assert abs(seen[150]['out'] - 129) < 2, seen[150]           # then 1:1 again, 21 px behind
+        assert not seen[150]['armed'] and seen[214]['armed'] and seen['still']['armed'], seen
+        assert abs(seen[150]['gap'] - 20) < 1.5 and abs(seen[214]['gap'] - 20) < 1.5, seen  # beside the edge, frame by frame
+        assert all(v['trans'] in ('0s', '0s, 0s') for v in seen.values()), seen
+        assert is_open() and not calls['archive'], 'dragging back short of the mark did not leave it open'
+        tap_off_list(); settle(); assert not page.locator('.swipe-under').count(), 'a tap off the list left it open'
+        print('PASS it holds at the button, keeps 归档 beside its edge without lag, darkens only past the mark')
+
+        # a quick flick only opens; a touch on another row shuts it and opens nothing; a scroll shuts it too
+        x, y, w = box('codex:cx3'); finger.drag([(x + w - 30 - 40 * i, y) for i in range(4)], step=12); settle()
+        assert is_open() and not calls['archive'], 'a flick did more than open'
+        x, y, w = box('codex:cx5'); finger.tap(x + w / 2, y); settle()
+        assert not page.locator('.swipe-under').count() and page.evaluate('cur') is None
+        swipe('codex:cx3', 70, steps=10, step=30); settle(); assert is_open()
+        x, y, w = box('codex:cx6'); finger.drag([(x + w / 2, y + i * 14) for i in range(8)]); settle()
+        assert not page.locator('.swipe-under').count(), 'a scroll left the row open'
+        # a rightward drag on an open row shuts it and does not pull the drawer out
+        swipe('codex:cx3', 70, steps=10, step=30); settle(); assert is_open()
+        x, y, w = box('codex:cx3'); finger.drag([(x + w - 120 + 15 * i, y) for i in range(9)], step=20); settle()
+        assert not page.locator('.swipe-under').count() and not page.evaluate("overlays.some(o=>o.id==='navSheet')")
+        print('PASS a flick only opens; another row, a scroll or a drag back shuts it; the drawer stays put')
+
+        # tapping 归档 archives: off to the left, a pause, the list closes up smoothly, then the bar
+        swipe('codex:cx4', 70, steps=10, step=30); settle(); assert is_open()
+        page.evaluate("""() => { window.__h = []; const r = document.querySelector('#convList .conv[data-key="codex:cx4"]');
+          const t0 = performance.now(); (function f() { window.__h.push([performance.now() - t0, r.isConnected ? r.offsetHeight : -1,
+          document.getElementById('archiveUndo').classList.contains('show')]); if (r.isConnected) requestAnimationFrame(f); })(); }""")
+        tap_button()
+        page.wait_for_function("!document.querySelector('#convList .conv[data-key=\"codex:cx4\"]')")
+        h = page.evaluate('window.__h'); full = h[0][1]
+        assert calls['archive'] == [{'app': 'codex', 'id': 'cx4'}], calls['archive']
+        middle = [v for v in h if 0 < v[1] < full - 1]
+        assert len(middle) >= 5, h            # the list closes up over several frames, not at once
+        assert middle[0][0] > 380, middle[0]  # only after the row is off
+        assert not any(v[2] for v in h if v[0] < 380), 'the bar came up before the row was off'
+        assert 700 < h[-1][0] < 1200, h[-1]   # about 0.8 s in all
+        page.wait_for_function("document.getElementById('archiveUndo').classList.contains('show')")
+        assert '示例对话 4' in page.locator('#archiveUndo').inner_text() and not page.locator('.swipe-under').count()
+        page.locator('#archiveUndo button').click()
+        page.wait_for_function("!!document.querySelector('#convList .conv[data-key=\"codex:cx4\"]')")
+        for _ in range(30):
+            if calls['unarchive']: break
+            page.wait_for_timeout(100)
+        assert calls['unarchive'] == [{'app': 'codex', 'id': 'cx4'}], calls['unarchive']
+        print('PASS tapping 归档 archives; the row goes, then the list closes up over', len(middle), 'frames, then 撤销 shows')
+
+        # past the mark, letting go archives at once; a refresh keeps it off; 撤销 brings it back in its place
         def armed_shot():
             assert page.evaluate("document.querySelector('.swipe-under')?.classList.contains('armed')"), 'not armed past the mark'
-            if shots: page.screenshot(path=str(shots / 'swipe_armed.png'))
-        swipe('codex:cx1', 230, hold=(10, 120, armed_shot))
+        swipe('codex:cx1', 260, hold=(12, 120, armed_shot))
         page.wait_for_function("!document.querySelector('#convList .conv[data-key=\"codex:cx1\"]')")
-        assert calls['archive'] == [{'app': 'codex', 'id': 'cx1'}], calls['archive']
+        assert calls['archive'][-1] == {'app': 'codex', 'id': 'cx1'} and len(calls['archive']) == 2, calls['archive']
         page.wait_for_function("document.getElementById('archiveUndo').classList.contains('show')")
-        assert page.locator('#archiveUndo').inner_text().startswith('对话已归档')
-        assert '部署方案' in page.locator('#archiveUndo').inner_text()
-        assert not page.locator('.swipe-under').count()
+        assert page.locator('#archiveUndo').inner_text().startswith('对话已归档') and '部署方案' in page.locator('#archiveUndo').inner_text()
         if shots: page.wait_for_timeout(350); page.screenshot(path=str(shots / 'undo_bar.png'))
         page.evaluate('loadConvs()'); page.wait_for_timeout(400)
         assert row('codex:cx1').count() == 0, 'a refresh brought the archived row back'
         page.locator('#archiveUndo button').click()
         page.wait_for_function("!!document.querySelector('#convList .conv[data-key=\"codex:cx1\"]')")
         for _ in range(30):
-            if calls['unarchive']: break
+            if len(calls['unarchive']) == 2: break
             page.wait_for_timeout(100)
-        assert calls['unarchive'] == [{'app': 'codex', 'id': 'cx1'}]
+        assert calls['unarchive'][-1] == {'app': 'codex', 'id': 'cx1'}
         assert [n for n in page.evaluate("[...document.querySelectorAll('#convList .conv')].map(n=>n.dataset.key)")][:2] == ['codex:cx1', 'deepseek:session-ds1']
-        assert not page.evaluate("document.getElementById('archiveUndo').classList.contains('show')")
+        assert not bar_shown()
         print('PASS a full swipe archives with 撤销; a refresh keeps it off; 撤销 brings it back in its place')
 
-        # short, slow, sideways-then-down and Claude's: nothing archived, everything back in place
-        swipe('deepseek:session-ds1', 60, step=30)
-        page.wait_for_timeout(400)
-        assert row('deepseek:session-ds1').get_attribute('style') in (None, '', 'transform: none;'), row('deepseek:session-ds1').get_attribute('style')
+        # a scroll and a Claude row archive nothing
         x, y, w = box('codex:cx3'); finger.drag([(x + w / 2, y + i * 14) for i in range(10)])  # a scroll
         x, y, w = box('claude:local_cl1'); finger.drag([(x + w - 30 - i * 25, y) for i in range(11)])
         page.wait_for_timeout(400)
-        assert calls['archive'] == [{'app': 'codex', 'id': 'cx1'}] and not page.locator('.swipe-under').count()
+        assert len(calls['archive']) == 2 and not page.locator('.swipe-under').count()
         assert row('claude:local_cl1').count() == 1
-        print('PASS a short swipe springs back; a scroll and a Claude row archive nothing')
+        print('PASS a scroll and a Claude row archive nothing')
 
-        # a running one springs back and says why; one the computer refuses comes back with the reason
-        swipe('codex:cx2', 240); page.wait_for_timeout(450)
-        assert row('codex:cx2').count() == 1 and len(calls['archive']) == 1
+        # a running one springs back and says why, by a full swipe or by its button; one the computer refuses slides back
+        swipe('codex:cx2', 260); page.wait_for_timeout(450)
+        assert row('codex:cx2').count() == 1 and len(calls['archive']) == 2 and not page.locator('.swipe-under').count()
         assert '正在运行' in page.locator('#toast').inner_text()
-        mode['refuse'] = True; swipe('deepseek:session-ds1', 240)
-        page.wait_for_function("!!document.querySelector('#convList .conv[data-key=\"deepseek:session-ds1\"]') && document.getElementById('toast').textContent.includes('没归档')")
+        page.evaluate("document.getElementById('toast').textContent=''")
+        swipe('codex:cx2', 70, steps=10, step=30); settle(); tap_button(); settle()
+        assert len(calls['archive']) == 2 and '正在运行' in page.locator('#toast').inner_text() and not page.locator('.swipe-under').count()
+        mode['refuse'] = True; swipe('deepseek:session-ds1', 260)
+        page.wait_for_function("document.getElementById('toast').textContent.includes('没归档')")
+        page.wait_for_timeout(900)
+        assert row('deepseek:session-ds1').count() == 1 and abs(out('deepseek:session-ds1')) < 1 and not page.locator('.swipe-under').count()
         assert calls['archive'][-1] == {'app': 'deepseek', 'id': 'session-ds1'}; mode['refuse'] = False
-        print('PASS a running one is not archived; a refusal brings the row back with the reason')
+        assert not bar_shown()
+        print('PASS a running one is not archived; a refusal slides the row back with the reason')
 
-        # the lift after a swipe is not a tap; a tap afterwards opens the conversation
-        swipe('codex:cx4', 50); page.wait_for_timeout(500)
-        x, y, w = box('codex:cx4'); finger.tap(x + w / 2, y)
-        page.wait_for_function("cur?.id==='cx4'"); page.evaluate('closeConv(true)'); page.wait_for_timeout(300)
-        print('PASS a tap after a swipe still opens the conversation')
+        # a tiny slide shuts again; a tap afterwards opens the conversation
+        swipe('codex:cx5', 20, steps=5, step=30); settle()
+        assert not page.locator('.swipe-under').count(), 'a 20 px slide did not shut again'
+        x, y, w = box('codex:cx5'); finger.tap(x + w / 2, y)
+        page.wait_for_function("cur?.id==='cx5'"); page.evaluate('closeConv(true)'); page.wait_for_timeout(300)
+        swipe('codex:cx3', 20, steps=5, step=30); x, y, w = box('codex:cx4'); finger.tap(x + w / 2, y)  # while it is still going back
+        page.wait_for_function("cur?.id==='cx4'"); page.evaluate('closeConv(true)'); page.wait_for_timeout(400)
+        assert not page.locator('.swipe-under').count()
+        print('PASS a tiny slide shuts again; a tap after a swipe, even at once, still opens the conversation')
 
         # 设置 → 已归档对话: restore one, tick the Codex ones and delete them after the confirmation
         page.evaluate("openSheet('settingsSheet')"); page.wait_for_function("overlays.some(o=>o.id==='settingsSheet')")

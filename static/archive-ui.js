@@ -1,6 +1,8 @@
-/* 左滑归档 (10-20). On the conversation list a row slides left under the finger and shows 归档 behind it; let go past the
-   mark (or flick) and it slides off, the list closes up, and a bar at the bottom says 对话已归档 with 撤销 for six
-   seconds. The archive is made on the computer at once (archives.py); 撤销 restores it there. Codex and DeepSeek only
+/* 左滑归档 (10-20). On the conversation list a row slides left under the finger and uncovers 归档 behind it, in two stops
+   as Mail's and Telegram's do: let go after a short slide (or flick) and the row stays open on a 归档 button, which
+   archives when tapped; slide on past about half the row and 归档 turns darker, and letting go there archives at once.
+   Then the row slides off, the list closes up, and a bar at the bottom says 对话已归档 with 撤销 for six seconds.
+   The archive is made on the computer at once (archives.py); 撤销 restores it there. Codex and DeepSeek only
    for now (Claude's comes later); a running one springs back and says why.
    设置 → 已归档对话 lists the archived ones: 恢复 brings one back; Codex ones can be ticked and deleted, after a
    confirmation, for good. DeepSeek has no delete, so its rows only restore. The main list never deletes. */
@@ -9,17 +11,20 @@
   const APPS = ['codex', 'deepseek'], NAMES = {codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek'};
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
   const EASE = 'cubic-bezier(.32,.72,0,1)';
+  const BUTTON = 88, HOLD = 30, GIVE = 0.3, GAP = 20;  // 归档 opens this wide; past it the finger goes HOLD px while the row goes GIVE of that
+  const SETTLE_MS = 300, OFF_MS = 380, CLOSE_MS = 320, OFF_EASE = 'cubic-bezier(.33,.7,.35,1)', CLOSE_EASE = 'cubic-bezier(.4,0,.2,1)';
   const hidden = new Set();    // rows archived from here, kept off the list until 撤销 (a refresh would bring them back)
   const pending = new Map();   // key -> the archive request under way
   const css = el('style'); css.textContent = `
     #convList{position:relative}
     .conv.swiping{background:var(--card);position:relative;z-index:3;will-change:transform}
-    .swipe-under{position:absolute;left:0;right:0;z-index:2;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:0 20px;
-      background:#6366f1;color:#fff;font-size:14px;font-weight:600;overflow:hidden;pointer-events:none;border-radius:10px;transition:background .15s}
-    .swipe-label{display:flex;align-items:center;gap:6px;transition:transform .14s ${EASE}}
-    .swipe-under svg{width:20px;height:20px;transition:transform .18s ${EASE}}.swipe-under.armed{background:#4f46e5}.swipe-under.armed svg{transform:scale(1.18)}
-    .swipe-under.collapse,.conv.collapse{transition:height .24s ${EASE},padding .24s ${EASE},margin .24s ${EASE},opacity .2s;overflow:hidden}
-    .conv.returning{animation:convBack .32s ${EASE}}@keyframes convBack{from{transform:translateX(-24%);opacity:0}to{transform:none;opacity:1}}
+    .swipe-under{position:absolute;left:0;right:0;z-index:2;background:#6366f1;color:#fff;font-size:14px;font-weight:600;overflow:hidden;
+      pointer-events:none;transition:background-color .2s}.swipe-under.armed{background:#4338ca}
+    .swipe-label{position:absolute;left:0;top:0;bottom:0;display:flex;align-items:center;gap:5px;white-space:nowrap;will-change:transform}
+    .swipe-label svg{width:20px;height:20px;transition:transform .22s cubic-bezier(.34,1.56,.64,1)}.swipe-under.armed .swipe-label svg{transform:scale(1.2)}
+    .swipe-under .swipe-btn{position:absolute;top:0;right:0;bottom:0;width:${BUTTON}px;-webkit-tap-highlight-color:transparent}.swipe-under.open .swipe-btn{pointer-events:auto}
+    .swipe-under.collapse,.conv.collapse{transition:height ${CLOSE_MS}ms ${CLOSE_EASE},padding ${CLOSE_MS}ms ${CLOSE_EASE},border-width ${CLOSE_MS}ms ${CLOSE_EASE},opacity ${CLOSE_MS}ms;overflow:hidden}
+    .conv.returning{animation:convBack .36s ${EASE}}@keyframes convBack{from{transform:translateX(-24%);opacity:0}to{transform:none;opacity:1}}
     .undo-bar{position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:90;display:flex;align-items:center;gap:10px;
       padding:6px 6px 6px 16px;border-radius:16px;background:#1f2430;color:#fff;box-shadow:0 8px 28px rgba(15,23,42,.28);transform:translateY(160%);opacity:0;
       transition:transform .3s ${EASE},opacity .2s;max-width:520px;margin:0 auto}
@@ -45,82 +50,182 @@
     const item = convItems.find(v => convKey(v) === row.dataset.key);
     return item && !item.group && !item.kind && APPS.includes(item.app) ? item : null;
   }
-  // a refresh brings back what the server still lists for a moment: rows archived here stay off until 撤销
+  // A refresh brings back what the server still lists for a moment: rows archived here stay off until 撤销. While a row
+  // is out of place (under the finger, open on 归档, gliding, leaving) the list is not rebuilt, or the 10 s refresh would
+  // snap it shut under the finger; it is rebuilt once the row is back or gone.
   const baseRender = window.renderConvs;
-  window.renderConvs = function () { if (hidden.size) convItems = convItems.filter(v => !hidden.has(convKey(v))); return baseRender.apply(this, arguments); };
+  let s = null;      // the row out of place: {row, item, under, label, button, w, home, mark, f, armed, state: drag|open|shut|leaving, timer}
+  let touch = null;  // this finger: {x, y, samples, decided, base, row, item, caught, shut}
+  let stale = false, frame = 0, quietUntil = 0;
+  window.renderConvs = function () {
+    if (s && s.row.isConnected) { stale = true; return; }
+    s = null; stale = false;
+    if (hidden.size) convItems = convItems.filter(v => !hidden.has(convKey(v)));
+    return baseRender.apply(this, arguments);
+  };
+  function settled(me) { if (me && s !== me) return; s = null; if (stale) { stale = false; renderConvs(); } }
 
-  // ---- the gesture
-  let g = null;  // {row, item, x, y, t, dx, decided, under, width, armed, samples}
-  function underFor(row) {
-    const u = el('div', 'swipe-under'); u.innerHTML = '<span class="swipe-label">' + icon('archive') + '<span>归档</span></span>'; u.setAttribute('aria-hidden', 'true');
-    u.style.top = row.offsetTop + 'px'; u.style.height = row.offsetHeight + 'px'; row.before(u); return u;
+  // ---- the gesture (second version, 10-20). The user: other apps first stop on a 归档 button you tap yourself, and only
+  // a longer slide archives the whole row; ours went at once and too fast, before one could react, and 归档 smeared
+  // when pulled fast. So: the row follows the finger and uncovers 归档, which waits in its button; once the button is
+  // all out the row holds a moment (the next HOLD px of finger move it GIVE as much), then goes on, 归档 now keeping
+  // beside its edge. Letting go settles it open on the button (tap it to archive) or, when barely moved or flung back,
+  // shut; a tap elsewhere, a scroll or a drag back shuts it. Past the mark (about half the row) 归档 darkens and its
+  // icon swells: letting go there archives. A flick never archives (the first version did after 50 px). Nothing that
+  // follows the finger has a CSS transition (归档's 0.14 s one trailed behind a fast finger: the smear), and each
+  // move is painted once a frame. The slide off, the pause and the closing up take about 0.8 s.
+  function outFor(d) {  // how far the row is out (px leftward) when the finger has gone d px from where a shut row was
+    if (d <= 0) return Math.max(-8, d / 5);
+    const f = d <= BUTTON ? d : d <= BUTTON + HOLD ? BUTTON + (d - BUTTON) * GIVE : d - HOLD * (1 - GIVE), most = s.w * 0.86;
+    return f > most ? most + (f - most) / 4 : f;
   }
-  function place(dx) {
-    const w = g.width, limit = -w * 0.72, x = dx < limit ? limit + (dx - limit) * 0.25 : Math.min(0, dx);  // past ~3/4 it drags heavier
-    const mark = Math.min(w * 0.36, 150), armed = -x > mark, label = g.under.firstChild;
-    g.row.style.transform = `translate3d(${x}px,0,0)`;
-    // before the mark 归档 grows clearer at the right; past it, it rides along the row's edge, as Mail's does
-    label.style.opacity = String(Math.min(1, 0.35 + 0.65 * -x / mark));
-    label.style.transform = armed ? `translate3d(${Math.min(0, x + 34 + label.offsetWidth)}px,0,0)` : '';
-    if (armed !== g.armed) { g.armed = armed; g.under.classList.toggle('armed', armed); if (armed) window.navigationUI?.haptic?.(); }
+  const fingerFor = f => f <= BUTTON ? f : f <= BUTTON + HOLD * GIVE ? BUTTON + (f - BUTTON) / GIVE : f + HOLD * (1 - GIVE);
+  const labelAt = (me, f) => Math.min(me.home, me.w - f + GAP);  // in its button, or beside the row's edge once that has passed it
+  const px = v => Math.round(v * devicePixelRatio) / devicePixelRatio;  // whole screen pixels, so the text stays sharp as it moves
+  function begin(row, item) {
+    const under = el('div', 'swipe-under'), label = el('span', 'swipe-label'), button = el('div', 'swipe-btn');
+    label.innerHTML = icon('archive') + '<span>归档</span>'; under.setAttribute('aria-hidden', 'true'); under.append(label, button);
+    under.style.top = row.offsetTop + 'px'; under.style.height = row.offsetHeight + 'px'; under.style.borderRadius = getComputedStyle(row).borderRadius;
+    row.before(under); row.classList.add('swiping'); row.style.transition = 'none';
+    button.addEventListener('click', tapped); window.navigationUI?.tapLabel?.(button);  // the iPhone ticks on a tap of it
+    const w = row.offsetWidth, cw = label.offsetWidth;
+    s = {row, item, under, label, button, w, home: w - BUTTON + (BUTTON - cw) / 2, mark: Math.round(Math.max(BUTTON + 70, Math.min(w * 0.48, w - 80))),
+      f: 0, armed: false, state: 'drag', timer: 0};
+    label.style.transform = `translate3d(${px(s.home)}px,0,0)`;
   }
-  function speed(s) {  // px per ms over the last ~80 ms; negative is leftward
-    const last = s.at(-1); let first = last;
-    for (let i = s.length - 1; i >= 0 && last.t - s[i].t < 80; i--) first = s[i];
+  function schedule() { if (!frame) frame = requestAnimationFrame(paint); }
+  function paint() {
+    frame = 0; if (!s || s.state !== 'drag') return;
+    const f = s.f, armed = f >= s.mark;
+    if (armed !== s.armed) { s.armed = armed; s.under.classList.toggle('armed', armed); if (armed) window.navigationUI?.haptic?.(); }  // Android only
+    s.row.style.transform = `translate3d(${px(-f)}px,0,0)`;
+    s.label.style.transform = `translate3d(${px(labelAt(s, f))}px,0,0)`;
+    s.label.style.opacity = String(Math.max(0.3, Math.min(1, f / 64)));
+  }
+  function stopPainting() { if (frame) { cancelAnimationFrame(frame); frame = 0; } }
+  function glide(f, ms, done) {  // the row, and 归档 with it, settles f px out; then done()
+    const me = s; me.f = f; stopPainting(); clearTimeout(me.timer);
+    const t = ms ? `transform ${ms}ms ${EASE}` : 'none';
+    me.row.style.transition = t; me.label.style.transition = ms ? `${t},opacity ${ms}ms` : 'none';
+    me.row.style.transform = `translate3d(${-f}px,0,0)`;
+    me.label.style.transform = `translate3d(${px(labelAt(me, f))}px,0,0)`; me.label.style.opacity = f ? '1' : '0.3';
+    me.timer = setTimeout(() => { if (s === me) done?.(me); }, ms + 20);
+  }
+  function hold() {  // a finger on a row that is open or gliding: it stops where it is
+    const me = s; clearTimeout(me.timer); stopPainting();
+    try { me.f = -new DOMMatrixReadOnly(getComputedStyle(me.row).transform).m41; } catch (e) {}
+    me.state = 'drag'; me.under.classList.remove('open'); me.row.style.transition = me.label.style.transition = 'none';
+    me.row.style.transform = `translate3d(${px(-me.f)}px,0,0)`; me.label.style.transform = `translate3d(${px(labelAt(me, me.f))}px,0,0)`;
+  }
+  function settleOpen() {
+    s.state = 'open'; s.armed = false; s.under.classList.remove('armed'); s.under.classList.add('open');
+    glide(BUTTON, reduced() ? 0 : SETTLE_MS);
+  }
+  function shut() {
+    if (!s || s.state === 'leaving') return;
+    s.state = 'shut'; s.armed = false; s.under.classList.remove('open', 'armed');
+    glide(0, reduced() ? 0 : SETTLE_MS, me => { me.row.classList.remove('swiping'); me.row.style.transition = me.row.style.transform = ''; me.under.remove(); settled(); });
+  }
+  function drop() {  // back at once, no motion: the page is leaving the list
+    if (!s || s.state === 'leaving') return; const me = s; clearTimeout(me.timer); stopPainting(); touch = null;
+    me.row.classList.remove('swiping'); me.row.style.transition = me.row.style.transform = ''; me.under.remove(); settled();
+  }
+  function tapped(e) {
+    e.stopPropagation(); if (!s || s.state !== 'open') return;
+    if (s.item.status === 'running') { shut(); toast('这个对话正在运行，先停止这一轮再归档', true); return; }
+    leave();
+  }
+  function speed(samples) {  // px per ms over the last ~80 ms; negative is leftward
+    const last = samples.at(-1); let first = last;
+    for (let i = samples.length - 1; i >= 0 && last.t - samples[i].t < 80; i--) first = samples[i];
     return last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0;
   }
   list.addEventListener('touchstart', e => {
-    g = null; if (e.touches.length !== 1 || cur || overlays.length || window.workspaceUI?.composing) return;
-    const row = e.target.closest?.('.conv'), item = itemOf(row); if (!item || row.classList.contains('collapse')) return;
-    const t = e.touches[0]; g = {row, item, x: t.clientX, y: t.clientY, dx: 0, decided: false, armed: false, samples: [{x: t.clientX, t: e.timeStamp}]};
+    touch = null; quietUntil = 0;  // a new touch: what it clicks is its own
+    if (e.touches.length !== 1 || cur || overlays.length || window.workspaceUI?.composing) return;
+    const t = e.touches[0], at = {x: t.clientX, y: t.clientY, samples: [{x: t.clientX, t: e.timeStamp}], decided: false};
+    if (s) {
+      if (s.state === 'leaving') return;  // the next swipe waits until the list has closed up
+      const mine = s.row.contains(e.target) || s.under.contains(e.target);
+      if (s.state === 'shut') { if (mine) touch = {...at, base: 0, row: s.row, item: s.item}; return; }  // already going back: a tap is a tap, a drag catches it
+      if (!mine) { shut(); touch = {...at, shut: true}; return; }  // open: a first touch elsewhere only shuts it
+      if (s.button.contains(e.target)) { touch = {...at, base: 0, row: s.row, item: s.item}; return; }  // a tap archives, a drag moves it
+      hold(); touch = {...at, caught: true, base: fingerFor(s.f)}; return;
+    }
+    const row = e.target.closest?.('.conv'), item = itemOf(row); if (!item) return;
+    touch = {...at, base: 0, row, item};
   }, {passive: true});
   list.addEventListener('touchmove', e => {
-    if (!g) return; const t = e.touches[0], dx = t.clientX - g.x, dy = t.clientY - g.y;
-    if (!g.decided) {
-      if (Math.hypot(dx, dy) < 8) return;
-      if (!(dx < 0 && -dx > 1.3 * Math.abs(dy) && e.cancelable)) { g = null; return; }  // a scroll, or the drawer's rightward pull
-      g.decided = true; g.width = g.row.offsetWidth; g.under = underFor(g.row); g.row.classList.add('swiping'); g.row.style.transition = 'none';
+    const tt = touch; if (!tt) return; const t = e.touches[0], dx = t.clientX - tt.x, dy = t.clientY - tt.y;
+    if (tt.shut) {  // sideways it neither swipes another row nor pulls the drawer out; up or down it scrolls
+      if (!tt.decided && Math.hypot(dx, dy) >= 8) tt.decided = Math.abs(dx) > Math.abs(dy) ? 'side' : 'scroll';
+      if (tt.decided === 'side' && e.cancelable) { e.preventDefault(); e.stopPropagation(); }
+      return;
     }
-    e.preventDefault(); g.dx = dx; g.samples.push({x: t.clientX, t: e.timeStamp}); if (g.samples.length > 12) g.samples.shift();
-    place(dx);
+    if (!tt.decided) {
+      if (Math.hypot(dx, dy) < 8) return;
+      if (!(Math.abs(dx) > 1.3 * Math.abs(dy) && e.cancelable) || (!s && dx > 0)) { touch = null; if (s) shut(); return; }  // a scroll, or the drawer's pull
+      if (!s && !tt.row.isConnected) { touch = null; return; }  // the row went back and the list was rebuilt meanwhile
+      tt.decided = true;
+      if (!s) begin(tt.row, tt.item);
+      else if (!tt.caught) { hold(); tt.base = fingerFor(s.f) + dx; }  // taken where it is, without a jump
+    }
+    e.preventDefault(); e.stopPropagation();  // the drawer's own handler further up must not take a rightward drag of an open row
+    tt.samples.push({x: t.clientX, t: e.timeStamp}); if (tt.samples.length > 12) tt.samples.shift();
+    s.f = outFor(tt.base - dx); schedule();
   }, {passive: false});
-  function release(commit) {
-    const s = g; g = null; if (!s?.decided) return;
-    const fling = commit && speed(s.samples) < -0.6 && -s.dx > 50;
-    // the lift is not a tap on the row: a click that follows at once is swallowed, a later one is not
-    const swallow = e => { e.stopImmediatePropagation(); e.preventDefault(); };
-    s.row.addEventListener('click', swallow, true); setTimeout(() => s.row.removeEventListener('click', swallow, true), 450);
-    if (commit && (s.armed || fling)) {
-      if (s.item.status === 'running') { springBack(s); toast('这个对话正在运行，先停止这一轮再归档', true); return; }
-      slideOff(s);
-    } else springBack(s);
-  }
-  list.addEventListener('touchend', () => { if (g) release(true); });
-  list.addEventListener('touchcancel', () => { if (g) release(false); });
-  function springBack(s) {
-    s.row.style.transition = reduced() ? 'none' : `transform .28s ${EASE}`; s.row.style.transform = '';
-    const done = () => { s.row.classList.remove('swiping'); s.row.style.transition = ''; s.under.remove(); };
-    if (reduced()) done(); else setTimeout(done, 300);
-  }
-  // off to the left, then the gap closes; the archive goes to the computer meanwhile
-  function slideOff(s) {
-    const key = convKey(s.item), index = convItems.findIndex(v => convKey(v) === key);
-    hidden.add(key); archive(s.item, index);
-    const collapse = () => {
-      for (const n of [s.row, s.under]) { n.style.height = n.offsetHeight + 'px'; n.classList.add('collapse'); }
-      requestAnimationFrame(() => { for (const n of [s.row, s.under]) { n.style.height = '0px'; n.style.paddingTop = n.style.paddingBottom = '0px'; n.style.opacity = '0'; n.style.borderTopWidth = '0px'; } });
-      setTimeout(() => { s.under.remove(); if (hidden.has(key)) { s.row.remove(); convItems = convItems.filter(v => convKey(v) !== key); } }, 260);
-    };
-    if (reduced()) { s.under.remove(); s.row.remove(); convItems = convItems.filter(v => convKey(v) !== key); return; }
-    s.row.style.transition = `transform .22s ${EASE}`; s.row.style.transform = `translate3d(${-s.width - 24}px,0,0)`;
-    setTimeout(collapse, 200);
+  list.addEventListener('touchend', e => {
+    const tt = touch; touch = null; if (!tt) return;
+    if (tt.shut || (tt.caught && !tt.decided)) { if (e.cancelable) e.preventDefault(); if (tt.caught) shut(); return; }  // that tap only shut the open row
+    if (!tt.decided || !s) return;  // a tap: on a row it opens the conversation, on 归档 it archives
+    quietUntil = performance.now() + 400; stopPainting();
+    const v = speed(tt.samples);
+    if (s.f >= s.mark && v < 0.3) {  // past the mark, and not flung back
+      if (s.item.status === 'running') { shut(); toast('这个对话正在运行，先停止这一轮再归档', true); return; }
+      leave();
+    } else if (v > 0.3 || (v > -0.3 && s.f < BUTTON / 2)) shut();
+    else settleOpen();
+  }, {passive: false});
+  list.addEventListener('touchcancel', () => { const tt = touch; touch = null; if (tt && s && s.state === 'drag') shut(); });
+  // the lift after a drag is not a tap: a click that follows it at once, before any new touch, is dropped
+  list.addEventListener('click', e => { if (performance.now() < quietUntil) { quietUntil = 0; e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+  // a touch anywhere off the list shuts an open row and goes on to do its own thing
+  document.addEventListener('touchstart', e => { if (s && s.state !== 'leaving' && !list.contains(e.target)) shut(); }, {capture: true, passive: true});
+  let width = innerWidth;
+  addEventListener('resize', () => { if (innerWidth !== width) { width = innerWidth; drop(); } });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) drop(); });
+  const baseOpen = window.openConv;
+  window.openConv = function () { drop(); return baseOpen.apply(this, arguments); };
+
+  // off to the left, a moment's pause, then the gap closes and the bar comes up; the archive goes to the computer meanwhile
+  function leave() {
+    const me = s; me.state = 'leaving'; me.under.classList.remove('open'); clearTimeout(me.timer); stopPainting();
+    const key = convKey(me.item), index = convItems.findIndex(v => convKey(v) === key);
+    hidden.add(key); archive(me.item, index);
+    const gone = () => { me.under.remove(); if (hidden.has(key)) { me.row.remove(); convItems = convItems.filter(v => convKey(v) !== key); } settled(me); };
+    if (reduced()) { showBar(me.item, index); gone(); return; }
+    me.label.style.transition = 'none';  // 归档 stays where it is while the row goes
+    me.row.style.transition = `transform ${OFF_MS}ms ${OFF_EASE}`; me.row.style.transform = `translate3d(${-(me.w + 24)}px,0,0)`;
+    me.timer = setTimeout(() => {
+      if (s !== me) return gone();  // the list was rebuilt meanwhile
+      if (!hidden.has(key)) {  // refused, or 撤销 already: it slides back instead
+        me.state = 'shut'; me.armed = false; me.under.classList.remove('armed');
+        glide(0, SETTLE_MS, () => { me.row.classList.remove('swiping'); me.row.style.transition = me.row.style.transform = ''; me.under.remove(); settled(); });
+        return;
+      }
+      showBar(me.item, index);
+      for (const n of [me.row, me.under]) { n.style.transition = ''; n.style.height = n.offsetHeight + 'px'; n.classList.add('collapse'); }
+      me.row.offsetHeight;  // the start height takes effect first, so that the change to 0 is animated (the row's inline transition is gone too)
+      for (const n of [me.row, me.under]) { n.style.height = '0px'; n.style.paddingTop = n.style.paddingBottom = '0px'; n.style.borderTopWidth = '0px'; n.style.opacity = '0'; }
+      me.timer = setTimeout(gone, CLOSE_MS + 40);
+    }, OFF_MS + 80);
   }
 
   // ---- the computer, and 撤销
   async function archive(item, index) {
     const key = convKey(item);
     const job = api('/api/chat/archive', {app: item.app, id: item.id}, 60000);
-    pending.set(key, job); showBar(item, index);
+    pending.set(key, job);  // the bar comes up once the row is off (leave)
     try { await job; window.sidebarUI?.load?.(true); }
     catch (e) { comeBack(item, index); hideBar(item); toast('没归档：' + e.message, true); }
     finally { if (pending.get(key) === job) pending.delete(key); }
@@ -130,7 +235,7 @@
     if (!convItems.some(v => convKey(v) === key)) convItems.splice(Math.max(0, Math.min(index, convItems.length)), 0, item);
     renderConvs();
     const row = [...list.querySelectorAll('.conv')].find(n => n.dataset.key === key);
-    if (row && !reduced()) { row.classList.add('returning'); setTimeout(() => row.classList.remove('returning'), 360); }
+    if (row && !reduced() && !row.classList.contains('swiping')) { row.classList.add('returning'); setTimeout(() => row.classList.remove('returning'), 360); }
   }
   async function undo(item, index) {
     hideBar(item); const key = convKey(item), job = pending.get(key);
