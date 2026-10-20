@@ -101,7 +101,7 @@
   function paintRun(me){
     const on=!!me&&active(me),running=on&&!!state?.running,pending=on&&!!localStorage.getItem(pendingKey(me));
     runBar.hidden=!(running||pending);runHint.hidden=later.hidden=!running;check.hidden=!pending;
-    later.disabled=busy||sending||!state?.available||!($('cvText').value.trim()||codexUI.imageSnapshot(me).length);
+    later.disabled=busy||sending||!state?.available||!!window.referencesUI?.pendingCount(me)||!($('cvText').value.trim()||codexUI.imageSnapshot(me).length||window.referencesUI?.fileCount(me));
     if(on)$('cvBtn').setAttribute('aria-label',running?'立即补充当前任务':'发送');
     const rows=on?state?.queued||[]:[];const sig=JSON.stringify([on&&me.id,rows,running]);
     if(tray.dataset.sig===sig)return;tray.dataset.sig=sig;  // rebuilt only when it changes: a tap on a row is not lost
@@ -196,8 +196,10 @@
   }
   $('cvText').addEventListener('input',()=>{if(cur?.app==='deepseek')paintRun(cur);});
   async function send(intent='steer'){
-    const me=cur;if(!me||!active(me)||busy||sending||window.workspaceUI?.composing||codexUI.blocked())return;
-    const text=$('cvText').value,images=codexUI.imageSnapshot(me);if(!text.trim()&&!images.length)return;
+    const me=cur;if(!me||!active(me)||busy||sending||window.workspaceUI?.composing)return;
+    if(window.referencesUI?.pendingCount(me)){showNote('文件还在传到电脑，传完再发；没传上的点「重试」或去掉','warn');return;}
+    if(codexUI.blocked())return;
+    const text=$('cvText').value,images=codexUI.imageSnapshot(me);if(!text.trim()&&!images.length&&!window.referencesUI?.fileCount(me))return;  // files alone are a message
     const key=pendingKey(me);let previous;try{previous=JSON.parse(localStorage.getItem(key)||'null');}catch{}
     if(previous){await checkPending(me,true);return;}
     const body={id:me.id,request_id:uid(),text,attachments:images.map(v=>v.meta.id),references:window.referencesUI?.snapshot(me)||[],intent};

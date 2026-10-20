@@ -17,7 +17,7 @@
 // runs and the page looks whole but is not: no Claude buttons, no microphone. Once the page has loaded, check that every
 // part is there; if one is missing, reload once (the open chat comes back), and if it still is, say so.
 addEventListener('load', () => {
-  const parts = {deepseekUI:'deepseek-ui', codexUI:'codex-ui', navigationUI:'navigation-ui', workspaceUI:'workspace-ui', activityUI:'activity-ui', readingUI:'reading-ui', claudeUI:'claude-ui', referencesUI:'references-ui', newChatUI:'new-chat-ui', voiceUI:'voice-ui', sidebarUI:'sidebar-ui'};
+  const parts = {deepseekUI:'deepseek-ui', codexUI:'codex-ui', navigationUI:'navigation-ui', workspaceUI:'workspace-ui', activityUI:'activity-ui', readingUI:'reading-ui', claudeUI:'claude-ui', referencesUI:'references-ui', newChatUI:'new-chat-ui', filesUI:'files-ui', voiceUI:'voice-ui', sidebarUI:'sidebar-ui'};
   const missing = Object.keys(parts).filter(k => !window[k]).map(k => parts[k]);
   let last = 0, before = '';
   try { last = +sessionStorage.getItem('lbr_parts_reload') || 0; before = sessionStorage.getItem('lbr_parts_missing') || ''; sessionStorage.removeItem('lbr_parts_missing'); } catch (e) {}
@@ -866,7 +866,8 @@ async function sendConv(deliveryMode=null) {
   if (window.codexUI?.shouldSendEnhanced()) return codexUI.send();
   const replaceDraft = replaceDraftNext?.key === chatKey(cur) && cur.app === 'claude' ? replaceDraftNext.draft : null; replaceDraftNext = null;
   const images=cur.app==='claude'?(window.codexUI?.imageSnapshot(cur)||[]):[];
-  const text = $('cvText').value.trim(); if (!text&&!images.length) return;
+  const text = $('cvText').value.trim(); if (!text&&!images.length&&!window.referencesUI?.fileCount(cur)) return;  // files alone are a message (10-20)
+  if(window.referencesUI?.pendingCount(cur)){toast('文件还在传到电脑，传完再发；没传上的点「重试」或去掉',true);return;}
   if(window.codexUI?.blocked())return;
   if(images.length&&deliveryMode==='steer'){toast('图片请使用普通发送，文字可立即补充',true);return;}
   const me = cur, key = chatKey(me), previous = pendingSends.get(key);
@@ -1181,6 +1182,7 @@ setMode('chat'); replaceUIState();
 <script src="/claude-ui.js"></script>
 <script src="/references-ui.js"></script>
 <script src="/new-chat-ui.js"></script>
+<script src="/files-ui.js"></script>
 <script src="/voice-ui.js"></script>
 <script src="/notify-ui.js"></script>
 <script src="/sidebar-ui.js"></script>

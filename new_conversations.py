@@ -218,11 +218,12 @@ class NewConversations:
                 folder=''  # Codex gets its folder below, once the request is known to be sound
             else:folder=self.context(app,body.get('folder'))
             ids=body.get('attachments') or [];refs=body.get('references') or []
-            if app=='deepseek' and any(isinstance(r,dict) and r.get('kind')!='chat' for r in refs):raise chats.ChatError('DeepSeek 暂时只能引用对话，不能用技能')
+            if app=='deepseek' and any(isinstance(r,dict) and r.get('kind') not in ('chat','file','folder') for r in refs):raise chats.ChatError('DeepSeek 不能用技能，只能引用对话、附文件')
             if not isinstance(ids,list) or len(ids)>5 or any(not isinstance(v,str) for v in ids) or len(set(ids))!=len(ids):raise chats.ChatError('最多添加 5 张不重复的图片')
             images=[self.bridge.attachment(i,'new:'+rid) for i in ids]
             if sum(v['original_size'] for v in images)>50<<20:raise chats.ChatError('图片合计不能超过 50 MB')
-            text=chats.clean_text(body.get('text') or ('请查看这些图片。' if images else '请根据所选引用协助处理。' if refs else ''))
+            only_files=bool(refs) and all(isinstance(r,dict) and r.get('kind') in ('file','folder') for r in refs)
+            text=chats.clean_text(body.get('text') or ('请查看这些图片。' if images else '请查看附带的文件。' if only_files else '请根据所选引用协助处理。' if refs else ''))
             compiled,native=self.references.compose(app,'',text,refs,cwd=folder)
             if projectless and app=='codex':folder=self._projectless_folder()
             # Store the complete immutable submission before any desktop effect.

@@ -88,6 +88,18 @@ class NewDeepSeekTests(unittest.TestCase):
         self.assertEqual(len(self.ds.sent),1);sent=self.ds.sent[0]
         self.assertEqual((sent['id'],sent['text'],sent['intent']),(status['id'],'你好','steer'))
         self.assertNotEqual(sent['request_id'],rid)  # its own id in DeepSeek's ledger
+    def test_files_alone_go_as_paths_in_the_first_message(self):  # 10-20: ＋ → 电脑上的文件 / 手机上的文件
+        import io,pc_files
+        files=pc_files.Files('k',inbox=self.root/'inbox',registry=self.root/'phone-files.json')
+        self.service.references.files=files
+        doc=self.workspace/'需求.md';doc.write_text('# 需求',encoding='utf-8')
+        sent_up=files.upload('现场照片说明.txt',io.BytesIO(b'abc').read,3,'deepseek','')
+        rid=self.submit(text='',references=[files.entry(doc),sent_up])
+        self.service._run(rid)
+        text=self.ds.sent[0]['text']
+        self.assertTrue(text.startswith('请查看附带的文件。\n\n附带的文件（都在这台电脑上，请直接打开）：'),text)
+        self.assertIn(f'- {doc}（文本，8 字节）',text);self.assertIn('现场照片说明.txt（文本，3 字节，从手机传来）',text)
+        self.assertEqual(files.remove_upload(sent_up['upload']),{'ok':True,'retained':True})  # went with a message: kept
     def test_deepseek_closed_fails_before_anything_and_continuing_sends_once(self):
         self.ds.down=True;rid=self.submit()
         self.service._run(rid)

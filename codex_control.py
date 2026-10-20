@@ -811,7 +811,8 @@ class Bridge:
         ids = body.get("attachments") or []
         if not isinstance(ids, list) or len(ids) > 5 or len(set(ids)) != len(ids):
             raise ControlError("每条消息最多 5 张不同图片", 400)
-        if (not text and not ids) or len(text) > chats.MAX_TEXT:
+        files = any(isinstance(v, dict) and v.get("kind") in ("file", "folder") for v in body.get("references") or [])
+        if (not text and not ids and not files) or len(text) > chats.MAX_TEXT:  # files alone are a message (10-20)
             raise ControlError("请填写消息或添加图片，文字不能超过 20000 字", 400)
         with self.lock:
             prior = self.receipt(tid,rid)

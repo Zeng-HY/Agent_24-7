@@ -478,6 +478,10 @@ class Bridge:
     def send(self,body):
         sid=body.get('id');self.find(sid);text=body.get('text','');ids=body.get('attachments',[])
         if not isinstance(text,str) or len(text)>20000 or not isinstance(ids,list) or len(ids)>5 or any(not isinstance(i,str) for i in ids) or len(set(ids))!=len(ids):raise DeepSeekError('消息或图片数量超出限制',400)
+        if body.get('references'):  # conversations and files (10-20: their paths go under the text); no skills
+            if not getattr(self,'references',None):raise DeepSeekError('引用服务暂不可用',503)
+            if any(not isinstance(ref,dict) or ref.get('kind') not in ('chat','file','folder') for ref in body['references']):raise DeepSeekError('DeepSeek 不能用技能，只能引用对话、附文件',400)
+            text,_=self.references.compose('deepseek',sid,text,body['references'])
         content=[{'type':'text','text':text}] if text.strip() else []
         total=0
         for ident in ids:
@@ -492,12 +496,6 @@ class Bridge:
         mode=body.get('intent','steer')
         if mode not in ('queue','steer'):raise DeepSeekError('发送模式无效',400)
         rid=body.get('request_id')
-        if body.get('references'):
-            if not getattr(self,'references',None):raise DeepSeekError('引用服务暂不可用',503)
-            if any(ref.get('kind')!='chat' for ref in body['references']):raise DeepSeekError('DeepSeek 暂仅支持引用对话',400)
-            text,_=self.references.compose('deepseek',sid,text,body['references'])
-            if content and content[0]['type']=='text':content[0]['text']=text
-            else:content.insert(0,{'type':'text','text':text})
         def operation():
             result=self.client.call('session/prompt',{'request':{'sessionId':sid,'requestId':rid,'mode':mode,'content':content,'clientTimeZone':'Asia/Taipei'}})
             if result.get('accepted') is not True:raise DeepSeekError('DeepSeek 尚未确认接收')

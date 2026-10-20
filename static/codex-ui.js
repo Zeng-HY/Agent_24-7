@@ -18,7 +18,8 @@
   }
   function save(id) {
     const d=draft(id);
-    try {localStorage.setItem(storageKey(id),JSON.stringify({settings:d.settings,base:d.base,images:d.images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta||null}))}));} catch(e) {toast('浏览器未能保存草稿，请保持页面打开',true);}
+    // pc: a picture picked on the computer (files-ui.js), read in again from there when its upload has to be redone
+    try {localStorage.setItem(storageKey(id),JSON.stringify({settings:d.settings,base:d.base,images:d.images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta||null,...(v.pc?{pc:v.pc}:{})}))}));} catch(e) {toast('浏览器未能保存草稿，请保持页面打开',true);}
   }
   const css=document.createElement('style');
   css.textContent=`
@@ -78,7 +79,8 @@
   const codexQueue=el('div','queue-strip'),runBar=el('div','run-bar'),sendIntent=el('button','run-queue','排队稍后发送');codexQueue.id='codexQueue';sendIntent.id='codexQueueSend';sendIntent.type='button';
   codexQueue.hidden=runBar.hidden=true;runBar.append(el('span','run-hint','发送会立即补充给这一轮'),sendIntent);
   $('runtimeBar').before(codexQueue,runBar);sendIntent.onclick=()=>send(null,'queue');
-  function queueReady(){const me=current(),s=states.get(me?.id);sendIntent.disabled=sending||!s?.available||s?.queue_available===false||!($('cvText').value.trim()||(me&&draft(me.id).images.length));}
+  const fileRefs=me=>window.referencesUI?.fileCount(me)||0,filesGoingUp=me=>window.referencesUI?.pendingCount(me)||0;  // files-ui.js
+  function queueReady(){const me=current(),s=states.get(me?.id);sendIntent.disabled=sending||!s?.available||s?.queue_available===false||!!(me&&filesGoingUp(me))||!($('cvText').value.trim()||(me&&(draft(me.id).images.length||fileRefs(me))));}
   $('cvText').addEventListener('input',queueReady);
   async function queueAction(message,action){
     const me=current(),s=states.get(me?.id);if(me?.app!=='codex')return;
@@ -135,6 +137,11 @@
   async function uploadImage(me,image){
     if(image.inflight)return;image.inflight=true;image.status='uploading';if(active(me))paintComposer();
     try{
+      if(image.pc&&!image.file){  // a picture on the computer: read in again from where it is
+        const data=await api('/api/files/image',{ref:image.pc,app:me.app,id:me.id},30000);
+        if(!draft(me.id).images.includes(image)){await api('/api/codex/remove-attachment',{id:me.id,attachment:data.id});return;}
+        image.meta=data;image.status='ready';image.error='';return;
+      }
       const file=image.file||await fileStore('get',image.localId);if(!file)throw Error('图片草稿不存在，请重新选择');
       image.file=file;if(!image.localUrl)image.localUrl=URL.createObjectURL(file);
       const response=await fetch('/api/codex/upload?app='+encodeURIComponent(me.app)+'&id='+encodeURIComponent(me.id)+'&name='+encodeURIComponent(image.name),{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
@@ -194,12 +201,13 @@
     const s=states.get(me.id);if(!s?.available){showNote(s?.reason||'Codex 控制连接不可用','bad');return;}
     if(s.running&&intent!=='queue'&&hasChanges(me)){showNote('图片、引用和新设置请点“排队稍后发送”；草稿已保留','warn');return;}
     if(d.images.some(v=>v.status!=='ready')){showNote('请先完成图片上传','warn');return;}
-    const originalText=$('cvText').value,text=planId?'请执行这份计划。':originalText.trim();if(!text&&!d.images.length)return;saveDraft();
+    if(!planId&&filesGoingUp(me)){showNote('文件还在传到电脑，传完再发；没传上的点「重试」或去掉','warn');return;}
+    const originalText=$('cvText').value,text=planId?'请执行这份计划。':originalText.trim();if(!text&&!d.images.length&&!(!planId&&fileRefs(me)))return;saveDraft();
     const previous=pendingSends.get(chatKey(me));if(previous?.state==='unconfirmed' && !(await askConfirm('上一条消息的结果尚未确认，再次发送可能重复。仍要发送吗？')))return;
     const rid=uid(),settings={...(d.settings||s.settings)},base=d.base||s.settings;
     if(planId)settings.mode='default';
-    const imageIds=d.images.map(v=>v.meta.id),ticket={text:text||(d.images.length+' 张图片'),started:Date.now(),state:'sending',note:'正在发送给 Codex…',request_id:rid,originalText,draftSettings:d.settings?{...d.settings}:null};
-    const sentImages=d.images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta}));
+    const imageIds=d.images.map(v=>v.meta.id),ticket={text:text||(d.images.length?d.images.length+' 张图片':'附带的文件'),started:Date.now(),state:'sending',note:'正在发送给 Codex…',request_id:rid,originalText,draftSettings:d.settings?{...d.settings}:null};
+    const sentImages=d.images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta,...(v.pc?{pc:v.pc}:{})}));
     const body={id:me.id,request_id:rid,text,attachments:imageIds,settings,expected_settings:base,intent,expected_turn:s.running?s.active_turn_id:null};if(planId)body.plan_id=planId;
     const references=planId?[]:window.referencesUI?.snapshot(me)||[];if(references.length)body.references=references;
     ticket.submission={text,attachments:imageIds,settings,plan_id:planId,references};
@@ -373,12 +381,16 @@
     async restoreSubmission(item){const d=draft(item.id);d.images=(item.images||[]).map(v=>({...v,status:'ready'}));d.settings=canonicalSettings(item.settings);d.base=canonicalSettings(item.base);save(item.id);if(current()?.id===item.id)await onOpen(cur);},
     onClose(){if(current())save(cur.id);ask=null;if(askOpen())closeSheet(askSheet.id);},refresh,decorateRows,renderCard,renderImages,openModels,openModes,
     openAttachments(anchor){if(current())openSheet('attachmentMenu',anchor);},
-    imageSnapshot(me=cur){return draft(me.id).images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta}));},
+    imageSnapshot(me=cur){return draft(me.id).images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta,...(v.pc?{pc:v.pc}:{})}));},
     clearImages(me){draft(me.id).images=[];save(me.id);if(active(me))paintComposer();},
-    attachmentCount(){return current()?draft(cur.id).images.length:0;},
+    // pictures and attached files (files-ui.js): either is enough to send
+    attachmentCount(){return current()?draft(cur.id).images.length+fileRefs(cur):0;},
     // A running thread's images/settings cannot be submitted, but let Send explain why instead of looking frozen.
-    blocked(){if(!current())return false;return draft(cur.id).images.some(v=>v.status!=='ready');},
-    shouldSendEnhanced(){return current()?.app==='codex';},send};
+    blocked(){if(!current())return false;return draft(cur.id).images.some(v=>v.status!=='ready')||filesGoingUp(cur)>0;},
+    shouldSendEnhanced(){return current()?.app==='codex';},send,
+    // files-ui.js: photos among the files picked on the phone; a picture on the computer the service read in (pc: where it is)
+    addPhotos(me,files){return addFiles(files,me);},photoRoom(me){return 5-draft(me.id).images.length;},
+    addImported(me,meta,pc){const d=draft(me.id);if(d.images.length>=5)return false;d.images.push({localId:uid(),name:meta.name||pc.name,size:meta.original_size||pc.size||0,meta,pc,status:'ready',error:''});save(me.id);if(active(me))paintComposer();updateSendButton();return true;}};
   // Match keyboard navigation used by existing sheet controls.
   document.addEventListener('keydown',e=>{const top=overlays.at(-1)?.id;if(!['modelSheet','modeSheet','claudeSettingSheet'].includes(top)||!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;const group=document.activeElement.closest('[role=radiogroup]');if(!group)return;const rows=[...group.querySelectorAll('[role=radio]:not(:disabled)')],i=rows.indexOf(document.activeElement);if(i<0)return;e.preventDefault();rows[(i+(['ArrowDown','ArrowRight'].includes(e.key)?1:-1)+rows.length)%rows.length].focus();});
   updateSendButton();

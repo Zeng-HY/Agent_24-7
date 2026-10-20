@@ -9,6 +9,10 @@
   const APP_NAME={codex:'Codex',claude:'Claude',deepseek:'DeepSeek'},APP_ID={codex:'newCodex',claude:'newClaude',deepseek:'newDeepseek'};
   const SPARK='<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l1.8 4.7 4.7 1.8-4.7 1.8-1.8 4.7-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>';
   let d;try{d={...empty(),...JSON.parse(localStorage.getItem(key)||'{}')};}catch{d=empty();}
+  // files attached (10-20, files-ui.js) are references too: {kind:'file'|'folder', path, …}; one from the phone still going
+  // up has a status, and nothing goes up before the page has loaded
+  const isFile=v=>v&&(v.kind==='file'||v.kind==='folder');
+  for(const v of d.references||[])if(isFile(v)&&v.status==='uploading'){v.status='failed';v.error='上传中断了，点重试';}
   // jobs: the first messages sent, oldest first, each {request_id, preview_id, app, folder, projectless, label, text,
   // references, images, body (what was submitted), pending (the service's latest word), clientTiming, created}
   let jobs;try{jobs=JSON.parse(localStorage.getItem(jobsKey)||'[]');if(!Array.isArray(jobs))jobs=[];}catch{jobs=[];}
@@ -24,10 +28,10 @@
   const sheet=$('newSheet'),box=sheet.querySelector('.sh-body');
   sheet.querySelector('b').textContent='新建对话';sheet.setAttribute('aria-label','新建对话');
   box.innerHTML=`<div class="new-apps" role="radiogroup" aria-label="客户端"><button id="newCodex" role="radio">Codex</button><button id="newClaude" role="radio">Claude</button><button id="newDeepseek" role="radio">DeepSeek</button></div>
-    <p class="hint new-caption" id="newCaption">第一句话就能附照片、使用技能或引用其他对话。</p>
+    <p class="hint new-caption" id="newCaption">第一句话就能附照片、文件，使用技能或引用其他对话。</p>
     <div class="new-composer"><div id="newImages" class="attachment-previews" hidden></div><div id="newRefs" class="reference-chips" hidden></div>
     <textarea id="newText" rows="4" placeholder="想做什么？输入 @ 找对话，$ 找技能" aria-label="首条消息"></textarea>
-    <div id="newSuggestions" class="new-suggestions" hidden></div><div class="new-composer-bar"><button id="newAdd" class="icon-btn" aria-label="添加照片、技能或对话">＋</button><span class="hint">首条消息</span><button id="newBtn" class="icon-btn new-send" aria-label="创建并发送">${icon('send')}</button></div></div>
+    <div id="newSuggestions" class="new-suggestions" hidden></div><div class="new-composer-bar"><button id="newAdd" class="icon-btn" aria-label="添加照片、文件、技能或对话">＋</button><span class="hint">首条消息</span><button id="newBtn" class="icon-btn new-send" aria-label="创建并发送">${icon('send')}</button></div></div>
     <button id="newFolderChoice" class="new-folder"><span>${icon('folder')}</span><span><strong id="newFolderName">选择项目文件夹</strong><small id="newFolderPath">读取电脑上的项目…</small></span><span>⌄</span></button>
     <button id="newModelChoice" class="new-folder"><span>${SPARK}</span><span><strong id="newModelName">默认模型</strong><small id="newModelDetail">跟电脑当前设置走；点这里选</small></span><span>⌄</span></button>
     <p class="hint new-caption" id="newStatus" role="status" aria-live="polite"></p>`;
@@ -57,7 +61,7 @@
     @media(max-height:520px){#newSheet .sh-body{gap:8px}.new-composer textarea{min-height:60px}.new-caption{font-size:12px}}
   `;document.head.append(css);
   function panel(id,title,content,popover=false){const n=el('div','sheet'+(popover?' popover':''));n.id=id;n.setAttribute('aria-label',title);n.innerHTML='<div class="box"><div class="sh-head"><b>'+title+'</b><button class="icon-btn" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body">'+content+'</div></div>';n.querySelector('button').onclick=()=>closeSheet(id);n.onclick=e=>{if(e.target===n)closeSheet(id);};document.body.append(n);return n;}
-  panel('newAddMenu','添加','<button class="menu-row" id="newCamera">拍照</button><button class="menu-row" id="newPhoto">从相册选择</button><button class="menu-row" id="newChatRef">引用对话</button><button class="menu-row" id="newSkillRef">使用技能</button>',true);
+  panel('newAddMenu','添加','<button class="menu-row" id="newCamera">拍照</button><button class="menu-row" id="newPhoto">从相册选择</button><button class="menu-row" id="newPhoneFiles">手机上的文件</button><button class="menu-row" id="newPcFiles">电脑上的文件</button><button class="menu-row" id="newChatRef">引用对话</button><button class="menu-row" id="newSkillRef">使用技能</button>',true);
   panel('newModelSheet','模型与推理强度','<div id="newModelRows" role="radiogroup" aria-label="模型"></div><div class="setting-heading" id="newEffortHead">推理强度</div><div id="newEffortRows" class="effort-choices" role="radiogroup" aria-label="推理强度"></div><p id="newModelNote" class="settings-notice"></p><button class="big" id="newModelDone">好了</button>');
   panel('newPicker','选择','<div class="new-search"><input id="newSearch" class="field" type="search" placeholder="搜索" aria-label="搜索选项"></div><div id="newPickerResults" role="listbox"></div><button id="newMore" hidden>加载更多</button>');
   panel('newJobSheet','新建对话的结果','<p class="hint new-caption" id="newJobTitle"></p><p class="new-job-status" id="newJobStatus" role="status" aria-live="polite"></p><div class="new-result-actions"><button id="newCheck">核对结果</button><button id="newRetry" hidden>继续发送</button><button id="newOpen" hidden>打开对话</button><button id="newRestore" hidden>恢复草稿</button><button id="newDismiss">移除</button></div>');
@@ -70,7 +74,7 @@
   function fresh(v){return {...empty(),app:v.app,folder:v.folder,projectless:!!v.projectless,label:v.label||'',settings:v.settings||{}};}  // same place and picks, nothing written
   function jobOf(v,pending){
     const pick=(v.settings||{})[v.app],j={request_id:v.request_id,preview_id:v.preview_id||'new:'+(v.request_id||hex()),app:v.app,folder:v.folder,projectless:!!v.projectless,label:v.label||'',
-      text:v.text||'',references:v.references||[],images:(v.images||[]).map(({file,url,...i})=>i),pending,clientTiming:v.clientTiming||{},timingReported:!!v.timingReported,created:Date.now()};
+      text:v.text||'',references:(v.references||[]).filter(r=>!r.status),images:(v.images||[]).map(({file,url,...i})=>i),pending,clientTiming:v.clientTiming||{},timingReported:!!v.timingReported,created:Date.now()};
     j.body={request_id:j.request_id,app:j.app,folder:j.projectless?'':j.folder,...(j.projectless?{projectless:true}:{}),...(pick?{settings:{model:pick.model,effort:pick.effort??null}}:{}),text:j.text,attachments:j.images.map(i=>i.meta?.id).filter(Boolean),references:j.references};
     return j;
   }
@@ -156,7 +160,7 @@
   function renderFirst(node,item){
     node.className='new-first-message';node.replaceChildren();const bubble=el('div','bub user');bubble.innerHTML=md(item.text||'请查看这些图片或引用。');
     if(item.images.length)window.codexUI?.renderImages(bubble,item.images);
-    if(item.references.length)bubble.append(el('small','',item.references.map(r=>(r.kind==='skill'?'$':'@')+(r.name||r.title)).join(' · ')));
+    if(item.references.length)bubble.append(el('small','',item.references.map(r=>isFile(r)&&window.filesUI?filesUI.label(r):(r.kind==='skill'?'$':'@')+(r.name||r.title)).join(' · ')));
     node.append(bubble);if(item.status){const note=el('button','new-inline-status'+(item.problem?' problem':''),item.status);note.id='newInlineStatus';note.onclick=()=>{const j=currentJob();if(problem(j))openJobSheet(j);};node.append(note);}
   }
   function rememberTiming(j,r){
@@ -170,24 +174,29 @@
     const apps=box.querySelector('.new-apps');apps.hidden=[...apps.children].filter(b=>!b.hidden).length<2;  // one app: nothing to pick
     const skills=d.app!=='deepseek';  // DeepSeek takes conversations as references, not skills: nothing on the sheet offers them
     $('newSkillRef').style.display=skills?'':'none';
-    $('newCaption').textContent=skills?'第一句话就能附照片、使用技能或引用其他对话。':'第一句话就能附照片或引用其他对话。';
+    $('newCaption').textContent=skills?'第一句话就能附照片、文件，使用技能或引用其他对话。':'第一句话就能附照片、文件或引用其他对话。';
     $('newText').placeholder=skills?'想做什么？输入 @ 找对话，$ 找技能':'想做什么？输入 @ 找对话';
-    $('newAdd').setAttribute('aria-label',skills?'添加照片、技能或对话':'添加照片或对话');
+    $('newAdd').setAttribute('aria-label',skills?'添加照片、文件、技能或对话':'添加照片、文件或对话');
     const folder=folders.find(v=>v.path===d.folder);$('newFolderName').textContent=d.projectless?'无项目':d.label||folder?.name||(d.folder?d.folder.split(/[\\/]/).pop():'选择项目文件夹');$('newFolderPath').textContent=d.projectless?'不放进任何项目':d.folder||'电脑端的项目与对话目录';
     const pick=chosen();$('newModelName').textContent=pick?pick.modelLabel+(pick.effortLabel?' · '+pick.effortLabel:''):'默认模型';
     $('newModelDetail').textContent=pick?'新对话用这个模型；点这里换':'跟电脑当前设置走；点这里选';
-    $('newBtn').disabled=starting||composing||uploading>0||d.images.some(v=>!v.meta)||!(d.folder||d.projectless)||(!d.text.trim()&&!d.images.length&&!d.references.length);
+    $('newBtn').disabled=starting||composing||uploading>0||d.images.some(v=>!v.meta)||d.references.some(v=>isFile(v)&&v.status)||!(d.folder||d.projectless)||(!d.text.trim()&&!d.images.length&&!d.references.length);
     $('newRefs').replaceChildren();$('newRefs').hidden=!d.references.length;
-    for(const r of d.references){const chip=el('div','reference-chip'),b=el('button','','×');b.type='button';b.setAttribute('aria-label','移除 '+(r.name||r.title));b.onclick=()=>{d.references=d.references.filter(v=>v!==r);save();paint();};chip.append(el('span','',(r.kind==='skill'?'$':'@')+(r.name||r.title)),b);$('newRefs').append(chip);}
+    for(const r of d.references){
+      const drop=()=>{d.references=d.references.filter(v=>v!==r);window.filesUI?.discard(r);save();paint();};
+      if(isFile(r)&&window.filesUI){$('newRefs').append(filesUI.chip(r,{remove:drop,retry:()=>filesUI.retry(r,fileTarget())}));continue;}
+      const chip=el('div','reference-chip'),b=el('button','','×');b.type='button';b.setAttribute('aria-label','移除 '+(r.name||r.title));b.onclick=drop;chip.append(el('span','',(r.kind==='skill'?'$':'@')+(r.name||r.title)),b);$('newRefs').append(chip);}
     $('newImages').replaceChildren();$('newImages').hidden=!d.images.length;
     for(const v of d.images){const tile=el('div','attachment-tile'),img=el('img'),remove=el('button','remove-image');img.src=v.meta?.thumbnail||v.url||'';img.alt=v.name;remove.innerHTML='<span>×</span>';remove.setAttribute('aria-label','移除 '+v.name);remove.onclick=()=>{d.images=d.images.filter(i=>i!==v);fileStore('delete',v.localId).catch(()=>{});if(v.url)URL.revokeObjectURL(v.url);save();paint();};tile.append(img,remove,el('small','',v.meta?'待发送':v.uploading?'上传中…':'未上传'));
       if(v.error){const err=el('div','new-upload-error',v.error),retry=el('button','retry-image','重试上传');retry.onclick=()=>upload(v);tile.append(err,retry);} $('newImages').append(tile);}
     $('newStatus').textContent=d.app==='claude'?(pick?'':'使用 Claude 桌面端当前设置。')+'新文件夹可能需要在电脑上确认信任。':pick?'创建后还可以在输入区调整。':'使用 '+(APP_NAME[d.app]||'Codex')+' 当前默认设置；创建后可在输入区调整。';
     renderProgress();
   }
-  async function upload(v){if(v.uploading)return;v.uploading=true;v.error='';uploading++;paint();try{const rid=await ensureDraft(),file=v.file||await fileStore('get',v.localId);if(!file)throw Error('原图已不在浏览器中，请移除后重新选择');const res=await fetch('/api/codex/upload?draft='+rid+'&name='+encodeURIComponent(v.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});const out=await res.json();if(!res.ok||out.error)throw Error(out.error||'上传失败');v.meta=out;}catch(e){v.error=e.message;}finally{v.uploading=false;uploading--;save();paint();}}
+  async function upload(v){if(v.uploading)return;v.uploading=true;v.error='';uploading++;paint();try{const rid=await ensureDraft();
+      if(v.pc&&!v.file){v.meta=await api('/api/files/image',{ref:v.pc,draft:rid},30000);return;}  // a picture on the computer: read in again from there
+      const file=v.file||await fileStore('get',v.localId);if(!file)throw Error('原图已不在浏览器中，请移除后重新选择');const res=await fetch('/api/codex/upload?draft='+rid+'&name='+encodeURIComponent(v.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});const out=await res.json();if(!res.ok||out.error)throw Error(out.error||'上传失败');v.meta=out;}catch(e){v.error=e.message;}finally{v.uploading=false;uploading--;save();paint();}}
   async function addFiles(files){for(const file of files){if(d.images.length>=5){toast('最多添加 5 张图片',true);break;}if(file.size>20*1024*1024){toast('单张图片不能超过 20 MB',true);continue;}if(d.images.reduce((n,v)=>n+v.size,0)+file.size>50*1024*1024){toast('图片合计不能超过 50 MB',true);break;}const v={localId:'new-'+hex(),name:file.name,size:file.size,file,url:URL.createObjectURL(file)};try{await fileStore('put',v.localId,file);d.images.push(v);save();upload(v);}catch(e){toast('图片草稿未能保存：'+e.message,true);}}paint();}
-  function chooseRef(ref){if(composing)return;const id=v=>v.kind+':'+v.app+':'+v.id;if(d.references.some(v=>id(v)===id(ref))){toast('已经选过这一项');return;}if(d.references.length>=8||(ref.kind==='chat'&&d.references.filter(v=>v.kind==='chat').length>=3)){toast('最多引用 8 项，其中对话最多 3 段',true);return;}d.references.push(ref);if(trigger){const n=$('newText');if(n.value.slice(trigger.start,trigger.end)===trigger.text){n.setRangeText('',trigger.start,trigger.end,'end');d.text=n.value;}trigger=null;}$('newSuggestions').hidden=true;save();paint();}
+  function chooseRef(ref){if(composing)return;const id=v=>v.kind+':'+v.app+':'+v.id;if(d.references.some(v=>id(v)===id(ref))){toast('已经选过这一项');return;}if(d.references.filter(v=>!isFile(v)).length>=8||(ref.kind==='chat'&&d.references.filter(v=>v.kind==='chat').length>=3)){toast('最多引用 8 项，其中对话最多 3 段',true);return;}d.references.push(ref);if(trigger){const n=$('newText');if(n.value.slice(trigger.start,trigger.end)===trigger.text){n.setRangeText('',trigger.start,trigger.end,'end');d.text=n.value;}trigger=null;}$('newSuggestions').hidden=true;save();paint();}
   function pickRow(v,kind){const b=el('button','new-pick-row',kind==='folder'?v.name:(v.kind==='skill'?'$':'@')+(v.name||v.title));b.setAttribute('role','option');b.setAttribute('aria-selected',String(kind==='folder'?d.folder===v.path:d.references.some(r=>r.id===v.id&&r.app===v.app)));b.append(el('small','',kind==='folder'?v.path+' · '+v.sources.join(' / '):v.kind==='skill'?v.scope+' · '+v.description:(APP_NAME[v.app]||v.app)+' · '+v.folder+' · '+v.id.slice(-6)));b.onclick=()=>{if(kind==='folder'){if(d.folder!==v.path||d.projectless){d.folder=v.path;d.projectless=false;d.label='';searchSeq++;$('newSuggestions').hidden=true;d.references=d.references.filter(v=>v.kind!=='skill');save();paint();}}else chooseRef(v);closeSheet('newPicker');};return b;}
   function noProjectRow(){const b=el('button','new-pick-row','无项目');b.setAttribute('role','option');b.setAttribute('aria-selected',String(!!d.projectless));b.append(el('small','',d.app==='claude'?'Claude 不选文件夹，电脑上显示 No folder':'在「文档\\Codex」下新建一个文件夹'));b.onclick=()=>{if(!d.projectless){d.projectless=true;d.folder='';d.label='';searchSeq++;$('newSuggestions').hidden=true;d.references=d.references.filter(v=>v.kind!=='skill');save();paint();}closeSheet('newPicker');};return b;}
   async function loadPicker(more=false){const seq=++searchSeq,kind=pickerKind,q=$('newSearch').value.trim(),results=$('newPickerResults');if(!more)results.textContent='读取中…';$('newMore').hidden=true;
@@ -205,6 +214,17 @@
       if(!d.projectless&&!folders.some(v=>v.path===d.folder)){let previous='';try{previous=localStorage.getItem('lbr_new_folder')||'';}catch{}d.folder=folders.find(v=>v.path===previous)?.path||folders[0]?.path||'';d.label='';save();}
       paint();grow();}catch(e){$('newStatus').textContent='文件夹读取失败：'+e.message;}}
   $('newAdd').onclick=()=>openSheet('newAddMenu',$('newAdd'));$('newCamera').onclick=()=>{closeSheet('newAddMenu');camera.click();};$('newPhoto').onclick=()=>{closeSheet('newAddMenu');photo.click();};$('newChatRef').onclick=()=>{closeSheet('newAddMenu');openPicker('chat');};$('newSkillRef').onclick=()=>{closeSheet('newAddMenu');openPicker('skill');};$('newFolderChoice').onclick=()=>openPicker('folder');$('newModelChoice').onclick=openModels;$('newModelDone').onclick=()=>closeSheet('newModelSheet');$('newSearch').oninput=e=>{if(!e.isComposing){clearTimeout(debounce);debounce=setTimeout(()=>loadPicker(),180);}};$('newSearch').oncompositionend=()=>loadPicker();$('newMore').onclick=()=>loadPicker(true);
+  // ---- files (10-20, files-ui.js): from the phone, sent up into the computer's inbox; or picked among its folders.
+  // Photos and pictures go with the photos; the rest are references whose paths go under the first message.
+  function fileTarget(){return {list:()=>d.references,changed(progressOnly){if(!progressOnly)save();paint();},params:async()=>({app:d.app,draft:await ensureDraft().catch(()=>'')})};}
+  $('newPhoneFiles').onclick=()=>{closeSheet('newAddMenu');filesUI.choosePhone(files=>{const {photos,others}=filesUI.splitPhone(files);if(photos.length)addFiles(photos);if(others.length)filesUI.upload(others,fileTarget());});};
+  $('newPcFiles').onclick=()=>{closeSheet('newAddMenu');filesUI.open({folder:d.projectless?'':d.folder||'',room:()=>filesUI.MAX_FILES-d.references.filter(isFile).length,onPick:async entries=>{
+    for(const v of entries){
+      let meta=null;if(d.images.length<5){try{meta=await filesUI.importPicture(v,{draft:await ensureDraft()});}catch(e){}}
+      if(meta)d.images.push({localId:'new-'+hex(),name:meta.name||v.name,size:meta.original_size||v.size||0,meta,pc:v});
+      else if(!d.references.some(r=>isFile(r)&&r.path&&r.path.toLowerCase()===v.path.toLowerCase()))d.references.push({...v});
+    }
+    save();paint();}});};
   async function check(j){
     if(!j?.request_id||checking.has(j.request_id)||sending.has(j.request_id)||!jobs.includes(j))return;
     const rid=j.request_id;clearTimeout(timers[rid]);checking.add(rid);let delay=500;

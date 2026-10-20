@@ -1,21 +1,32 @@
-/* Search by partial name; selections are server-bound and travel with the send snapshot. */
+/* Search by partial name; selections are server-bound and travel with the send snapshot.
+   Files and folders on the computer are references too (10-20, files-ui.js): up to 20 besides the 8 others, each a
+   chip with 📄/📁; one still going up from the phone holds the send until it is there. */
 (() => {
   const input=$('cvText'),drafts=new Map();let generation=0,timer=null,trigger=null,suggestions=[],selectedIndex=-1,pickerTarget=null,pickerKind='chat',nextOffset=0,hasMore=false;
   const key=me=>'lbr_references_'+chatKey(me);
-  function entries(me=cur){if(!me)return [];const k=chatKey(me);if(!drafts.has(k)){let saved=[];try{saved=JSON.parse(localStorage.getItem(key(me))||'[]');}catch(e){}drafts.set(k,Array.isArray(saved)?saved:[]);}return drafts.get(k);}
+  const isFile=v=>v&&(v.kind==='file'||v.kind==='folder');
+  function entries(me=cur){if(!me)return [];const k=chatKey(me);if(!drafts.has(k)){let saved=[];try{saved=JSON.parse(localStorage.getItem(key(me))||'[]');}catch(e){}if(!Array.isArray(saved))saved=[];
+    for(const v of saved)if(isFile(v)&&v.status==='uploading'){v.status='failed';v.error='上传中断了，点重试';}  // nothing goes up before the page loads
+    drafts.set(k,saved);}return drafts.get(k);}
   function save(me){localStorage.setItem(key(me),JSON.stringify(entries(me)));}
+  // where files-ui.js puts files from the phone: this conversation's list
+  function target(me){return {list:()=>entries(me),changed(progressOnly){if(!progressOnly)try{save(me);}catch(e){toast('文件草稿未能保存，请保持页面打开',true);}if(cur&&chatKey(cur)===chatKey(me))paint();},params:{app:me.app,id:me.id}};}
+  function removeRef(me,ref){drafts.set(chatKey(me),entries(me).filter(v=>v!==ref));window.filesUI?.discard(ref);try{save(me);}catch(e){toast('引用草稿未能保存',true);}paint();updateSendButton();}
   const style=el('style');style.textContent=`.reference-chips{display:flex;flex-wrap:wrap;gap:8px;padding:4px;max-height:120px;overflow:auto}.reference-chip{display:flex;align-items:center;gap:4px;border:1px solid var(--line);background:#eef2ff;border-radius:999px;max-width:100%;color:var(--blue);font-size:13px;padding-left:10px}.reference-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.reference-chip button{border:0;color:inherit;background:transparent;min-width:44px;min-height:44px;padding:8px}.reference-suggestions{max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:20px;background:white;margin-bottom:8px;box-shadow:0 3px 12px rgba(0,0,0,.05)}.reference-result{width:100%;display:block;text-align:left;border:0;border-bottom:1px solid var(--line);background:transparent;border-radius:0;padding:12px 16px;font-size:14px;font-weight:500;min-height:44px;overflow-wrap:anywhere}.reference-result:last-child{border-bottom:0}.reference-result small{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--muted);font-size:12px;font-weight:400;margin-top:4px;line-height:1.5}.reference-result[aria-selected=true]{background:#eef2ff;color:var(--blue)}.reference-result:focus-visible{outline:2px solid var(--blue);outline-offset:-3px}.reference-empty{padding:12px 16px;color:var(--muted);font-size:13px}.reference-search{width:100%;font:inherit;font-size:16px;border:1px solid var(--line);border-radius:16px;padding:12px;background:var(--bg)}.reference-caption{font-size:12px;color:var(--muted);line-height:1.5}#referencePicker .sh-body{gap:8px}#referenceResults{min-height:0;overflow:auto}#claudeComposerTools .composer-chip{padding:8px 4px}#claudeReferenceAdd{flex:none}#referencePicker .box{max-height:min(80dvh,620px)}`;document.head.append(style);
   const chips=el('div','reference-chips');chips.id='referenceChips';chips.hidden=true;input.before(chips);
   const list=el('div','reference-suggestions');list.id='referenceSuggestions';list.hidden=true;list.setAttribute('role','listbox');list.setAttribute('aria-label','对话与技能建议');document.querySelector('.cv-row').before(list);
   const panel=el('div','sheet');panel.id='referencePicker';panel.setAttribute('aria-label','查找对话或技能');panel.innerHTML='<div class="box"><div class="sh-head"><b></b><button class="icon-btn" aria-label="关闭查找">'+icon('close')+'</button></div><div class="sh-body"><input class="reference-search" id="referenceSearch" type="search" aria-label="搜索对话或技能" placeholder="输入部分名称或关键词"><div class="reference-caption" id="referenceCaption"></div><div id="referenceResults"></div><button id="referenceMore" hidden>加载更多</button></div></div>';document.body.append(panel);panel.querySelector('button').onclick=()=>closeSheet(panel.id);panel.onclick=e=>{if(e.target===panel)closeSheet(panel.id);};
   const menu=el('div','sheet popover');menu.id='referenceMenu';menu.innerHTML='<div class="box"><div class="sh-head"><b>添加引用</b><button class="icon-btn" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body"></div></div>';document.body.append(menu);menu.querySelector('button').onclick=()=>closeSheet(menu.id);menu.onclick=e=>{if(e.target===menu)closeSheet(menu.id);};
   for(const [kind,title] of [['chat','引用对话'],['skill','使用技能']])for(const parent of [menu.querySelector('.sh-body'),$('attachmentMenu').querySelector('.sh-body')]){const b=el('button','menu-row',title);b.onclick=()=>{dismissOverlays();openPicker(kind);};parent.append(b);}
-  const add=el('button','icon-btn','＋');add.id='claudeReferenceAdd';add.setAttribute('aria-label','添加图片、对话或技能');add.onclick=()=>codexUI.openAttachments(add);$('claudeComposerTools').prepend(add);
+  const add=el('button','icon-btn','＋');add.id='claudeReferenceAdd';add.setAttribute('aria-label','添加图片、文件、对话或技能');add.onclick=()=>codexUI.openAttachments(add);$('claudeComposerTools').prepend(add);
   function identity(v){return v.kind+':'+v.app+':'+v.id;}
-  function paint(){chips.replaceChildren();for(const ref of entries()){const chip=el('div','reference-chip'),label=el('span','',(ref.kind==='skill'?'$':'@')+(ref.name||ref.title));label.title=(ref.name||ref.title)+' · '+(ref.scope||ref.folder||ref.app);const remove=el('button','','×');remove.setAttribute('aria-label','移除引用 '+(ref.name||ref.title));remove.onclick=()=>{const me=cur;drafts.set(chatKey(me),entries(me).filter(v=>identity(v)!==identity(ref)));try{save(me);}catch(e){toast('引用草稿未能保存',true);}paint();updateSendButton();};chip.append(label,remove);chips.append(chip);}chips.hidden=!entries().length;updateSendButton();}
+  function paint(){chips.replaceChildren();const me=cur;for(const ref of entries()){
+      if(isFile(ref)&&window.filesUI){chips.append(filesUI.chip(ref,{remove:()=>removeRef(me,ref),retry:()=>filesUI.retry(ref,target(me))}));continue;}
+      const chip=el('div','reference-chip'),label=el('span','',(ref.kind==='skill'?'$':'@')+(ref.name||ref.title));label.title=(ref.name||ref.title)+' · '+(ref.scope||ref.folder||ref.app);const remove=el('button','','×');remove.setAttribute('aria-label','移除引用 '+(ref.name||ref.title));remove.onclick=()=>removeRef(me,ref);chip.append(label,remove);chips.append(chip);}
+    chips.hidden=!entries().length;updateSendButton();}
   function hide(){generation++;clearTimeout(timer);trigger=null;suggestions=[];selectedIndex=-1;list.hidden=true;input.removeAttribute('aria-activedescendant');}
   function select(ref,me,token=null){if(!cur||chatKey(cur)!==chatKey(me)||workspaceUI.composing)return;
-    const all=entries(me);if(all.some(v=>identity(v)===identity(ref))){toast('已经选过这一项');return;}if(all.length>=8||(ref.kind==='chat'&&all.filter(v=>v.kind==='chat').length>=3)){toast('最多引用 8 项，其中对话最多 3 段',true);return;}
+    const all=entries(me);if(all.some(v=>identity(v)===identity(ref))){toast('已经选过这一项');return;}if(all.filter(v=>!isFile(v)).length>=8||(ref.kind==='chat'&&all.filter(v=>v.kind==='chat').length>=3)){toast('最多引用 8 项，其中对话最多 3 段',true);return;}
     if(token&&(input.value.slice(token.start,token.end)!==token.text||input.selectionStart!==token.end)){hide();return;}
     all.push(ref);try{save(me);}catch(e){all.pop();toast('引用未能保存，请释放浏览器存储空间',true);return;}
     if(token){input.setRangeText('',token.start,token.end,'end');input.dispatchEvent(new Event('input',{bubbles:true}));}
@@ -35,8 +46,15 @@
   function openPicker(kind){if(!cur)return;hide();pickerTarget={...cur};pickerKind=kind;panel.querySelector('b').textContent=kind==='chat'?'引用对话':'使用技能';$('referenceSearch').value='';$('referenceResults').textContent='正在读取…';$('referenceCaption').textContent=kind==='chat'?'选择准确对话，随消息附带最近公开摘要。不会向该对话发送消息。':'按名称或说明搜索当前客户端的本地技能，例如：中文、翻译、表格。';$('referenceMore').hidden=true;openSheet(panel.id);loadPicker();}
   $('referenceSearch').addEventListener('input',e=>{if(e.isComposing)return;clearTimeout(timer);timer=setTimeout(()=>loadPicker(),180);});$('referenceSearch').addEventListener('compositionend',()=>loadPicker());$('referenceMore').onclick=()=>loadPicker(true);
   window.referencesUI={onOpen(){hide();paint();},onClose(){hide();pickerTarget=null;},onSheetClose(id){if(id===panel.id){generation++;pickerTarget=null;}},
-    count(){return entries().length;},snapshot(me=cur){return entries(me).map(v=>({...v}));},
+    count(){return entries().length;},snapshot(me=cur){return entries(me).filter(v=>!v.status).map(v=>({...v}));},
     clear(me){drafts.set(chatKey(me),[]);try{save(me);}catch(e){}if(cur&&chatKey(cur)===chatKey(me))paint();},
-    restore(me,refs){if(entries(me).length)throw Error('当前已有引用，请先处理');drafts.set(chatKey(me),(refs||[]).map(v=>({...v})));save(me);if(cur&&chatKey(cur)===chatKey(me))paint();},openPicker};
+    restore(me,refs){if(entries(me).length)throw Error('当前已有引用，请先处理');drafts.set(chatKey(me),(refs||[]).map(v=>({...v})));save(me);if(cur&&chatKey(cur)===chatKey(me))paint();},openPicker,
+    // files (files-ui.js): ones picked on the computer, ones from the phone to send up, and how many are attached
+    addFiles(me,refs){const all=entries(me);let full=false;
+      for(const ref of refs){if(all.some(v=>isFile(v)&&v.path&&v.path.toLowerCase()===String(ref.path).toLowerCase()))continue;if(all.filter(isFile).length>=filesUI.MAX_FILES){full=true;break;}all.push({...ref});}
+      if(full)toast('一条消息最多附 '+filesUI.MAX_FILES+' 个文件或文件夹',true);try{save(me);}catch(e){toast('文件草稿未能保存，请保持页面打开',true);}if(cur&&chatKey(cur)===chatKey(me))paint();},
+    uploadFiles(me,files){window.filesUI?.upload(files,target(me));},
+    fileCount(me=cur,withPending=false){return entries(me).filter(v=>isFile(v)&&(withPending||!v.status)).length;},
+    pendingCount(me=cur){return entries(me).filter(v=>isFile(v)&&v.status).length;}};
   if(cur)paint();
 })();

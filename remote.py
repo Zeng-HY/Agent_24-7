@@ -15,7 +15,8 @@ computer at 127.0.0.1, Funnel, a tagged device, or bind other than 127.0.0.1) th
 The token lives in remote_config.json next to this file, with "name" (this computer, as the phone shows it),
 "voice": false on a computer without the microphone, and optionally "apps": ["codex"] to override what is found.
 "bark" is the phone's notification address, pasted on the page (notify.py); "ntfy": true when the ntfy app on an
-Android phone gets them from this service (ntfy_feed.py), turned on on the page.
+Android phone gets them from this service (ntfy_feed.py), turned on on the page. "phone_files": the folder files sent
+up from the phone go into (pc_files.py; 下载\\手机传来的文件 when not set).
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ import chat_projects  # the sidebar: conversations by app and project, as the de
 import live_events
 import claude_control
 import composer_references
+import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
 import new_conversations
 import voice  # the microphone button: recordings from the phone turned into text with VoiceAnywhere's key
 import voice_local  # the same button, recognised on this PC while the user talks (SenseVoice + Qwen3-ASR)
@@ -67,7 +69,7 @@ import notify  # a notification on the phone (Bark, ntfy) when a conversation is
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.20.14"  # a /compact sent from the phone leaves 排队中; Claude's summary shows as 对话已压缩, not a message
+VERSION = "0.21.0"  # ＋ attaches any file on this computer, or one from the phone; the message carries its path
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -100,6 +102,7 @@ STATIC_FILES = {  # served without the token: home-screen icons and the web app 
     "/navigation-ui.js": ("navigation-ui.js", "application/javascript; charset=utf-8"),
     "/claude-ui.js": ("claude-ui.js", "application/javascript; charset=utf-8"),
     "/references-ui.js": ("references-ui.js", "application/javascript; charset=utf-8"),
+    "/files-ui.js": ("files-ui.js", "application/javascript; charset=utf-8"),
     "/codex-ui.js": ("codex-ui.js", "application/javascript; charset=utf-8"),
     "/new-chat-ui.js": ("new-chat-ui.js", "application/javascript; charset=utf-8"),
     "/workspace-ui.js": ("workspace-ui.js", "application/javascript; charset=utf-8"),
@@ -397,6 +400,14 @@ class Handler(BaseHTTPRequestHandler):
             try:self._json(self.server.references.search(q.get('app','codex'),q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0'))))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
+        if path in ('/api/files/places','/api/files/list'):  # 电脑上的文件: where to start, and one folder (pc_files.py)
+            q=self._query()
+            try:
+                if path.endswith('/places'):self._json(self.server.files.places(self._conversation_folder(q)))
+                else:self._json(self.server.files.listing(q.get('path',''),q.get('sort','name'),q.get('query',''),int(q.get('offset','0') or 0)))
+            except pc_files.FileError as exc:self._json({'error':str(exc)},exc.status)
+            except (chats.ChatError,OSError,ValueError) as exc:self._json({'error':str(exc)},400)
+            return
         if path in ('/api/chat/new/state','/api/chat/new/references'):
             try:
                 q=self._query()
@@ -472,6 +483,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/codex/upload":
             self._codex_upload()
             return
+        if path == "/api/files/upload":  # a file from the phone, its bytes as the body (pc_files.Files.upload)
+            self._files_upload()
+            return
         if path == "/api/voice":
             self._voice()
             return
@@ -525,6 +539,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith('/api/deepseek/'):
             self._deepseek(path,body)
+            return
+        if path in ('/api/files/image','/api/files/remove'):
+            self._files_post(path,body)
             return
         if path.startswith("/api/codex/"):
             self._codex_post(path, body)
@@ -792,6 +809,47 @@ class Handler(BaseHTTPRequestHandler):
             self.log.write(traceback.format_exc())
             self._json({"error": f"{type(exc).__name__}: {str(exc)[:200]}"}, 500)
 
+    def _conversation_folder(self, q: dict) -> str:
+        """Where the file sheet starts: the folder picked for a new conversation, or the open one's working folder."""
+        if q.get("folder"):
+            return q["folder"]
+        try:
+            return chats._strip_unc(str(chats.find(q.get("app", ""), q.get("id", "")).get("cwd") or ""))
+        except Exception:  # a conversation the lists no longer have: the sheet starts at the other places
+            return ""
+
+    def _files_upload(self):
+        """A file from the phone written to the inbox on this computer; it answers with the reference that attaches it."""
+        q = self._query()
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+            if not 0 < size <= pc_files.MAX_UPLOAD:
+                raise pc_files.FileError(f"单个文件最多 {pc_files.MAX_UPLOAD >> 20} MB", 413)
+            self._json(self.server.files.upload(q.get("name", "文件"), self.rfile.read, size, q.get("app", ""),
+                                                q.get("id", "") or q.get("draft", "")))
+        except pc_files.FileError as exc:
+            self.close_connection = True  # what is left of the body is not read
+            self._json({"error": str(exc)}, exc.status)
+        except (OSError, ValueError) as exc:
+            self.close_connection = True
+            self._json({"error": f"文件没存下来：{exc}"}, 400)
+
+    def _files_post(self, path: str, body: dict):
+        try:
+            if path == "/api/files/remove":  # taken off the draft before it went: deleted unless a message carried it
+                self._json(self.server.files.remove_upload(body.get("upload")))
+                return
+            # /api/files/image: a picture on this computer, read into the photo path so the model sees it at once
+            name, raw = self.server.files.picture(body.get("ref") if isinstance(body.get("ref"), dict) else {})
+            if body.get("draft"):
+                self._json(self.server.new_chats.upload(str(body["draft"]), name, raw))
+            else:
+                self._json(self.server.codex.upload(str(body.get("id", "")), name, raw, str(body.get("app", "codex"))))
+        except pc_files.FileError as exc:
+            self._json({"error": str(exc)}, exc.status)
+        except (codex_control.ControlError, chats.ChatError, OSError, ValueError, TypeError) as exc:
+            self._json({"error": str(exc)}, getattr(exc, "status", 400))
+
     def _codex_upload(self):
         try:
             size = int(self.headers.get("Content-Length") or 0)
@@ -910,7 +968,8 @@ def main(argv: list[str] | None = None) -> int:
     server.claude_reads = collections.deque(maxlen=60)  # when the page last read Claude's state, and from what (10-12)
     server.tasks = activity.TaskCenter(server.codex)
     server.history = chat_history.History(cfg.get('roots',[]),cfg['token'])
-    server.references = composer_references.References(server.history)
+    server.files = pc_files.Files(cfg['token'], inbox=cfg.get('phone_files') or None)  # type: ignore[attr-defined]
+    server.references = composer_references.References(server.history, files=server.files)
     server.deepseek.references = server.references
     server.codex.references = server.references
     server.new_chats = new_conversations.NewConversations(server.history,server.references,server.codex,server.desktop)

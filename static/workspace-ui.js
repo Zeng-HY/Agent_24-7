@@ -89,7 +89,7 @@
     node.className='bub user outbox'+(waiting?' pending':' problem');node.replaceChildren();
     node.append(document.createTextNode(item.originalText||item.text||''));
     if(item.images?.length)codexUI?.renderImages(node,item.images.map(v=>v.meta).filter(Boolean));
-    if(item.references?.length)node.append(el('div','outbox-refs',item.references.map(v=>(v.kind==='skill'?'$':'@')+(v.name||v.title)).join(' · ')));
+    if(item.references?.length)node.append(el('div','outbox-refs',item.references.map(v=>window.filesUI?.isFile(v)?filesUI.label(v):(v.kind==='skill'?'$':'@')+(v.name||v.title)).join(' · ')));
     if(waiting){node.append(el('span','outbox-state','发送中…'));return;}
     const state=el('button','outbox-state',item.app==='codex'?(item.transport==='legacy'?'旧记录待核对 ›':({rejected:'未提交 ›',queued:'已排队 ›',cancelled:'已取消 ›'}[item.state]||'结果待核对 ›')):(item.state==='rejected'?'没发出去 ›':'没确认送达 ›')),actions=el('div','message-actions');actions.hidden=true;
     state.setAttribute('aria-expanded','false');state.onclick=()=>{actions.hidden=!actions.hidden;state.setAttribute('aria-expanded',String(!actions.hidden));};
