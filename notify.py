@@ -1,9 +1,11 @@
-"""Tells the phone when a conversation on this PC is done, through Bark.
+"""Tells the phone when a conversation on this PC is done: an iPhone through Bark, an Android phone through ntfy.
 
 Bark is a free iPhone app. It gives the phone an address (https://api.day.app/<key>/); what is sent there shows up
 as a notification. Apple delivers it the way it delivers WeChat's, over the one connection the phone keeps to Apple
 for all its apps, so nothing runs on the phone meanwhile. The address is pasted on the page (设置 → 手机通知) and
 kept in remote_config.json as "bark"; it is not shown again and not written to the log.
+Bark has no Android app. An Android phone gets them in the ntfy app, which subscribes to this service itself over
+Tailscale (ntfy_feed.py); turned on on the page, kept as "ntfy": true. Both can be on, for two phones.
 
 Every 10 s the newest conversations are looked at, and a file that grew is read from its end. A turn that ended there
 after this service started (Codex: task_complete; Claude: an answer that stopped for good, not to use a tool) is sent
@@ -30,6 +32,7 @@ from urllib.parse import quote, urlsplit
 
 import chats
 import machines
+import ntfy_feed
 import winctl
 
 POLL_SECONDS = 10
@@ -183,9 +186,10 @@ def _seconds(ts: str, fallback: float) -> float:
 
 class Notifier:
     def __init__(self, cfg: dict, name: str, log, save, clock=time.time, idle=winctl.person_idle_seconds,
-                 sender=send, page_url=None) -> None:
+                 sender=send, page_url=None, feed=None) -> None:
         self.cfg, self.name, self.log, self.save = cfg, name, log, save
         self.clock, self.idle, self.sender = clock, idle, sender
+        self.feed = feed or ntfy_feed.Feed(clock=clock)  # what the ntfy app on an Android phone listens to
         self._own_url = page_url or (lambda: machines.own_url(machines.tailscale_status()))
         self.lock = threading.Lock()
         self.since = clock()                         # turns that ended before this are not sent
@@ -202,9 +206,14 @@ class Notifier:
         found = self.cfg.get("bark")
         return found if isinstance(found, dict) and found.get("key") and found.get("server") else None
 
+    def ntfy_on(self) -> bool:
+        return self.cfg.get("ntfy") is True
+
     def public(self) -> dict:
-        found = self.address()
-        return {"configured": bool(found), "server": urlsplit(found["server"]).netloc if found else "",
+        found, seen = self.address(), self.feed.last_seen
+        ntfy = {"on": self.ntfy_on(), "topic": self.feed.topic, "server": self.url.rstrip("/"),
+                "listening": self.feed.listening, "last_seen": time.strftime("%m-%d %H:%M", time.localtime(seen)) if seen else ""}
+        return {"configured": bool(found), "server": urlsplit(found["server"]).netloc if found else "", "ntfy": ntfy,
                 "recent": list(self.recent)[::-1]}
 
     def set_address(self, text: str) -> dict:
@@ -219,19 +228,44 @@ class Notifier:
         self.sender(found, f"{self.name}的通知设好了", "对话做完时会推到这里，点通知能打开那个对话。",
                     group=self.name, url=self.page_url())
         with self.lock:
-            if self.address() is None:
+            if self.address() is None and not self.ntfy_on():
                 self._count_from_now()
             self.cfg["bark"] = found
             self.save()
         self.log(f"通知：已设好（{urlsplit(found['server']).netloc}）")
         return {"ok": True, "configured": True, "text": "已保存，刚推了一条，看看手机"}
 
-    def test(self) -> dict:
-        found = self.address()
-        if not found:
-            raise NotifyError("还没设推送地址")
-        self.sender(found, f"{self.name}的通知是好的", "这是一条试推。", group=self.name, url=self.page_url())
-        return {"ok": True, "text": "推了一条，看看手机"}
+    def set_ntfy(self, on: bool) -> dict:
+        """Turn on (or off) what the ntfy app gets; turned on, a first one goes to the phones listening now."""
+        with self.lock:
+            if on and self.address() is None and not self.ntfy_on():
+                self._count_from_now()
+            if on:
+                self.cfg["ntfy"] = True
+            else:
+                self.cfg.pop("ntfy", None)
+            self.save()
+        self.log("通知：ntfy " + ("已打开" if on else "已关掉"))
+        if not on:
+            return {"ok": True, "ntfy": False, "text": "ntfy 已关掉，不再推送"}
+        self.feed.publish(f"{self.name}的通知设好了", "对话做完时会推到这里，点通知能打开那个对话。", click=self.page_url())
+        return {"ok": True, "ntfy": True, "text": "已打开，刚推了一条，看看 ntfy" if self.feed.listening else
+                "已打开。ntfy 现在没连着这台电脑：在 ntfy App 里订阅后就能收到"}
+
+    def test(self, channel: str = "") -> dict:
+        """One to try: on Bark ("bark"), on ntfy ("ntfy"), or on both when no channel is named."""
+        found = self.address() if channel != "ntfy" else None
+        ntfy = self.ntfy_on() and channel != "bark"
+        if not found and not ntfy:
+            raise NotifyError("ntfy 还没打开" if channel == "ntfy" else "还没设推送地址")
+        texts = []
+        if ntfy:
+            self.feed.publish(f"{self.name}的通知是好的", "这是一条试推。", click=self.page_url())
+            texts.append("推了一条，看看 ntfy" if self.feed.listening else "推了一条，但 ntfy 现在没连着这台电脑")
+        if found:
+            self.sender(found, f"{self.name}的通知是好的", "这是一条试推。", group=self.name, url=self.page_url())
+            texts.append("推了一条，看看手机")
+        return {"ok": True, "text": "；".join(texts)}
 
     @contextlib.contextmanager
     def watching(self, app: str, conv_id: str):
@@ -278,7 +312,7 @@ class Notifier:
 
     def look(self) -> None:
         found = self.address()
-        if found is None:  # nothing to send to; once an address is set, only turns that end after that count
+        if found is None and not self.ntfy_on():  # nothing to send to; once Bark or ntfy is on, only later turns count
             self.since = None
             return
         if self.since is None:
@@ -361,7 +395,7 @@ class Notifier:
             return f"有人 {int(idle)} 秒前用过这台电脑"
         return ""
 
-    def _tell(self, found: dict, item: dict, end: dict) -> None:
+    def _tell(self, found: dict | None, item: dict, end: dict) -> None:
         app = {'codex':'Codex','claude':'Claude','deepseek':'DeepSeek'}[item['app']]
         done = "出错停了" if end["state"] == "failed" else "在等你选" if end.get("asks") else "好了"
         title = chats.one_line(item.get("title") or "（无标题）", 40)
@@ -370,18 +404,25 @@ class Notifier:
         if why:
             self._note(what, "没推：" + why)
             return
-        body = _preview(end["text"])
+        body, subtitle, outcomes = _preview(end["text"]), f"{self.name} · {app} {done}", []
+        if self.ntfy_on():  # kept for a phone that is away, which gets it when it connects again (ntfy_feed.py)
+            self.feed.publish(title, f"{subtitle}\n{body}", click=self.page_url(item))
+            outcomes.append("ntfy 已推到" if self.feed.listening else "ntfy 现在没连着，连上后会收到")
+        if found:
+            outcomes.append(self._bark(found, title, body, subtitle, item))
+        if outcomes:  # none when both were turned off a moment ago
+            self._note(what, "；".join(outcomes))
+
+    def _bark(self, found: dict, title: str, body: str, subtitle: str, item: dict) -> str:
         for attempt in (1, 2):
             try:
-                self.sender(found, title, body, subtitle=f"{self.name} · {app} {done}", group=self.name,
-                            url=self.page_url(item))
-                self._note(what, "已推到手机")
-                return
+                self.sender(found, title, body, subtitle=subtitle, group=self.name, url=self.page_url(item))
+                return "已推到手机"
             except NotifyError as exc:
                 if attempt == 2:
-                    self._note(what, f"没推出去：{exc}")
-                    return
+                    return f"没推出去：{exc}"
                 self.stopped.wait(3)
+        return ""
 
     def _note(self, what: str, outcome: str) -> None:
         self.recent.append({"time": time.strftime("%H:%M"), "text": f"{what} · {outcome}"})

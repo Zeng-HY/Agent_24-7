@@ -196,7 +196,9 @@ class Watcher(unittest.TestCase):
         self.assertTrue(result["configured"])
         self.assertEqual(self.cfg["bark"], {"server": "https://api.day.app", "key": KEY})
         self.assertEqual(self.sent[0][1]["url"], "https://pc.example.ts.net/")
-        self.assertEqual(self.notifier.public(), {"configured": True, "server": "api.day.app", "recent": []})
+        self.assertEqual(self.notifier.public(), {"configured": True, "server": "api.day.app", "recent": [],
+                                                  "ntfy": {"on": False, "topic": "agent-remote", "server": "https://pc.example.ts.net",
+                                                           "listening": 0, "last_seen": ""}})
 
         def refused(*a, **k):
             raise notify.NotifyError("Bark 没收下（400）：failed to get device token")
@@ -207,6 +209,58 @@ class Watcher(unittest.TestCase):
         self.assertFalse(self.notifier.set_address("")["configured"])
         self.assertNotIn("bark", self.cfg)
         self.assertEqual(len(self.saved), 2)
+
+    # -- ntfy: the ntfy app on an Android phone listens to this service (ntfy_feed.py, 10-20)
+
+    def test_with_ntfy_alone_the_turn_goes_to_the_app_with_its_link(self):
+        self.cfg.pop("bark")
+        self.cfg["ntfy"] = True
+        self.notifier.look()
+        self.turn("task_complete", "t1", "**改好了**，测试都过了。")
+        self.notifier.look()
+        self.assertEqual(self.sent, [])  # no Bark
+        msg = self.notifier.feed.since("all")[0]
+        self.assertEqual((msg["title"], msg["message"], msg["click"]),
+                         ("改通知", "家里电脑 · Codex 好了\n改好了，测试都过了。", "https://pc.example.ts.net/?open=codex:x1"))
+        self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · ntfy 现在没连着，连上后会收到")
+        with self.notifier.feed.listener():  # a phone connected
+            self.turn("task_complete", "t2", "又好了")
+            self.notifier.look()
+        self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · ntfy 已推到")
+
+    def test_bark_and_ntfy_both_get_it_and_the_quiet_rules_hold_for_both(self):
+        self.cfg["ntfy"] = True
+        self.notifier.look()
+        self.turn("task_complete", "t1", "好")
+        self.notifier.look()
+        self.assertEqual((len(self.sent), len(self.notifier.feed.since("all"))), (1, 1))
+        self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · ntfy 现在没连着，连上后会收到；已推到手机")
+        self.idle = 20.0
+        self.turn("task_complete", "t2", "好")
+        self.notifier.look()
+        self.assertEqual((len(self.sent), len(self.notifier.feed.since("all"))), (1, 1))
+
+    def test_ntfy_turned_on_and_off_from_the_page_and_tried_alone(self):
+        self.cfg.pop("bark")
+        self.turn("task_complete", "t1", "好")  # ended before ntfy was turned on: not sent
+        self.now += 60
+        result = self.notifier.set_ntfy(True)
+        self.assertEqual((self.cfg.get("ntfy"), len(self.saved)), (True, 1))
+        self.assertIn("ntfy 现在没连着", result["text"])
+        self.assertEqual(self.notifier.feed.since("all")[0]["title"], "家里电脑的通知设好了")
+        self.notifier.look()
+        self.assertEqual(len(self.notifier.feed.since("all")), 1)
+        with self.notifier.feed.listener():
+            self.assertEqual(self.notifier.test("ntfy")["text"], "推了一条，看看 ntfy")
+            self.assertTrue(self.notifier.public()["ntfy"]["on"])
+            self.assertEqual(self.notifier.public()["ntfy"]["listening"], 1)
+        self.assertEqual(self.sent, [])
+        with self.assertRaises(notify.NotifyError):
+            self.notifier.test("bark")  # no Bark address
+        self.assertFalse(self.notifier.set_ntfy(False)["ntfy"])
+        self.assertNotIn("ntfy", self.cfg)
+        with self.assertRaises(notify.NotifyError):
+            self.notifier.test("ntfy")
 
 
 class PersonIdle(unittest.TestCase):

@@ -14,7 +14,8 @@ accounts in "allowed_logins" (Tailscale names the account in the request). Witho
 computer at 127.0.0.1, Funnel, a tagged device, or bind other than 127.0.0.1) the token: ?t=<token> or the lbr cookie.
 The token lives in remote_config.json next to this file, with "name" (this computer, as the phone shows it),
 "voice": false on a computer without the microphone, and optionally "apps": ["codex"] to override what is found.
-"bark" is the phone's notification address, pasted on the page (notify.py).
+"bark" is the phone's notification address, pasted on the page (notify.py); "ntfy": true when the ntfy app on an
+Android phone gets them from this service (ntfy_feed.py), turned on on the page.
 """
 
 from __future__ import annotations
@@ -62,10 +63,11 @@ import voice  # the microphone button: recordings from the phone turned into tex
 import voice_local  # the same button, recognised on this PC while the user talks (SenseVoice + Qwen3-ASR)
 import voice_terms  # the voice dictionary: words to listen for and how to spell them
 import machines  # this computer's name and apps, and the other computers the page can switch to
-import notify  # a notification on the phone (Bark) when a conversation is done
+import notify  # a notification on the phone (Bark, ntfy) when a conversation is done
+import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.20.11"  # the microphone hint and the notification note fit Android phones too
+VERSION = "0.20.12"  # an Android phone gets done-notifications in the ntfy app, from this service over Tailscale
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -347,6 +349,12 @@ class Handler(BaseHTTPRequestHandler):
             # with their account on the request: let in as the page is (10-20; it used to answer anyone)
             self._json({"app": machines.APP, "name": self.server.machine["name"], "version": VERSION})
             return
+        # the ntfy app on an Android phone (ntfy_feed.py): /agent-remote/json and the like. Matched on the request as
+        # sent, since a server address typed with a slash at its end gives //agent-remote/json
+        feed = ntfy_feed.PATH.fullmatch("/" + self.path.split("?", 1)[0].lstrip("/"))
+        if feed:
+            ntfy_feed.serve(self, self.server.notifier.feed, feed[1], feed[2], self._query())
+            return
         if path.startswith("/api/voice") and not self.server.machine["voice"]:
             self._json({"error": "这台电脑没开语音"}, 404)
             return
@@ -482,10 +490,16 @@ class Handler(BaseHTTPRequestHandler):
             except voice.VoiceError as exc:
                 self._json({"error": str(exc)}, exc.status if 400 <= exc.status < 600 else 400)
             return
-        if path in ("/api/notify", "/api/notify/test"):  # paste Bark's address (empty: off), or send one to try
+        if path in ("/api/notify", "/api/notify/ntfy", "/api/notify/test"):
+            # Bark's address (empty: off), ntfy on or off, one to try (on one channel, or on all)
             try:
                 notifier = self.server.notifier
-                self._json(notifier.test() if path.endswith("/test") else notifier.set_address(str(body.get("address", ""))))
+                if path.endswith("/test"):
+                    self._json(notifier.test(str(body.get("channel", ""))))
+                elif path.endswith("/ntfy"):
+                    self._json(notifier.set_ntfy(body.get("on") is True))
+                else:
+                    self._json(notifier.set_address(str(body.get("address", ""))))
             except notify.NotifyError as exc:
                 self._json({"error": str(exc)}, 400)
             return
