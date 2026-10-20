@@ -164,6 +164,22 @@ def clean_claude_user(text: str) -> str:
     return _CLAUDE_TAGS.sub("", text or "").strip()
 
 
+_COMMAND_NAME = re.compile(r"<command-name>\s*(.*?)\s*</command-name>", re.S)
+_COMMAND_ARGS = re.compile(r"<command-args>\s*(.*?)\s*</command-args>", re.S)
+_COMMAND_OUTPUT = re.compile(r"<local-command-(?:stdout|stderr)>")
+
+
+def claude_command(text: str) -> str:
+    """The slash command a Claude user line holds, as typed ("/compact", "/model opus"); '' for anything else. Claude
+    records a command in tags, never as the words sent, so a /compact from the phone stayed 排队中 for good (10-20)."""
+    name = _COMMAND_NAME.search(text or "")
+    if not name or not name.group(1):
+        return ""
+    command = name.group(1) if name.group(1).startswith("/") else "/" + name.group(1)
+    args = _COMMAND_ARGS.search(text)
+    return f"{command} {args.group(1)}" if args and args.group(1) else command
+
+
 def clean_codex_user(text: str) -> str:
     text = (text or "").strip()
     envelope=re.fullmatch(r'<send_user_message_question_reply>\s*([\s\S]*?)\s*</send_user_message_question_reply>',text)
@@ -643,9 +659,16 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
         message = rec.get("message") or {}
         content = message.get("content")
         if t == "user":
+            if rec.get("isCompactSummary"):
+                # /compact (or Claude running out of room) writes its summary as a user line. The desktop shows a divider
+                # in its place; the phone showed all 10,000 characters as the user's own message and, the turn seeming to
+                # wait on it, 停止这一轮 (10-20)
+                msgs.append({"role": "event", "text": "对话已压缩", "time": ts})
+                continue
             if isinstance(content, str):
                 text = clean_claude_user(content)
-                last_kind = "user"
+                # a local command's output (/compact's "Compacted") ends what the command started: no turn follows
+                last_kind = "command_done" if not text and _COMMAND_OUTPUT.search(content) else "user"
             else:
                 blocks = content or []
                 text = clean_claude_user("\n".join(b.get("text", "") for b in blocks
@@ -681,7 +704,7 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                     msgs.append({**card, "time": ts} if card else {"role": "tool", "text": _claude_tool(block), "time": ts})
     mark_open_next(msgs)
     if last_kind is not None:
-        state["running"] = not (last_kind in ("interrupted", "asked") or (last_kind == "assistant" and last_stop not in (None, "tool_use")))
+        state["running"] = not (last_kind in ("interrupted", "asked", "command_done") or (last_kind == "assistant" and last_stop not in (None, "tool_use")))
     return msgs, state
 
 
@@ -963,7 +986,7 @@ def claude_delivery_stage(path,offset,text):
         if steered and want and norm(re.sub(r'^(\[图片\]\s*)+','',steered['text']))==want:return 'received'  # the mark is ours, not sent
         if rec.get('type')=='user':
             actual=_join_text((rec.get('message') or {}).get('content'))
-            if want and norm(actual)==want:return 'received'
+            if want and want in (norm(actual),norm(claude_command(actual))):return 'received'
         elif rec.get('type')=='queue-operation' and rec.get('operation')=='enqueue':
             if want and norm(_join_text(rec.get('content')))==want:stage='queued'
     return stage
