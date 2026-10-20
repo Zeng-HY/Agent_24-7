@@ -1,6 +1,6 @@
 # Agent Remote
 
-在 iPhone 上查看、继续电脑上 **Codex**、**Claude**、**DeepSeek Harness** 桌面版里的对话。
+在手机上查看、继续电脑上 **Codex**、**Claude**、**DeepSeek Harness** 桌面版里的对话。
 
 电脑上跑一个小服务，手机经 [Tailscale](https://tailscale.com) 打开一个网页就能用：不需要公网服务器，不装 App，对话内容不经过任何第三方。
 
@@ -16,17 +16,17 @@
 - **新建对话**：三家都在同一个面板里新建：选软件、项目文件夹（DeepSeek 选它自己的工作区）、模型和推理强度，写好第一句话（可以带图片、引用别的对话）一次发出。网络断了点「继续发送」，也不会建出两个对话。Codex 和 Claude 还能新建不属于任何项目的对话。
 - **改设置**：Claude 的模型、推理强度、权限模式；DeepSeek 的模型和权限预设。
 - **多台电脑**：每台电脑各装一份，页面上点电脑名就能切换。服务会自动找出同一 Tailscale 账号下装了本服务的其他电脑。
-- **做完推送**（可选）：对话一轮结束时用 [Bark](https://bark.day.app) 推到 iPhone。你正看着这个对话，或者刚在电脑上操作过，就不推。
+- **做完推送**（可选）：对话一轮结束时用 [Bark](https://bark.day.app) 推到 iPhone。你正看着这个对话，或者刚在电脑上操作过，就不推。安卓手机目前收不到推送。
 - **语音输入**（可选）：边说边识别，需要另外准备本地语音模型。
-- **手机上顺手**：侧滑返回、底部面板、轻触震动、主屏幕图标，按 iPhone Safari 调过。
+- **手机上顺手**：侧滑返回、底部面板、轻触震动、主屏幕图标，按 iPhone Safari 调过。安卓上，系统返回键会在页面里一层层往回退。
 
 ## 工作原理
 
 ```
-iPhone Safari ──Tailscale（加密）──▶ 电脑：tailscale serve（https）──▶ 本服务 127.0.0.1:8765
-                                                                        ├─ Codex：桌面版的本机通道
-                                                                        ├─ Claude：桌面版的记录文件 + 桌面窗口操作
-                                                                        └─ DeepSeek Harness：桌面版的本机接口
+手机浏览器 ──Tailscale（加密）──▶ 电脑：tailscale serve（https）──▶ 本服务 127.0.0.1:8765
+                                                                     ├─ Codex：桌面版的本机通道
+                                                                     ├─ Claude：桌面版的记录文件 + 桌面窗口操作
+                                                                     └─ DeepSeek Harness：桌面版的本机接口
 ```
 
 - 对话内容直接读各家桌面版自己的记录文件，不靠截屏。
@@ -47,7 +47,7 @@ iPhone Safari ──Tailscale（加密）──▶ 电脑：tailscale serve（ht
 | Python | 3.11 或更新，推荐 3.12 |
 | Tailscale | 电脑和手机登录同一个账号；在 Tailscale 后台的 DNS 页打开 HTTPS Certificates |
 | 桌面版 | Codex、Claude、DeepSeek Harness 至少装一个 |
-| 手机 | iPhone + Safari；其他手机和浏览器没有专门测过 |
+| 手机 | iPhone + Safari，或安卓 + Chrome。安卓版还没在真手机上测过；其他浏览器没有专门测过 |
 
 ## 安装
 
@@ -59,8 +59,12 @@ iPhone Safari ──Tailscale（加密）──▶ 电脑：tailscale serve（ht
    ```
 
 3. 双击 `安装.cmd`。它会依次：建 Python 环境并安装依赖（装不上会自动换国内镜像）→ 问这台电脑在手机上叫什么 → 生成本机口令 → 把网页放到 Tailscale 的 https 地址上 → 设成登录 Windows 后自动启动 → 启动服务 → 在浏览器里打开一张二维码页。
-4. iPhone 上装 Tailscale App，登录同一个账号并连上。用相机扫电脑上的二维码，在 Safari 里打开。
-5. 想放到主屏幕：点分享 →「添加到主屏幕」。建议关掉「作为网页 App 打开」，否则用第三方键盘语音输入时，跳回来可能黑屏。
+4. 手机上装 Tailscale App，登录同一个账号并连上，再扫电脑上的二维码打开网页：
+   - iPhone：用相机扫，在 Safari 里打开。
+   - 安卓：Tailscale 可以从 Google Play 装；手机上没有 Google Play 的，到 [Tailscale 的下载页](https://pkgs.tailscale.com/stable/#android) 下载安卓安装包（要 Android 8 或更新）。用相机或「扫一扫」扫码，在 Chrome 里打开；手机自动用别的浏览器打开时，把网址复制到 Chrome 里。
+5. 想放到主屏幕：
+   - iPhone：点分享 →「添加到主屏幕」。建议关掉「作为网页 App 打开」，否则用第三方键盘语音输入时，跳回来可能黑屏。
+   - 安卓：在 Chrome 里点右上角 ⋮ →「添加到主屏幕」（有的版本叫「安装应用」）。国产手机上点了没反应的，到手机设置里给 Chrome 打开「桌面快捷方式」权限。
 
 以后想再看二维码，双击 `手机链接.cmd`。更新到新版，双击 `更新.cmd`：它会先 `git pull`，再重新安装依赖并重启服务。
 
@@ -95,6 +99,12 @@ iPhone Safari ──Tailscale（加密）──▶ 电脑：tailscale serve（ht
 
 **页面打不开**
 先确认手机上 Tailscale 是连着的；再在电脑上运行 `tailscale serve status`，看网页是不是放在了 https 地址上。
+
+**安卓手机上 Tailscale 连着，页面却打不开**
+看看手机设置里的「私人 DNS」（在设置里搜「DNS」就能找到）。如果填了某个服务商的地址，手机会绕过 Tailscale 去查网址，`.ts.net` 结尾的地址就查不到。改成「自动」或「关闭」。
+
+**安卓手机锁屏一阵后，页面打不开了**
+国产安卓系统常在锁屏后停掉后台的 App，Tailscale 一停，手机就连不上电脑。到手机设置里找到 Tailscale，允许它在后台运行（各家叫法不同，比如「自启动」「允许后台活动」），再在耗电或省电设置里把它改成「无限制」。
 
 **页面上没有某个软件**
 说明这台电脑上没认出它。装好后刷新页面即可。DeepSeek Harness 要装桌面版，只装了命令行版不算。也可以在 `remote_config.json` 里用 `apps` 手动指定。

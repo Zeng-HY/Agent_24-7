@@ -23,6 +23,8 @@
   const group = el('div', 'setting-group'), note = el('div', 'setting-note');
   body.append(el('div', 'setting-title', '手机通知'), group, note);
   let state = {configured: false, server: '', recent: []}, busy = false, draft = '';
+  // Bark is an iPhone app: on an Android phone (or a computer) the notes say pushes reach only an iPhone
+  const iPhone = phoneSystem() === 'iphone';
 
   function row(text, onclick, cls) {  // an action, so no › (that one means another page opens)
     const b = el('button', 'menu-row setting-row' + (cls ? ' ' + cls : ''));
@@ -36,7 +38,7 @@
       group.append(on, row('试推一条', () => call('/api/notify/test', {})), row('关掉', () => call('/api/notify', {address: ''}), 'danger'));
       const recent = (state.recent || []).slice(0, 3);
       note.textContent = recent.length ? '最近：' + recent.map(r => r.time + ' ' + r.text).join('\n') :
-        '对话做完时推到这部手机。正在用这台电脑、或手机正开着那个对话时不推。';
+        (iPhone ? '对话做完时推到这部手机。' : '对话做完时推到装了 Bark 的 iPhone，安卓手机目前收不到。') + '正在用这台电脑、或手机正开着那个对话时不推。';
       return;
     }
     const field = el('div', 'setting-row'), input = el('input');
@@ -48,7 +50,8 @@
       if (!input.value.trim()) { toast('先把 Bark 的推送地址贴进来', true); input.focus(); return; }
       call('/api/notify', {address: input.value});
     }));
-    note.textContent = '对话做完时推到这部手机。先在 iPhone 上装 Bark，在它首页复制 https://api.day.app/ 开头的地址，贴在上面。';
+    note.textContent = iPhone ? '对话做完时推到这部手机。先在 iPhone 上装 Bark，在它首页复制 https://api.day.app/ 开头的地址，贴在上面。' :
+      '目前只支持 iPhone 上的 Bark，安卓手机还收不到。有 iPhone 的话，在 iPhone 上装 Bark，把它首页 https://api.day.app/ 开头的地址贴在上面，对话做完时推到那部 iPhone。';
   }
   async function call(path, data) {
     if (busy) return; busy = true; group.querySelectorAll('button').forEach(b => b.disabled = true);

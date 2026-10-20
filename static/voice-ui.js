@@ -210,6 +210,14 @@
     try { const r = await fetch('/api/voice/https-link'); url = (await r.json()).url || ''; } catch (e) {}
     showPill([words('话筒要在 https 地址下才能用'), ...(url ? [action('换过去', () => { location.href = url; })] : [])], {hideAfter: 10000});
   }
+  // The microphone was refused: where this phone turns it back on. Chrome on Android asks per site, and the phone
+  // itself may not let Chrome use the microphone at all.
+  function deniedHint() {
+    const system = phoneSystem();
+    if (system === 'iphone') return '没有麦克风权限：iPhone 设置 → App → Safari → 麦克风，改成允许';
+    if (system === 'android') return '没有麦克风权限：Chrome 右上角 ⋮ → 设置 → 网站设置 → 麦克风，把这个网址改成允许；还不行，到手机设置里给 Chrome 打开麦克风权限';
+    return '没有麦克风权限：在浏览器的网站设置里允许这个网址用麦克风';
+  }
 
   // ---------------------------------------------------------------- recording
   function begin(selection) {
@@ -248,7 +256,7 @@
         stopCapture(r); rec = null; setMode('idle');
         if (r.sid) post('/api/voice/stream/cancel?sid=' + r.sid, null).catch(() => {});
         const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
-        showPill([words(denied ? '没有麦克风权限：iPhone 设置 → App → Safari → 麦克风，改成允许' : '没拿到麦克风：' + (err && err.message || err))], {error: true, wrap: true, hideAfter: 9000});
+        showPill([words(denied ? deniedHint() : '没拿到麦克风：' + (err && err.message || err))], {error: true, wrap: true, hideAfter: 9000});
       });
   }
   function clock(r) { const s = Math.floor((r.total || 0) / RATE); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }

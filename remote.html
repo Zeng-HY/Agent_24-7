@@ -373,6 +373,13 @@ let mode = 'chat';
 function toast(text, bad) { const t = $('toast'); t.classList.toggle('chat-toast', !!cur); t.textContent = text; t.style.background = bad ? '#b91c1c' : '#111'; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2800); }
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// The phone's system, for steps that differ (where the microphone is turned back on, which phones Bark reaches):
+// 'iphone' (an iPad too, which calls itself a Mac), 'android', or '' (a computer, or a system not known)
+function phoneSystem() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iphone';
+  return /Android/.test(ua) ? 'android' : '';
+}
 
 // timeout (ms), for reads repeated on a timer: one answer that never comes (a request caught in a service restart) must
 // not stop every later read, which wait for it (claude-ui.js, 10-12)
