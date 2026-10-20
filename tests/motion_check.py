@@ -396,7 +396,7 @@ def run(shots_dir=None, reduced=False, check=None):
             ok("the switch ticks (Android: vibrate; on the iPhone the switch itself ticks)", state()["haptics"] - h0 == 1, state()["haptics"] - h0)
             finger.tap(*center(page, "#settingsBody label.setting-row > span")); wait(300)
             ok("a tap on the row's words turns it back on", page.evaluate("localStorage.getItem('lbr_setting_voice_tidy')") == "1")
-            finger.tap(*center(page, "#settingsBody button.setting-row")); wait(700); s = state()
+            finger.tap(*center(page, "#settingsBody button.setting-row:has-text('语音词典')")); wait(700); s = state()  # 已归档对话 is first (10-20)
             ok("语音词典 opens over 设置", s["overlays"] == ["navSheet", "settingsSheet", "voiceTermsSheet"], s["overlays"])
             page.evaluate("closeSheet('voiceTermsSheet')"); wait(500)
             shot("settings.png")
@@ -838,8 +838,8 @@ def run_computers(check):
         ok("the page names its computer under the title, and the name can be tapped", top["sub"] == "公司电脑" and top["can"] and "公司电脑" in top["title"], top)
         ok("only Codex here: no 全部 / Codex / Claude chips", top["chips"] == "none", top["chips"])
         settings = page.evaluate("[...document.querySelectorAll('#settingsBody .setting-title')].map(n => n.textContent)")
-        ok("no voice here: no microphone, the gear has only 手机通知 (0.19), and no part reported missing",
-           not top["mic"] and top["gear"] != "none" and settings == ["手机通知"] and not top["missing"], (top, settings))
+        ok("no voice here: no microphone, the gear has 对话 (已归档对话) and 手机通知, and no part reported missing",
+           not top["mic"] and top["gear"] != "none" and settings == ["对话", "手机通知"] and not top["missing"], (top, settings))
         page.evaluate("openNewSheet()"); page.wait_for_timeout(600)
         ok("the new-chat panel offers no Claude", page.evaluate("document.querySelector('#newSheet .new-apps').hidden"))
         page.evaluate("closeSheet('newSheet')"); page.wait_for_timeout(500)
@@ -890,7 +890,7 @@ def run_notify(check):
            opened == {"app": "codex", "id": "c3", "search": "", "title": "测试对话 3"}, opened)
         page.evaluate("closeConv(true); openSheet('settingsSheet')"); page.wait_for_timeout(600)
         rows = page.evaluate("[...document.querySelectorAll('#settingsBody .setting-title')].map(n => n.textContent)")
-        ok("the settings have 语音输入 and 手机通知", rows == ["语音输入", "手机通知"], rows)
+        ok("the settings have 对话 (已归档对话), 语音输入 and 手机通知", rows == ["对话", "语音输入", "手机通知"], rows)
         box = "#settingsBody input[aria-label='Bark 的推送地址']"
         page.fill(box, "随便几个字")
         page.click("#settingsBody .menu-row:has-text('保存并试推一条')"); page.wait_for_timeout(500)

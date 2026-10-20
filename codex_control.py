@@ -185,6 +185,11 @@ class DesktopPipe:
         finally:
             self.pending.pop(rid, None)
 
+    def broadcast(self, method, version, params):
+        """To every window on the pipe, as the desktop's windows tell each other: thread-archived (v2) and
+        thread-unarchived (v1) with {hostId, conversationId} after an archive made elsewhere (archives.py, 10-20)."""
+        self._send({"type": "broadcast", "sourceClientId": self.client, "method": method, "version": version, "params": params})
+
     def follow(self, tid, owner, value):
         self._send({"type": "broadcast", "sourceClientId": self.client, "method": "thread-stream-following-changed",
                     "version": 1, "targetClientIds": [owner],

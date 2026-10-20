@@ -17,7 +17,7 @@
 // runs and the page looks whole but is not: no Claude buttons, no microphone. Once the page has loaded, check that every
 // part is there; if one is missing, reload once (the open chat comes back), and if it still is, say so.
 addEventListener('load', () => {
-  const parts = {deepseekUI:'deepseek-ui', codexUI:'codex-ui', navigationUI:'navigation-ui', workspaceUI:'workspace-ui', activityUI:'activity-ui', readingUI:'reading-ui', claudeUI:'claude-ui', referencesUI:'references-ui', newChatUI:'new-chat-ui', filesUI:'files-ui', voiceUI:'voice-ui', sidebarUI:'sidebar-ui'};
+  const parts = {deepseekUI:'deepseek-ui', codexUI:'codex-ui', navigationUI:'navigation-ui', workspaceUI:'workspace-ui', activityUI:'activity-ui', readingUI:'reading-ui', claudeUI:'claude-ui', referencesUI:'references-ui', newChatUI:'new-chat-ui', filesUI:'files-ui', archiveUI:'archive-ui', voiceUI:'voice-ui', sidebarUI:'sidebar-ui'};
   const missing = Object.keys(parts).filter(k => !window[k]).map(k => parts[k]);
   let last = 0, before = '';
   try { last = +sessionStorage.getItem('lbr_parts_reload') || 0; before = sessionStorage.getItem('lbr_parts_missing') || ''; sessionStorage.removeItem('lbr_parts_missing'); } catch (e) {}
@@ -1187,5 +1187,6 @@ setMode('chat'); replaceUIState();
 <script src="/notify-ui.js"></script>
 <script src="/sidebar-ui.js"></script>
 <script src="/deepseek-ui.js"></script>
+<script src="/archive-ui.js"></script>
 </body>
 </html>

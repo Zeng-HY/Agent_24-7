@@ -60,6 +60,7 @@ import live_events
 import claude_control
 import composer_references
 import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
+import archives  # a left swipe archives a conversation; 设置 → 已归档对话 restores or deletes (10-20)
 import new_conversations
 import voice  # the microphone button: recordings from the phone turned into text with VoiceAnywhere's key
 import voice_local  # the same button, recognised on this PC while the user talks (SenseVoice + Qwen3-ASR)
@@ -69,7 +70,7 @@ import notify  # a notification on the phone (Bark, ntfy) when a conversation is
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.21.0"  # ＋ attaches any file on this computer, or one from the phone; the message carries its path
+VERSION = "0.22.0"  # a left swipe archives a Codex or DeepSeek conversation, with 撤销; 设置 → 已归档对话
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -103,6 +104,7 @@ STATIC_FILES = {  # served without the token: home-screen icons and the web app 
     "/claude-ui.js": ("claude-ui.js", "application/javascript; charset=utf-8"),
     "/references-ui.js": ("references-ui.js", "application/javascript; charset=utf-8"),
     "/files-ui.js": ("files-ui.js", "application/javascript; charset=utf-8"),
+    "/archive-ui.js": ("archive-ui.js", "application/javascript; charset=utf-8"),
     "/codex-ui.js": ("codex-ui.js", "application/javascript; charset=utf-8"),
     "/new-chat-ui.js": ("new-chat-ui.js", "application/javascript; charset=utf-8"),
     "/workspace-ui.js": ("workspace-ui.js", "application/javascript; charset=utf-8"),
@@ -408,6 +410,10 @@ class Handler(BaseHTTPRequestHandler):
             except pc_files.FileError as exc:self._json({'error':str(exc)},exc.status)
             except (chats.ChatError,OSError,ValueError) as exc:self._json({'error':str(exc)},400)
             return
+        if path=='/api/chat/archived':  # 设置 → 已归档对话 (archives.py)
+            try:self._json(self.server.archives.archived())
+            except chats.ChatError as exc:self._json({'error':str(exc)},getattr(exc,'status',400))
+            return
         if path in ('/api/chat/new/state','/api/chat/new/references'):
             try:
                 q=self._query()
@@ -542,6 +548,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ('/api/files/image','/api/files/remove'):
             self._files_post(path,body)
+            return
+        if path in ('/api/chat/archive','/api/chat/unarchive','/api/chat/delete'):  # a left swipe, 撤销, 已归档对话 (archives.py)
+            try:
+                archives=self.server.archives
+                if path.endswith('/delete'):
+                    if body.get('confirmed') is not True:raise chats.ChatError('删除要先在手机上确认')
+                    self._json(archives.delete(body.get('items')))
+                elif path.endswith('/unarchive'):self._json(archives.unarchive(str(body.get('app','')),body.get('id')))
+                else:self._json(archives.archive(str(body.get('app','')),body.get('id')))
+            except chats.ChatError as exc:self._json({'error':str(exc)},getattr(exc,'status',400))
+            except Exception as exc:
+                self.log.write(f'归档操作 {path} 出错：\n'+traceback.format_exc())
+                self._json({'error':f'{type(exc).__name__}: {str(exc)[:200]}'},500)
             return
         if path.startswith("/api/codex/"):
             self._codex_post(path, body)
@@ -970,6 +989,8 @@ def main(argv: list[str] | None = None) -> int:
     server.history = chat_history.History(cfg.get('roots',[]),cfg['token'])
     server.files = pc_files.Files(cfg['token'], inbox=cfg.get('phone_files') or None)  # type: ignore[attr-defined]
     server.references = composer_references.References(server.history, files=server.files)
+    server.archives = archives.Archives(server.codex, server.history, log.write,  # type: ignore[attr-defined]
+                                        apps=lambda: server.machine["apps"])  # a left swipe archives (10-20)
     server.deepseek.references = server.references
     server.codex.references = server.references
     server.new_chats = new_conversations.NewConversations(server.history,server.references,server.codex,server.desktop)

@@ -88,6 +88,9 @@ class History:
         stray=copy.deepcopy(found['ungrouped'])
         with self.lock:self.catalog_cache=(time.monotonic(),items,stray)
         return items,stray
+    def invalidate(self):
+        """Read the lists again at the next ask: one was archived or restored from the phone (archives.py)."""
+        with self.lock:self.catalog_cache=(0,[],[])
     def catalog(self):
         return list(self._load()[0])
     def ungrouped(self):

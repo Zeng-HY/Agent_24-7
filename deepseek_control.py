@@ -276,7 +276,11 @@ class Client:
             data=json.loads(response.read())
             if data.get('rpcId')!=rid or not isinstance(data.get('result'),dict):raise DeepSeekError('DeepSeek 接口格式已变化',503)
             result=data['result']
-            if result.get('ok') is not True:raise DeepSeekError('DeepSeek 未接受此操作；请刷新状态后核对',409)
+            if result.get('ok') is not True:
+                # its own code goes along ({ok:false, error:{code, message}}): workspace/session-active, say (archives.py)
+                error=result.get('error') if isinstance(result.get('error'),dict) else {}
+                refused=DeepSeekError('DeepSeek 未接受此操作；请刷新状态后核对',409);refused.code=str(error.get('code') or '');refused.detail=str(error.get('message') or '')[:200]
+                raise refused
             return result.get('value')
         except (OSError,ValueError,http.client.HTTPException):
             self.checked=0
