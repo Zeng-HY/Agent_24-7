@@ -65,7 +65,7 @@ import machines  # this computer's name and apps, and the other computers the pa
 import notify  # a notification on the phone (Bark) when a conversation is done
 import re
 
-VERSION = "0.20.9"  # a new DeepSeek conversation comes from the shared sheet: workspace, model and first message in one go
+VERSION = "0.20.10"  # the new-conversation sheet does not mention skills for DeepSeek
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);

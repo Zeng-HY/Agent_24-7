@@ -24,7 +24,7 @@
   const sheet=$('newSheet'),box=sheet.querySelector('.sh-body');
   sheet.querySelector('b').textContent='新建对话';sheet.setAttribute('aria-label','新建对话');
   box.innerHTML=`<div class="new-apps" role="radiogroup" aria-label="客户端"><button id="newCodex" role="radio">Codex</button><button id="newClaude" role="radio">Claude</button><button id="newDeepseek" role="radio">DeepSeek</button></div>
-    <p class="hint new-caption">第一句话就能附照片、使用技能或引用其他对话。</p>
+    <p class="hint new-caption" id="newCaption">第一句话就能附照片、使用技能或引用其他对话。</p>
     <div class="new-composer"><div id="newImages" class="attachment-previews" hidden></div><div id="newRefs" class="reference-chips" hidden></div>
     <textarea id="newText" rows="4" placeholder="想做什么？输入 @ 找对话，$ 找技能" aria-label="首条消息"></textarea>
     <div id="newSuggestions" class="new-suggestions" hidden></div><div class="new-composer-bar"><button id="newAdd" class="icon-btn" aria-label="添加照片、技能或对话">＋</button><span class="hint">首条消息</span><button id="newBtn" class="icon-btn new-send" aria-label="创建并发送">${icon('send')}</button></div></div>
@@ -168,7 +168,11 @@
   function paint(){
     for(const app in APP_ID)$(APP_ID[app]).setAttribute('aria-checked',String(d.app===app));
     const apps=box.querySelector('.new-apps');apps.hidden=[...apps.children].filter(b=>!b.hidden).length<2;  // one app: nothing to pick
-    $('newSkillRef').style.display=d.app==='deepseek'?'none':'';  // DeepSeek takes conversations as references, not skills
+    const skills=d.app!=='deepseek';  // DeepSeek takes conversations as references, not skills: nothing on the sheet offers them
+    $('newSkillRef').style.display=skills?'':'none';
+    $('newCaption').textContent=skills?'第一句话就能附照片、使用技能或引用其他对话。':'第一句话就能附照片或引用其他对话。';
+    $('newText').placeholder=skills?'想做什么？输入 @ 找对话，$ 找技能':'想做什么？输入 @ 找对话';
+    $('newAdd').setAttribute('aria-label',skills?'添加照片、技能或对话':'添加照片或对话');
     const folder=folders.find(v=>v.path===d.folder);$('newFolderName').textContent=d.projectless?'无项目':d.label||folder?.name||(d.folder?d.folder.split(/[\\/]/).pop():'选择项目文件夹');$('newFolderPath').textContent=d.projectless?'不放进任何项目':d.folder||'电脑端的项目与对话目录';
     const pick=chosen();$('newModelName').textContent=pick?pick.modelLabel+(pick.effortLabel?' · '+pick.effortLabel:''):'默认模型';
     $('newModelDetail').textContent=pick?'新对话用这个模型；点这里换':'跟电脑当前设置走；点这里选';

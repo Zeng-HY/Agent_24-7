@@ -68,9 +68,12 @@ def main():
         page.locator('header button[aria-label="新建对话"]').click(); page.wait_for_function("overlays.some(v => v.id === 'newSheet')")
         assert page.evaluate("[...document.querySelectorAll('#newSheet .new-apps button')].filter(b => !b.hidden).map(b => b.textContent)") == ['Codex', 'Claude', 'DeepSeek']
         assert page.evaluate("!document.getElementById('deepseekNew')"), 'the old DeepSeek sheet is still on the page'
+        wording = "[document.getElementById('newCaption').textContent, document.getElementById('newText').placeholder, document.getElementById('newAdd').getAttribute('aria-label')]"
+        assert all('技能' in w for w in page.evaluate(wording)), page.evaluate(wording)  # Codex: skills are offered
         page.locator('#newDeepseek').click()
         page.wait_for_function("document.getElementById('newFolderName').textContent === 'demo'")  # its workspace, not a Codex project
         assert page.evaluate("document.getElementById('newDeepseek').getAttribute('aria-checked')") == 'true'
+        assert not any('技能' in w or '$' in w for w in page.evaluate(wording)), page.evaluate(wording)  # DeepSeek: no word of skills
 
         # its workspaces only: no 无项目
         page.locator('#newFolderChoice').click(); page.wait_for_function("document.querySelectorAll('#newPickerResults .new-pick-row').length >= 1")
@@ -110,10 +113,12 @@ def main():
         page.wait_for_function("overlays.some(v => v.id === 'newSheet')")
         assert page.evaluate("document.getElementById('newDeepseek').getAttribute('aria-checked')") == 'true'
         page.wait_for_function("document.getElementById('newFolderName').textContent === 'demo'")
+        page.locator('#newCodex').click()  # back to Codex: skills are offered again
+        assert all('技能' in w for w in page.evaluate(wording)), page.evaluate(wording)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert not errors, errors
         browser.close()
-    print('new DeepSeek conversation ui check: shared sheet, workspaces only, no skills, models, one request, continue once, opens; sidebar + PASS')
+    print('new DeepSeek conversation ui check: shared sheet, workspaces only, no skills, models, one request, continue once, opens; sidebar +; no word of skills for DeepSeek PASS')
 
 
 if __name__ == '__main__':
