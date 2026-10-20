@@ -1,0 +1,5 @@
+# Files stay as they are on disk (LF); git does not turn them into CRLF on checkout.
+* text=auto eol=lf
+# except batch files: cmd.exe can misread a batch file with LF line ends (labels, long lines), so those get CRLF
+*.cmd text eol=crlf
+*.png binary

@@ -1,0 +1,5 @@
+# The microphone, recognised on this computer (voice_local.py; models in %LOCALAPPDATA%\AgentRemote\models).
+# setup_machine.py installs these when the models are there; a computer without them gets "voice": false.
+numpy==2.4.6
+sherpa-onnx==1.13.8
+sherpa-onnx-core==1.13.8

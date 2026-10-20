@@ -1,0 +1,13 @@
+# Python packages for agent_remote, installed into .venv in this folder (Python 3.11 or newer, Windows).
+# On a new computer 安装.cmd does all of it. By hand:
+#   python -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+# The microphone (voice_local.py) also needs requirements-voice.txt, the page checks in tests/ requirements-dev.txt.
+comtypes==1.4.17
+pillow==12.3.0
+pillow_heif==1.8.0
+pywin32==312
+segno==1.6.6
+uiautomation==2.0.29
+PyYAML==6.0.3
+websocket-client==1.9.2

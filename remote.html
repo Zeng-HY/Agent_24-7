@@ -1,0 +1,1176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Remote">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#2563eb">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>电脑遥控</title>
+<!--machine-->
+<script>
+// Every file of the page comes on its own connection. When one fails (10-11: Tailscale answered 502), that part never
+// runs and the page looks whole but is not: no Claude buttons, no microphone. Once the page has loaded, check that every
+// part is there; if one is missing, reload once (the open chat comes back), and if it still is, say so.
+addEventListener('load', () => {
+  const parts = {deepseekUI:'deepseek-ui', codexUI:'codex-ui', navigationUI:'navigation-ui', workspaceUI:'workspace-ui', activityUI:'activity-ui', readingUI:'reading-ui', claudeUI:'claude-ui', referencesUI:'references-ui', newChatUI:'new-chat-ui', voiceUI:'voice-ui', sidebarUI:'sidebar-ui'};
+  const missing = Object.keys(parts).filter(k => !window[k]).map(k => parts[k]);
+  let last = 0, before = '';
+  try { last = +sessionStorage.getItem('lbr_parts_reload') || 0; before = sessionStorage.getItem('lbr_parts_missing') || ''; sessionStorage.removeItem('lbr_parts_missing'); } catch (e) {}
+  if (before && window.api) api('/api/debug/client', {ua:navigator.userAgent, events:[{t:Math.round(performance.now()), e:'parts-missing', before, now:missing.join(',')}]}).catch(() => {});
+  if (!missing.length) return;
+  if (Date.now() - last > 60000) {
+    try { sessionStorage.setItem('lbr_parts_reload', String(Date.now())); sessionStorage.setItem('lbr_parts_missing', missing.join(',')); } catch (e) {}
+    location.reload(); return;
+  }
+  const note = document.createElement('button'); note.className = 'parts-missing'; note.textContent = '页面有部分没加载出来（' + missing.join('、') + '），点这里重新加载';
+  note.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top) + 8px);z-index:100;padding:12px;border:0;border-radius:12px;background:#b91c1c;color:#fff;font-size:14px';
+  note.onclick = () => location.reload(); document.body.append(note);
+});
+</script>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --line:#e1e4ea; --text:#1d2330; --muted:#6b7280; --blue:#2563eb; --green:#16a34a; --red:#dc2626; --amber:#d97706; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; padding:0 0 60px; }
+  header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line); padding:calc(8px + env(safe-area-inset-top)) 12px 8px; }
+  .dot { width:12px; height:12px; border-radius:50%; background:#9ca3af; flex:none; }
+  .dot.on { background:var(--green); } .dot.starting { background:var(--amber); } .dot.error { background:var(--red); }
+  section { background:var(--card); margin:12px 12px 0; border:1px solid var(--line); border-radius:12px; padding:12px; }
+  h2 { margin:0 0 10px; font-size:15px; color:var(--muted); font-weight:600; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+  .grid.two { grid-template-columns:repeat(2, 1fr); }
+  button { font:inherit; border:1px solid var(--line); background:#fff; color:var(--text); border-radius:10px; padding:14px 8px; font-size:17px; font-weight:600; }
+  button:active { background:#eef2ff; }
+  button.big { background:var(--blue); color:#fff; border-color:var(--blue); }
+  button.big:active { background:#1d4ed8; }
+  button.small { padding:9px 10px; font-size:15px; font-weight:500; }
+  button.tiny { padding:6px 9px; font-size:14px; font-weight:500; }
+  button.danger { color:var(--red); }
+  button[disabled] { opacity:.5; }
+  .hint { font-size:13px; color:var(--muted); margin-top:8px; }
+  .line { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+  input[type=text], select, textarea.field { font:inherit; font-size:16px; padding:11px 10px; border:1px solid var(--line); border-radius:10px; flex:1; min-width:0; background:#fff; }
+  textarea.field { width:100%; resize:vertical; }
+  .sheet { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; z-index:50; }
+  .sheet .box { position:absolute; left:0; right:0; bottom:0; max-height:88vh; background:#fff; border-radius:16px 16px 0 0; display:flex; flex-direction:column; padding-bottom:env(safe-area-inset-bottom); }
+  .sheet .sh-head { padding:12px 14px; border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; }
+  .sheet .sh-head b { flex:1; word-break:break-all; }
+  .sheet .sh-body { padding:12px 14px; overflow:auto; display:flex; flex-direction:column; gap:10px; }
+  .toast { position:fixed; left:50%; bottom:calc(18px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#111; color:#fff; padding:10px 16px; border-radius:20px; font-size:14px; opacity:0; transition:opacity .2s; z-index:90; max-width:90vw; pointer-events:none; }
+  .toast.show { opacity:.95; }
+
+  /* conversation list */
+  .chips { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .chip { padding:7px 13px; font-size:14px; border-radius:16px; background:#f3f4f6; font-weight:600; }
+  .chip.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .grow { flex:1; }
+  .conv { padding:11px 2px; border-top:1px solid var(--line); }
+  .conv:first-child { border-top:0; }
+  .conv:active { background:#f8fafc; }
+  .conv .c1 { display:flex; gap:8px; align-items:center; }
+  .conv .ct { flex:1; min-width:0; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .conv .cm { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .conv .c2 { font-size:13px; color:var(--muted); margin-top:2px; }
+  .conv .c3 { font-size:14px; color:#4b5563; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { font-size:11px; font-weight:700; padding:2px 6px; border-radius:6px; flex:none; }
+  .badge.codex { background:#111827; color:#fff; }
+  .badge.claude { background:#d97757; color:#fff; }
+  .badge.deepseek { background:#4d6bfe; color:#fff; }
+  .st.running { color:var(--green); font-weight:600; }
+  .st.unknown { color:var(--amber); }
+
+  /* one conversation, full screen */
+  #convView { position:fixed; left:0; right:0; top:0; height:100%; background:var(--bg); z-index:40; display:none; flex-direction:column; }
+  .cv-top { display:flex; gap:6px; align-items:center; padding:calc(8px + env(safe-area-inset-top)) 8px 8px; background:var(--card); border-bottom:1px solid var(--line); }
+  .cv-top .back { padding:8px 10px; font-size:17px; border:0; background:transparent; color:var(--blue); }
+  .cv-title { flex:1; min-width:0; }
+  #cvTitle { font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #cvMeta { font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #cvMsgs { flex:1; overflow-y:auto; padding:6px 10px 12px; -webkit-overflow-scrolling:touch; }
+  .bub { margin:8px 0; padding:9px 12px; border-radius:14px; max-width:94%; width:fit-content; white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.55; }
+  .bub.user { background:var(--blue); color:#fff; margin-left:auto; border-bottom-right-radius:4px; }
+  .bub.assistant { background:#fff; border:1px solid var(--line); border-bottom-left-radius:4px; }
+  .bub.note { background:transparent; border:0; color:var(--muted); font-size:13px; padding:2px 4px; }
+  .bub.pending { opacity:.55; }
+  .message-origin { display:block;font-size:12px;font-weight:500;opacity:.85;margin-bottom:8px; }
+  .bub.user .message-actions button { color:inherit;background:rgba(255,255,255,.18);min-height:44px; }
+  .bub pre { white-space:pre-wrap; word-break:break-all; background:#f3f4f6; padding:8px; border-radius:8px; font-size:12px; margin:6px 0; }
+  .bub code { background:#f3f4f6; padding:0 3px; border-radius:4px; font-size:13px; }
+  .bub.user code, .bub.user pre { background:rgba(255,255,255,.18); }
+  .bub table { border-collapse:collapse; font-size:13px; display:block; overflow-x:auto; white-space:normal; margin:4px 0; }
+  .bub td, .bub th { border:1px solid var(--line); padding:3px 6px; vertical-align:top; }
+  .evt { text-align:center; font-size:12px; color:var(--muted); margin:8px 0; }
+  details.tools { margin:2px 0; font-size:12px; color:var(--muted); }
+  details.tools summary { padding:2px 4px; }
+  details.tools .tool { font-family:ui-monospace,Consolas,monospace; padding:2px 8px; white-space:pre-wrap; word-break:break-all; }
+  #cvOpts { padding:0 10px; }
+  .optbox { background:#fff7ed; border:1px solid #fdba74; border-radius:12px; padding:8px 10px; margin:6px 0; font-size:14px; }
+  .optbox .ob { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+  .optbox button { padding:9px 12px; font-size:15px; text-align:left; }
+  .cv-bottom { background:var(--card); border-top:1px solid var(--line); padding:8px 10px calc(8px + env(safe-area-inset-bottom)); }
+  .cv-row { display:flex; gap:8px; align-items:flex-end; }
+  #cvText { flex:1; font:inherit; font-size:16px; padding:9px 12px; border:1px solid var(--line); border-radius:18px; resize:none; line-height:1.4; max-height:40vh; background:#fff; }
+  #cvBtn { padding:9px 16px; border-radius:18px; font-size:16px; }
+  #cvNote { font-size:13px; margin-bottom:6px; display:none; }
+  #cvNote.ok { color:var(--green); } #cvNote.warn { color:var(--amber); } #cvNote.bad { color:var(--red); }
+
+  /* Shared light surfaces and touch controls. Existing color tokens remain authoritative. */
+  :root { --radius:20px; --shadow:0 8px 32px rgba(29,35,48,.09); }
+  [hidden] { display:none !important; }
+  body { padding-bottom:calc(24px + env(safe-area-inset-bottom)); }
+  button { min-height:44px; border-radius:14px; font-size:16px; cursor:pointer; transition:background .12s, transform .12s; }
+  button:active:not(:disabled) { transform:scale(.98); }
+  button:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+  button.tiny, button.small { min-height:44px; }
+  .icon { width:22px; height:22px; display:block; flex:none; }
+  [data-icon] { display:inline-flex; align-items:center; justify-content:center; }
+  .icon-btn { width:44px; height:44px; padding:10px; flex:none; border:0; background:transparent; border-radius:50%; }
+  header { border-bottom:0; padding:calc(8px + env(safe-area-inset-top)) 16px 8px; }
+  .app-top { display:flex; align-items:center; gap:12px; }
+  .app-heading { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .app-heading strong { font-size:20px; font-weight:600; }
+  .app-heading span { color:var(--muted); font-size:12px; margin-top:2px; }
+  .app-heading .machine-switch { align-self:flex-start; border:0; background:transparent; padding:2px 0; min-height:0; color:var(--muted); font-size:12px; font-weight:500; text-align:left; }
+  .app-heading .machine-switch:not(:disabled)::after { content:' ⌄'; }
+  .computer-here { color:var(--blue); }
+  section { border:0; border-radius:var(--radius); padding:16px; margin:12px 16px 0; }
+  .conversation-home { margin:0; border-radius:0; min-height:calc(100dvh - 120px); padding:12px 16px; }
+  body[data-current-mode="chat"] { background:#fff; }
+  .chips { gap:8px; padding-bottom:16px; }
+  .chip { min-height:44px; padding:8px 16px; border:0; border-radius:999px; font-weight:500; }
+  .conv { padding:16px 4px; cursor:pointer; border-color:var(--bg); border-radius:8px; }
+  .conv .ct { font-weight:600; font-size:16px; }
+  .conv .c2 { margin-top:6px; }.conv .c3 { margin-top:6px; color:var(--muted); }
+  /* a conversation's children (DeepSeek subagents, one-shot sessions a script started from it) fold under it (10-20) */
+  .conv.conv-fold { padding:2px 4px 12px 16px; border-top:0; color:var(--blue); font-size:13px; font-weight:500; }
+  .conv.conv-fold::before { content:'▸ '; } .conv.conv-fold.open::before { content:'▾ '; }
+  .conv.conv-child { position:relative; padding:9px 4px 9px 24px; border-top:0; }
+  .conv.conv-child::before { content:''; position:absolute; left:11px; top:8px; bottom:8px; width:2px; border-radius:1px; background:var(--line); }
+  .conv.conv-child .ct { font-weight:500; font-size:15px; }
+  .conv.conv-child .c2 { margin-top:2px; font-size:12px; }
+  .conv.conv-more { padding:6px 4px 14px 24px; border-top:0; color:var(--blue); font-size:13px; }
+  .conv.conv-group .ct::after { content:' ▸'; color:var(--muted); font-weight:400; }
+  .conv.conv-group[aria-expanded="true"] .ct::after { content:' ▾'; }
+  .badge { font-weight:600; }
+  .badge.claude { background:#d97757; color:#fff; }
+  .badge.codex { background:#111111; color:#fff; }
+  .badge.deepseek { background:#4d6bfe; color:#fff; }  /* DeepSeek's own blue, as Claude's orange and Codex's black (10-20) */
+  #convHint { padding:16px 4px; }
+  #convView { background:#fff; height:100dvh; }
+  .cv-top { padding:calc(8px + env(safe-area-inset-top)) 12px 8px; gap:8px; border:0; flex:none; }
+  .cv-top .back { color:var(--text); padding:10px; }
+  #cvTitle { font-size:17px; font-weight:600; } #cvMeta { margin-top:4px; }
+  .message-region { flex:1; position:relative; min-height:0; display:flex; }
+  #cvMsgs { padding:8px 20px 24px; min-width:0; overflow-anchor:none; }
+  .bub { font-size:16px; line-height:1.7; margin:20px 0; padding:0; max-width:100%; }
+  .bub.assistant { border:0; border-radius:0; background:transparent; width:100%; }
+  .bub.user { padding:10px 16px; max-width:88%; border-radius:20px; }
+  .bub.note { font-size:13px; line-height:1.65; margin:12px 0; padding:0; }
+  .bub.note.thinking.long { max-height:9.9em; overflow:hidden; position:relative; cursor:pointer; }
+  .bub.note.thinking.long::after { content:'展开'; position:absolute; right:0; bottom:0; padding:0 0 0 3em; color:var(--blue); background:linear-gradient(to right,transparent,#fff 2.5em); }
+  .bub.note.thinking.long.open { max-height:none; } .bub.note.thinking.long.open::after { content:none; }
+  .plan-card { margin:12px 0; padding:12px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card); }
+  .plan-head { font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .plan-row { display:flex; align-items:flex-start; gap:10px; padding:5px 0; font-size:14px; line-height:1.5; }
+  .plan-mark { flex:none; position:relative; width:16px; height:16px; margin-top:2px; border-radius:50%; border:1.5px dashed #b4bccb; box-sizing:border-box; }
+  .plan-row.doing .plan-mark { border:1.5px solid var(--blue); }
+  .plan-row.doing .plan-mark::after { content:''; position:absolute; inset:3px; border-radius:50%; background:var(--blue); }
+  .plan-row.doing .plan-text { font-weight:600; }
+  .plan-row.done .plan-mark { border:0; background:var(--green); }
+  .plan-row.done .plan-mark::after { content:''; position:absolute; left:5.5px; top:2.5px; width:4px; height:8px; border:solid #fff; border-width:0 1.8px 1.8px 0; transform:rotate(45deg); }
+  .plan-row.done .plan-text { color:var(--muted); }
+  .next-card { margin:16px 0; padding:14px 16px; border:1px solid var(--line); border-radius:16px; background:var(--card); }
+  .next-card.closed { margin:12px 0; padding:0; border:0; background:transparent; }
+  .next-recap { font-size:14px; line-height:1.65; color:var(--muted); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .next-ask { margin-top:10px; font-size:15px; line-height:1.6; font-weight:600; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .next-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  .next-actions button { padding:8px 16px; border-radius:999px; font-size:14px; font-weight:500; max-width:100%; }
+  .next-actions button.big { font-weight:600; }
+  .next-status { margin-top:12px; font-size:13px; line-height:1.6; color:var(--blue); }
+  .task-card { margin:16px 0; padding:14px 16px; border:1px solid var(--line); border-radius:16px; background:var(--card); }
+  .task-head { font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .task-title { font-size:15px; font-weight:600; line-height:1.5; overflow-wrap:anywhere; }
+  .task-brief { margin-top:6px; font-size:13px; line-height:1.6; color:var(--muted); white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; cursor:pointer; }
+  .task-brief.open { display:block; }
+  .task-note { margin-top:8px; font-size:13px; line-height:1.6; color:var(--muted); }
+  .task-note:empty { display:none; }
+  .task-card.settled .next-actions { display:none; }
+  .sub-card { margin:12px 0; padding:10px 14px; border:1px dashed var(--line); border-radius:14px; background:#f8fafc; display:flex; align-items:center; gap:8px; font-size:14px; }
+  .sub-card.running { border-color:#bfdbfe; background:#eff6ff; }
+  .sub-card[data-subagent] { cursor:pointer; }
+  .sub-mark { width:8px; height:8px; border-radius:50%; background:#9ca3af; flex:none; }
+  .sub-card.running .sub-mark { background:var(--blue); }
+  .sub-label { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .sub-state { font-size:12px; color:var(--muted); flex:none; }
+  .bub pre { overflow:auto; white-space:pre; word-break:normal; max-width:100%; padding:12px; font:13px/1.6 ui-monospace,Consolas,monospace; }
+  .bub table { width:100%; font-size:14px; margin:12px 0; }
+  .bub td,.bub th { padding:8px 12px; }
+  .thread-link { display:flex; align-items:center; gap:8px; margin-top:12px; padding:10px 14px; border-radius:16px; font-size:14px; font-weight:500; color:var(--blue); background:#eef2ff; }
+  details.tools { padding:4px 0; margin:12px 0; font-size:13px; }
+  details.tools summary { min-height:44px; display:flex; align-items:center; cursor:pointer; list-style:none; }
+  details.tools summary::before { content:'›'; width:20px; font-size:20px; transition:transform .16s; }
+  details.tools[open] summary::before { transform:rotate(90deg); }
+  details.tools .tool { padding:8px 12px; background:var(--bg); border-radius:8px; margin:4px 0; }
+  .cv-bottom { border:0; flex:none; padding:4px 12px calc(8px + env(safe-area-inset-bottom)); background:#fff; }
+  .cv-row { position:relative; padding:10px 10px 54px; background:var(--bg); border:1px solid var(--line); border-radius:24px; }
+  #cvText { flex:none; width:100%; min-height:28px; max-height:30dvh; padding:4px 6px; border:0; border-radius:0; outline:0; background:transparent; font-size:16px; line-height:1.5; }
+  #cvBtn { position:absolute; right:8px; bottom:8px; width:40px; height:40px; min-height:40px; padding:9px; border-radius:50%; }
+  #cvBtn::before { content:''; position:absolute; inset:-2px; }
+  #cvNote { padding:4px 8px; font-size:13px; max-height:20dvh; overflow:auto; }
+  .runtime-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; min-height:44px; padding:8px; border:0; background:transparent; color:var(--muted); font-size:12px; font-weight:400; text-align:left; }
+  #runtimeBar { display:none !important; } /* the context share is the ring in the title bar; details in 会话状态 */
+  .ctx-ring { width:44px; height:44px; min-height:44px; padding:0; border:0; background:transparent; display:flex; align-items:center; justify-content:center; flex:none; }
+  .ctx-ring i { position:relative; width:26px; height:26px; border-radius:50%; background:conic-gradient(var(--muted) calc(var(--p,0) * 1%), var(--line) 0); }
+  .ctx-ring.warn i { background:conic-gradient(var(--amber) calc(var(--p,0) * 1%), var(--line) 0); }
+  .ctx-ring span { position:absolute; inset:3px; border-radius:50%; background:#fff; display:flex; align-items:center; justify-content:center; font:600 9px/1 -apple-system,sans-serif; color:var(--muted); font-style:normal; }
+  #runtimeModel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; } #runtimeContext { flex:none; }
+  .runtime-label { display:flex; flex-direction:column; min-width:0; gap:2px; } #runtimeScope { font-size:11px; color:var(--muted); }
+  .new-messages { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:6px; padding:8px 16px; border-radius:999px; box-shadow:var(--shadow); font-size:13px; white-space:nowrap; }
+  .new-messages:active { transform:translateX(-50%); }
+  #cvOpts { max-height:25dvh; overflow:auto; flex:none; }
+  .optbox { border-radius:16px; }
+  .sheet { background:rgba(29,35,48,.22); opacity:0; transition:opacity .16s; z-index:60; }
+  .sheet.is-open { opacity:1; }
+  .sheet .box { max-height:calc(var(--overlay-height, 100dvh) - 24px); border-radius:20px 20px 0 0; box-shadow:var(--shadow); transform:translateY(12px) scale(.98); transition:transform .2s ease-out; }
+  .sheet.is-open .box { transform:translateY(0) scale(1); }
+  .sheet .sh-head { padding:12px 16px; flex:none; }
+  .sheet .sh-head b { font-size:17px; font-weight:600; }
+  .sheet .sh-body { padding:16px; gap:12px; min-height:0; }
+  .sheet .box button { flex-shrink:0; }
+  .drawer .box { top:0; bottom:0; right:auto; width:min(320px,88vw); max-height:none; border-radius:0 20px 20px 0; padding-top:env(safe-area-inset-top); transform:translateX(-24px); }
+  .drawer .nav-links { flex:1; }
+  .nav-links button,.menu-row { display:flex; align-items:center; gap:12px; border:0; padding:12px; font-weight:500; text-align:left; background:transparent; }
+  .nav-links button.selected { background:#eef2ff; color:var(--blue); }
+  .nav-foot { display:flex; align-items:center; gap:8px; padding:12px 12px 12px 24px; font-size:13px; color:var(--muted); }
+  #serviceStatus { flex:1; min-width:0; }
+  #serviceStatus .update-link { border:0; background:transparent; padding:0; color:var(--blue); font-size:inherit; font-weight:500; }
+  .nav-foot .icon-btn { color:var(--text); }
+  /* settings (the gear in the drawer): grouped rows with a switch or an arrow on the right */
+  .setting-title { font-size:13px; color:var(--muted); margin:4px 4px -4px; flex:none; }
+  .setting-group { background:var(--bg); border-radius:16px; overflow:hidden; flex:none; }
+  .setting-row { display:flex; align-items:center; gap:12px; width:100%; min-height:52px; margin:0; padding:10px 16px; border:0; border-radius:0; background:transparent; color:var(--text); font-size:16px; font-weight:400; text-align:left; }
+  .setting-row + .setting-row { border-top:1px solid var(--line); }
+  .setting-row > span { flex:1; min-width:0; }
+  .setting-row > .go { flex:none; color:var(--muted); font-size:20px; line-height:1; }
+  .setting-switch { flex:none; margin:0; }
+  .setting-row > .setting-value { flex:none; color:var(--muted); font-size:14px; }
+  .setting-note { font-size:13px; color:var(--muted); margin:-6px 4px 0; line-height:1.45; white-space:pre-line; flex:none; }
+  /* where the browser has no switch control (it is Safari's), one is drawn */
+  .setting-switch.drawn { appearance:none; -webkit-appearance:none; position:relative; width:51px; height:31px; border-radius:999px; background:#d1d5db; transition:background .2s; cursor:pointer; }
+  .setting-switch.drawn::after { content:''; position:absolute; top:2px; left:2px; width:27px; height:27px; border-radius:50%; background:#fff; box-shadow:0 2px 4px rgba(0,0,0,.2); transition:transform .2s; }
+  .setting-switch.drawn:checked { background:var(--green); }
+  .setting-switch.drawn:checked::after { transform:translateX(20px); }
+  .popover { background:transparent; }
+  .popover .box { inset:auto; width:min(280px,calc(100vw - 24px)); border:1px solid var(--line); border-radius:20px; padding:0; transform:translateY(-4px) scale(.96); transform-origin:top right; }
+  .dialog-sheet { align-items:center; justify-content:center; }
+  .dialog-sheet .box { position:relative; bottom:auto; max-width:400px; width:calc(100% - 32px); border-radius:20px; }
+  #confirmText { white-space:pre-wrap; line-height:1.7; margin:0 0 12px; }
+  .runtime-field { display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .runtime-field span { color:var(--muted); font-size:14px; }.runtime-field strong { text-align:right; font-size:15px; font-weight:500; overflow-wrap:anywhere; }
+  .connection-note { padding:8px 16px; background:#fff7ed; color:#92400e; font-size:13px; flex:none; }
+  .pending-alert { width:100%; border:0; padding:8px 16px; border-radius:0; background:#fff7ed; color:#92400e; font-size:13px; text-align:left; flex:none; }
+  .toast { bottom:calc(24px + env(safe-area-inset-bottom)); }
+  .toast.chat-toast { bottom:calc(var(--composer-height, 140px) + 12px); }
+  .line > * { min-width:0; } .grid > button { overflow-wrap:anywhere; }
+  @media(min-width:700px) { .conversation-home { max-width:780px; margin:auto; } #cvMsgs,.cv-bottom,.cv-top { width:100%; max-width:820px; margin-left:auto; margin-right:auto; } .sheet:not(.drawer):not(.popover):not(.dialog-sheet) .box { max-width:600px; left:50%; right:auto; width:100%; transform:translate(-50%,12px) scale(.98); } .sheet.is-open:not(.drawer):not(.popover):not(.dialog-sheet) .box { transform:translate(-50%,0) scale(1); } }
+  @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+
+</style>
+</head>
+<body>
+<header>
+  <div class="app-top">
+    <button class="icon-btn" aria-label="打开导航" onclick="openSheet('navSheet')" data-icon="menu"></button>
+    <div class="app-heading"><strong id="appTitle">对话</strong><button id="appSubtitle" class="machine-switch" disabled onclick="openComputers(this)" aria-label="切换电脑">电脑上的工作，随时继续</button></div>
+    <button class="icon-btn" aria-label="新建对话" onclick="openNewSheet()" data-icon="new"></button>
+  </div>
+  <div id="connectionNote" class="connection-note" role="status" hidden></div>
+</header>
+
+<!-- ======================= conversations ======================= -->
+<section data-mode="chat" class="conversation-home">
+  <div class="chips">
+    <button class="chip on" data-app="all" onclick="setConvApp('all')">全部</button>
+    <button class="chip" data-app="codex" onclick="setConvApp('codex')">Codex</button>
+    <button class="chip" data-app="claude" onclick="setConvApp('claude')">Claude</button>
+    <button class="chip" data-app="deepseek" onclick="setConvApp('deepseek')">DeepSeek</button>
+
+  </div>
+  <div id="convList" style="margin-top:8px"><div class="hint">读取中…</div></div>
+  <div class="hint" id="convHint"></div>
+</section>
+
+<div id="convView">
+  <div class="cv-top">
+    <button class="icon-btn back" aria-label="返回对话列表" onclick="window.navigationUI?navigationUI.back():closeConv()" data-icon="back"></button>
+    <div class="cv-title"><div id="cvTitle"></div><div id="cvMeta"></div></div>
+    <button id="ctxRing" class="ctx-ring" hidden onclick="openRuntime()" aria-label="上下文用量"><i><span></span></i></button>
+    <button class="icon-btn" aria-label="对话菜单" onclick="openSheet('convMenu', this)" data-icon="more"></button>
+  </div>
+  <div id="cvConnection" class="connection-note" role="status" hidden></div>
+  <button id="cvPending" class="pending-alert" hidden onclick="showPending()"></button>
+  <div class="message-region"><div id="cvMsgs" tabindex="0" aria-label="对话消息"></div>
+    <button id="newMessages" class="new-messages" hidden onclick="jumpToLatest()"><span data-icon="down"></span>有新消息</button>
+  </div>
+  <div id="cvOpts"></div>
+  <div class="cv-bottom">
+    <div id="cvNote" role="status" aria-live="polite"></div>
+    <button id="runtimeBar" class="runtime-bar" onclick="openRuntime()" aria-label="查看模型和上下文状态"><span class="runtime-label"><span id="runtimeModel">模型暂无数据</span><small id="runtimeScope">最近一轮记录</small></span><span id="runtimeContext">上下文暂无数据</span></button>
+    <div class="cv-row">
+      <div id="attachmentPreviews" class="attachment-previews" hidden></div>
+      <textarea id="cvText" rows="1" enterkeyhint="enter" aria-label="消息" placeholder="输入消息…"></textarea>
+      <div id="codexComposerTools" class="composer-tools" hidden>
+        <button class="icon-btn" id="addImageBtn" aria-label="添加图片" onclick="codexUI.openAttachments(this)">＋</button>
+        <button class="composer-chip" id="modelChoice" onclick="codexUI.openModels()" aria-label="选择模型与推理强度">模型</button>
+        <button class="composer-chip" id="modeChoice" onclick="codexUI.openModes()" aria-label="选择模式">普通执行</button>
+      </div>
+      <button id="cvBtn" class="icon-btn big" aria-label="发送消息" onclick="sendConv()" data-icon="send"></button>
+    </div>
+  </div>
+</div>
+
+<div id="newSheet" class="sheet" onclick="if (event.target === this) closeSheet('newSheet')">
+  <div class="box">
+    <div class="sh-head"><b>新建对话</b><button class="small" onclick="closeSheet('newSheet')">关闭</button></div>
+    <div class="sh-body"><p class="hint">正在加载新建面板…</p>
+    </div>
+  </div>
+</div>
+
+<div id="navSheet" class="sheet drawer" aria-label="导航"><div class="box">
+  <div class="sh-head"><b>电脑遥控</b><button class="icon-btn" aria-label="关闭导航" onclick="closeSheet('navSheet')" data-icon="close"></button></div>
+  <div class="sh-body nav-links">
+    <button data-nav="chat" onclick="navigateMode('chat')"><span data-icon="chat"></span>对话</button>
+  </div><div class="nav-foot"><span id="serviceDot" class="dot"></span><span id="serviceStatus">正在连接电脑…</span><button id="settingsBtn" class="icon-btn" aria-label="设置" onclick="openSheet('settingsSheet')" data-icon="settings"></button></div>
+</div></div>
+<div id="computerMenu" class="sheet popover" aria-label="电脑"><div class="box">
+  <div id="computerList" class="sh-body"></div>
+</div></div>
+<div id="convMenu" class="sheet popover" aria-label="对话菜单"><div class="box">
+  <div class="sh-body"><button class="menu-row" onclick="closeSheet('convMenu'); openOnPC()"><span data-icon="window"></span>电脑上打开</button><button class="menu-row" onclick="closeSheet('convMenu'); setTimeout(openRuntime, 180)"><span data-icon="box"></span>会话状态</button><div id="convFolder" class="hint"></div></div>
+</div></div>
+<div id="runtimeSheet" class="sheet" aria-label="会话状态"><div class="box">
+  <div class="sh-head"><b>会话状态</b><button class="icon-btn" aria-label="关闭状态" onclick="closeSheet('runtimeSheet')" data-icon="close"></button></div>
+  <div id="runtimeBody" class="sh-body"></div>
+</div></div>
+<div id="confirmSheet" class="sheet dialog-sheet" aria-label="确认操作"><div class="box">
+  <div class="sh-head"><b>确认操作</b></div><div class="sh-body"><p id="confirmText"></p><div class="grid two"><button onclick="answerConfirm(false)">取消</button><button class="big" onclick="answerConfirm(true)">确定</button></div></div>
+</div></div>
+<div id="settingsSheet" class="sheet" aria-label="设置"><div class="box">
+  <div class="sh-head"><b>设置</b><button class="icon-btn" aria-label="关闭设置" onclick="closeSheet('settingsSheet')" data-icon="close"></button></div>
+  <div id="settingsBody" class="sh-body"></div>
+</div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let mode = 'chat';
+
+function toast(text, bad) { const t = $('toast'); t.classList.toggle('chat-toast', !!cur); t.textContent = text; t.style.background = bad ? '#b91c1c' : '#111'; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2800); }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+// timeout (ms), for reads repeated on a timer: one answer that never comes (a request caught in a service restart) must
+// not stop every later read, which wait for it (claude-ui.js, 10-12)
+async function api(path, body, timeout) {
+  const stop = timeout ? new AbortController() : null, timer = stop && setTimeout(() => stop.abort(), timeout);
+  let r; try { r = await fetch(path, {...(body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {}), ...(stop ? {signal: stop.signal} : {})}); }
+  catch (e) { if (stop?.signal.aborted) throw new Error('电脑 ' + Math.round(timeout / 1000) + ' 秒没回应'); throw e; }
+  finally { if (timer) clearTimeout(timer); }
+  let j = null; try { j = await r.json(); } catch (e) {}
+  if (!r.ok) {const error=new Error((j && (j.error || j.text)) || ('HTTP ' + r.status));error.notSubmitted=j?.not_submitted===true;error.code=j?.code;error.draft=j?.draft||null;throw error;}
+  return j;
+}
+
+// ---------------------------------------------------------------- computers (10-13)
+// Every computer runs its own copy of the service. window.MACHINE (put into the page by remote.py) names this one and
+// says what it has: apps (no Claude on a computer with only Codex) and voice (no microphone when false). The name under
+// the title opens the list of the other computers (found through Tailscale, machines.py); tapping one opens that
+// computer's own page, which lets in a phone on the same Tailscale account without a token (remote.py, 10-20).
+const MACHINE = window.MACHINE || {};
+function hasApp(app) { return !Array.isArray(MACHINE.apps) || MACHINE.apps.includes(app); }
+async function openComputers(anchor) {
+  const list = $('computerList'); list.replaceChildren(el('p', 'hint', '正在找别的电脑…'));
+  openSheet('computerMenu', anchor);
+  let j; try { j = await api('/api/computers', null, 15000); } catch (e) { list.replaceChildren(el('p', 'hint', '没找到别的电脑：' + e.message)); return; }
+  const here = el('div', 'menu-row computer-here', '✓ ' + (j.self?.name || MACHINE.name || '这台电脑') + '（现在这台）');
+  list.replaceChildren(here);
+  for (const c of j.others || []) {
+    const row = el('button', 'menu-row', c.name + (c.reachable ? '' : ' · 现在连不上'));
+    row.onclick = () => { closeSheet('computerMenu'); window.workspaceUI?.saveScene(); location.href = c.url; };
+    list.append(row);
+  }
+  if (!(j.others || []).length) list.append(el('p', 'hint', '还没有别的电脑。别的电脑装好、开着时会出现在这里。'));
+}
+if (MACHINE.name) { document.title = '电脑遥控 · ' + MACHINE.name; $('appSubtitle').disabled = false; }
+if (!hasApp('claude')) document.querySelector('.conversation-home .chips').style.display = 'none'; // 全部 / Codex alone says nothing
+addEventListener('load', () => { if (!$('settingsBody').children.length) $('settingsBtn').style.display = 'none'; }); // no voice: nothing to set
+
+// ---------------------------------------------------------------- modes
+const MODES = {chat:['对话','电脑上的工作，随时继续']}; // 任务 went 10-12; the sidebar lists conversations by project (sidebar-ui.js)
+function setMode(m) {
+  if (!MODES[m]) m = 'chat'; // the browser and window pages are gone (10-12); an old history entry may still name them
+  mode = m; document.body.dataset.currentMode = m; $('appTitle').textContent = MODES[m][0]; $('appSubtitle').textContent = MACHINE.name || MODES[m][1]; document.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('selected', b.dataset.nav === m)); try { localStorage.setItem('lbr_mode', m); } catch (e) {}
+  document.querySelectorAll('[data-mode]').forEach(s => { s.style.display = s.dataset.mode.split(' ').includes(m) ? '' : 'none'; });
+  if (m === 'chat') loadConvs();
+  window.activityUI?.onMode();
+  window.workspaceUI?.saveScene();
+}
+
+// ---------------------------------------------------------------- conversations
+const STATUS = {running: '● 运行中', waiting: '等待你处理', idle: '空闲', unknown: '状态不明'};
+let convApp = 'all', convItems = [], cur = null, curSig = '', convTimer = null, sending = false, boostUntil = 0, optsSig = '', pendingText = '';
+
+function hhmm(d) { return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+function ago(ms) {
+  if (!ms) return '';
+  const s = (Date.now() - ms) / 1000;
+  if (s < 60) return '刚刚';
+  if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+  const t = new Date(ms), now = new Date();
+  if (t.toDateString() === now.toDateString()) return '今天 ' + hhmm(t);
+  if (t.toDateString() === new Date(now - 86400000).toDateString()) return '昨天 ' + hhmm(t);
+  return (t.getMonth() + 1) + '-' + t.getDate() + ' ' + hhmm(t);
+}
+
+function setConvApp(a) {
+  convApp = a; try { localStorage.setItem('lbr_conv_app', a); } catch (e) {}
+  document.querySelectorAll('.chip[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === a));
+  loadConvs();
+}
+let convLoading = false;
+async function loadConvs() {
+  if(window.readingUI)return readingUI.loadList();
+  if (convLoading) return; convLoading = true;
+  try { const j = await api('/api/chats?app=' + convApp + '&limit=40'); convItems = j.items; renderConvs(); }
+  catch (e) { $('convHint').textContent = '读不到对话：' + e.message; }
+  finally { convLoading = false; }
+}
+// A conversation's children fold under it (10-20): DeepSeek subagents and the one-shot sessions a script started from
+// it; DeepSeek's sessions in no workspace are one row, 未分组的会话 (group). Open folds are kept on the phone.
+let convFolds = new Set(); try { convFolds = new Set(JSON.parse(localStorage.getItem('lbr_conv_folds') || '[]')); } catch (e) {}
+const convMoreKids = new Map();  // row key → children fetched past the first ones the row carries
+function convKey(c) { return c.app + ':' + c.id; }
+function pressable(node, act) {
+  node.tabIndex = 0; node.setAttribute('role', 'button'); node.onclick = act;
+  node.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } };
+}
+function toggleFold(c) {
+  const k = convKey(c); if (convFolds.has(k)) convFolds.delete(k); else convFolds.add(k);
+  try { localStorage.setItem('lbr_conv_folds', JSON.stringify([...convFolds].slice(-200))); } catch (e) {}
+  renderConvs();
+}
+function openChild(ch, parent) {  // a subagent's own record is not readable: open the conversation that shows its card
+  if (ch.kind !== 'subagent') return openConv(ch);
+  openConv(parent || {app: ch.app, id: ch.parent, title: ch.parent_title || '', folder: '', status: 'idle', updated: 0});
+}
+async function moreChildren(c) {
+  const k = convKey(c), have = (c.children || []).length + (convMoreKids.get(k) || []).length;
+  try {
+    const j = await api('/api/chats/children?app=' + c.app + '&id=' + encodeURIComponent(c.id) + '&offset=' + have + '&limit=50');
+    convMoreKids.set(k, [...(convMoreKids.get(k) || []), ...j.items]); renderConvs();
+  } catch (e) { toast(e.message, true); }
+}
+function convRow(c, child = false) {
+  const row = el('div', 'conv' + (child ? ' conv-child' : c.group ? ' conv-group' : ''));
+  const l1 = el('div', 'c1');
+  if (!child) l1.appendChild(el('span', 'badge ' + c.app, c.app === 'deepseek' ? 'DeepSeek' : (c.app === 'codex' ? 'Codex' : 'Claude')));
+  l1.appendChild(el('span', 'ct', c.title));
+  l1.appendChild(el('span', 'cm', ago(c.updated)));
+  const l2 = el('div', 'c2');
+  l2.appendChild(el('span', 'st ' + c.status, STATUS[c.status] || c.status));
+  if (c.group) l2.appendChild(document.createTextNode(' · ' + (c.child_count || 0) + ' 个' + (c.child_running ? '，' + c.child_running + ' 个运行中' : '')));
+  else if (c.kind === 'subagent') l2.appendChild(document.createTextNode(' · 子智能体'));
+  else if (c.folder) l2.appendChild(document.createTextNode(' · ' + c.folder));
+  if (!child && c.kind) l2.appendChild(document.createTextNode(c.parent_title ? ' · 属于「' + c.parent_title + '」' : ' · 未分组'));
+  row.appendChild(l1); row.appendChild(l2);
+  if (c.preview && !child) row.appendChild(el('div', 'c3', c.preview));
+  row.dataset.key = convKey(c);
+  return row;
+}
+function renderConvs() {
+  const box = $('convList'); box.innerHTML = '';
+  if (!convItems.length) box.appendChild(el('div', 'hint', '没有对话。'));
+  for (const c of convItems) {
+    const row = convRow(c), k = convKey(c), open = convFolds.has(k), count = c.child_count || 0;
+    pressable(row, c.group ? () => toggleFold(c) : c.kind ? () => openChild(c, null) : () => openConv(c));
+    box.appendChild(row);
+    if (!count) continue;
+    if (c.group) row.setAttribute('aria-expanded', String(open));
+    else {
+      const fold = el('div', 'conv conv-fold' + (open ? ' open' : ''), (open ? '收起子对话' : '子对话 ' + count + ' 个') + (c.child_running ? ' · ' + c.child_running + ' 个运行中' : ''));
+      fold.dataset.key = 'fold:' + k; fold.setAttribute('aria-expanded', String(open)); pressable(fold, () => toggleFold(c));
+      box.appendChild(fold);
+    }
+    if (!open) continue;
+    const seen = new Set(), kids = [...(c.children || []), ...(convMoreKids.get(k) || [])].filter(ch => !seen.has(ch.id) && seen.add(ch.id));
+    for (const ch of kids) { const r = convRow(ch, true); pressable(r, () => openChild(ch, c)); box.appendChild(r); }
+    if (count > kids.length) {
+      const more = el('div', 'conv conv-more', '再显示 ' + Math.min(50, count - kids.length) + ' 个（共 ' + count + ' 个）');
+      more.dataset.key = 'more:' + k; pressable(more, () => moreChildren(c)); box.appendChild(more);
+    }
+  }
+  $('convHint').textContent = '';
+}
+
+// iPhone Safari moves the view by itself when the keyboard opens or closes: it slides the visible part
+// down the page so the input box stays above the keyboard, and back up when the keyboard goes. The chat
+// used to follow that slide (top = visualViewport.offsetTop, height = visible height) to keep the title
+// bar on screen, but Safari reports the slide late: traces from the iPhone (logs/viewport_trace*.jsonl,
+// 10-11) show the keyboard mostly closing while the input box keeps focus, with one late report of the
+// final numbers. Each time, Safari had already moved the view back while the chat was still placed for
+// the keyboard, so it sat half a screen low with a blank top until the late report snapped it back.
+// The chat now always fills the window and Safari's own movement does the rest: while you type, the
+// title bar slides up out of view with the keyboard and comes back down with it, in one movement.
+// One exception (traces 19:37-22:46): on the first keyboard after the page loads, Safari often does not move the
+// view at all (offsetTop stays 0, sometimes after a report of a negative height), and the input box sat under the
+// keyboard. Only then the chat is cut to the visible height, title bar on screen and the messages next to the box
+// kept in place; it fills the window again as soon as Safari moves the view itself or the keyboard goes.
+// The trace that sent these numbers to the PC was taken out on 10-12, when the user found the jump fixed.
+let pageHeight = window.innerHeight, keyboardCut = 0, cutTimer = 0; // keyboardCut: the height the chat is cut to, or 0
+function typingField() {
+  const a = document.activeElement;
+  return !!a && (a.tagName === 'TEXTAREA' || a.isContentEditable || (a.tagName === 'INPUT' && !['button','checkbox','radio','range','file','submit','reset','color'].includes(a.type)));
+}
+function keyboardUnmoved() { // true: keyboard up and Safari left the view where it was; false: not; null: numbers in flux
+  const vv = window.visualViewport;
+  if (!vv || !typingField() || !$('convView').contains(document.activeElement)) return false;
+  if (vv.height <= 240) return null;
+  return vv.offsetTop < 1 && vv.height < window.innerHeight - 120;
+}
+function viewportBox() {
+  pageHeight = window.innerHeight;
+  if (keyboardCut && keyboardUnmoved() === false) keyboardCut = 0;
+  return {top:0, height:keyboardCut || pageHeight};
+}
+function fitView() {
+  const v = $('convView');
+  if (v.style.display === 'none') return;
+  const box = viewportBox(), h = box.height + 'px', t = box.top + 'px', m = $('cvMsgs'), fromEnd = m.scrollHeight - m.scrollTop - m.clientHeight;
+  if (v.style.height !== h) { v.style.height = h; m.scrollTop = m.scrollHeight - m.clientHeight - fromEnd; }
+  if (v.style.top !== t) v.style.top = t;
+  window.navigationUI?.sync();
+}
+// Cutting waits a moment, for Safari's numbers to settle while the keyboard slides in; filling the window does not.
+function keyboardCheck() {
+  const want = keyboardUnmoved(), vv = window.visualViewport;
+  if (want === null) return;
+  if (!want) { clearTimeout(cutTimer); cutTimer = 0; if (keyboardCut) { keyboardCut = 0; fitView(); } return; }
+  if (keyboardCut) { if (keyboardCut !== Math.round(vv.height)) { keyboardCut = Math.round(vv.height); fitView(); } return; }
+  if (!cutTimer) cutTimer = setTimeout(() => { cutTimer = 0; if (keyboardUnmoved() === true) { keyboardCut = Math.round(visualViewport.height); fitView(); } }, 90);
+}
+document.addEventListener('focusin', keyboardCheck);
+document.addEventListener('focusout', () => setTimeout(keyboardCheck, 0));
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', keyboardCheck);
+  visualViewport.addEventListener('scroll', keyboardCheck);
+}
+window.addEventListener('resize', fitView);
+
+function openConv(c, fromHistory = false) {
+  if(window.newChatUI?.route(c,fromHistory))return;
+  if (cur) { saveDraft(); rememberScroll(); }
+  dismissOverlays();
+  $('convView').classList.remove('new-provisional');$('cvText').placeholder='输入消息…';
+  cur = {app: c.app, id: c.id, title: c.title, folder: c.folder, status: c.status, updated: c.updated};
+  curSig = ''; optsSig = ''; pendingText = ''; lastRuntime = null; currentMessages = []; $('newMessages').hidden = true;
+  $('cvTitle').textContent = c.title;
+  $('cvMeta').textContent = (c.app === 'deepseek' ? 'DeepSeek' : (c.app === 'codex' ? 'Codex' : 'Claude')) + (c.folder ? ' · ' + c.folder : '');
+  if(!c.keepPreview)$('cvMsgs').innerHTML = '<div class="hint" style="text-align:center">读取中…</div>'; delete $('cvMsgs').dataset.ready;
+  $('cvOpts').innerHTML = ''; hideNote();
+  $('convView').style.display = 'flex'; document.body.style.overflow = 'hidden'; fitView();
+  if (!fromHistory) pushUIState();
+  $('convFolder').textContent = c.cwd || c.folder || '没有工作目录信息';
+  renderRuntime(null); updateSendButton(); updateConnection();
+  let draft = readDraft(cur);
+  $('cvText').value = draft; autoGrow(); updateSendButton();
+  window.readingUI?.onOpen(c,cur);
+  window.codexUI?.onOpen(cur);
+  window.claudeUI?.onOpen(cur);
+  window.deepseekUI?.onOpen(cur);
+  window.referencesUI?.onOpen(cur);
+  window.activityUI?.onOpen(cur);
+  window.navigationUI?.onOpen();
+  loadConv(true);
+  if (c.app === 'claude') loadOpts(false);
+  schedulePoll();
+}
+function closeConv(fromHistory) {
+  if (!cur) return;
+  window.claudeUI?.onClose();
+  window.deepseekUI?.onClose();
+  window.referencesUI?.onClose();
+  window.readingUI?.pauseStream(); window.workspaceUI?.saveScene(); window.codexUI?.onClose(); saveDraft(); rememberScroll(); cur = null; clearTimeout(convTimer);
+  $('convView').style.display = 'none'; document.body.style.overflow = '';
+  window.navigationUI?.onClose();
+  if (!fromHistory) { if (history.state?.remoteUI?.conv) history.back(); else replaceUIState(); }
+  loadConvs();
+  window.workspaceUI?.saveScene();
+}
+
+function saveDraft() { if (cur) writeDraft(cur, $('cvText').value); }
+
+async function loadConv(force) {
+  if(window.newChatUI?.isPreview(cur))return;
+  if(window.readingUI)return readingUI.loadConversation(force);
+  if (!cur) return;
+  const me = cur;
+  try {
+    const j = await api('/api/chat?app=' + me.app + '&id=' + encodeURIComponent(me.id) + '&n=60');
+    if (cur !== me) return;
+    me.status = j.status; me.title = j.title || me.title; chatReadError = ''; renderRuntime(j.runtime); updateConnection();
+    window.codexUI?.refresh(me);
+    const pending = pendingSends.get(chatKey(me));
+    if (pending?.state === 'unconfirmed' && pending.offset != null) {
+      try {
+        const check = await api('/api/chat/check', {app:me.app,id:me.id,offset:pending.offset,text:pending.text});
+        if (check.delivered) {
+          pending.state='delivered'; pending.note='已送达 ✓';
+          persistPending(); window.workspaceUI?.update(me,pending); if (cur === me) showNote(pending.note,'ok');
+        }
+      } catch (e) {}
+      if (cur !== me) return;
+    }
+    $('cvTitle').textContent = me.title;
+    $('cvMeta').textContent = (me.app === 'deepseek' ? 'DeepSeek' : (me.app === 'codex' ? 'Codex' : 'Claude')) + (j.folder ? ' · ' + j.folder : '') + ' · ' + (STATUS[j.status] || '');
+    const sig = j.size + ':' + j.messages.length + ':' + j.status + ':' + (pendingSends.get(chatKey(me))?.state || '');
+    if (force || sig !== curSig) { curSig = sig; renderMsgs(j.messages, j.note); }
+  } catch (e) { if (cur === me) { chatReadError = '读不到这个对话：' + e.message; updateConnection(); } }
+}
+function schedulePoll() {
+  clearTimeout(convTimer);
+  if(window.newChatUI?.isPreview(cur))return;
+  if (!cur) return;
+  const fast = cur.status === 'running' || Date.now() < boostUntil;
+  convTimer = setTimeout(async () => {
+    if (cur && !document.hidden && !sending && (window.workspaceUI?.canPoll() ?? true) && !window.readingUI?.streamActive) {
+      await loadConv(false);
+      if (cur && cur.app === 'claude' && (fast || optsSig)) loadOpts(false);
+    }
+    schedulePoll();
+  }, fast ? 2500 : 8000);
+}
+
+function md(s) {
+  const lines = String(s).split('\n'), out = [];
+  let inCode = false, code = [], table = null;
+  const flushTable = () => { if (table) { out.push('<table>' + table.join('') + '</table>'); table = null; } };
+  const inline = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<u>$1</u>');
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) { if (inCode) { out.push('<pre>' + esc(code.join('\n')) + '</pre>'); code = []; inCode = false; } else { flushTable(); inCode = true; } continue; }
+    if (inCode) { code.push(line); continue; }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) continue;
+      const cells = line.trim().replace(/^\||\|$/g, '').split('|').map(c => '<td>' + inline(c.trim()) + '</td>').join('');
+      (table = table || []).push('<tr>' + cells + '</tr>'); continue;
+    }
+    flushTable();
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    out.push(h ? '<b>' + inline(h[1]) + '</b>' : inline(line));
+  }
+  if (inCode) out.push('<pre>' + esc(code.join('\n')) + '</pre>');
+  flushTable();
+  return out.join('\n').replace(/\n?(<table>|<\/table>|<pre>|<\/pre>)\n?/g, '$1');
+}
+
+function renderAssistantText(node,text) {
+  const lines=[],links=[];let fence=null;
+  for(const line of text.split('\n')){
+    const marker=line.match(/^\s*(`{3,}|~{3,})/);
+    if(marker){if(!fence)fence=marker[1][0];else if(fence===marker[1][0])fence=null;lines.push(line);continue;}
+    const directive=!fence && line.trim().match(/^::created-thread\{(threadId|clientThreadId)="([a-zA-Z0-9-]+)"\}$/);
+    if(directive){links.push({kind:directive[1],id:directive[2]});continue;}
+    lines.push(line);
+  }
+  node.innerHTML=md(lines.join('\n').replace(/<\/?proposed_plan>/g,''));
+  for(const link of links){
+    if(link.kind!=='threadId'){node.append(el('div','hint','新对话正在准备中'));continue;}
+    const button=el('button','thread-link');button.innerHTML=icon('chat');button.append(document.createTextNode('打开新建对话'));
+    button.onclick=async()=>{button.disabled=true;try{const c=await api('/api/chat?app=codex&id='+encodeURIComponent(link.id)+'&n=5');openConv(c);}catch(e){toast('暂时无法打开这个对话：'+e.message,true);}finally{button.disabled=false;}};
+    node.append(button);
+  }
+}
+
+function renderMsgs(list, note) {
+  const box = $('cvMsgs'), key = chatKey(cur);
+  const initial = !box.dataset.ready;
+  const atBottom = initial ? !scrollPositions.has(key) : box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  const anchor = [...box.children].find(n => n.getBoundingClientRect().bottom > box.getBoundingClientRect().top);
+  const anchorKey = anchor?.dataset.key, anchorY = anchor?.getBoundingClientRect().top;
+  const previousTail = currentMessages.at(-1)?.id;
+  const old = new Map([...box.children].map(n => [n.dataset.key,n]));
+  const rows = []; let group = null;
+  const lastPlan = list.findLast(m => m.role === 'plan');  // Claude's checklist: only where it stands now (10-15)
+  for (const m of list) {
+    const id = m.id || [m.time,m.role,m.text].join(':');
+    if (m.role === 'plan' && m !== lastPlan) continue;
+    if (m.role === 'tool') {
+      if (!group) { group = {key:'tool:' + id, items:[]}; rows.push(group); }
+      group.items.push(m);
+    } else { group = null; rows.push({key:id,message:m,...(m.images?{images:m.images}:{})}); }
+  }
+  if (note) rows.unshift({key:'notice',message:{role:'event',text:note}});
+  if (!list.length && !note) rows.push({key:'empty',message:{role:'event',text:'还没有消息。'}});
+  const pending = pendingSends.get(key);
+  if (pending && ['sending','pressed','unconfirmed'].includes(pending.state)) rows.push({key:'pending:' + pending.started,message:{role:'user',text:pending.text,pending:true}});
+  window.codexUI?.decorateRows(rows);
+  window.workspaceUI?.decorateRows(rows);
+  window.readingUI?.decorateRows(rows);
+  window.newChatUI?.decorateRows(rows);
+  const retained = new Set();
+  for (const row of rows) {
+    let n = old.get(row.key);
+    if (!n) { n = document.createElement(row.items ? 'details' : 'div'); n.dataset.key = row.key; }
+    const sig = JSON.stringify(row);
+    if (n.dataset.sig !== sig) {
+      if (row.newCreation) {
+        window.newChatUI?.renderFirst(n,row.newCreation);
+      } else if (row.workspace) {
+        window.workspaceUI?.renderOutbox(n,row.workspace);
+      } else if (row.custom) {
+        window.codexUI?.renderCard(n,row.custom);
+      } else if (row.items) {
+        n.className = 'tools'; let summary = n.querySelector('summary');
+        if (!summary) { summary = el('summary'); n.prepend(summary); }
+        const runningTools=row.items.filter(m=>m.tool_status==='running').length;
+        summary.textContent = row.items.some(m=>m.tool_status) ? '工具活动 '+row.items.length+' 项'+(runningTools?' · '+runningTools+' 项进行中':'') : '已执行 ' + row.items.length + ' 步操作';
+        const toolNodes = new Map([...n.querySelectorAll('.tool')].map(t => [t.dataset.id,t]));
+        const ids = new Set();
+        for (const m of row.items) { const id = m.id || m.time + m.text; ids.add(id); let t = toolNodes.get(id) || el('div','tool'); t.dataset.id = id; t.textContent = m.text; n.appendChild(t); }
+        toolNodes.forEach((t,id) => { if (!ids.has(id)) t.remove(); });
+      } else if (row.message.role === 'subagent') {
+        renderSubagent(n,row.message);
+      } else if (row.message.role === 'plan') {
+        renderPlan(n,row.message);
+      } else if (row.message.role === 'next') {
+        renderNext(n,row.message);
+      } else if (row.message.role === 'task') {
+        renderTask(n,row.message);
+      } else {
+        const m = row.message;
+        const thoughtExpanded=n.classList.contains('open');
+        n.className = m.role === 'event' ? 'evt' : 'bub ' + m.role + (m.phase === 'commentary' ? ' note' : '') + (m.pending ? ' pending' : '');
+        if(m.role==='assistant')renderAssistantText(n,m.text);else n.innerHTML=md(m.text);
+        n.onclick = null;
+        if (m.thinking) { n.classList.add('thinking'); if (m.text.length > 400) { n.classList.add('long'); if(thoughtExpanded)n.classList.add('open');n.onclick = () => n.classList.toggle('open'); } }
+        if(m.thinking&&cur?.app==='deepseek')n.prepend(el('div','message-origin',m.streaming?'思考中…':'思考过程'));
+        if(m.origin==='other_chat')n.prepend(el('div','message-origin','来自其他对话'));
+        if (row.images) window.codexUI?.renderImages(n,row.images);
+        window.readingUI?.decorateMessage(n,m);
+      }
+      n.dataset.sig = sig;
+    }
+    retained.add(row.key);
+    const target = box.children[retained.size - 1]; if (target !== n) box.insertBefore(n, target || null);
+  }
+  [...box.children].forEach(n => { if (!retained.has(n.dataset.key)) n.remove(); });
+  box.dataset.ready = '1'; currentMessages = list;
+  if (initial && scrollPositions.has(key)) box.scrollTop = scrollPositions.get(key);
+  else if (atBottom) { box.scrollTop = box.scrollHeight; $('newMessages').hidden = true; }
+  else {
+    const kept = [...box.children].find(n => n.dataset.key === anchorKey);
+    if (kept && anchorY !== undefined) box.scrollTop += kept.getBoundingClientRect().top - anchorY;
+    if (list.at(-1)?.id !== previousTail) $('newMessages').hidden = false;
+  }
+}
+
+// Claude's checklist (update_plan in Claude desktop, TodoWrite in Claude Code), as the desktop draws it: a ring for each step
+// still to do, a filled ring for the one under way, a tick for the ones done (10-15)
+function renderPlan(n, m) {
+  n.className = 'plan-card'; n.onclick = null; n.replaceChildren();
+  const done = m.items.filter(i => i.status === 'completed').length;
+  n.append(el('div', 'plan-head', '进度 ' + done + ' / ' + m.items.length));
+  for (const i of m.items) {
+    const row = el('div', 'plan-row ' + (i.status === 'completed' ? 'done' : i.status === 'in_progress' ? 'doing' : 'todo'));
+    row.append(el('span', 'plan-mark'), el('span', 'plan-text', i.text)); n.append(row);
+  }
+}
+
+// Claude's next-step box (10-16), as the desktop draws it at the end of a turn: a recap and, while it waits on you, its
+// question and buttons, the first one the main one. A button presses the same one on the PC. Answered, the recap stays.
+function renderNext(n, m) {
+  n.className = 'next-card' + (m.open ? '' : ' closed'); n.onclick = null; n.replaceChildren();
+  if (m.recap) n.append(el('div', 'next-recap', m.recap));
+  if (!m.open) return;
+  if (m.ask) n.append(el('div', 'next-ask', m.ask));
+  if (!m.actions?.length) return;
+  const row = el('div', 'next-actions');
+  m.actions.forEach((a, i) => { const b = el('button', i ? '' : 'big', a.label); b.type = 'button'; b.onclick = () => window.claudeUI?.pressNext(m, i, row); row.append(b); });
+  n.append(row);
+}
+
+// A task Claude proposes (10-16), as the desktop's card: its title and brief (a tap shows all of it); Start, Do it here and
+// the cross are pressed on the PC. Whether the card still waits there comes from the PC: claude-ui.js marks a settled one.
+function renderTask(n, m) {
+  n.className = 'task-card'; n.dataset.title = m.title; n.onclick = null; n.replaceChildren();
+  n.append(el('div', 'task-head', m.offer ? 'Claude 问要不要新开一个对话' : 'Claude 提议新开一个任务'), el('div', 'task-title', m.title));
+  if (m.brief) { const b = el('div', 'task-brief', m.brief); b.onclick = () => b.classList.toggle('open'); n.append(b); }
+  const note = el('div', 'task-note'); n.append(note);
+  if (m.offer) { note.textContent = '要在电脑上选「New session」或「Do it here」。'; return; }
+  const row = el('div', 'next-actions');
+  for (const [kind, label] of [['start', '开始'], ['here', '在这里做'], ['dismiss', '不要了']]) {
+    const b = el('button', kind === 'start' ? 'big' : '', label); b.type = 'button'; b.onclick = () => window.claudeUI?.pressTask(m, kind, label, row); row.append(b);
+  }
+  n.append(row); window.claudeUI?.markTask(n);
+}
+
+// A subagent this conversation opened (10-19): where it was started, its label, and whether it still runs. The child's
+// own transcript is only readable on the PC (its log is delivered to the desktop, not through the phone's session API),
+// so the card reports and does not open anything.
+function renderSubagent(n, m) {
+  const state = m.status === 'running' ? 'running' : m.status === 'done' ? 'done' : '';
+  n.className = 'sub-card' + (state === 'running' ? ' running' : ''); n.onclick = null; n.replaceChildren();
+  n.dataset.subagent = m.child || ''; n.dataset.status = state;
+  n.append(el('span', 'sub-mark'), el('span', 'sub-label', '子智能体 · ' + (m.label || m.child || '')),
+           el('span', 'sub-state', state === 'running' ? '运行中' : state === 'done' ? '已完成' : ''));
+}
+
+function showNote(text, cls, withEnter) {
+  // Progress and success are shown on the message itself; this line is only for things that need you.
+  if (!cls || cls === 'ok') { hideNote(); return; }
+  const n = $('cvNote'); n.style.display = 'block'; n.className = cls || ''; n.textContent = text;
+  if (withEnter) { const b = el('button', 'tiny', '再按一次回车'); b.style.marginLeft = '8px'; b.onclick = pressEnterAgain; n.appendChild(b); }
+}
+function hideNote() { $('cvNote').style.display = 'none'; }
+function autoGrow() { const t = $('cvText'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight + 2, window.innerHeight * 0.4) + 'px'; }
+$('cvText').addEventListener('input', () => { autoGrow(); clearTimeout($('cvText')._d); $('cvText')._d = setTimeout(saveDraft, 600); });
+$('cvText').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); sendConv(); }
+});
+
+// Text found in Claude's box on the PC (10-12: an "e" typed there) turns a send away; the card then offers to send again
+// replacing exactly that text (workspace-ui.js sets this for the next send to the same conversation).
+let replaceDraftNext = null;
+function sendReplacing(me, draft) { replaceDraftNext = {key: chatKey(me), draft}; return sendConv(); }
+async function sendConv(deliveryMode=null) {
+  if(window.newChatUI?.isPreview(cur))return;
+  if (!cur || sending || window.workspaceUI?.composing) return;
+  if (cur.app==='deepseek') return window.deepseekUI?.send(deliveryMode||'steer');
+  if (window.codexUI?.shouldSendEnhanced()) return codexUI.send();
+  const replaceDraft = replaceDraftNext?.key === chatKey(cur) && cur.app === 'claude' ? replaceDraftNext.draft : null; replaceDraftNext = null;
+  const images=cur.app==='claude'?(window.codexUI?.imageSnapshot(cur)||[]):[];
+  const text = $('cvText').value.trim(); if (!text&&!images.length) return;
+  if(window.codexUI?.blocked())return;
+  if(images.length&&deliveryMode==='steer'){toast('图片请使用普通发送，文字可立即补充',true);return;}
+  const me = cur, key = chatKey(me), previous = pendingSends.get(key);
+  const references=window.referencesUI?.snapshot(me)||[];
+  const steer=me.app==='claude'&&deliveryMode==='steer',expectedTurn=steer?window.claudeUI?.turnAnchor():null;
+  if(steer&&!expectedTurn){toast('当前没有可核实的运行轮次，请刷新 Claude 状态',true);return;}
+  if (previous?.state === 'unconfirmed' && !(await askConfirm('上一条消息尚未确认送达。再次发送可能重复，仍要发送这条消息吗？'))) return;
+  const ticket = {text,started:Date.now(),state:'sending',note:steer?'正在提交补充指令…':'正在打开电脑对话并发送…'};
+  try { window.workspaceUI?.capture(me,ticket,{originalText:$('cvText').value,references,images}); } catch(e) {toast(e.message,true);return;}
+  if(images.length)codexUI.clearImages(me);
+  sending = true; pendingSends.set(key,ticket); persistPending();
+  autoGrow(); updateSendButton(); renderMsgs(currentMessages); showNote(ticket.note);
+  try {
+    const pressed = await api(steer?'/api/claude/steer':'/api/chat/send', {app:me.app,id:me.id,text,...(images.length?{attachments:images.map(v=>v.meta.id),request_id:ticket.rid}:{}),...(references.length?{references}: {}),...(steer?{expected_turn:expectedTurn,request_id:ticket.rid}: {}),...(replaceDraft&&!steer?{replace_draft:replaceDraft}:{})});
+    ticket.state = 'pressed'; ticket.offset = pressed.offset;ticket.check_text=pressed.check_text||text; ticket.note = me.app==='claude'?(pressed.text||'已提交，等待 Claude 读取'):'已按回车，等待送达确认…'; persistPending(); window.workspaceUI?.update(me,ticket);
+    if (cur && chatKey(cur) === key) showNote(ticket.note);
+    boostUntil = Date.now() + 90000;
+    const until = Date.now() + 25000; let delivered = false,queued=false;
+    while (Date.now() < until) {
+      await sleep(1500);
+      try { const c = await api('/api/chat/check', {app:me.app,id:me.id,offset:pressed.offset,text:ticket.check_text});queued=queued||!!c.queued;if(c.queued){ticket.state='queued';ticket.note='已进入 Claude 队列，等待当前任务读取';workspaceUI?.update(me,ticket);} if (c.delivered) { delivered = true; break; } } catch (e) {}
+    }
+    ticket.state = delivered ? 'delivered' : queued?'queued':'unconfirmed';
+    ticket.note = delivered ? (me.app==='claude'?'Claude 已读取消息 ✓':'已送达 ✓') : queued?'已进入 Claude 队列，等待当前任务读取':(me.app==='claude'?'已提交，尚未确认 Claude 读取。':'已按回车，但尚未确认送达。') + (pressed.running ? '对话运行中，消息可能在排队。' : '') + '可从菜单打开电脑上的对话检查。';
+    if (!delivered) ticket.offset = pressed.offset;
+  } catch (e) {
+    // A lost HTTP response does not prove that Enter was never pressed. Never retry automatically.
+    ticket.state = e.notSubmitted?'rejected':'unconfirmed'; ticket.note = e.notSubmitted?e.message:'未确认发送结果：' + e.message + '。请检查电脑对话，避免重复发送。';
+    ticket.draft = e.code === 'desktop_draft' ? e.draft : null; // what sits in Claude's box: the card can replace it
+    // The failed send is retained in the outbox; never overwrite the new draft.
+  } finally {
+    persistPending(); window.workspaceUI?.update(me,ticket); sending = false; updateSendButton();
+    if (ticket.state === 'rejected') toast(ticket.note, true); // the message stays on screen with 恢复草稿
+    if (cur && chatKey(cur) === key) {
+      hideNote(); // delivered, queued (shown above the box) or unconfirmed (marked on the message)
+      // Restore is an explicit action on the outbox card.
+      await loadConv(true); if (me.app === 'claude') loadOpts(false); schedulePoll();
+    }
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+async function pressEnterAgain() {
+  if (!cur) return;
+  try { const j = await api('/api/chat/enter', {app: cur.app, id: cur.id}); toast(j.text); } catch (e) { toast(e.message, true); }
+  boostUntil = Date.now() + 60000; setTimeout(() => loadConv(false), 1500); schedulePoll();
+}
+async function openOnPC() {
+  if (!cur) return;
+  try { const j = await api('/api/chat/open', {app: cur.app, id: cur.id}); toast(j.text); } catch (e) { toast(e.message, true); }
+  if (cur && cur.app === 'claude') { optsSig = ''; loadOpts(false); }
+}
+
+// Claude: buttons and choices on the PC around its message box (permission prompts, questions, Stop)
+async function loadOpts(open) {
+  if(window.claudeUI&&cur?.app==='claude'){if(open)await openOnPC();return claudeUI.refresh(cur,!!open);}
+  if (!cur || cur.app !== 'claude') return;
+  const me = cur;
+  try {
+    const j = await api('/api/chat/options?id=' + encodeURIComponent(me.id) + (open ? '&open=1' : ''));
+    if (cur === me) renderOpts(j);
+  } catch (e) { if (open) toast(e.message, true); }
+}
+function renderOpts(j) {
+  const sig = JSON.stringify(j);
+  if (sig === optsSig) return;
+  optsSig = sig;
+  const box = $('cvOpts'); box.innerHTML = '';
+  if (!j.on_screen) {
+    const d = el('div', 'hint', '电脑上的 Claude 现在显示' + (j.shown ? '「' + j.shown + '」' : '别的页面') + '，这里看不到它的按钮。');
+    d.style.margin = '4px 0';
+    const b = el('button', 'tiny', '切过去看'); b.style.marginLeft = '6px'; b.onclick = () => loadOpts(true); d.appendChild(b);
+    box.appendChild(d); optsSig = '';
+    return;
+  }
+  if (!j.options.length && !j.running) return;
+  const ob = el('div', 'optbox');
+  ob.appendChild(el('div', '', j.options.length ? '电脑上的 Claude 在等你选：' : 'Claude 正在运行。'));
+  const row = el('div', 'ob');
+  for (const o of j.options) {
+    if (o.type === 'Edit') {
+      const wrap = el('div', 'line'); wrap.style.width = '100%';
+      const inp = el('input'); inp.type = 'text'; inp.placeholder = o.name || '填写'; inp.value = o.value || '';
+      const b = el('button', 'tiny big', '填入并回车'); b.onclick = () => pressOpt(o, inp.value, true);
+      wrap.appendChild(inp); wrap.appendChild(b); row.appendChild(wrap);
+      continue;
+    }
+    const mark = o.type === 'RadioButton' || o.type === 'CheckBox' ? (o.checked ? '◉ ' : '○ ') : '';
+    const b = el('button', 'small', mark + o.name);
+    b.onclick = () => pressOpt(o);
+    row.appendChild(b);
+  }
+  if (j.running) { const s = el('button', 'small danger', '停止这一轮'); s.onclick = async () => { if (await askConfirm('让电脑上的 Claude 停下这一轮？')) pressOpt({type: 'Button', name: 'Stop', nth: 0}); }; row.appendChild(s); }
+  ob.appendChild(row); box.appendChild(ob);
+}
+async function pressOpt(o, text, enter) {
+  if (!cur) return;
+  try { const j = await api('/api/chat/press', {id: cur.id, option: o, text: text || '', enter: !!enter}); toast(j.text); }
+  catch (e) { toast(e.message, true); }
+  optsSig = ''; boostUntil = Date.now() + 30000;
+  setTimeout(() => { loadOpts(false); loadConv(false); }, 700); schedulePoll();
+}
+
+// The full, durable first-message composer is installed by new-chat-ui.js.
+function openNewSheet() { toast('新建面板正在加载，请稍后重试',true); }
+function sendNew() { window.newChatUI?.open(); }
+
+// ---------------------------------------------------------------- is the PC reachable
+// The service was restarted with new code after this page loaded: it now says another version than the one it put into
+// the page (MACHINE.version). The page reloads itself the next time it comes back to the screen with nothing half done,
+// and says so for a moment; till then the drawer's status line offers it. Before 10-14 a button stayed pinned over the
+// top right, and from 0.18 on for good: the page compared with a version written into it that nobody had updated.
+let pageOutdated = false;
+async function refreshStatus() { if(document.hidden || (window.workspaceUI && !workspaceUI.canPoll()))return; try { const status=await api('/api/status');serviceOnline = true;pageOutdated=!!(status.ui_version&&MACHINE.version&&status.ui_version!==MACHINE.version); } catch (e) { serviceOnline = false; } updateConnection(); }
+function quietMoment() { return !overlays.length && !sending && !window.voiceUI?.recording && !window.workspaceUI?.composing && !document.activeElement?.matches?.('input,textarea'); }
+function reloadForUpdate() { window.workspaceUI?.saveScene(); try { sessionStorage.setItem('lbr_page_updated', '1'); } catch (e) {} location.reload(); }
+
+// ---------------------------------------------------------------- shared mobile UI
+const ICONS = {
+  menu:'M4 6h16M4 12h16M4 18h16', back:'m14 5-7 7 7 7', close:'m6 6 12 12M18 6 6 18',
+  new:'M12 5H5v14h14v-7M14 4l6 6M11 13l2-5 5-5 3 3-5 5z',
+  more:'M5 12h.01M12 12h.01M19 12h.01', send:'M12 19V5m-6 6 6-6 6 6', down:'M12 5v14m-6-6 6 6 6-6',
+  chat:'M4 4h16v12H9l-5 4z', window:'M3 4h18v13H3zM8 21h8M12 17v4', check:'m5 12 4 4L19 6',
+  folder:'M3 7V5h6l2 2h10v13H3z', box:'M4 4h16v16H4z',
+  settings:'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z'
+};
+function icon(name) { return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (name === 'more' ? '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>' : '<path d="' + (ICONS[name] || ICONS.more) + '"></path>') + '</svg>'; }
+function applyIcons(root = document) { root.querySelectorAll('[data-icon]').forEach(n => { n.innerHTML = icon(n.dataset.icon); }); }
+applyIcons();
+let serviceOnline = null, chatReadError = '', lastRuntime = null, currentMessages = [];
+const scrollPositions = new Map(), pageScroll = new Map(), pendingSends = new Map();
+try {
+  for (const [key,ticket] of JSON.parse(localStorage.getItem('lbr_pending_sends') || sessionStorage.getItem('lbr_pending_sends') || '[]')) {
+    if (['sending','pressed','unconfirmed'].includes(ticket.state)) { ticket.state='unconfirmed'; ticket.note='上次发送尚未确认送达，请先检查对话，避免重复发送。'; }
+    pendingSends.set(key,ticket);
+  }
+} catch (e) {}
+function persistPending() { try { localStorage.setItem('lbr_pending_sends',JSON.stringify([...pendingSends].slice(-20))); } catch(e) {} }
+const overlays = [];
+let applyingHistory = false, confirmResolve = null;
+function chatKey(c) { return c ? c.app + ':' + c.id : ''; }
+function draftKey(c) { return 'lbr_draft_' + chatKey(c); }
+function readDraft(c) { try { return localStorage.getItem(draftKey(c)) ?? localStorage.getItem('lbr_draft_' + c.id) ?? ''; } catch (e) { return ''; } }
+function writeDraft(c, value) { try { if (value) localStorage.setItem(draftKey(c),value); else localStorage.removeItem(draftKey(c)); localStorage.removeItem('lbr_draft_' + c.id); } catch (e) {} }
+function rememberScroll() { if (cur && $('cvMsgs').dataset.ready) scrollPositions.set(chatKey(cur),$('cvMsgs').scrollTop); }
+function jumpToLatest() { $('cvMsgs').scrollTop = $('cvMsgs').scrollHeight; $('newMessages').hidden = true; rememberScroll(); }
+$('cvMsgs').addEventListener('scroll', () => { rememberScroll(); if ($('cvMsgs').scrollHeight - $('cvMsgs').scrollTop - $('cvMsgs').clientHeight < 120) $('newMessages').hidden = true; }, {passive:true});
+function updateSendButton() {
+  $('cvBtn').disabled = !!window.newChatUI?.isPreview(cur) || sending || !!window.workspaceUI?.composing || (!$('cvText').value.trim() && !window.codexUI?.attachmentCount()) || !!window.codexUI?.blocked();
+  const sendIcon=sending ? 'more' : 'send';
+  if($('cvBtn').dataset.sendIcon!==sendIcon){$('cvBtn').innerHTML=icon(sendIcon);$('cvBtn').dataset.sendIcon=sendIcon;}
+  $('cvBtn').setAttribute('aria-label', sending ? '发送中' : '发送消息');
+}
+$('cvText').addEventListener('input', () => { updateSendButton(); const ticket=pendingSends.get(chatKey(cur)); if(ticket?.restored) { ticket.restored=false; persistPending(); } });
+
+function uiState() { return {mode,conv:cur ? {app:cur.app,id:cur.id,title:cur.title,folder:cur.folder,status:cur.status} : null,overlays:[],parent:!!cur}; }
+function pushUIState() { if (!applyingHistory) history.pushState({remoteUI:uiState()},''); }
+function replaceUIState() { if (!applyingHistory) history.replaceState({remoteUI:uiState()},''); }
+function syncInert() {
+  const top = overlays.at(-1)?.id;
+  [...document.body.children].forEach(n => { if (n.tagName !== 'SCRIPT') n.inert = top ? n.id !== top : !!cur && !['convView','backGestureEdge','toast','newJobDock'].includes(n.id); });
+  document.body.style.overflow = top || cur ? 'hidden' : '';
+  window.navigationUI?.sync();
+  window.newChatUI?.sync();
+}
+function fitOverlays() {
+  const view = viewportBox();
+  for (const o of overlays) {
+    const node = $(o.id); node.style.top = view.top + 'px'; node.style.height = view.height + 'px'; node.style.bottom = 'auto';
+    node.style.setProperty('--overlay-height',view.height+'px');
+    if (node.classList.contains('popover') && o.anchor) {
+      const r = o.anchor.getBoundingClientRect(), box = node.querySelector('.box'), h = view.height, top = view.top;
+      box.style.left = Math.max(12,Math.min(r.right-box.offsetWidth,innerWidth-box.offsetWidth-12))+'px';
+      const below = r.bottom-top+8, above = r.top-top-box.offsetHeight-8;
+      box.style.top = Math.max(12,below+box.offsetHeight <= h-12 ? below : above)+'px';
+      box.style.transformOrigin = below+box.offsetHeight <= h-12 ? 'top right' : 'bottom right';
+    }
+  }
+}
+function openSheet(id, anchor = null, fromHistory = false) {
+  if (overlays.some(o=>o.id===id)) return;
+  const node = $(id); if (!node) return;
+  clearTimeout(node._closing);
+  const trigger = document.activeElement;
+  node.style.display = node.classList.contains('dialog-sheet') ? 'flex' : 'block';
+  node.style.zIndex = 60 + overlays.length * 2;
+  node.setAttribute('role','dialog'); node.setAttribute('aria-modal','true'); node.tabIndex = -1;
+  overlays.push({id,trigger,anchor});
+  syncInert(); fitOverlays(); node.getBoundingClientRect(); requestAnimationFrame(()=> { node.classList.add('is-open'); node.focus({preventScroll:true}); });
+  if (!fromHistory) replaceUIState();
+}
+function hideOverlay(id) {
+  const at = overlays.findIndex(o=>o.id===id); if (at < 0) return;
+  const closing = overlays.splice(at);
+  closing.reverse().forEach(o => {
+    window.claudeUI?.onSheetClose(o.id);
+    window.referencesUI?.onSheetClose(o.id);
+    const n = $(o.id); n.classList.remove('is-open'); n._closing = setTimeout(()=> { if (!overlays.some(x=>x.id===o.id)) n.style.display='none'; }, window.navigationUI?.closeDelay?.(o.id) ?? 160);
+    if (o.id === 'confirmSheet' && confirmResolve) { const resolve = confirmResolve; confirmResolve = null; resolve(false); }
+  });
+  syncInert(); const trigger = closing.at(-1)?.trigger;
+  const focus = overlays.length ? $(overlays.at(-1).id) : trigger;
+  if (focus?.isConnected && !focus.closest('[inert]')) focus.focus({preventScroll:true});
+}
+function closeSheet(id) {
+  if (!overlays.some(o=>o.id===id)) return;
+  hideOverlay(id);
+  replaceUIState();
+}
+function dismissOverlays() { if (overlays.length) { hideOverlay(overlays[0].id); replaceUIState(); } }
+function applyHistoryState(target) {
+  applyingHistory = true;
+  for (const o of [...overlays].reverse()) hideOverlay(o.id);
+  if (target.mode !== mode) setMode(target.mode);
+  if (chatKey(target.conv) !== chatKey(cur)) {
+    if (target.conv) openConv(target.conv,true); else closeConv(true);
+  }
+  applyingHistory = false; syncInert();
+}
+window.addEventListener('popstate', e => {if(window.navigationUI)navigationUI.pop(e);else applyHistoryState(e.state?.remoteUI||{mode:'chat',conv:null,overlays:[]});});
+function navigateMode(next) {
+  pageScroll.set(mode,scrollY); dismissOverlays(); if (cur) closeConv(true);
+  setMode(next); pushUIState(); requestAnimationFrame(()=>window.scrollTo(0,pageScroll.get(next)||0));
+}
+document.querySelectorAll('.sheet').forEach(n => {
+  n.removeAttribute('onclick');
+  n.addEventListener('click', e => { if (e.target === n) closeSheet(n.id); });
+});
+document.addEventListener('keydown', e => {
+  if (!overlays.length) return;
+  const top = $(overlays.at(-1).id);
+  if (e.key === 'Escape') { e.preventDefault(); closeSheet(top.id); return; }
+  const focusable = [...top.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),[tabindex="0"]')].filter(n=>n.offsetParent !== null);
+  if (e.key === 'Tab') {
+    const first = focusable[0], last = focusable.at(-1);
+    if (!first) { e.preventDefault(); return; }
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === top)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || document.activeElement === top)) { e.preventDefault(); first.focus(); }
+  }
+});
+if (window.visualViewport) { visualViewport.addEventListener('resize',fitOverlays); visualViewport.addEventListener('scroll',fitOverlays); }
+window.addEventListener('resize',fitOverlays);
+if (window.ResizeObserver) new ResizeObserver(()=>document.documentElement.style.setProperty('--composer-height',document.querySelector('.cv-bottom').offsetHeight+'px')).observe(document.querySelector('.cv-bottom'));
+
+function askConfirm(text) { return new Promise(resolve => { if (confirmResolve) { resolve(false); return; } confirmResolve = resolve; $('confirmText').textContent = text; openSheet('confirmSheet'); }); }
+function answerConfirm(value) { const resolve = confirmResolve; confirmResolve = null; closeSheet('confirmSheet'); if (resolve) resolve(value); }
+
+const EFFORT = {none:'无',minimal:'最低',low:'低',medium:'中',high:'高',xhigh:'极高',max:'最高',ultra:'Ultra'};
+function modelLabel(value) { return value ? value.replace(/^gpt-/i,'GPT-') : '模型暂无数据'; }
+function number(value) { return typeof value === 'number' ? value.toLocaleString() : '暂无数据'; }
+function stamp(value) { const d=new Date(value); return value && !isNaN(d) ? d.toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '暂无数据'; }
+function renderRuntime(runtime) {
+  runtime=window.claudeUI?.runtimeFor(runtime)||runtime;
+  lastRuntime=runtime || null; const r=runtime || {};
+  const scope=r.source==='desktop'?'桌面显示 · '+stamp(r.usage_time):r.source==='last_request'?'最近请求记录':cur?.status==='running' && r.model_time && r.turn_time && r.model_time>=r.turn_time ? '当前轮记录' : '最近一轮记录';
+  $('runtimeModel').textContent=modelLabel(r.model)+(r.effort ? ' · '+(EFFORT[r.effort]||r.effort) : '');
+  $('runtimeContext').textContent=r.context_state==='available' && Number.isFinite(r.percent) ? '上下文约 '+r.percent+'%' : r.context_state==='waiting' ? '上下文等待更新' : r.context_state==='partial'?'最近输入 '+number(r.used_tokens)+' tokens':'上下文暂无数据';
+  $('runtimeBar').title=scope;
+  $('runtimeScope').textContent=scope;
+  const ring=$('ctxRing'), pct=r.context_state==='available' && Number.isFinite(r.percent) ? Math.max(0,Math.min(100,Math.round(r.percent))) : null;
+  ring.hidden=pct===null;
+  if(pct!==null){ring.style.setProperty('--p',pct);ring.querySelector('span').textContent=pct;ring.classList.toggle('warn',pct>=80);ring.setAttribute('aria-label','上下文已用约 '+pct+'%，查看会话状态');}
+  if (overlays.some(o=>o.id==='runtimeSheet')) fillRuntime(scope);
+}
+function fillRuntime(scope) {
+  const r=lastRuntime || {}, body=$('runtimeBody'); body.innerHTML='';
+  body.append(el('div','hint',scope || $('runtimeBar').title));
+  const fields=[['模型',r.model||'暂无数据'],['推理强度',r.effort ? (EFFORT[r.effort]||r.effort)+' ('+r.effort+')' : '暂无数据'],['模型记录时间',stamp(r.model_time)],['上下文',r.context_state==='waiting'?'等待更新':r.context_state==='available'?'约 '+r.percent+'%':'暂无数据'],['最近用量 / 窗口容量',number(r.used_tokens)+' / '+number(r.context_window)],['用量记录时间',stamp(r.usage_time)]];
+  for(const [label,value] of fields) {const row=el('div','runtime-field'); row.append(el('span','',label),el('strong','',value)); body.append(row);}
+  body.append(el('p','hint',cur?.app==='claude'?(r.source==='desktop'?'直接读取桌面显示，数值可能经过取整。':'日志仅提供最近请求的输入量，含缓存输入；没有窗口容量时不计算百分比。')+'模型、推理强度和计划模式通过输入区按钮操作。':'来自最近的会话记录，可能晚于电脑界面；上下文比例是估算值。可在输入区选择下条消息的模型、推理强度和模式。'));
+}
+function openRuntime() { fillRuntime(); openSheet('runtimeSheet'); }
+function updateConnection() {
+  $('serviceDot').className='dot '+(serviceOnline===true?'on':serviceOnline===false?'error':'starting');
+  const label=serviceOnline===true?'已连接'+(MACHINE.name||'电脑'):serviceOnline===false?'连接已断开':'正在连接电脑…', outdated=pageOutdated&&serviceOnline===true, status=$('serviceStatus');
+  if(status.dataset.sig!==label+outdated){status.dataset.sig=label+outdated;status.textContent=label;  // rebuilt only on change: a tap is not lost
+    if(outdated){const b=el('button','update-link','有新版，点此刷新');b.type='button';b.onclick=reloadForUpdate;status.append(' · ',b);}}
+  const text=serviceOnline===false?'连不上电脑，正在重连。已保留草稿。':'';
+  $('connectionNote').textContent=text; $('connectionNote').hidden=!text;
+  $('cvConnection').textContent=text || chatReadError; $('cvConnection').hidden=!(text||chatReadError);
+}
+
+// While Claude or Codex waits for an answer, a bar under the chat title says so (claude-ui.js and codex-ui.js open the
+// question from it).
+function updatePending() {
+  const waiting=!!cur && !!$('cvOpts').querySelector('.optbox');
+  $('cvPending').hidden=!waiting; $('cvPending').textContent=(cur?.app==='codex'?'Codex':'Claude')+' 有待处理操作 · 查看';
+}
+function showPending() { $('cvOpts').scrollIntoView({block:'nearest'}); }
+new MutationObserver(updatePending).observe($('cvOpts'),{childList:true,subtree:true});
+updateSendButton(); updateConnection();
+
+// ---------------------------------------------------------------- start
+refreshStatus(); setInterval(refreshStatus, 2000);
+setInterval(() => { if (mode === 'chat' && !cur && !document.hidden && (window.workspaceUI?.canPoll() ?? true)) loadConvs(); }, 10000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || (window.workspaceUI && !workspaceUI.canPoll())) return;
+  refreshStatus().then(() => { if (pageOutdated && quietMoment()) reloadForUpdate(); });  // back on screen: the moment to update
+  if (mode === 'chat') { if (cur) loadConv(false); else loadConvs(); }
+});
+try { if (sessionStorage.getItem('lbr_page_updated')) { sessionStorage.removeItem('lbr_page_updated'); setTimeout(() => toast('页面已更新到新版'), 600); } } catch (e) {}
+try { convApp = localStorage.getItem('lbr_conv_app') || 'all'; } catch (e) {}
+if (convApp !== 'all' && !hasApp(convApp)) convApp = 'all';
+document.querySelectorAll('.chip[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === convApp));
+setMode('chat'); replaceUIState();
+</script>
+<script src="/codex-ui.js"></script>
+<script src="/navigation-ui.js"></script>
+<script src="/workspace-ui.js"></script>
+<script src="/activity-ui.js"></script>
+<script src="/reading-ui.js"></script>
+<script src="/claude-ui.js"></script>
+<script src="/references-ui.js"></script>
+<script src="/new-chat-ui.js"></script>
+<script src="/voice-ui.js"></script>
+<script src="/notify-ui.js"></script>
+<script src="/sidebar-ui.js"></script>
+<script src="/deepseek-ui.js"></script>
+</body>
+</html>

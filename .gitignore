@@ -1,0 +1,12 @@
+# secrets and what the service writes while it runs
+remote_config.json
+attachments/
+logs/
+# each user's own voice dictionary, edited on the phone (voice_terms.py starts it from its default list)
+voice_terms.txt
+# environment and caches
+.venv/
+__pycache__/
+*.pyc
+# screenshots from tests/motion_check.py --shots
+shots/
