@@ -14,7 +14,7 @@ DeepSeek (archive, restore): workspace/archiveSession and workspace/unarchiveSes
 conversation is refused (workspace/session-active) rather than stopped. DeepSeek has no delete: it keeps session files
 until something outside removes them and has no interface for that (its storage notes, 10-20).
 
-Claude: not yet; its archive works differently.
+Claude: exact-ID desktop search, then native archive/unarchive and index readback. No deletion.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import chats
 
-APPS = ("codex", "deepseek")  # what the phone may archive; Claude comes later
+APPS = ("codex", "deepseek", "claude")
 DELETABLE = ("codex",)
 WRITER = ("already has an active writer", "already has a live local writer")
 
@@ -205,12 +205,13 @@ def deepseek_archived(ds) -> list[dict]:
 
 
 class Archives:
-    def __init__(self, codex_bridge=None, history=None, log=None, server=CodexServer, deepseek=None, apps=None):
+    def __init__(self, codex_bridge=None, history=None, log=None, server=CodexServer, deepseek=None, apps=None, claude=None):
         self.codex_bridge = codex_bridge  # codex_control.Bridge: its pipe to the desktop, for the broadcasts
         self.history = history
         self.log = log or (lambda text: None)
         self.server = server
         self._deepseek = deepseek
+        self.claude = claude
         self.apps = apps or (lambda: list(APPS))  # the apps this computer has (remote.py: MACHINE.apps)
         self.lock = threading.Lock()  # one app-server of ours at a time
 
@@ -236,9 +237,8 @@ class Archives:
         except Exception as exc:
             self.log(f"没能告诉 Codex 桌面版 {method}（{tid}）：{exc}")
 
-    @staticmethod
-    def _check(app: str, tid) -> None:
-        if app == "claude":
+    def _check(self, app: str, tid) -> None:
+        if app == "claude" and self.claude is None:
             raise ArchiveError("Claude 的对话还不能从手机归档", 400)
         if app not in APPS:
             raise ArchiveError("不认识这个软件", 400)
@@ -262,6 +262,8 @@ class Archives:
                                            "过几分钟再试，或者在电脑上归档。") from None
                     raise ArchiveError("Codex 没有归档：" + str(exc)) from None
             self._tell_desktop("thread-archived", 2, tid)
+        elif app == "claude":
+            self.claude.session_actions.change(tid, True)
         else:
             import deepseek_control
             ds = self.deepseek()
@@ -289,6 +291,8 @@ class Archives:
                     except CodexRefused as exc:
                         raise ArchiveError("Codex 没有恢复：" + str(exc)) from None
                 self._tell_desktop("thread-unarchived", 1, tid)
+        elif app == "claude":
+            self.claude.session_actions.change(tid, False)
         else:
             import deepseek_control
             try:
@@ -313,7 +317,13 @@ class Archives:
                 items += [dict(v, can_delete=False) for v in deepseek_archived(self.deepseek())]
             except Exception as exc:
                 problems.append(f"DeepSeek：{str(exc)[:120]}")
-        return {"items": items, "problems": problems, "apps": [a for a in APPS if a in apps],
+        if 'claude' in apps and self.claude is not None:
+            try:
+                import claude_archive
+                items += claude_archive.archived()
+            except Exception as exc:
+                problems.append('Claude：' + str(exc)[:160])
+        return {"items": items, "problems": problems, "apps": [a for a in APPS if a in apps and (a != 'claude' or self.claude is not None)],
                 "deletable": [a for a in DELETABLE if a in apps]}
 
     def delete(self, items) -> dict:

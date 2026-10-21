@@ -130,6 +130,12 @@ class PageTests(unittest.TestCase):
     def test_without_the_token_the_page_says_how_to_get_it(self):
         handler,sent=self.handler('/');handler.do_GET()
         self.assertEqual(sent[0][0],403);self.assertIn('手机链接.cmd',sent[0][1].decode('utf-8'))
+    def test_claude_archive_capability_is_supplied_by_the_running_backend(self):
+        handler,sent=self.handler('/?t=secret')
+        handler.server.machine={**handler.server.machine,'apps':['claude']}
+        handler.server.cfg['apps']=['claude']
+        handler.do_GET()
+        self.assertIn('"claude_archive": true',sent[0][1].decode('utf-8'))
     def test_the_sidebar_has_no_claude_group_without_claude(self):
         handler,sent=self.handler('/api/chat/projects?t=secret');handler.server.history=SimpleNamespace(catalog=lambda:[],ungrouped=lambda:[])
         tree={'apps':[{'app':'codex','name':'Codex','projects':[]},{'app':'claude','name':'Claude','projects':[]}],'now':1}

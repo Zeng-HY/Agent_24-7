@@ -70,7 +70,7 @@ import notify  # a notification on the phone (Bark, ntfy) when a conversation is
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.22.2"  # 左滑归档 stops on a 归档 button first; only a longer slide archives at once; no smear
+VERSION = "0.23.0"
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -347,7 +347,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._recheck_apps()
                 page = stamp_page(page)  # each script's URL carries this version; the file itself holds none
                 # version: the page compares it with what /api/status says later, and reloads itself after an update
-                facts = json.dumps({**self.server.machine, "version": VERSION}, ensure_ascii=False).replace("<", "\\u003c")
+                capabilities = {"claude_archive": True} if "claude" in self.server.machine["apps"] else {}
+                facts = json.dumps({**self.server.machine, "version": VERSION, **capabilities}, ensure_ascii=False).replace("<", "\\u003c")
                 page = page.replace(b"<!--machine-->", f"<script>window.MACHINE={facts};</script>".encode("utf-8"), 1)
             self._send(200, page, "text/html; charset=utf-8", extra)
             return
@@ -994,7 +995,7 @@ def main(argv: list[str] | None = None) -> int:
     server.files = pc_files.Files(cfg['token'], inbox=cfg.get('phone_files') or None)  # type: ignore[attr-defined]
     server.references = composer_references.References(server.history, files=server.files)
     server.archives = archives.Archives(server.codex, server.history, log.write,  # type: ignore[attr-defined]
-                                        apps=lambda: server.machine["apps"])  # a left swipe archives (10-20)
+                                        apps=lambda: server.machine["apps"], claude=server.claude)
     server.deepseek.references = server.references
     server.codex.references = server.references
     server.new_chats = new_conversations.NewConversations(server.history,server.references,server.codex,server.desktop)

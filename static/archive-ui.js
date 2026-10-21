@@ -2,13 +2,13 @@
    as Mail's and Telegram's do: let go after a short slide (or flick) and the row stays open on a 归档 button, which
    archives when tapped; slide on past about half the row and 归档 turns darker, and letting go there archives at once.
    Then the row slides off, the list closes up, and a bar at the bottom says 对话已归档 with 撤销 for six seconds.
-   The archive is made on the computer at once (archives.py); 撤销 restores it there. Codex and DeepSeek only
-   for now (Claude's comes later); a running one springs back and says why.
+   The archive is made on the computer (archives.py); 撤销 restores it there. Claude waits for index readback;
+   a running one springs back and says why.
    设置 → 已归档对话 lists the archived ones: 恢复 brings one back; Codex ones can be ticked and deleted, after a
    confirmation, for good. DeepSeek has no delete, so its rows only restore. The main list never deletes. */
 (() => {
   const list = $('convList');
-  const APPS = ['codex', 'deepseek'], NAMES = {codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek'};
+  const APPS = ['codex', 'deepseek', ...(window.MACHINE?.claude_archive ? ['claude'] : [])], NAMES = {codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek'};
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
   const EASE = 'cubic-bezier(.32,.72,0,1)';
   const BUTTON = 88, HOLD = 30, GIVE = 0.3, GAP = 20;  // 归档 opens this wide; past it the finger goes HOLD px while the row goes GIVE of that
@@ -226,8 +226,8 @@
     const key = convKey(item);
     const job = api('/api/chat/archive', {app: item.app, id: item.id}, 60000);
     pending.set(key, job);  // the bar comes up once the row is off (leave)
-    try { await job; window.sidebarUI?.load?.(true); }
-    catch (e) { comeBack(item, index); hideBar(item); toast('没归档：' + e.message, true); }
+    try { await job; pending.delete(key); if (item.app === 'claude' && barItem === item) showBar(item, index); window.sidebarUI?.load?.(true); }
+    catch (e) { comeBack(item, index); hideBar(item); toast((item.app === 'claude' ? 'Claude：' : '没归档：') + e.message, true); }
     finally { if (pending.get(key) === job) pending.delete(key); }
   }
   function comeBack(item, index) {
@@ -242,15 +242,18 @@
     comeBack(item, index);  // back on the list at once; the computer follows
     if (job) { try { await job; } catch (e) { return; } }  // still archiving: wait; it failed: it is back already
     try { await api('/api/chat/unarchive', {app: item.app, id: item.id}, 90000); window.sidebarUI?.load?.(true); toast('已恢复'); }
-    catch (e) { hidden.add(key); convItems = convItems.filter(v => convKey(v) !== key); renderConvs(); toast('没恢复：' + e.message, true); }
+    catch (e) { hidden.add(key); convItems = convItems.filter(v => convKey(v) !== key); renderConvs(); toast((item.app === 'claude' ? 'Claude：' : '没恢复：') + e.message, true); }
   }
   const bar = el('div', 'undo-bar'); bar.id = 'archiveUndo'; bar.setAttribute('role', 'status'); bar.setAttribute('aria-live', 'polite');
   const barText = el('div', 'undo-text'), barButton = el('button', '', '撤销'); barButton.type = 'button';
   bar.append(barText, barButton); document.body.append(bar);
   let barItem = null, barTimer = 0;
   function showBar(item, index) {
-    barItem = item; barText.replaceChildren(document.createTextNode('对话已归档'), el('small', '', item.title || ''));
-    barButton.onclick = () => undo(item, index); bar.classList.add('show'); clearTimeout(barTimer); barTimer = setTimeout(() => hideBar(item), 6000);
+    const waiting = item.app === 'claude' && pending.has(convKey(item));
+    barItem = item; barText.replaceChildren(document.createTextNode(waiting ? '正在归档…' : '对话已归档'), el('small', '', item.title || ''));
+    barButton.disabled = waiting;
+    barButton.onclick = () => undo(item, index); bar.classList.add('show'); clearTimeout(barTimer);
+    if (!waiting) barTimer = setTimeout(() => hideBar(item), 6000);
   }
   function hideBar(item) { if (item && barItem !== item) return; barItem = null; clearTimeout(barTimer); bar.classList.remove('show'); }
 
@@ -277,7 +280,7 @@
     const box = $('arcList'), data = archivedData; box.replaceChildren();
     const apps = data?.apps || [], deletable = new Set(data?.deletable || []);
     $('arcNote').textContent = !data ? '' : [apps.includes('codex') ? 'Codex 的可以恢复，也可以勾选后删除；删除后电脑上也找不回来。' : '',
-      apps.includes('deepseek') ? 'DeepSeek 没有删除对话的功能，只能恢复。' : '', hasApp('claude') ? 'Claude 的对话还不能从手机归档。' : ''].filter(Boolean).join('');
+      apps.includes('deepseek') ? 'DeepSeek 没有删除对话的功能，只能恢复。' : '', hasApp('claude') ? (apps.includes('claude') ? 'Claude 可以归档和恢复，需电脑解锁；有工作副本的会话请在电脑上归档。暂不支持删除。' : '此服务尚未启用 Claude 归档。') : ''].filter(Boolean).join('');
     if (!data) { box.append(el('div', 'arc-empty', '读取中…')); paintFoot(); return; }
     for (const p of data.problems || []) box.append(el('div', 'arc-empty', '读不到 ' + p));
     if (!data.items.length && !(data.problems || []).length) box.append(el('div', 'arc-empty', '没有已归档的对话。\n在对话列表里把一行往左滑，就能归档。'));
@@ -315,7 +318,7 @@
   async function restoreOne(v) {
     if (busy) return; busy = true; paintArchived();
     try { await api('/api/chat/unarchive', {app: v.app, id: v.id}, 90000); toast('已恢复，回到对话列表里了'); hidden.delete(pickKey(v)); window.sidebarUI?.load?.(true); loadConvs(); }
-    catch (e) { toast('没恢复：' + e.message, true); }
+    catch (e) { toast((v.app === 'claude' ? 'Claude：' : '没恢复：') + e.message, true); }
     busy = false; await openArchivedRefresh();
   }
   async function openArchivedRefresh() {

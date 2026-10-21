@@ -104,6 +104,8 @@ def turn_anchor(path):
 class Controller:
     def __init__(self,desktop):
         self.desktop=desktop;self.cache={};self.choices={};self.lock=threading.RLock();self.menu_context=None;self.steer_submissions={}
+        from claude_archive import SessionActions
+        self.session_actions = SessionActions(self)
         self.catalog_path=Path(__file__).parent/'attachments'/'claude-catalog.json'
         try:self.catalogs=json.loads(self.catalog_path.read_text(encoding='utf-8'))
         except (OSError,ValueError):self.catalogs={}

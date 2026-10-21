@@ -25,7 +25,7 @@ ARCHIVED = [{'app': 'codex', 'id': 'old1', 'title': '旧的报价单', 'folder':
 def main():
     shots = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     calls = {'archive': [], 'unarchive': [], 'delete': []}
-    mode = {'refuse': False, 'slow': 0}
+    mode = {'refuse': False, 'slow': 0, 'claude': False}
     archived = [dict(v) for v in ARCHIVED]
 
     def route(r, req):
@@ -34,6 +34,8 @@ def main():
         def out(v, status=200): r.fulfill(status=status, content_type='application/json', body=json.dumps(v, ensure_ascii=False))
         if path == '/':
             page = (fixture.HERE / 'remote.html').read_text(encoding='utf-8').replace('<!--machine-->', '<script>window.MACHINE={apps:["codex","claude","deepseek"],voice:false,name:"测试电脑"};</script>')
+            if mode['claude']:
+                page = page.replace('voice:false', 'claude_archive:true,voice:false')
             return r.fulfill(status=200, content_type='text/html; charset=utf-8', body=page)
         if path == '/api/chats':  # the server keeps listing an archived one for a moment
             return out({'items': ROWS, 'total': len(ROWS), 'has_more': False, 'next_cursor': None})
@@ -46,7 +48,7 @@ def main():
             calls['unarchive'].append(body); archived[:] = [v for v in archived if v['id'] != body['id']]
             return out({'ok': True, 'archived': False})
         if path == '/api/chat/archived':
-            return out({'items': archived, 'problems': [], 'apps': ['codex', 'deepseek'], 'deletable': ['codex']})
+            return out({'items': archived, 'problems': [], 'apps': ['codex', 'deepseek'] + (['claude'] if mode['claude'] else []), 'deletable': ['codex']})
         if path == '/api/chat/delete':
             calls['delete'].append(body); gone = {v['id'] for v in body['items']}; archived[:] = [v for v in archived if v['id'] not in gone]
             return out({'ok': True, 'deleted': len(gone), 'results': [{'app': v['app'], 'id': v['id'], 'ok': True} for v in body['items']]})
@@ -223,6 +225,34 @@ def main():
         assert calls['delete'] == [{'items': [{'app': 'codex', 'id': 'old1'}, {'app': 'codex', 'id': 'old2'}], 'confirmed': True}], calls['delete']
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         print('PASS 已归档对话: restore; tick and delete Codex ones after the confirmation; DeepSeek only restores')
+        mode['claude'] = True
+        page.reload()
+        page.wait_for_function('!!window.archiveUI && document.querySelectorAll("#convList .conv").length>10')
+        page.evaluate("""() => {
+          const baseApi = api;
+          api = (path, ...args) => path === '/api/chat/archive'
+            ? new Promise(resolve => { window.finishArchive = () => resolve({ok:true, archived:true}); })
+            : baseApi(path, ...args);
+        }""")
+        swipe('claude:local_cl1', 270, steps=16, step=30)
+        page.wait_for_function("document.querySelector('#archiveUndo').textContent.includes('正在归档')")
+        assert page.locator('#archiveUndo button').is_disabled()
+        page.evaluate('finishArchive()')
+        page.wait_for_function("document.querySelector('#archiveUndo').textContent.includes('对话已归档')")
+        assert page.locator('#archiveUndo button').is_enabled()
+        page.locator('#archiveUndo button').click()
+        page.wait_for_function("!archiveUI.hidden.includes('claude:local_cl1')")
+        page.wait_for_timeout(300)
+        assert calls['unarchive'][-1] == {'app': 'claude', 'id': 'local_cl1'}
+        archived.append({'app': 'claude', 'id': 'local_old', 'title': 'Claude 已归档测试', 'can_delete': False})
+        page.evaluate('archiveUI.openArchived()')
+        page.wait_for_function("document.querySelectorAll('#arcList .arc-row').length===1")
+        assert page.locator('#arcList .arc-pick').is_disabled()
+        assert '暂不支持删除' in page.locator('#arcNote').inner_text()
+        page.locator('#arcList').get_by_role('button', name='恢复').click()
+        page.wait_for_function("document.querySelector('#arcList .arc-empty')")
+        assert calls['unarchive'][-1] == {'app': 'claude', 'id': 'local_old'}
+        print('PASS Claude waits for readback, enables undo after success, restores archived items and disallows deletion')
         assert not errors, errors
         print('PASS no JavaScript errors')
         browser.close()
