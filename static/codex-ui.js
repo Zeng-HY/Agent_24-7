@@ -105,8 +105,6 @@
     const me=current();$('codexComposerTools').hidden=me?.app!=='codex';$('attachmentPreviews').hidden=true;attachmentErrors.hidden=true;controlNote.hidden=true;
     paintQueue(me,states.get(me?.id));if(!me)return;
     const d=draft(me.id),s=states.get(me.id),settings=d.settings||s?.settings;
-    // Without the desktop connection plain text still goes through; the model chip then opens the
-    // conversation on the PC instead of explaining it in a note.
     const away=me.app==='codex' && !!s && !s.available;
     const modelName=s?.catalog?.models?.find(m=>m.id===settings?.model)?.name || modelLabel(settings?.model);
     $('modelChoice').textContent=away ? '电脑上打开' : settings ? modelName + ' · '+(EFFORT[settings.effort]||settings.effort||'默认') : '模型';

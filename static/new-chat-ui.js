@@ -4,7 +4,7 @@
   const key='lbr_new_chat_v1',jobsKey='lbr_new_jobs_v1';
   // settings: per app, the model and effort picked for the next new conversation ({model, modelLabel, effort, effortLabel});
   // none: the desktop's own (10-14, the sheet had no way to pick them)
-  const empty=()=>({app:'codex',folder:'',projectless:false,label:'',text:'',references:[],images:[],request_id:null,settings:{}});
+  const empty=()=>({app:'codex',folder:'',projectless:false,label:'',text:'',references:[],images:[],request_id:null,settings:{},permission:null});
   // DeepSeek is one of the three like the others since 10-20 (it had a sheet of its own: a folder and an empty conversation)
   const APP_NAME={codex:'Codex',claude:'Claude',deepseek:'DeepSeek'},APP_ID={codex:'newCodex',claude:'newClaude',deepseek:'newDeepseek'};
   const SPARK='<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l1.8 4.7 4.7 1.8-4.7 1.8-1.8 4.7-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>';
@@ -34,6 +34,7 @@
     <div id="newSuggestions" class="new-suggestions" hidden></div><div class="new-composer-bar"><button id="newAdd" class="icon-btn" aria-label="添加照片、文件、技能或对话">＋</button><span class="hint">首条消息</span><button id="newBtn" class="icon-btn new-send" aria-label="创建并发送">${icon('send')}</button></div></div>
     <button id="newFolderChoice" class="new-folder"><span>${icon('folder')}</span><span><strong id="newFolderName">选择项目文件夹</strong><small id="newFolderPath">读取电脑上的项目…</small></span><span>⌄</span></button>
     <button id="newModelChoice" class="new-folder"><span>${SPARK}</span><span><strong id="newModelName">默认模型</strong><small id="newModelDetail">跟电脑当前设置走；点这里选</small></span><span>⌄</span></button>
+    <button id="newPermissionChoice" class="new-folder" hidden><span>${icon('settings')}</span><span><strong id="newPermissionName">默认权限</strong><small>首条消息发送前设置并核对</small></span><span>⌄</span></button>
     <p class="hint new-caption" id="newStatus" role="status" aria-live="polite"></p>`;
   // Only the desktop apps this computer has (MACHINE.apps, looked at again each time the page opens); paint() hides the row
   // when one button is left (10-20; it used to look only for Claude).
@@ -63,6 +64,17 @@
   function panel(id,title,content,popover=false){const n=el('div','sheet'+(popover?' popover':''));n.id=id;n.setAttribute('aria-label',title);n.innerHTML='<div class="box"><div class="sh-head"><b>'+title+'</b><button class="icon-btn" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body">'+content+'</div></div>';n.querySelector('button').onclick=()=>closeSheet(id);n.onclick=e=>{if(e.target===n)closeSheet(id);};document.body.append(n);return n;}
   panel('newAddMenu','添加','<button class="menu-row" id="newCamera">拍照</button><button class="menu-row" id="newPhoto">从相册选择</button><button class="menu-row" id="newPhoneFiles">手机上的文件</button><button class="menu-row" id="newPcFiles">电脑上的文件</button><button class="menu-row" id="newChatRef">引用对话</button><button class="menu-row" id="newSkillRef">使用技能</button>',true);
   panel('newModelSheet','模型与推理强度','<div id="newModelRows" role="radiogroup" aria-label="模型"></div><div class="setting-heading" id="newEffortHead">推理强度</div><div id="newEffortRows" class="effort-choices" role="radiogroup" aria-label="推理强度"></div><p id="newModelNote" class="settings-notice"></p><button class="big" id="newModelDone">好了</button>');
+  panel('newPermissionSheet','新对话权限','<div id="newPermissionRows"></div>');
+  $('newPermissionChoice').onclick=async()=>{
+    openSheet('newPermissionSheet');const rows=$('newPermissionRows');rows.textContent='读取 DeepSeek 权限选项…';
+    try{const result=await api('/api/deepseek/permissions');if(d.app!=='deepseek')return;rows.replaceChildren();
+      for(const option of [{value:'',name:'默认权限',description:'沿用 DeepSeek 新会话的默认权限'},...result.options]){
+        const button=el('button','new-pick-row',option.name);button.append(el('small','',option.description||''));
+        button.setAttribute('aria-selected',String((d.permission?.value||'')===option.value));
+        button.onclick=()=>{d.permission=option.value?option:null;save();paint();closeSheet('newPermissionSheet');};rows.append(button);
+      }
+    }catch(error){rows.textContent='读不到权限选项：'+error.message;}
+  };
   panel('newPicker','选择','<div class="new-search"><input id="newSearch" class="field" type="search" placeholder="搜索" aria-label="搜索选项"></div><div id="newPickerResults" role="listbox"></div><button id="newMore" hidden>加载更多</button>');
   panel('newJobSheet','新建对话的结果','<p class="hint new-caption" id="newJobTitle"></p><p class="new-job-status" id="newJobStatus" role="status" aria-live="polite"></p><div class="new-result-actions"><button id="newCheck">核对结果</button><button id="newRetry" hidden>继续发送</button><button id="newOpen" hidden>打开对话</button><button id="newRestore" hidden>恢复草稿</button><button id="newDismiss">移除</button></div>');
   const photo=el('input'),camera=el('input');for(const n of [photo,camera]){n.type='file';n.accept='image/*';n.hidden=true;n.onchange=()=>{addFiles([...n.files]);n.value='';};document.body.append(n);}photo.multiple=true;camera.setAttribute('capture','environment');
@@ -71,11 +83,12 @@
   function save(){localStorage.setItem(key,JSON.stringify({...d,images:d.images.map(({file,url,...v})=>v)}));}
   function saveJobs(){localStorage.setItem(jobsKey,JSON.stringify(jobs));}
   function hex(){return [...crypto.getRandomValues(new Uint8Array(16))].map(v=>v.toString(16).padStart(2,'0')).join('');}
-  function fresh(v){return {...empty(),app:v.app,folder:v.folder,projectless:!!v.projectless,label:v.label||'',settings:v.settings||{}};}  // same place and picks, nothing written
-  function jobOf(v,pending){
+  function fresh(v){return {...empty(),app:v.app,folder:v.folder,projectless:!!v.projectless,label:v.label||'',settings:v.settings||{},permission:v.permission||null};}
+  function jobOf(v,pending,permissionConfirmed=false){
     const pick=(v.settings||{})[v.app],j={request_id:v.request_id,preview_id:v.preview_id||'new:'+(v.request_id||hex()),app:v.app,folder:v.folder,projectless:!!v.projectless,label:v.label||'',
-      text:v.text||'',references:(v.references||[]).filter(r=>!r.status),images:(v.images||[]).map(({file,url,...i})=>i),pending,clientTiming:v.clientTiming||{},timingReported:!!v.timingReported,created:Date.now()};
+      text:v.text||'',permission:v.permission||null,references:(v.references||[]).filter(r=>!r.status),images:(v.images||[]).map(({file,url,...i})=>i),pending,clientTiming:v.clientTiming||{},timingReported:!!v.timingReported,created:Date.now()};
     j.body={request_id:j.request_id,app:j.app,folder:j.projectless?'':j.folder,...(j.projectless?{projectless:true}:{}),...(pick?{settings:{model:pick.model,effort:pick.effort??null}}:{}),text:j.text,attachments:j.images.map(i=>i.meta?.id).filter(Boolean),references:j.references};
+    if(j.app==='deepseek'&&j.permission?.value)Object.assign(j.body,{permission:j.permission.value,permission_confirmed:permissionConfirmed});
     return j;
   }
   function grow(){const n=$('newText');n.style.height='auto';n.style.height=Math.min(n.scrollHeight,window.innerHeight*.28)+'px';}
@@ -170,6 +183,7 @@
   }
   async function ensureDraft(){if(d.request_id)return d.request_id;if(!opening)opening=api('/api/chat/new/draft',{}).then(v=>{d.request_id=v.request_id;save();return v.request_id;}).finally(()=>opening=null);return opening;}
   function paint(){
+    $('newPermissionChoice').hidden=d.app!=='deepseek';$('newPermissionName').textContent=d.permission?.name||'默认权限';
     for(const app in APP_ID)$(APP_ID[app]).setAttribute('aria-checked',String(d.app===app));
     const apps=box.querySelector('.new-apps');apps.hidden=[...apps.children].filter(b=>!b.hidden).length<2;  // one app: nothing to pick
     const skills=d.app!=='deepseek';  // DeepSeek takes conversations as references, not skills: nothing on the sheet offers them
@@ -252,10 +266,15 @@
   async function send(){
     if(composing||starting||$('newBtn').disabled)return;
     const clock=performance.now();starting=true;paint();let rid;
+    let permissionConfirmed=false;
+    if(d.app==='deepseek'&&d.permission?.confirm){
+      permissionConfirmed=await askConfirm('新对话使用「'+d.permission.name+'」？'+(d.permission.description||''));
+      if(!permissionConfirmed){starting=false;paint();return;}
+    }
     try{rid=await ensureDraft();}catch(e){starting=false;paint();$('newStatus').textContent='还没发出，草稿还在：'+e.message;return;}
     starting=false;
     // the draft becomes a job, and the sheet takes a fresh draft at once (10-16)
-    const j=jobOf(d,{state:'creating',message:'正在创建对话…'});j.clientTiming={draft_ms:performance.now()-clock};clocks[rid]=clock;jobs.push(j);saveJobs();
+    const j=jobOf(d,{state:'creating',message:'正在创建对话…'},permissionConfirmed);j.clientTiming={draft_ms:performance.now()-clock};clocks[rid]=clock;jobs.push(j);saveJobs();
     for(const v of d.images)if(v.url)URL.revokeObjectURL(v.url);  // the files stay in the browser's store, the job's now
     d=fresh(d);save();$('newText').value='';$('newSuggestions').hidden=true;trigger=null;searchSeq++;grow();
     document.activeElement?.blur();openPreview(j);paint();

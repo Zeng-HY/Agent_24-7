@@ -54,6 +54,14 @@ def subagent_catalog(values):
     return rows
 
 
+def workspace_for(folder, identity=None):
+    key=os.path.normcase(str(Path(folder).resolve()))
+    matches=[row for row in workspaces() if os.path.normcase(str(Path(row['path']).resolve()))==key
+             and (identity is None or row['id']==identity)]
+    if len(matches)!=1:raise DeepSeekError('所选 DeepSeek 工作区已不存在或不唯一，请重新选择',409)
+    return matches[0]
+
+
 # ---------------------------------------------------------------- conversations, their children and the rest (10-20)
 # The Harness sidebar files a session under the workspace whose sessionIds name it; everything else trails in one
 # "Ungrouped" bucket, and subagents never show (the parent's row counts them). The phone used to list every session
@@ -520,14 +528,21 @@ class Bridge:
     def create(self,body):
         rid=body.get('request_id');folder=body.get('folder')
         if not isinstance(folder,str) or not Path(folder).is_absolute() or not Path(folder).is_dir():raise DeepSeekError('请选择存在的项目文件夹',400)
+        workspace=workspace_for(folder,body.get('workspace_id'))
         sid='session-'+str(uuid.uuid5(uuid.NAMESPACE_URL,'agent-remote:'+str(rid)))
         self.receipt(rid)  # reconcile a timed-out creation; once() still checks its fingerprint
         def operation():
-            result=self.client.call('session/create',{'request':{'sessionId':sid,'cwd':str(Path(folder).resolve())}})
+            result=self.client.call('session/create',{'request':{'sessionId':sid,'workspaceId':workspace['id']}})
             created=result['sessionId']
             if body.get('settings'):self.select_model(created,body['settings'])
             return {'accepted':True,'id':created,'app':'deepseek','title':'新对话','cwd':folder,'folder':Path(folder).name}
-        return self.once(rid,sid,body,operation)
+        result=self.once(rid,sid,body,operation)
+        deadline=time.monotonic()+5
+        while True:
+            member=(workspace_members() or {}).get(result['id'])
+            if member and member['id']==workspace['id']:return result
+            if time.monotonic()>=deadline:raise DeepSeekError('对话已创建，但尚未确认归入所选工作区；首条消息未发送，请核对',409)
+            time.sleep(.2)
     def answer(self,body):
         sid=body.get('id');call=body.get('call_id')
         if body.get('event_id'):

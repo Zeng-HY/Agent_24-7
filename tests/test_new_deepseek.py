@@ -23,7 +23,13 @@ class FakeDeepSeek:
     """DeepSeek's bridge as the flow uses it: models, and create and send through a ledger that runs an id once and
     refuses to repeat one left unconfirmed (deepseek_control.Bridge.once); receipts by id."""
     def __init__(self):
-        self.ledger={};self.created=[];self.sent=[];self.down=False;self.send_error=None
+        self.ledger={};self.created=[];self.sent=[];self.down=False;self.send_error=None;self.permission_calls=[];self.permission_error=None
+    def permissions(self):
+        return {'options':[{'value':preset,'confirm':preset in deepseek_control.RISKY_PERMISSIONS} for preset in deepseek_control.PERMISSIONS]}
+    def set_permission(self,sid,preset,confirmed):
+        if self.permission_error:raise self.permission_error
+        self.permission_calls.append((sid,preset,confirmed))
+        return {'accepted':True,'permission':preset}
     def models(self):
         if self.down:raise deepseek_control.DeepSeekError('连接被拒绝')
         return CATALOG
@@ -58,7 +64,7 @@ class NewDeepSeekTests(unittest.TestCase):
         self.service=NewConversations(self.history,References(self.history,self.home),self.bridge,Mock(),self.root)
         self.ds=FakeDeepSeek()
         self.patches=[patch('deepseek_control.bridge',return_value=self.ds),
-                      patch('deepseek_control.workspaces',return_value=[{'path':str(self.workspace),'name':'demo'}]),
+                      patch('deepseek_control.workspaces',return_value=[{'id':'workspace-demo','path':str(self.workspace),'name':'demo'}]),
                       patch('new_conversations.chats.CODEX_HOME',self.home/'.codex')]
         for p in self.patches:p.start()
     def tearDown(self):
@@ -84,6 +90,7 @@ class NewDeepSeekTests(unittest.TestCase):
         self.assertEqual((status['state'],status['app']),('accepted','deepseek'))
         self.assertEqual(status['id'],'session-'+str(uuid.uuid5(uuid.NAMESPACE_URL,'agent-remote:'+rid)))
         self.assertEqual(self.ds.created,[{'request_id':rid,'folder':str(self.workspace.resolve()),
+                                           'workspace_id':'workspace-demo',
                                            'settings':{'provider':'deepseek-account','model':'deepseek-pro','reasoningEffort':'max'}}])
         self.assertEqual(len(self.ds.sent),1);sent=self.ds.sent[0]
         self.assertEqual((sent['id'],sent['text'],sent['intent']),(status['id'],'你好','steer'))
@@ -140,6 +147,36 @@ class NewDeepSeekTests(unittest.TestCase):
         rid=self.submit()
         with patch('new_conversations.chats.require_send_desktop',side_effect=chats.SendNotSubmitted('屏幕锁着')):self.service._run(rid)
         self.assertEqual(self.service.status(rid)['state'],'accepted')
+
+    def test_permission_is_set_before_first_message_and_persisted_for_retry(self):
+        rid=self.submit(permission='workspace-write',permission_confirmed=False)
+        original=self.ds.send
+        def send(body):
+            self.assertEqual(self.ds.permission_calls,[(body['id'],'workspace-write',False)])
+            return original(body)
+        self.ds.send=send
+        self.service._run(rid)
+        self.assertEqual(self.service.status(rid)['state'],'accepted')
+        self.assertEqual(self.service._read(rid)[1]['permission'],'workspace-write')
+
+    def test_full_access_needs_confirmation_before_creating(self):
+        with self.assertRaises(chats.ChatError):self.submit(permission='danger-full-access')
+        self.assertEqual(self.ds.created,[])
+        rid=self.submit(permission='danger-full-access',permission_confirmed=True)
+        self.service._run(rid)
+        self.assertEqual(self.ds.permission_calls[0][1:],('danger-full-access',True))
+
+    def test_permission_failure_prevents_first_prompt_and_retry_reuses_session(self):
+        rid=self.submit(permission='workspace-write')
+        self.ds.permission_error=deepseek_control.DeepSeekError('未确认权限')
+        self.service._run(rid)
+        self.assertEqual(self.ds.sent,[])
+        self.assertTrue(self.service.status(rid)['not_submitted'])
+        self.ds.permission_error=None
+        with patch('new_conversations.threading.Thread'):self.service.retry(rid)
+        self.service._run(rid)
+        self.assertEqual(len(self.ds.created),1)
+        self.assertEqual(len(self.ds.sent),1)
 
 
 if __name__=='__main__':unittest.main()

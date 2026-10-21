@@ -8,6 +8,23 @@ import chat_projects
 SID='session-11111111-1111-1111-1111-111111111111'
 
 class AdapterTests(unittest.TestCase):
+    def test_create_uses_workspace_identity_not_cwd_and_confirms_membership(self):
+        with tempfile.TemporaryDirectory() as folder:
+            workspace={'id':'workspace-test','path':folder,'name':'测试'}
+            self.client.call.return_value={'sessionId':SID}
+            with patch.object(d,'workspaces',return_value=[workspace]),patch.object(d,'workspace_members',return_value={SID:workspace}):
+                body={'request_id':'a'*32,'folder':folder}
+                self.assertEqual(self.bridge.create(body)['id'],SID)
+                self.bridge.create(body)
+            self.client.call.assert_called_once()
+            request=self.client.call.call_args.args[1]['request']
+            self.assertEqual(request['workspaceId'],'workspace-test');self.assertNotIn('cwd',request)
+
+    def test_create_refuses_missing_workspace_before_host_call(self):
+        with patch.object(d,'workspaces',return_value=[]),self.assertRaises(d.DeepSeekError):
+            self.bridge.create({'request_id':'a'*32,'folder':self.tmp.name})
+        self.client.call.assert_not_called()
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.client=Mock();self.bridge=d.Bridge(self.client,self.tmp.name,links=d.ParentLinks(Path(self.tmp.name)/'links.jsonl'))

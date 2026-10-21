@@ -33,6 +33,9 @@ def main():
             return reply({'items': [WORKSPACE] if q.get('app') == ['deepseek'] else [PROJECT]})
         if path == '/api/chat/new/options':
             return reply(MODELS if q.get('app') == ['deepseek'] else {'models': [], 'note': ''})
+        if path == '/api/deepseek/permissions':
+            return reply({'options':[{'value':'workspace-write','name':'工作区内修改','description':'仅修改工作区','confirm':False},
+                                     {'value':'danger-full-access','name':'完全权限','description':'可以修改任意文件','confirm':True}]})
         if path == '/api/chat/new/draft':
             return reply({'request_id': RID})
         if path == '/api/chat/new':
@@ -89,6 +92,9 @@ def main():
         page.locator('#newEffortRows button', has_text='高').click(); page.locator('#newModelDone').click()
         page.wait_for_function("document.getElementById('newModelName').textContent === 'DeepSeek-V4.1-Flash · 高'")
 
+        page.locator('#newPermissionChoice').click()
+        page.locator('#newPermissionRows button',has_text='工作区内修改').click()
+        assert page.locator('#newPermissionName').inner_text() == '工作区内修改'
         # one request: the conversation and its first message
         page.locator('#newText').fill('你好'); phase['now'] = 'failed'; page.locator('#newBtn').click()
         page.wait_for_function("document.querySelector('#newInlineStatus')?.textContent.includes('没发出去')")
@@ -97,6 +103,7 @@ def main():
         assert (body['app'], body['folder'], body['text'], body['settings']) == ('deepseek', 'D:/work/demo_workspace', '你好',
                                                                                  {'model': 'deepseek-account/deepseek-flash', 'effort': 'high'}), body
         assert not body.get('projectless')
+        assert body['permission']=='workspace-write' and body['permission_confirmed'] is False
 
         # 继续发送 goes again under the same request, once, and the conversation opens
         page.locator('#newInlineStatus').click(); page.wait_for_function("overlays.some(v => v.id === 'newJobSheet')")
@@ -113,7 +120,17 @@ def main():
         page.wait_for_function("overlays.some(v => v.id === 'newSheet')")
         assert page.evaluate("document.getElementById('newDeepseek').getAttribute('aria-checked')") == 'true'
         page.wait_for_function("document.getElementById('newFolderName').textContent === 'demo'")
+        page.locator('#newPermissionChoice').click()
+        page.locator('#newPermissionRows button',has_text='完全权限').click()
+        page.locator('#newText').fill('权限测试')
+        page.locator('#newBtn').click()
+        page.wait_for_function("overlays.some(v=>v.id==='confirmSheet')")
+        assert '完全权限' in page.locator('#confirmText').inner_text()
+        page.locator('#confirmSheet button',has_text='取消').click()
+        assert len(posts)==1
+        assert page.locator('#newText').input_value()=='权限测试'
         page.locator('#newCodex').click()  # back to Codex: skills are offered again
+        assert page.locator('#newPermissionChoice').is_hidden()
         assert all('技能' in w for w in page.evaluate(wording)), page.evaluate(wording)
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert not errors, errors

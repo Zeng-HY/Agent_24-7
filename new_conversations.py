@@ -205,7 +205,9 @@ class NewConversations:
         rid=body.get('request_id')
         with self.lock:
             state,data,result,_=self._read(rid)
-            supplied={k:body.get(k) for k in ('app','folder','text','attachments','references','projectless','settings')}
+            supplied={k:body.get(k) for k in ('app','folder','text','attachments','references','projectless','settings','permission','permission_confirmed')}
+            if not supplied['permission']:
+                supplied.pop('permission');supplied.pop('permission_confirmed')
             if not supplied['projectless']:supplied.pop('projectless')  # as stored before projectless existed
             if not supplied['settings']:supplied.pop('settings')  # and before the model could be picked
             if state!='draft':
@@ -213,6 +215,13 @@ class NewConversations:
                 return self.status(rid)
             app=body.get('app');projectless=body.get('projectless') is True
             chosen=self._settings(app,body.get('settings'))
+            permission=body.get('permission')
+            if permission:
+                if app!='deepseek':raise chats.ChatError('新建权限选项仅适用于 DeepSeek')
+                import deepseek_control
+                option=next((value for value in deepseek_control.bridge().permissions()['options'] if value['value']==permission),None)
+                if option is None:raise chats.ChatError('DeepSeek 权限选项已变化，请重新选择')
+                if option['confirm'] and body.get('permission_confirmed') is not True:raise chats.ChatError('完全权限或自动审查需要先确认')
             if projectless:
                 if app not in ('codex','claude'):raise chats.ChatError('DeepSeek 的新对话要选一个工作区')
                 folder=''  # Codex gets its folder below, once the request is known to be sound
@@ -229,6 +238,10 @@ class NewConversations:
             # Store the complete immutable submission before any desktop effect.
             data={'submitted':supplied,'app':app,'folder':folder,'projectless':projectless,'text':text,'compiled':compiled,'native':native,'attachments':ids,'references':refs,'started':int(time.time()*1000)}
             if chosen:data['settings']=chosen
+            if app=='deepseek':
+                import deepseek_control
+                data['workspace_id']=deepseek_control.workspace_for(folder)['id']
+                if permission:data.update(permission=permission,permission_confirmed=body.get('permission_confirmed') is True)
             if app=='claude':data['known_ids']=[v['id'] for v in chats.claude_sessions(1000000,pending=True)]
             self._save(rid,'creating',data,{'message':'正在创建对话…'})
             self.traces[rid]=RequestTiming(self,rid,data,entered)
@@ -435,9 +448,12 @@ class NewConversations:
             raise chats.SendNotSubmitted('DeepSeek 没有回应，请确认电脑上的 DeepSeek Harness 开着：'+str(exc)[:120]) from None
         trace.phase('deepseek_create','在 DeepSeek 里建对话')
         settings=self._deepseek_settings(data.get('settings'))
-        created=ds.create({'request_id':rid,'folder':data['folder'],**({'settings':settings} if settings else {})})
+        created=ds.create({'request_id':rid,'folder':data['folder'],**({'workspace_id':data['workspace_id']} if data.get('workspace_id') else {}),**({'settings':settings} if settings else {})})
         data.update(id=created['id'],title=created.get('title') or '新对话')
         self._save(rid,'prepared',data,{'message':'对话已建好，正在发出第一句话…'})
+        if data.get('permission') and self._deepseek_receipt(rid)!='accepted':
+            trace.phase('deepseek_permission','设置并核对 DeepSeek 权限')
+            ds.set_permission(data['id'],data['permission'],data.get('permission_confirmed') is True)
         trace.phase('bind','准备首条消息与附件')
         self._bind(rid,data)
         self._save(rid,'dispatching',data,{'message':'正在提交首条消息…'})
