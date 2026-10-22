@@ -2,7 +2,7 @@ name: Windows test installer
 on:
   workflow_dispatch:
   push:
-    branches: [codex/relay-027]
+    branches: [main]
 permissions:
   contents: read
 concurrency:
