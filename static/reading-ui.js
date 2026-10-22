@@ -41,9 +41,12 @@
     if(force)pauseStream();const target={...cur},generation=loadGeneration,startedStream=streamGeneration,startedSeq=streamSeq;
     fetching=(async()=>{try{await Promise.resolve();if(generation!==loadGeneration)return;
       const initial=initialPage;initialPage=null;const j=initial||await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60');if(generation!==loadGeneration||!cur||chatKey(cur)!==chatKey(target))return;
+      // A reply still being written is not in the record yet: kept through a fresh read (one follows every send), it does not
+      // blink out until the stream brings it back (10-22). Over when the record says the turn is.
+      const writing=force&&!initial?loaded.filter(m=>m.streaming):[];
       if(initial||force){loaded=[];historyWindow=!!j.has_newer;cursor=j.next_cursor;hasMore=!!j.has_more;}
       else if(!loaded.length){cursor=j.next_cursor;hasMore=!!j.has_more;}
-      merge(j.messages||[]);if(!streamActive||(startedStream===streamGeneration&&startedSeq===streamSeq)){applyMeta(j);if(j.status==='idle')reconcileLive([]);}render();codexUI?.refresh(cur);workspaceUI?.pollReceipts();
+      merge(j.messages||[]);if(writing.length)merge(writing);if(!streamActive||(startedStream===streamGeneration&&startedSeq===streamSeq)){applyMeta(j);if(j.status==='idle')reconcileLive([]);}render();codexUI?.refresh(cur);workspaceUI?.pollReceipts();
       if(force&&!initial){historyWindow=false;latest.hidden=true;jumpToLatest();}
       resumeStream();
     }catch(e){if(generation===loadGeneration&&cur&&chatKey(cur)===chatKey(target)){chatReadError='读取对话失败：'+e.message;updateConnection();}}finally{if(generation===loadGeneration)fetching=null;}})();return fetching;

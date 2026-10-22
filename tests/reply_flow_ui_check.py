@@ -161,6 +161,17 @@ def main():
         ends = [s["end"] for s in page.evaluate("window.watching = false, window.seen")]
         ok("a finger lifted off words rewritten under it: the view follows the words down again at once", ends and max(ends) <= 30, f"farthest {max(ends):.0f}px")
 
+        # -- a fresh read of the conversation (one follows every send) while a reply is being written: the record does not
+        #    have the reply yet, and it used to blink out until the stream brought it back
+        send("codex", "c1", [{"id": "live4", "role": "assistant", "phase": "final_answer", "text": WORDS * 2, "streaming": True}], ["live4"])
+        page.wait_for_timeout(900)
+        page.evaluate("""window.missing = 0; window.watching = true; (function loop() { if (!window.watching) return;
+            if (!document.querySelector('#cvMsgs [data-key="live4"] .reply-text')) window.missing++; requestAnimationFrame(loop); })()""")
+        page.evaluate("loadConv(true)")
+        page.wait_for_timeout(800)
+        missing = page.evaluate("window.watching = false, window.missing")
+        ok("a fresh read while a reply is being written (one follows every send) keeps the reply on screen", missing == 0, f"missing in {missing} frames")
+
         # -- a block that lands whole (how Claude writes) runs out within about a second
         open_chat("claude", "c3")
         page.evaluate("watch('cb1')")
