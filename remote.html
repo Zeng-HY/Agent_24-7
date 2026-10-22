@@ -753,7 +753,7 @@ function renderMsgs(list, note) {
     let n = old.get(row.key);
     if (!n) { n = document.createElement(row.items ? 'details' : 'div'); n.dataset.key = row.key; }
     const sig = JSON.stringify(row);
-    if (n.dataset.sig !== sig) {
+    if (n.dataset.sig !== sig && !window.readingUI?.holding?.(n)) {  // not under words being picked out of it (reading-ui.js)
       if (row.newCreation) {
         window.newChatUI?.renderFirst(n,row.newCreation);
       } else if (row.workspace) {
