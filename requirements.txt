@@ -1,5 +1,7 @@
 # Python packages for agent_remote, installed into .venv in this folder (Python 3.11 or newer, Windows).
-# On a new computer 安装.cmd does all of it. By hand:
+# Keep this file ASCII: pip reads it in the system code page (GBK on a Chinese Windows) and stopped at the
+# first other character (10-22: the install script's Chinese name, here, failed every install and update).
+# On a new computer the install script in this folder does all of it. By hand:
 #   python -m venv .venv
 #   .venv\Scripts\python.exe -m pip install -r requirements.txt
 # The microphone (voice_local.py) also needs requirements-voice.txt, the page checks in tests/ requirements-dev.txt.
