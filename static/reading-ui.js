@@ -55,8 +55,9 @@
   async function jump(mid){const target={...cur};const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&around='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;loaded=j.messages;cursor=j.next_cursor;hasMore=!!j.has_more;historyWindow=!!j.has_newer;render();const n=[...$('cvMsgs').children].find(n=>n.dataset.key===mid);if(n){n.scrollIntoView({block:'center'});n.animate?.([{background:'#eef2ff'},{background:'transparent'}],{duration:900});}await expandMessage(mid);}
   async function expandMessage(mid){if(!cur)return;const target={...cur},j=await api('/api/chat/message?app='+target.app+'&id='+encodeURIComponent(target.id)+'&message='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;expanded.set(mid,j);merge([j]);render();}
   function publicText(text){let fence=false;return text.split('\n').filter(line=>{if(/^\s*```/.test(line)){fence=!fence;return true;}return fence||!/^::created-thread\{/.test(line.trim());}).join('\n').replace(/<\/?proposed_plan>/g,'').trim();}
-  async function copyText(text){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);toast('已复制');return;}}catch(e){}
-    copyBody.innerHTML='';copyBody.append(el('div','hint','长按下面文字复制，或点击选择全文。'));const area=el('textarea','question-other');area.readOnly=true;area.value=text;area.style.minHeight='35vh';const select=el('button','','选择全文');select.onclick=()=>{area.focus();area.select();};copyBody.append(area,select);openSheet('copyTextSheet');}
+  async function copyText(text){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);toast('已复制');return;}}catch(e){}selectText(text);}
+  function selectText(text,hint='长按下面文字复制，或点击选择全文。'){
+    copyBody.innerHTML='';copyBody.append(el('div','hint',hint));const area=el('textarea','question-other');area.readOnly=true;area.value=text;area.style.minHeight='35vh';const select=el('button','','选择全文');select.onclick=()=>{area.focus();area.select();};copyBody.append(area,select);openSheet('copyTextSheet');}
   function decorateMessage(node,m){
     const f=flows.get(node.dataset.key),running=!!f&&f.shown<f.text.length;if(f)f.node=node;
     if(m.role==='user'&&m.truncated){const actions=el('div','message-actions'),expand=el('button','','展开全文（'+m.length+' 字）');expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);node.append(actions);return;}
@@ -155,6 +156,86 @@
   $('cvMsgs').addEventListener('touchstart',e=>{touching=performance.now();const off=()=>{touching=0;};for(const name of ['touchend','touchcancel'])e.target.addEventListener(name,off,{once:true,passive:true});},{passive:true});
   $('cvMsgs').addEventListener('scroll',()=>{if(touching)touching=performance.now();},{passive:true});
   for(const name of ['touchend','touchcancel'])document.addEventListener(name,()=>{touching=0;},{passive:true});
+
+  // ---- a message lifted out, with what can be done with it (10-22)
+  // As WhatsApp, iMessage and Telegram do: hold a message (or tap one of yours; right-click on a computer) and it gives a
+  // little under the finger, then the rest blurs, the message comes up out of the page and a menu shows beside it: 复制,
+  // 选择文字, 分享. A tap anywhere puts it back. A message held on a phone no longer starts the phone's own text selection
+  // (its menu covered the message); 选择文字 shows the words to pick from. A popover, so the back gesture, Escape and the
+  // taps' ticks work as in the other menus (navigation-ui.js).
+  Object.assign(ICONS,{copy:'M8 8h11v11H8zM5 16V5h11',select:'M5 7V5h14v2M12 5v14M9 19h6',share:'M12 15V4m-4 4 4-4 4 4M6 11v8h12v-8'});
+  const liftCss=el('style');liftCss.textContent=`#cvMsgs .bub{transition:transform .2s ease}#cvMsgs .bub.pressing{transform:scale(.965)}
+    @media (hover:none) and (pointer:coarse){#cvMsgs .bub{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}}
+    #msgFocus{background:transparent;opacity:1;transition:none}
+    #msgFocus .focus-dim{position:absolute;inset:0;background:rgba(17,24,39,.16);-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);opacity:0;transition:opacity .15s ease;pointer-events:none}
+    #msgFocus.is-open .focus-dim{opacity:1;transition-duration:.26s}
+    #msgFocus .focus-lift{position:absolute;overflow:hidden;pointer-events:none;transform-origin:center;transition:transform .15s ease-in,box-shadow .15s}
+    #msgFocus.is-open .focus-lift{transform:translate(var(--lx),var(--ly)) scale(var(--ls));box-shadow:0 16px 40px rgba(15,23,42,.2),0 2px 6px rgba(15,23,42,.08);transition:transform .42s cubic-bezier(.25,1.35,.4,1),box-shadow .3s}
+    #msgFocus .focus-lift.mine{border-radius:20px}#msgFocus .focus-lift.reply{background:#fff;border-radius:18px;padding:13px}
+    #msgFocus .focus-lift .bub{margin:0;max-width:none}
+    #msgFocus .box{position:absolute;inset:auto;width:232px;max-width:calc(100vw - 24px);max-height:none;padding:0;border:0;border-radius:16px;background:rgba(255,255,255,.97);box-shadow:0 14px 40px rgba(15,23,42,.22),0 0 0 .5px rgba(15,23,42,.08);overflow:hidden;opacity:0;transform:scale(.6);transition:transform .14s ease-in,opacity .14s}
+    #msgFocus.is-open .box{opacity:1;transform:none;transition:transform .36s cubic-bezier(.25,1.3,.4,1) .03s,opacity .16s .03s}
+    #msgFocus .sh-body{padding:0;gap:0}#msgFocus .menu-row{width:100%;min-height:48px;margin:0;padding:12px 16px;border-radius:0;justify-content:space-between;font-size:16px;font-weight:400;color:var(--text)}
+    #msgFocus .menu-row+.menu-row{border-top:1px solid rgba(15,23,42,.08)}#msgFocus .menu-row .icon{width:20px;height:20px;color:var(--muted)}`;document.head.append(liftCss);
+  const focus=el('div','sheet popover');focus.id='msgFocus';focus.setAttribute('aria-label','消息');
+  const dim=el('div','focus-dim'),menuBox=el('div','box'),focusMenu=el('div','sh-body');menuBox.append(focusMenu);focus.append(dim,menuBox);document.body.append(focus);
+  focus.addEventListener('click',e=>{if(e.target===focus)closeSheet(focus.id);});  // the dim and the lifted message let taps through to here
+  const safe=el('div');safe.style.cssText='position:fixed;left:0;top:0;height:env(safe-area-inset-top,0px);width:env(safe-area-inset-bottom,0px);visibility:hidden;pointer-events:none';document.body.append(safe);
+  let lifted=null;  // the message in the page while its copy is lifted: hidden, shown again when the copy is back in its place
+  new MutationObserver(()=>{if(focus.classList.contains('is-open')||!lifted)return;const b=lifted;lifted=null;clearTimeout(focus._back);focus._back=setTimeout(()=>{b.style.visibility='';focus.querySelector('.focus-lift')?.remove();},150);}).observe(focus,{attributes:true,attributeFilter:['class']});
+  function textOf(b,m){
+    if(m&&typeof m.text==='string')return m.role==='assistant'?publicText(m.text):m.text;
+    const c=b.cloneNode(true);c.querySelectorAll('.send-receipt,.outbox-state,.message-actions,.outbox-refs,.sent-images,.message-origin,.code-copy,.thread-link').forEach(n=>n.remove());return c.textContent.trim();
+  }
+  async function fullText(b,m){return textOf(b,m?.truncated&&!m.streaming?await api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)):m);}
+  function focusMessage(b){
+    if(!cur||overlays.length||!b?.isConnected)return;
+    const key=b.closest('[data-key]')?.dataset.key,m=loaded.find(v=>v.id===key),mine=b.classList.contains('user'),pad=mine?0:13;
+    const r=b.getBoundingClientRect(),area=$('cvMsgs').getBoundingClientRect(),top=Math.max(r.top,area.top+6);
+    // the copy: where the message is, only the part on screen (a long reply), without its buttons and the line under it
+    clearTimeout(focus._back);focus.querySelector('.focus-lift')?.remove();
+    const card=el('div','focus-lift '+(mine?'mine':'reply')),copy=b.cloneNode(true);
+    copy.classList.remove('pressing','has-receipt');copy.removeAttribute('data-key');copy.removeAttribute('style');
+    copy.querySelectorAll('.send-receipt,.message-actions,.code-copy,.outbox-state').forEach(n=>n.remove());
+    copy.style.cssText='width:'+r.width+'px;margin-top:'+(r.top-top)+'px';card.append(copy);
+    card.style.cssText='left:'+(r.left-pad)+'px;top:'+(top-pad)+'px;width:'+(r.width+2*pad)+'px';focus.insertBefore(card,menuBox);
+    focusMenu.replaceChildren();
+    const item=(label,name,act)=>{const row=el('button','menu-row');row.type='button';row.append(el('span','',label));row.insertAdjacentHTML('beforeend',icon(name));row.onclick=()=>{closeSheet(focus.id);act().catch(e=>toast(e.message,true));};focusMenu.append(row);};
+    item('复制','copy',async()=>copyText(await fullText(b,m)));
+    item('选择文字','select',async()=>selectText(await fullText(b,m),'长按文字选出要的部分，或点「选择全文」。'));
+    if(navigator.share)item('分享','share',async()=>{try{await navigator.share({text:await fullText(b,m)});}catch(e){if(e.name!=='AbortError')throw e;}});
+    window.navigationUI?.haptic?.();openSheet(focus.id);
+    // lifted a little, with the menu under it, or over it, or (no room for either) the copy moved up to make room
+    const view=viewportBox(),lo=safe.offsetHeight+8,hi=view.height-safe.offsetWidth-8,mw=menuBox.offsetWidth,mh=menuBox.offsetHeight,gap=10,s=mine?1.035:1.012,grow=(s-1)/2;
+    const room=(hi-lo-mh-gap)/s;if(card.offsetHeight>room)card.style.height=Math.max(80,room)+'px';  // too tall: its top part
+    const w=card.offsetWidth,h=card.offsetHeight,x=r.left-pad,y=top-pad;
+    let dy=0,below=y+h*(1+grow)+gap+mh<=hi;
+    if(!below&&y-h*grow-gap-mh<lo)dy=hi-mh-gap-(y+h*(1+grow)),below=true;
+    if(y+dy-h*grow<lo)dy=lo-(y-h*grow);
+    card.style.setProperty('--lx','0px');card.style.setProperty('--ly',dy+'px');card.style.setProperty('--ls',s);
+    const left=Math.max(12,Math.min(innerWidth-12-mw,mine?x+w*(1+grow)-mw:x-w*grow));
+    menuBox.style.left=left+'px';menuBox.style.top=(below?y+dy+h*(1+grow)+gap:y-h*grow-gap-mh)+'px';menuBox.style.transformOrigin=(mine?'right ':'left ')+(below?'top':'bottom');
+    b.style.visibility='hidden';lifted=b;
+  }
+  // hold: a finger that stays put. Its release is listened for on what it went down on too (rewritten words leave the page).
+  const bubbleAt=t=>{const b=t?.closest?.('#cvMsgs .bub');return b&&!t.closest('button,a,input,textarea,select,summary')?b:null;};
+  // swallow: while the finger that lifted a message is still down, and a moment after it comes up, a click is not a tap:
+  // letting go makes one, and it landed on the open menu's backdrop and shut it at once.
+  // (A new finger on the screen means the old one is gone, should its release have been missed; at most 8 s in any case.)
+  let hold=null,swallow=-1e9,heldAt=0;
+  function letGo(){if(!hold)return;clearTimeout(hold.give);clearTimeout(hold.lift);hold.b.classList.remove('pressing');hold=null;}
+  function released(){letGo();if(swallow===Infinity)swallow=performance.now();}
+  document.addEventListener('touchstart',e=>{if(swallow===Infinity&&e.touches.length===1)swallow=-1e9;},{capture:true,passive:true});
+  $('cvMsgs').addEventListener('touchstart',e=>{letGo();if(e.touches.length!==1||overlays.length||window.workspaceUI?.composing)return;const b=bubbleAt(e.target);if(!b)return;const t=e.touches[0];
+    hold={b,x:t.clientX,y:t.clientY,give:setTimeout(()=>b.classList.add('pressing'),130),lift:setTimeout(()=>{letGo();swallow=Infinity;heldAt=performance.now();focusMessage(b);},450)};
+    for(const name of ['touchend','touchcancel'])e.target.addEventListener(name,released,{once:true,passive:true});},{passive:true});
+  $('cvMsgs').addEventListener('touchmove',e=>{const t=e.touches[0];if(hold&&t&&Math.hypot(t.clientX-hold.x,t.clientY-hold.y)>8)letGo();},{passive:true});
+  $('cvMsgs').addEventListener('scroll',letGo,{passive:true});
+  for(const name of ['touchend','touchcancel'])document.addEventListener(name,released,{capture:true,passive:true});
+  document.addEventListener('click',e=>{const now=performance.now();if(swallow===Infinity?now-heldAt<8000:now-swallow<400){e.stopPropagation();e.preventDefault();}},true);
+  $('cvMsgs').addEventListener('click',e=>{const b=bubbleAt(e.target);if(b?.classList.contains('user')&&!String(getSelection?.()||''))focusMessage(b);},true);  // not after picking words with a mouse
+  // a right-click on a computer (no click follows it); Android sends one for a long press too, its finger still down
+  $('cvMsgs').addEventListener('contextmenu',e=>{const b=bubbleAt(e.target);if(!b)return;e.preventDefault();if(overlays.some(o=>o.id===focus.id))return;if(hold){swallow=Infinity;heldAt=performance.now();}letGo();focusMessage(b);});
   function openSearch(){if(!cur)return;const target={...cur};searchBody.innerHTML='';const input=el('input');input.type='search';input.placeholder='查找这段对话的完整内容';input.setAttribute('aria-label','查找消息关键词');const go=el('button','big','查找'),results=el('div'),more=el('button','','更多结果');more.hidden=true;let next=null,version=0;
     async function search(append=false){const q=input.value.trim();if(!q)return;const v=++version;go.disabled=true;try{const j=await api('/api/chat/search?app='+target.app+'&id='+encodeURIComponent(target.id)+'&query='+encodeURIComponent(q)+(append&&next?'&cursor='+encodeURIComponent(next):''));if(v!==version)return;if(!append)results.innerHTML='';for(const hit of j.items){const b=el('button','search-hit',hit.snippet);b.append(el('small','',(hit.origin==='other_chat'?'来自其他对话':hit.role==='user'?'你':'助手')+' · '+stamp(hit.time)));b.onclick=()=>{dismissOverlays();jump(hit.id).catch(e=>toast(e.message,true));};results.append(b);}if(!j.items.length&&!append)results.append(el('div','hint','没有找到匹配消息'));next=j.next_cursor;more.hidden=!j.has_more;}catch(e){toast(e.message,true);}finally{go.disabled=false;}}
     go.onclick=()=>search();more.onclick=()=>search(true);input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)search();};searchBody.append(input,go,results,more);openSheet('historySearch');}
