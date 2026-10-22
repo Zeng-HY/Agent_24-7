@@ -1,0 +1,6 @@
+{
+  "appId": "com.pocketagentdesk.remote",
+  "appName": "Pocket Agent Desk",
+  "webDir": "dist",
+  "ios": { "contentInset": "automatic" }
+}
