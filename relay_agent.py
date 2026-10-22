@@ -83,7 +83,7 @@ class Agent:
                     data=message.json()
                     ident=data.get('stream','')
                     if data.get('v')!=1 or len(ident)!=32 or any(c not in '0123456789abcdef' for c in ident): break
-                    if len(self.tasks)>=16: break
+                    if len(self.tasks)>=32: continue  # busy: this request fails; the tunnel and the others carry on
                     task=asyncio.create_task(self.stream(client,ident))
                     self.tasks.add(task);task.add_done_callback(self.finished)
             finally:

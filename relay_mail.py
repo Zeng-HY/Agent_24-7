@@ -1,5 +1,6 @@
 """SMTP secrets stay in a private server environment file; never log messages."""
 from email.message import EmailMessage
+from email.utils import formataddr
 import os
 import smtplib
 import ssl
@@ -19,14 +20,15 @@ class Mailer:
     def ready(self):
         return bool(self.host and self.sender and self.user and self.password and self.verified)
 
-    def send(self, address, kind, code):
+    def send(self, address, kind, code, pin=''):
         if not self.ready: raise ValueError('邮箱服务暂未启用')
         message=EmailMessage()
-        message['From']=self.sender;message['To']=address
+        message['From']=formataddr(('Agent Remote',self.sender));message['To']=address
         reset=kind=='reset'
-        message['Subject']='重置密码 · Agent Remote' if reset else '验证邮箱 · Agent Remote'
+        # the code first (typed on the page that asked for it), the link for another device; 30 minutes, once
+        message['Subject']=(f'验证码 {pin} · ' if pin else '')+('重置密码' if reset else '验证邮箱')+' · Agent Remote'
         url=self.origin+'/account#'+('reset=' if reset else 'verify=')+code
-        message.set_content(('点击链接重置密码：' if reset else '点击链接验证邮箱：')+'\n'+url+'\n\n链接 30 分钟内有效，只能使用一次。')
+        message.set_content((f'验证码：{pin}\n\n' if pin else '')+('或打开链接：' if pin else '打开链接：')+url+'\n\n30 分钟内有效。不是你本人操作，忽略即可。')
         try:
             if self.port==465:
                 smtp=smtplib.SMTP_SSL(self.host,self.port,timeout=15,context=ssl.create_default_context())

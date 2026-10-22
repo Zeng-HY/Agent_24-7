@@ -31,13 +31,24 @@ sudo systemctl reload caddy
 
 数据库迁移保留旧表，路由回退无需覆盖数据库。不要将备份恢复到正在被服务写入的数据库；也不要恢复备份而丢弃迁移后新增的账号。
 
-## SMTP
+## 开启邮箱注册
 
 ```bash
 sudo python3 /home/admin/agent-relay-027/configure-mail.py
 ```
 
-在服务器终端输入 SMTP 主机、端口、发信账号和授权码，授权码不显示；再输入测试收件邮箱。脚本发送验证代码，管理员从实际收到的邮件中取码输入，核对成功才保存 `/etc/agent-relay/smtp.env`（root 0600）并重启新服务。不要把授权码贴入聊天、命令参数或 GitHub。
+填发信邮箱（QQ、163、126、Gmail、Outlook 等会自动填好服务器）和它的 SMTP 授权码，再把测试邮件里的 6 位代码输回去，注册和找回密码就开了。授权码只在服务器上输入，不要发到聊天、命令参数或 GitHub。注册和找回密码的邮件里有 6 位验证码，在发起的那个页面（手机或电脑绑定窗口）里直接输入即可，邮件里的链接也能用。
+
+## 更新服务器
+
+在电脑的源码目录运行 `python deploy/relay/pack-027.py`，把生成的 `dist/agent-relay-0.27.0-dev.zip` 上传到 `/home/admin/`，然后：
+
+```bash
+python3 -m zipfile -e /home/admin/agent-relay-0.27.0-dev.zip /home/admin/agent-relay-027-new
+sudo bash /home/admin/agent-relay-027-new/update-027.sh
+```
+
+换下的文件留在 `/opt/agent-relay-027/previous-时间/`；新文件起不来会自动换回。数据库不用动。
 
 默认 `AR_ACCOUNT_LIMIT=20`、`AR_DEVICE_LIMIT=3`。如需修改，向同一私有环境文件加入这两个配置后重启 `agent-relay-027.service`。只调整数值，不取消认证和限流。发信失败时注册保持不可用；原用户名登录继续可用。
 

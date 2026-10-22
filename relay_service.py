@@ -32,6 +32,8 @@ def clean_target(value):
     return p.path+('?' +query if query else '')
 
 
+REASONS={400:'请求无效',401:'请先登录',403:'没有权限',404:'找不到',405:'请求无效',413:'请求过大',421:'请求无效',429:'太频繁了，稍后再试',502:'电脑连接中断，请重试',503:'暂时不可用'}
+
 class Service:
     def __init__(self, origin, store, mailer=None, trusted_proxy=False):
         p=urlsplit(origin)
@@ -42,7 +44,7 @@ class Service:
         self.mailer=mailer or Mailer(origin)
         self.hub=TunnelHub(store)
         self.trusted_proxy=trusted_proxy
-        self.kdf=asyncio.Semaphore(2)
+        self.kdf=asyncio.Semaphore(2);self.kdf_ip={}  # source address -> [lock, requests holding or awaiting it]
         self.legacy_counts={}
         self.app=web.Application(client_max_size=MAX_BODY,middlewares=[self.guard])
         self.app.router.add_get('/tunnel/connect',self.hub.control)
@@ -79,7 +81,9 @@ class Service:
         except web.HTTPException as exc:
             headers={k:v for k,v in exc.headers.items() if k.lower() not in ('content-type','content-length')}
             headers['Cache-Control']='no-store'
-            return web.json_response({'error':exc.reason},status=exc.status,headers=headers)
+            # aiohttp's own text is "503: Service Unavailable"; the page shows this to people
+            said=exc.text if exc.text and not exc.text.startswith(f'{exc.status}:') else REASONS.get(exc.status,exc.reason)
+            return web.json_response({'error':said},status=exc.status,headers=headers)
 
     def source(self, request):
         # Only deployment's loopback proxy may supply this header. Never trust XFF.
@@ -90,9 +94,16 @@ class Service:
             except ValueError: pass
         return peer
 
-    async def costly(self, method, *args):
-        if self.kdf.locked(): raise Limited(2)
-        async with self.kdf: return await asyncio.to_thread(method,*args)
+    async def costly(self, request, method, *args):
+        # A password hash takes a moment and two run at a time; the rest wait their turn, one per address. (Turned
+        # away at once, three people signing in together got 429, and two busy addresses kept everyone else out.)
+        source=self.source(request)
+        entry=self.kdf_ip.setdefault(source,[asyncio.Lock(),0]);entry[1]+=1
+        try:
+            async with entry[0],self.kdf: return await asyncio.to_thread(method,*args)
+        finally:
+            entry[1]-=1
+            if not entry[1]: self.kdf_ip.pop(source,None)
 
     async def data(self, request):
         if request.content_length is None or request.content_length>8192: raise ValueError('请求过大或长度缺失')
@@ -158,27 +169,31 @@ class Service:
         result={'ok':True}
         session=None
         if action=='login':
-            session=await self.costly(self.store.login,data.get('name',''),data.get('password',''))
+            session=await self.costly(request,self.store.login,data.get('name',''),data.get('password',''))
         elif action=='logout': self.store.logout(token);session=''
         elif action=='password':
-            await self.costly(self.store.change_password,token,data.get('old',''),data.get('password',''));session=''
+            await self.costly(request,self.store.change_password,token,data.get('old',''),data.get('password',''));session=''
         elif action in ('register','forgot','link-email'):
             if not self.mailer.ready: raise ValueError('邮箱服务暂未启用')
+            self.store.rate('mail-ip:'+digest(self.source(request)),10,3600)
             kind={'register':'signup','forgot':'reset','link-email':'link'}[action]
             email=data.get('email','')
-            code=await self.costly(self.store.email_grant,kind,email,data.get('password',''),token,data.get('old',''))
-            if code: await asyncio.to_thread(self.mailer.send,self.store.email(email),kind,code)
+            code=await self.costly(request,self.store.email_grant,kind,email,data.get('password',''),token,data.get('old',''))
+            if code: await asyncio.to_thread(self.mailer.send,self.store.email(email),kind,code,getattr(code,'pin',''))
             result={'ok':True,'message':'请查收邮件'}
         elif action=='resend':
             if not self.mailer.ready:raise ValueError('邮箱服务暂未启用')
+            self.store.rate('mail-ip:'+digest(self.source(request)),10,3600)
             email=self.store.email(data.get('email',''))
             code=self.store.resend_signup(email)
-            if code:await asyncio.to_thread(self.mailer.send,email,'signup',code)
+            if code:await asyncio.to_thread(self.mailer.send,email,'signup',code,getattr(code,'pin',''))
             result={'ok':True,'message':'请查收邮件'}
         elif action=='verify':
-            await self.costly(self.store.consume_email,data.get('code',''))
+            if data.get('pin'):session=self.store.start_session(await self.costly(request,self.store.consume_pin,data.get('email',''),'signup',data['pin']))
+            else:await self.costly(request,self.store.consume_email,data.get('code',''))
         elif action=='reset':
-            await self.costly(self.store.reset_compatible,data.get('code',''),data.get('password',''))
+            if data.get('pin'):session=self.store.start_session(await self.costly(request,self.store.consume_pin,data.get('email',''),'reset',data['pin'],data.get('password','')))
+            else:await self.costly(request,self.store.reset_compatible,data.get('code',''),data.get('password',''))
         elif action=='rename': self.store.rename(token,data.get('id',''),data.get('label',''))
         elif action=='revoke':
             ident=data.get('id','')

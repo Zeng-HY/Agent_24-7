@@ -282,7 +282,7 @@
     go.onclick=()=>search();more.onclick=()=>search(true);input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)search();};searchBody.append(input,go,results,more);openSheet('historySearch');}
   function fileUrl(target,file,extra=''){return '/api/file?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id+extra;}
   async function checkFile(target,file){return api('/api/file/meta?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);}
-  async function download(target,file){try{await checkFile(target,file);workspaceUI?.saveScene();location.assign(fileUrl(target,file,'&download=1'));}catch(e){toast(e.message,true);}}
+  async function download(target,file){try{await checkFile(target,file);workspaceUI?.saveScene();location.assign((window.RELAY_BASE||'')+fileUrl(target,file,'&download=1'));}catch(e){toast(e.message,true);}}
   async function preview(target,file){try{await checkFile(target,file);previewBody.innerHTML='';previewBody.append(el('div','hint',file.name));
       if(file.kind==='text'){const data=await api('/api/file/text?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);previewBody.append(el('pre','text-preview',data.text));}
       else if(file.kind==='image'){const img=el('img');img.src=fileUrl(target,file);img.alt=file.name;img.style.maxWidth='100%';previewBody.append(img);}

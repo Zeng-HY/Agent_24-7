@@ -375,7 +375,7 @@ let mode = 'chat';
 
 function toast(text, bad) { const t = $('toast'); t.classList.toggle('chat-toast', !!cur); t.textContent = text; t.style.background = bad ? '#b91c1c' : '#111'; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2800); }
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
-function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }  // quotes too: relay_routing.js rewrites src="/… in markup
 // The phone's system, for steps that differ (where the microphone is turned back on, which phones Bark reaches):
 // 'iphone' (an iPad too, which calls itself a Mac), 'android', or '' (a computer, or a system not known)
 function phoneSystem() {
