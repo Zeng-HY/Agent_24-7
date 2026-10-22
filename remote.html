@@ -1190,6 +1190,78 @@ if (convApp !== 'all' && !hasApp(convApp)) convApp = 'all';
 document.querySelectorAll('.chip[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === convApp));
 setMode('chat'); replaceUIState();
 </script>
+<script id="diagnostic-speed">
+// Client-side request timings only. No message, filename, URL query or credentials are retained.
+(function () {
+  'use strict';
+  const KEY='lbr_diagnostic_speed', nativeFetch=window.fetch.bind(window);
+  let enabled=false, generation=0, hiddenCount=0, records=[], probing=false;
+  try { enabled=localStorage.getItem(KEY)==='1'; } catch(e) {}
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)hiddenCount++;});
+  const labels=new Map([
+    ['/api/codex/upload','图片上传'], ['/api/files/image','电脑图片读取'],
+    ['/api/codex/send','消息提交'], ['/api/chat/send','消息提交'],
+    ['/api/claude/steer','补充指令提交'], ['/api/deepseek/send','消息提交'],
+    ['/api/chat/new','新对话提交'], ['/api/chat/new/retry','新对话重试']
+  ]);
+  const settings=document.getElementById('settingsBody');
+  if(!settings)return;
+  const make=(tag,cls,text)=>{const n=document.createElement(tag);n.className=cls||'';if(text)n.textContent=text;return n;};
+  const title=make('div','setting-title','诊断测速');
+  const group=make('div','setting-group'),row=make('label','setting-row');
+  const toggle=make('input','setting-switch'+('switch' in HTMLInputElement.prototype?'':' drawn'));
+  toggle.type='checkbox';toggle.id='diagnosticSpeedSwitch';toggle.setAttribute('switch','');toggle.checked=enabled;
+  row.append(make('span','','显示操作耗时'),toggle);
+  const probe=make('button','menu-row setting-row','测当前连接（3 次小请求）');probe.type='button';probe.id='diagnosticProbe';
+  const clear=make('button','menu-row setting-row','清空记录');clear.type='button';
+  const note=make('div','setting-note','记录真实图片上传、消息提交的请求耗时，包含网络和电脑处理，不含模型生成，也不是纯带宽测速。记录仅保留在本页内存，不保存消息或文件名。');
+  const output=make('div','setting-note');output.id='diagnosticResults';output.style.whiteSpace='pre-wrap';output.setAttribute('aria-live','polite');
+  group.append(row,probe,clear);settings.append(title,group,note,output);
+  function format(r){return r.label+'：'+(r.ms/1000).toFixed(3)+' 秒'+(r.bytes?' · '+(r.bytes/1000000).toFixed(2)+' MB':'')+' · '+r.result+(r.background?'（切过后台，仅供参考）':'');}
+  function paint(){
+    toggle.checked=enabled;probe.disabled=!enabled||probing;clear.disabled=!records.length;
+    output.textContent=records.length?records.map(r=>r.time+' '+format(r)).join('\n\n'):(enabled?'已开启，下一次上传或提交后会显示记录。':'未开启');
+  }
+  function add(r,epoch,notify=true){
+    if(!enabled||epoch!==generation)return;
+    const item={...r,time:new Date().toLocaleTimeString()};records.unshift(item);records=records.slice(0,10);paint();
+    if(notify&&typeof toast==='function')toast(format(item),!['成功','请求完成'].includes(r.result));
+  }
+  toggle.onchange=()=>{enabled=toggle.checked;generation++;records=[];try{localStorage.setItem(KEY,enabled?'1':'0');}catch(e){}paint();};
+  clear.onclick=()=>{generation++;records=[];paint();};
+  window.fetch=async function(input,init){
+    let label=null;
+    if(enabled){try{const u=new URL(typeof input==='string'||input instanceof URL?input:input.url,location.href);
+      const method=(init?.method||(input instanceof Request?input.method:'GET')).toUpperCase();
+      if(u.origin===location.origin&&method==='POST')label=labels.get(u.pathname);
+    }catch(e){}}
+    if(!label)return nativeFetch(input,init);
+    const start=performance.now(),epoch=generation,visibility=hiddenCount;
+    const backgroundAtStart=document.hidden;
+    const body=init?.body,bytes=body instanceof Blob?body.size:0;
+    const finish=result=>add({label,bytes,ms:performance.now()-start,result,background:backgroundAtStart||document.hidden||visibility!==hiddenCount},epoch);
+    try{
+      const response=await nativeFetch(input,init);
+      // Inspect a clone asynchronously: the original response and caller's error handling are unchanged.
+      try{response.clone().json().then(data=>finish(!response.ok?'HTTP '+response.status:(data?.error||data?.ok===false||data?.accepted===false||data?.state==='failed')?'服务端未成功':data?.state==='unconfirmed'?'送达未确认':'请求完成'),()=>finish(response.ok?'响应解析失败':'HTTP '+response.status));}catch(e){finish('无法读取诊断响应');}
+      return response;
+    }catch(e){finish(e?.name==='AbortError'?'已取消或超时':'网络失败');throw e;}
+  };
+  probe.onclick=async()=>{
+    if(!enabled||probing)return;probing=true;paint();const epoch=generation;
+    try{for(let i=1;i<=3;i++){
+      if(!enabled||generation!==epoch)break;
+      const start=performance.now(),visibility=hiddenCount,wasHidden=document.hidden,stop=new AbortController();
+      const timer=setTimeout(()=>stop.abort(),10000);let result;
+      try{const r=await nativeFetch('/api/status',{cache:'no-store',signal:stop.signal});await r.arrayBuffer();result=r.ok?'成功':'HTTP '+r.status;}
+      catch(e){result=e?.name==='AbortError'?'超过10秒':'网络失败';}
+      finally{clearTimeout(timer);}
+      add({label:'连接请求 '+i+'/3',bytes:0,ms:performance.now()-start,result,background:wasHidden||document.hidden||visibility!==hiddenCount},epoch,false);
+    }}finally{probing=false;paint();}
+  };
+  paint();
+})();
+</script>
 <script src="/codex-ui.js"></script>
 <script src="/navigation-ui.js"></script>
 <script src="/workspace-ui.js"></script>

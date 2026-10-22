@@ -1,0 +1,25 @@
+[Unit]
+Description=Agent Remote invite-only account gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent-relay
+Group=agent-relay
+WorkingDirectory=/opt/agent-relay
+ExecStart=/usr/bin/python3 /opt/agent-relay/relay_cloud.py --state /var/lib/agent-relay/accounts.sqlite3 serve --origin https://8.166.15.235 --port 18770
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-relay
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target
