@@ -898,8 +898,11 @@ def run_notify(check):
            posts[-1] == ("/api/notify", {"address": "随便几个字"}) and page.input_value(box) == "随便几个字", posts[-1:])
         page.fill(box, "https://api.day.app/AbCdEf1234567890xyZQ/这里改成你自己的推送内容")
         page.click("#settingsBody .menu-row:has-text('保存并试推一条')"); page.wait_for_timeout(900)
-        shown = page.evaluate("""({rows: [...document.querySelectorAll('#settingsBody .setting-group')].at(-1).innerText.split('\\n').filter(Boolean),
-            note: [...document.querySelectorAll('#settingsBody .setting-note')].at(-1).textContent, toast: document.getElementById('toast').textContent})""")
+        # 手机通知's part of 设置: from its title to the next one (诊断测速 comes after it)
+        shown = page.evaluate("""(() => { const t = [...document.querySelectorAll('#settingsBody .setting-title')].find(n => n.textContent === '手机通知'), part = [];
+            for (let n = t.nextElementSibling; n && !n.classList.contains('setting-title'); n = n.nextElementSibling) part.push(n, ...n.querySelectorAll('*'));
+            return {rows: part.filter(n => n.classList.contains('setting-group')).at(-1).innerText.split('\\n').filter(Boolean),
+              note: part.filter(n => n.classList.contains('setting-note')).at(-1).textContent, toast: document.getElementById('toast').textContent}; })()""")
         ok("a Bark address is kept: 已开 with the server, 试推一条 and 关掉, and the last outcome",
            shown["rows"][:2] == ["已开", "api.day.app"] and "试推一条" in shown["rows"] and "关掉" in shown["rows"]
            and "已推到手机" in shown["note"] and "看看手机" in shown["toast"], shown)
