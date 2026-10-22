@@ -28,7 +28,7 @@ else
     -derivedDataPath build/DeviceDerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
   app=build/DeviceDerivedData/Build/Products/Release-iphoneos/App.app
   test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleSupportedPlatforms:0' "$app/Info.plist")" = iPhoneOS
-  xcrun lipo -verify_arch arm64 "$app/App"
+  xcrun lipo "$app/App" -verify_arch arm64
   mkdir -p build/sideload/Payload
   ditto "$app" build/sideload/Payload/App.app
   (cd build/sideload && ditto -c -k --keepParent Payload ../AgentRemote-unsigned.ipa)
