@@ -690,7 +690,8 @@ function md(s) {
   return out.join('\n').replace(/\n?(<table>|<\/table>|<pre>|<\/pre>)\n?/g, '$1');
 }
 
-function renderAssistantText(node,text) {
+// A reply's words as markdown, and the conversations it says it created (a button each under the text)
+function assistantMarkdown(text) {
   const lines=[],links=[];let fence=null;
   for(const line of text.split('\n')){
     const marker=line.match(/^\s*(`{3,}|~{3,})/);
@@ -699,7 +700,12 @@ function renderAssistantText(node,text) {
     if(directive){links.push({kind:directive[1],id:directive[2]});continue;}
     lines.push(line);
   }
-  node.innerHTML=md(lines.join('\n').replace(/<\/?proposed_plan>/g,''));
+  return {markdown:lines.join('\n').replace(/<\/?proposed_plan>/g,''),links};
+}
+// The words go in a box of their own, which the smooth run-out of a reply rewrites (reading-ui.js, 10-22)
+function renderAssistantText(node,text) {
+  const {markdown,links}=assistantMarkdown(text);
+  node.innerHTML='<div class="reply-text">'+md(markdown)+'</div>';
   for(const link of links){
     if(link.kind!=='threadId'){node.append(el('div','hint','新对话正在准备中'));continue;}
     const button=el('button','thread-link');button.innerHTML=icon('chat');button.append(document.createTextNode('打开新建对话'));
@@ -734,8 +740,13 @@ function renderMsgs(list, note) {
   window.workspaceUI?.decorateRows(rows);
   window.readingUI?.decorateRows(rows);
   window.newChatUI?.decorateRows(rows);
+  // Replies that arrive while the conversation is on screen run out smoothly (reading-ui.js, 10-22). Not on the first
+  // paint, not older pages put in front, and not a pile of new rows at once (回到最新, back from the background).
+  const keys = new Set(rows.map(r => r.key));
+  let shownUpTo = -1; rows.forEach((r, i) => { if (r.message && old.has(r.key)) shownUpTo = i; });
+  const live = !initial && rows.filter((r, i) => i > shownUpTo && r.message?.role === 'assistant' && !old.has(r.key)).length <= 3;
   const retained = new Set();
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     let n = old.get(row.key);
     if (!n) { n = document.createElement(row.items ? 'details' : 'div'); n.dataset.key = row.key; }
     const sig = JSON.stringify(row);
@@ -767,13 +778,15 @@ function renderMsgs(list, note) {
         const m = row.message;
         const thoughtExpanded=n.classList.contains('open');
         n.className = m.role === 'event' ? 'evt' : 'bub ' + m.role + (m.phase === 'commentary' ? ' note' : '') + (m.pending ? ' pending' : '');
-        if(m.role==='assistant')renderAssistantText(n,m.text);else n.innerHTML=md(m.text);
+        const text = window.readingUI?.flowText?.(row.key, m, live && index > shownUpTo && !old.has(row.key), keys) ?? m.text;
+        if(m.role==='assistant')renderAssistantText(n,text);else n.innerHTML=md(text);
         n.onclick = null;
         if (m.thinking) { n.classList.add('thinking'); if (m.text.length > 400) { n.classList.add('long'); if(thoughtExpanded)n.classList.add('open');n.onclick = () => n.classList.toggle('open'); } }
         if(m.thinking&&cur?.app==='deepseek')n.prepend(el('div','message-origin',m.streaming?'思考中…':'思考过程'));
         if(m.origin==='other_chat')n.prepend(el('div','message-origin','来自其他对话'));
         if (row.images) window.codexUI?.renderImages(n,row.images);
         window.readingUI?.decorateMessage(n,m);
+        if (row.receipt) window.workspaceUI?.paintReceipt(n,row.receipt);  // 电脑已接收 under a message sent from the phone
       }
       n.dataset.sig = sig;
     }

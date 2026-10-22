@@ -30,9 +30,9 @@
     else{let next=null;for(let i=items.length-1;i>=0;i--){const id=items[i].id;if(!known.has(id)){const at=next===null?-1:order.indexOf(next);if(at<0)order.push(id);else order.splice(at,0,id);known.add(id);}next=id;}}
     loaded=[...new Set(order)].map(id=>map.get(id));loaded.sort((a,b)=>Number.isFinite(a.order)&&Number.isFinite(b.order)?a.order-b.order:0);}
   function reconcileLive(ids){if(!Array.isArray(ids))return;const active=new Set(ids);loaded=loaded.filter(m=>!m.streaming||active.has(m.id));}
-  function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);older.hidden=!hasMore;latest.hidden=!historyWindow;}
+  function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);painted=true;older.hidden=!hasMore;latest.hidden=!historyWindow;}
   function applyMeta(j){if(!cur)return;chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
-  function onOpen(original,current){pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;}
+  function onOpen(original,current){pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;flows.clear();cancelAnimationFrame(frame);frame=0;keysSeen=null;painted=false;}
   async function loadConversation(force=false){
     if(window.newChatUI?.isPreview(cur))return;
     if(!cur)return;if(!me||chatKey(me)!==chatKey(cur))onOpen({},cur);
@@ -55,13 +55,103 @@
   async function copyText(text){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);toast('已复制');return;}}catch(e){}
     copyBody.innerHTML='';copyBody.append(el('div','hint','长按下面文字复制，或点击选择全文。'));const area=el('textarea','question-other');area.readOnly=true;area.value=text;area.style.minHeight='35vh';const select=el('button','','选择全文');select.onclick=()=>{area.focus();area.select();};copyBody.append(area,select);openSheet('copyTextSheet');}
   function decorateMessage(node,m){
+    const f=flows.get(node.dataset.key),running=!!f&&f.shown<f.text.length;if(f)f.node=node;
     if(m.role==='user'&&m.truncated){const actions=el('div','message-actions'),expand=el('button','','展开全文（'+m.length+' 字）');expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);node.append(actions);return;}
     if(m.role!=='assistant'||m.phase==='commentary')return;
     const actions=el('div','message-actions'),copy=el('button','','复制正文');copy.onclick=async()=>{try{const full=m.truncated&&!m.streaming?await api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)):m;await copyText(publicText(full.text));}catch(e){toast(e.message,true);}};actions.append(copy);
     if(m.truncated){const expand=el('button','',m.streaming?'生成中，完成后可展开':'展开全文（'+m.length+' 字）');expand.disabled=!!m.streaming;expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);}
     node.append(actions);
+    if(running)return;  // code blocks get their copy button once the reply has run out: its words are rewritten till then
     node.querySelectorAll('pre').forEach(pre=>{const code=pre.textContent,wrap=el('div','code-wrap'),b=el('button','code-copy','复制代码');b.onclick=()=>copyText(code);pre.before(wrap);wrap.append(b,pre);});
   }
+  // ---- a reply runs out smoothly (10-22)
+  // Text used to land in lumps: Codex's stream reads its log once a second, DeepSeek's sends up to five updates a second,
+  // and Claude writes a reply a whole block at a time. What has arrived now runs out at about the pace it comes in, at most
+  // about a second behind, and a block that lands whole runs out within a second (renderMsgs asks flowText how much of a
+  // reply to draw; step rewrites only its words, .reply-text, a frame at a time). The first paint of a conversation, older
+  // pages, a pile of rows at once, the page just back on screen and Reduce Motion show the text as it is.
+  const flows=new Map();  // row key → {text, shown (characters out), pace (out a second), gap (between updates), at, node, …}
+  let frame=0,quietUntil=0,keysSeen=null,touching=0;  // touching: when a finger, still down, last went down on or moved the messages
+  // painted: this conversation's own messages are on screen. Not just the box having been drawn: the Codex state can draw it
+  // empty before the conversation is read, and the first paint then ran out like a new reply.
+  let painted=false;
+  const MIN_CPS=40;
+  const calm=()=>document.hidden||performance.now()<quietUntil||matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // What is not out yet goes at one steady pace: while it streams, spread over a little more than the time till the next
+  // update is due (so the words keep moving), and once it has all come, within a second.
+  function pace(f){const left=f.text.length-f.shown;f.pace=Math.max(MIN_CPS,left/(f.streaming?Math.min(1.2,Math.max(.2,(f.gap||1)*1.15)):Math.min(1,Math.max(.3,left/400))));}
+  function upTo(f){  // the part out by now, never half of a character pair
+    let n=Math.floor(f.shown);if(n>=f.text.length)return f.text;
+    const c=f.text.charCodeAt(n-1);if(c>=0xD800&&c<0xDC00)n++;
+    return f.text.slice(0,n);
+  }
+  // A half-typed mark shows as what it will be, not as its marks: a line that may turn into a code fence, a table row, a
+  // heading or a ::directive waits till it is whole, a [link](…) till it is closed, and **bold** and `code` are bold and
+  // code already (inside a code block the words are left as they are).
+  function partial(s){
+    const at=s.lastIndexOf('\n')+1;let tail=s.slice(at);
+    if(/^\s*(::|\||[`~]{1,2}$|```|~~~|#{1,6}$)/.test(tail))return s.slice(0,at);
+    if((s.slice(0,at).match(/^\s*```/gm)||[]).length%2)return s;
+    const open=tail.lastIndexOf('['),rest=open<0?'':tail.slice(open);
+    if(open>=0&&!/\]\([^)\s]*\)/.test(rest)&&(rest.includes('](')||rest.length<120))tail=tail.slice(0,open);
+    tail=tail.replace(/[*`]+$/,'');
+    if((tail.match(/`/g)||[]).length%2)tail+='`';
+    else if((tail.replace(/`[^`]*`/g,'').match(/\*\*/g)||[]).length%2)tail+='**';
+    return s.slice(0,at)+tail;
+  }
+  const onScreen=f=>f.shown>=f.text.length?f.text:partial(upTo(f));
+  function flowText(key,m,fresh,keys){
+    if(m.role!=='assistant'||typeof m.text!=='string')return m.text;
+    const now=performance.now(),text=m.text,still=calm();
+    if(keys!==keysSeen){keysSeen=keys;for(const [k,o] of flows)if(!keys.has(k)){if(!o.gone){o.gone=now;o.goneIn=keys;}else if(now-o.gone>3000)flows.delete(k);}}
+    let f=flows.get(key);
+    if(!f){
+      // DeepSeek hands a streamed reply over to its saved copy, which has another name: carry on where the stream had got
+      // to. A stream replaced by other words shows them at once.
+      const gone=[...flows].filter(([,o])=>o.gone&&!!o.thinking===!!m.thinking),from=gone.find(([,o])=>text.startsWith(upTo(o)));
+      if(from){f={...from[1],gone:0,goneIn:null};flows.delete(from[0]);}
+      else if(fresh&&painted&&!still&&!gone.some(([,o])=>o.goneIn===keys))f={text:'',shown:0,gap:0,at:0};
+      else if(m.streaming)f={text,shown:text.length,gap:0,at:now};  // what is on screen, for the words still to come
+      else return text;
+      flows.set(key,f);
+    }
+    f.gone=0;f.goneIn=null;
+    const was=f.streaming;f.streaming=!!m.streaming;f.thinking=!!m.thinking;
+    if(text!==f.text){
+      const kept=text.startsWith(upTo(f))&&!(f.truncated&&!m.truncated);  // 展开全文 shows it all at once
+      if(kept&&f.at&&text.length>f.text.length){const gap=Math.min(3,(now-f.at)/1000);f.gap=f.gap?f.gap*.6+gap*.4:gap;}
+      if(!kept||still)f.shown=text.length;
+      f.text=text;f.at=now;pace(f);if(!f.tick)f.tick=now;  // the next frame already moves it
+    }else if(was&&!f.streaming)pace(f);  // it has all come: the rest at the finishing pace
+    f.truncated=!!m.truncated;
+    if(f.shown<f.text.length)wake();else if(!f.streaming)flows.delete(key);
+    return onScreen(f);
+  }
+  function wake(){if(!frame)frame=requestAnimationFrame(step);}
+  function step(now){
+    frame=0;if(window.workspaceUI?.composing){setTimeout(wake,250);return;}  // nothing moves under the IME (workspace-ui.js)
+    // follow the words down only from the very end, and not under a finger (one left still for 3 s counts as gone)
+    if(touching&&now-touching>=3000)touching=0;
+    const box=$('cvMsgs'),atEnd=!touching&&box.scrollHeight-box.scrollTop-box.clientHeight<=24,ended=[];let moved=false,going=false;
+    for(const [key,f] of flows){
+      if(f.shown>=f.text.length)continue;
+      const words=f.node?.isConnected&&f.node.querySelector('.reply-text');if(!words){flows.delete(key);continue;}
+      const dt=f.tick?Math.max(0,Math.min(.1,(now-f.tick)/1000)):0;f.tick=now;
+      const before=onScreen(f);f.shown=Math.min(f.text.length,f.shown+f.pace*dt);
+      const after=onScreen(f);if(after!==before){words.innerHTML=md(assistantMarkdown(after).markdown);moved=true;}
+      if(f.shown<f.text.length)going=true;else{f.tick=0;if(!f.streaming)ended.push(f);}
+    }
+    if(moved&&atEnd)box.scrollTop=box.scrollHeight;
+    // run out: drawn once more as a whole (copy buttons on code, the conversations it created)
+    if(ended.length&&cur&&box.dataset.ready){for(const f of ended)delete f.node.dataset.sig;renderMsgs(currentMessages);}
+    if(going)wake();
+  }
+  function settleFlows(){let any=false;for(const f of flows.values())if(f.shown<f.text.length){f.shown=f.text.length;if(f.node?.isConnected){delete f.node.dataset.sig;any=true;}}if(any&&cur&&$('cvMsgs').dataset.ready)renderMsgs(currentMessages);}
+  // The release is listened for on what the finger went down on: when the words under it are rewritten, that node leaves the
+  // page and its touchend no longer reaches #cvMsgs or the document, but still reaches the node itself.
+  $('cvMsgs').addEventListener('touchstart',e=>{touching=performance.now();const off=()=>{touching=0;};for(const name of ['touchend','touchcancel'])e.target.addEventListener(name,off,{once:true,passive:true});},{passive:true});
+  $('cvMsgs').addEventListener('scroll',()=>{if(touching)touching=performance.now();},{passive:true});
+  for(const name of ['touchend','touchcancel'])document.addEventListener(name,()=>{touching=0;},{passive:true});
   function openSearch(){if(!cur)return;const target={...cur};searchBody.innerHTML='';const input=el('input');input.type='search';input.placeholder='查找这段对话的完整内容';input.setAttribute('aria-label','查找消息关键词');const go=el('button','big','查找'),results=el('div'),more=el('button','','更多结果');more.hidden=true;let next=null,version=0;
     async function search(append=false){const q=input.value.trim();if(!q)return;const v=++version;go.disabled=true;try{const j=await api('/api/chat/search?app='+target.app+'&id='+encodeURIComponent(target.id)+'&query='+encodeURIComponent(q)+(append&&next?'&cursor='+encodeURIComponent(next):''));if(v!==version)return;if(!append)results.innerHTML='';for(const hit of j.items){const b=el('button','search-hit',hit.snippet);b.append(el('small','',(hit.origin==='other_chat'?'来自其他对话':hit.role==='user'?'你':'助手')+' · '+stamp(hit.time)));b.onclick=()=>{dismissOverlays();jump(hit.id).catch(e=>toast(e.message,true));};results.append(b);}if(!j.items.length&&!append)results.append(el('div','hint','没有找到匹配消息'));next=j.next_cursor;more.hidden=!j.has_more;}catch(e){toast(e.message,true);}finally{go.disabled=false;}}
     go.onclick=()=>search();more.onclick=()=>search(true);input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)search();};searchBody.append(input,go,results,more);openSheet('historySearch');}
@@ -91,7 +181,8 @@
   }
   $('cvText').addEventListener('compositionend',()=>{if(bufferedEvent){bufferedEvent=null;pauseStream();resumeStream();}});
   $('newMessages').onclick=()=>{if(historyWindow)loadConversation(true);else jumpToLatest();};
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseStream();else if(!window.workspaceUI?.paused)resumeStream();});
-  window.readingUI={loadList,onOpen,loadConversation,decorateMessage,decorateRows(){},pauseStream,resumeStream,get streamActive(){return streamActive;},get historyWindow(){return historyWindow;}};
+  // hidden: what was running out is shown whole; back on screen, what came meanwhile shows as it is
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){pauseStream();settleFlows();}else{quietUntil=performance.now()+2000;if(!window.workspaceUI?.paused)resumeStream();}});
+  window.readingUI={loadList,onOpen,loadConversation,decorateMessage,decorateRows(){},flowText,pauseStream,resumeStream,get streamActive(){return streamActive;},get historyWindow(){return historyWindow;}};
   if(cur){onOpen({},cur);loadConversation(true);}else loadList(false,true);
 })();

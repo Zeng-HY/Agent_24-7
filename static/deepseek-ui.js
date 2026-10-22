@@ -99,7 +99,8 @@
   subBar.onclick=()=>{subsBody.replaceChildren();for(const v of subs){const row=el('div','codex-card');row.append(el('b','',v.label||'子智能体'));row.append(el('span','hint',v.running?'运行中':'已完成'));subsBody.append(row);}subsBody.append(el('p','hint','子智能体自己的过程记录只在电脑上能打开；这里显示的是这个对话开过哪些、现在什么状态。'));openSheet('deepseekSubList');};
   function pendingKey(me){return 'lbr_deepseek_pending_'+me.id;}
   function paintRun(me){
-    const on=!!me&&active(me),running=on&&!!state?.running,pending=on&&!!localStorage.getItem(pendingKey(me));
+    // pending: a send whose outcome is not known; not while one is going out (it is noted just before), the bubble says so
+    const on=!!me&&active(me),running=on&&!!state?.running,pending=on&&!sending&&!!localStorage.getItem(pendingKey(me));
     runBar.hidden=!(running||pending);runHint.hidden=later.hidden=!running;check.hidden=!pending;
     later.disabled=busy||sending||!state?.available||!!window.referencesUI?.pendingCount(me)||!($('cvText').value.trim()||codexUI.imageSnapshot(me).length||window.referencesUI?.fileCount(me));
     if(on)$('cvBtn').setAttribute('aria-label',running?'立即补充当前任务':'发送');
@@ -202,19 +203,29 @@
     const text=$('cvText').value,images=codexUI.imageSnapshot(me);if(!text.trim()&&!images.length&&!window.referencesUI?.fileCount(me))return;  // files alone are a message
     const key=pendingKey(me);let previous;try{previous=JSON.parse(localStorage.getItem(key)||'null');}catch{}
     if(previous){await checkPending(me,true);return;}
-    const body={id:me.id,request_id:uid(),text,attachments:images.map(v=>v.meta.id),references:window.referencesUI?.snapshot(me)||[],intent};
+    const references=window.referencesUI?.snapshot(me)||[],body={id:me.id,request_id:uid(),text,attachments:images.map(v=>v.meta.id),references,intent};
     try{localStorage.setItem(key,JSON.stringify(body));}catch{showNote('无法保存发送记录，请先释放手机存储空间','bad');return;}
-    busy=true;sending=true;controls();updateSendButton();showNote(intent==='queue'?'正在排进 DeepSeek 的队列…':'正在发送给 DeepSeek…');
-    try{const result=await api('/api/deepseek/send',body);localStorage.removeItem(key);codexUI.clearImages(me);window.referencesUI?.clear(me);if(active(me)&&$('cvText').value===text){$('cvText').value='';saveDraft();autoGrow();}if(active(me))showNote(result.text,'ok');}
-    catch(e){if(active(me))showNote('发送结果待核对：'+e.message+'。草稿已保留。','warn');}
-    finally{busy=false;sending=false;updateSendButton();controls();if(active(me)){await loadConv(true);await refresh(me);}}
+    // The message shows at once as the blue bubble, 发送中… under it, as Codex's and Claude's do (workspace-ui.js, 10-22).
+    // It used to stay in the box until DeepSeek had it, and only then appear in the conversation.
+    const ticket={text:text.trim()||(images.length?images.length+' 张图片':'附带的文件'),started:Date.now(),state:'sending',note:'',request_id:body.request_id};
+    try{workspaceUI.capture(me,ticket,{transport:'deepseek',body,images,references,originalText:text});}catch(e){localStorage.removeItem(key);toast(e.message,true);return;}
+    codexUI.clearImages(me);busy=true;sending=true;controls();updateSendButton();renderMsgs(currentMessages);
+    try{const result=await api('/api/deepseek/send',body);localStorage.removeItem(key);ticket.state=intent==='queue'?'queued':'delivered';ticket.note=result.text||'';}
+    catch(e){ticket.state='unconfirmed';ticket.note='发送结果待核对：'+e.message;if(active(me))showNote(ticket.note+'。不会自动重发，可点「核对待发送消息」。','warn');}
+    finally{workspaceUI.update(me,ticket);busy=false;sending=false;updateSendButton();controls();if(active(me)){await loadConv(true);await refresh(me);}}
   }
   async function checkPending(me,explicit){
     if(!me||!active(me)||busy)return;const key=pendingKey(me);let body;try{body=JSON.parse(localStorage.getItem(key)||'null');}catch{}if(!body)return;
+    // Sent from this version, the message waits in the conversation as a bubble and its draft has left the box: the box
+    // may hold a newer draft by now, which is not touched. One sent before the update still sits in the box.
+    const kept=!!window.workspaceUI?.has(body.request_id);
+    const settle=note=>{localStorage.removeItem(key);
+      if(kept)workspaceUI.update(me,{request_id:body.request_id,state:body.intent==='queue'?'queued':'delivered',note});
+      else{codexUI.clearImages(me);window.referencesUI?.clear(me);if(active(me)&&$('cvText').value===body.text){$('cvText').value='';saveDraft();autoGrow();}}};
     try{const receipt=await api('/api/deepseek/receipt?request_id='+encodeURIComponent(body.request_id));
-      if(receipt.state==='accepted'&&receipt.id===me.id){localStorage.removeItem(key);codexUI.clearImages(me);window.referencesUI?.clear(me);if(active(me)&&$('cvText').value===body.text){$('cvText').value='';saveDraft();autoGrow();}if(active(me)){showNote('已按请求编号确认送达','ok');controls();updateSendButton();}return;}
-      if(explicit&&receipt.state==='unknown'){busy=true;check.disabled=true;try{const result=await api('/api/deepseek/send',body);localStorage.removeItem(key);codexUI.clearImages(me);window.referencesUI?.clear(me);if(active(me)&&$('cvText').value===body.text){$('cvText').value='';saveDraft();autoGrow();}if(active(me))showNote(result.text,'ok');}finally{busy=false;check.disabled=false;controls();updateSendButton();}return;}
-      if(explicit)showNote('仍未确认送达。已保留草稿和请求编号，请核对 DeepSeek 对话。','warn');
+      if(receipt.state==='accepted'&&receipt.id===me.id){settle('已按请求编号确认送达');if(active(me)){hideNote();controls();updateSendButton();}return;}
+      if(explicit&&receipt.state==='unknown'){busy=true;check.disabled=true;try{const result=await api('/api/deepseek/send',body);settle(result.text||'');if(active(me))hideNote();}finally{busy=false;check.disabled=false;controls();updateSendButton();}return;}
+      if(explicit)showNote('仍未确认送达。已保留请求编号，请核对 DeepSeek 对话。','warn');
     }catch(e){if(explicit&&active(me))showNote(e.message,'warn');}
   }
   // A new DeepSeek conversation comes from the shared sheet (new-chat-ui.js) like the others: workspace, model and first
