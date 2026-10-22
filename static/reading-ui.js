@@ -8,7 +8,7 @@
   const listMore=el('button','list-more','加载更多对话');listMore.hidden=true;listMore.onclick=()=>loadList(true);$('convList').after(listMore);
   let searchTimer;listInput.addEventListener('input',e=>{if(e.isComposing)return;clearTimeout(searchTimer);searchTimer=setTimeout(()=>{query=listInput.value.trim();loadList(false,true);},250);});listInput.addEventListener('compositionend',()=>{query=listInput.value.trim();loadList(false,true);});
   function sheet(id,title){const n=el('div','sheet');n.id=id;n.setAttribute('aria-label',title);n.innerHTML='<div class="box"><div class="sh-head"><b></b><button class="icon-btn" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body"></div></div>';n.querySelector('b').textContent=title;n.querySelector('button').onclick=()=>closeSheet(id);n.onclick=e=>{if(e.target===n)closeSheet(id);};document.body.append(n);return n.querySelector('.sh-body');}
-  const searchBody=sheet('historySearch','查找消息'),fileBody=sheet('conversationFiles','对话文件'),previewBody=sheet('resultPreview','文件预览'),copyBody=sheet('copyTextSheet','复制文字'),templateBody=sheet('promptLibrary','常用提示语');
+  const searchBody=sheet('historySearch','查找消息'),fileBody=sheet('conversationFiles','对话文件'),previewBody=sheet('resultPreview','文件预览'),templateBody=sheet('promptLibrary','常用提示语');
   const toolbar=el('div','history-tools'),older=el('button','','加载更早消息'),latest=el('button','','回到最新');older.hidden=true;latest.hidden=true;older.onclick=loadOlder;latest.onclick=()=>loadConversation(true);toolbar.append(older,latest);document.querySelector('.message-region').before(toolbar);
   function menu(label,fn){const b=el('button','menu-row',label);b.onclick=()=>{dismissOverlays();fn();};$('convMenu').querySelector('.sh-body').append(b);}
   menu('查找消息',openSearch);menu('对话文件',openFiles);menu('常用提示语',openTemplates);
@@ -32,7 +32,7 @@
   function reconcileLive(ids){if(!Array.isArray(ids))return;const active=new Set(ids);loaded=loaded.filter(m=>!m.streaming||active.has(m.id));}
   function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);painted=true;older.hidden=!hasMore;latest.hidden=!historyWindow;}
   function applyMeta(j){if(!cur)return;chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
-  function onOpen(original,current){pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;flows.clear();cancelAnimationFrame(frame);frame=0;keysSeen=null;painted=false;}
+  function onOpen(original,current){closeMenu(true);pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;flows.clear();cancelAnimationFrame(frame);frame=0;keysSeen=null;painted=false;}
   async function loadConversation(force=false){
     if(window.newChatUI?.isPreview(cur))return;
     if(!cur)return;if(!me||chatKey(me)!==chatKey(cur))onOpen({},cur);
@@ -55,14 +55,28 @@
   async function jump(mid){const target={...cur};const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&around='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;loaded=j.messages;cursor=j.next_cursor;hasMore=!!j.has_more;historyWindow=!!j.has_newer;render();const n=[...$('cvMsgs').children].find(n=>n.dataset.key===mid);if(n){n.scrollIntoView({block:'center'});n.animate?.([{background:'#eef2ff'},{background:'transparent'}],{duration:900});}await expandMessage(mid);}
   async function expandMessage(mid){if(!cur)return;const target={...cur},j=await api('/api/chat/message?app='+target.app+'&id='+encodeURIComponent(target.id)+'&message='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;expanded.set(mid,j);merge([j]);render();}
   function publicText(text){let fence=false;return text.split('\n').filter(line=>{if(/^\s*```/.test(line)){fence=!fence;return true;}return fence||!/^::created-thread\{/.test(line.trim());}).join('\n').replace(/<\/?proposed_plan>/g,'').trim();}
-  async function copyText(text){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);toast('已复制');return;}}catch(e){}selectText(text);}
-  function selectText(text,hint='长按下面文字复制，或点击选择全文。'){
-    copyBody.innerHTML='';copyBody.append(el('div','hint',hint));const area=el('textarea','question-other');area.readOnly=true;area.value=text;area.style.minHeight='35vh';const select=el('button','','选择全文');select.onclick=()=>{area.focus();area.select();};copyBody.append(area,select);openSheet('copyTextSheet');}
+  // The clipboard is written in the tap itself, as Safari wants it: words still to be read from the computer (a long
+  // message shown in part) go as a promise of them, which Safari and Chrome both take. Where that fails, the words are
+  // shown to pick from (选择文字), with 复制全部.
+  function copyText(text){
+    const done=()=>toast('已复制'),c=navigator.clipboard,secure=!!c&&window.isSecureContext;
+    const fail=()=>Promise.resolve(text).then(t=>openReader(t,'没能直接复制。长按文字选出要的部分，或点「复制全部」。'),e=>toast(e.message,true));
+    try{
+      if(typeof text==='string'){if(secure&&c.writeText)c.writeText(text).then(done,()=>execCopy(text)?done():fail());else if(execCopy(text))done();else fail();return;}
+      if(secure&&c.write&&window.ClipboardItem)c.write([new ClipboardItem({'text/plain':text.then(t=>new Blob([t],{type:'text/plain'}))})]).then(done,()=>text.then(t=>c.writeText(t)).then(done,fail));
+      else text.then(t=>secure?c.writeText(t):Promise.reject(new Error('no clipboard'))).then(done,fail);
+    }catch(e){fail();}
+  }
+  function execCopy(text){  // the old way, for a page not on https (no clipboard API there)
+    const t=el('textarea');t.value=text;t.readOnly=true;t.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0';
+    (overlays.length?$(overlays.at(-1).id):$('convView')).append(t);let ok=false;try{t.select();t.setSelectionRange(0,text.length);ok=document.execCommand('copy');}catch(e){}t.remove();return ok;
+  }
   function decorateMessage(node,m){
     const f=flows.get(node.dataset.key),running=!!f&&f.shown<f.text.length;if(f)f.node=node;
+    if(pick?.b===node)node.classList.add('picked');  // redrawn while its menu is open
     if(m.role==='user'&&m.truncated){const actions=el('div','message-actions'),expand=el('button','','展开全文（'+m.length+' 字）');expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);node.append(actions);return;}
     if(m.role!=='assistant'||m.phase==='commentary')return;
-    const actions=el('div','message-actions'),copy=el('button','','复制正文');copy.onclick=async()=>{try{const full=m.truncated&&!m.streaming?await api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)):m;await copyText(publicText(full.text));}catch(e){toast(e.message,true);}};actions.append(copy);
+    const actions=el('div','message-actions'),copy=el('button','','复制正文');copy.onclick=()=>copyText(m.truncated&&!m.streaming?api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)).then(full=>publicText(full.text)):publicText(m.text));actions.append(copy);
     if(m.truncated){const expand=el('button','',m.streaming?'生成中，完成后可展开':'展开全文（'+m.length+' 字）');expand.disabled=!!m.streaming;expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);}
     node.append(actions);
     if(running)return;  // code blocks get their copy button once the reply has run out: its words are rewritten till then
@@ -140,6 +154,7 @@
     for(const [key,f] of flows){
       if(f.shown>=f.text.length)continue;
       const words=f.node?.isConnected&&f.node.querySelector('.reply-text');if(!words){flows.delete(key);continue;}
+      if(holding(f.node)){f.tick=0;continue;}  // words being picked out of it: it waits till they are let go
       const dt=f.tick?Math.max(0,Math.min(.1,(now-f.tick)/1000)):0;f.tick=now;
       const before=onScreen(f);f.shown=Math.min(f.text.length,f.shown+f.pace*dt);
       const after=onScreen(f);if(after!==before){words.innerHTML=md(assistantMarkdown(after).markdown);moved=true;}
@@ -150,6 +165,11 @@
     if(ended.length&&cur&&box.dataset.ready){for(const f of ended)delete f.node.dataset.sig;renderMsgs(currentMessages);}
     if(going)wake();
   }
+  // Words being picked out of a message stay as they are till they are let go: a redraw (each update of a reply still being
+  // written, each frame of its run-out) would drop them. renderMsgs asks before it redraws a message.
+  let heldBack=false;
+  function holding(n){const s=getSelection?.();if(!n||!s||s.isCollapsed||!s.rangeCount||!s.getRangeAt(0).intersectsNode(n))return false;heldBack=true;return true;}
+  document.addEventListener('selectionchange',()=>{if(!heldBack||!getSelection().isCollapsed)return;heldBack=false;if(cur&&$('cvMsgs').dataset.ready)renderMsgs(currentMessages);wake();});
   function settleFlows(){let any=false;for(const f of flows.values())if(f.shown<f.text.length){f.shown=f.text.length;if(f.node?.isConnected){delete f.node.dataset.sig;any=true;}}if(any&&cur&&$('cvMsgs').dataset.ready)renderMsgs(currentMessages);}
   // The release is listened for on what the finger went down on: when the words under it are rewritten, that node leaves the
   // page and its touchend no longer reaches #cvMsgs or the document, but still reaches the node itself.
@@ -157,85 +177,106 @@
   $('cvMsgs').addEventListener('scroll',()=>{if(touching)touching=performance.now();},{passive:true});
   for(const name of ['touchend','touchcancel'])document.addEventListener(name,()=>{touching=0;},{passive:true});
 
-  // ---- a message lifted out, with what can be done with it (10-22)
-  // As WhatsApp, iMessage and Telegram do: hold a message (or tap one of yours; right-click on a computer) and it gives a
-  // little under the finger, then the rest blurs, the message comes up out of the page and a menu shows beside it: 复制,
-  // 选择文字, 分享. A tap anywhere puts it back. A message held on a phone no longer starts the phone's own text selection
-  // (its menu covered the message); 选择文字 shows the words to pick from. A popover, so the back gesture, Escape and the
-  // taps' ticks work as in the other menus (navigation-ui.js).
+  // ---- a message tapped: what can be done with it (10-22)
+  // Held, a message's words are picked out the phone's own way, with its handles and its 拷贝. (0.25.0 lifted a held message
+  // out over a blurred page instead: its menu covered the words, none could be picked out, and the blur was too much; the
+  // user, 10-22.) Tapped, or right-clicked on a computer, a message comes up a little and a small menu shows by it:
+  // 复制 · 选择文字 · 分享. Nothing is dimmed and nothing is in the way: a tap anywhere else, a scroll or a panel puts it
+  // away, and that tap does nothing else among the messages. A tap that puts the keyboard away, or clears words picked out,
+  // opens nothing. 选择文字 shows the words large, to pick from with the phone's handles, with 复制全部 under them.
   Object.assign(ICONS,{copy:'M8 8h11v11H8zM5 16V5h11',select:'M5 7V5h14v2M12 5v14M9 19h6',share:'M12 15V4m-4 4 4-4 4 4M6 11v8h12v-8'});
-  const liftCss=el('style');liftCss.textContent=`#cvMsgs .bub{transition:transform .2s ease}#cvMsgs .bub.pressing{transform:scale(.965)}
-    @media (hover:none) and (pointer:coarse){#cvMsgs .bub{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}}
-    #msgFocus{background:transparent;opacity:1;transition:none}
-    #msgFocus .focus-dim{position:absolute;inset:0;background:rgba(17,24,39,.16);-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);opacity:0;transition:opacity .15s ease;pointer-events:none}
-    #msgFocus.is-open .focus-dim{opacity:1;transition-duration:.26s}
-    #msgFocus .focus-lift{position:absolute;overflow:hidden;pointer-events:none;transform-origin:center;transition:transform .15s ease-in,box-shadow .15s}
-    #msgFocus.is-open .focus-lift{transform:translate(var(--lx),var(--ly)) scale(var(--ls));box-shadow:0 16px 40px rgba(15,23,42,.2),0 2px 6px rgba(15,23,42,.08);transition:transform .42s cubic-bezier(.25,1.35,.4,1),box-shadow .3s}
-    #msgFocus .focus-lift.mine{border-radius:20px}#msgFocus .focus-lift.reply{background:#fff;border-radius:18px;padding:13px}
-    #msgFocus .focus-lift .bub{margin:0;max-width:none}
-    #msgFocus .box{position:absolute;inset:auto;width:232px;max-width:calc(100vw - 24px);max-height:none;padding:0;border:0;border-radius:16px;background:rgba(255,255,255,.97);box-shadow:0 14px 40px rgba(15,23,42,.22),0 0 0 .5px rgba(15,23,42,.08);overflow:hidden;opacity:0;transform:scale(.6);transition:transform .14s ease-in,opacity .14s}
-    #msgFocus.is-open .box{opacity:1;transform:none;transition:transform .36s cubic-bezier(.25,1.3,.4,1) .03s,opacity .16s .03s}
-    #msgFocus .sh-body{padding:0;gap:0}#msgFocus .menu-row{width:100%;min-height:48px;margin:0;padding:12px 16px;border-radius:0;justify-content:space-between;font-size:16px;font-weight:400;color:var(--text)}
-    #msgFocus .menu-row+.menu-row{border-top:1px solid rgba(15,23,42,.08)}#msgFocus .menu-row .icon{width:20px;height:20px;color:var(--muted)}`;document.head.append(liftCss);
-  const focus=el('div','sheet popover');focus.id='msgFocus';focus.setAttribute('aria-label','消息');
-  const dim=el('div','focus-dim'),menuBox=el('div','box'),focusMenu=el('div','sh-body');menuBox.append(focusMenu);focus.append(dim,menuBox);document.body.append(focus);
-  focus.addEventListener('click',e=>{if(e.target===focus)closeSheet(focus.id);});  // the dim and the lifted message let taps through to here
-  const safe=el('div');safe.style.cssText='position:fixed;left:0;top:0;height:env(safe-area-inset-top,0px);width:env(safe-area-inset-bottom,0px);visibility:hidden;pointer-events:none';document.body.append(safe);
-  let lifted=null;  // the message in the page while its copy is lifted: hidden, shown again when the copy is back in its place
-  new MutationObserver(()=>{if(focus.classList.contains('is-open')||!lifted)return;const b=lifted;lifted=null;clearTimeout(focus._back);focus._back=setTimeout(()=>{b.style.visibility='';focus.querySelector('.focus-lift')?.remove();},150);}).observe(focus,{attributes:true,attributeFilter:['class']});
+  const menuCss=el('style');menuCss.textContent=`#cvMsgs .bub.user{transition:transform .2s ease,box-shadow .2s ease}
+    #cvMsgs .bub.user.picked{transform:scale(1.035);box-shadow:0 8px 22px rgba(37,99,235,.28);transition:transform .34s cubic-bezier(.3,1.6,.5,1),box-shadow .25s ease}
+    #cvMsgs .bub.assistant{transition:background-color .2s ease,box-shadow .2s ease}
+    #cvMsgs .bub.assistant.picked{background:#f1f3f6;box-shadow:0 0 0 8px #f1f3f6;border-radius:6px}
+    .msg-menu{position:absolute;z-index:30;display:flex;padding:4px;border-radius:16px;background:#fff;box-shadow:0 10px 30px rgba(15,23,42,.16),0 1px 3px rgba(15,23,42,.08),0 0 0 .5px rgba(15,23,42,.08)}
+    .msg-menu[hidden]{display:none}.msg-menu.closing{pointer-events:none}
+    .msg-menu button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-width:64px;min-height:56px;margin:0;padding:7px 10px 6px;border:0;border-radius:12px;background:transparent;color:var(--text);font-size:12px;font-weight:500;line-height:1.2}
+    .msg-menu button:active{background:#eef0f4;transform:none}.msg-menu .icon{width:21px;height:21px}
+    #readerSheet .reader-text{font-size:17px;line-height:1.75;white-space:pre-wrap;word-break:break-word;color:var(--text);-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+    #readerSheet .reader-text pre{white-space:pre-wrap;word-break:break-all;background:#f3f4f6;padding:10px 12px;border-radius:8px;font:14px/1.6 ui-monospace,Consolas,monospace;margin:6px 0}
+    #readerSheet .reader-text code{background:#f3f4f6;padding:0 3px;border-radius:4px;font-size:15px}
+    #readerSheet .reader-text table{border-collapse:collapse;display:block;overflow-x:auto;white-space:normal;font-size:15px;margin:8px 0}#readerSheet .reader-text td{border:1px solid var(--line);padding:6px 10px;vertical-align:top}
+    #readerSheet .hint{margin:0}#readerSheet .reader-foot{flex:none;padding:10px 16px 12px;border-top:1px solid var(--line)}#readerSheet .reader-foot button{width:100%}
+    @media (prefers-reduced-motion:reduce){#cvMsgs .bub.user.picked{transform:none}#cvMsgs .bub.user,#cvMsgs .bub.assistant{transition:none}}`;document.head.append(menuCss);
   function textOf(b,m){
     if(m&&typeof m.text==='string')return m.role==='assistant'?publicText(m.text):m.text;
     const c=b.cloneNode(true);c.querySelectorAll('.send-receipt,.outbox-state,.message-actions,.outbox-refs,.sent-images,.message-origin,.code-copy,.thread-link').forEach(n=>n.remove());return c.textContent.trim();
   }
   async function fullText(b,m){return textOf(b,m?.truncated&&!m.streaming?await api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)):m);}
-  function focusMessage(b){
-    if(!cur||overlays.length||!b?.isConnected)return;
-    const key=b.closest('[data-key]')?.dataset.key,m=loaded.find(v=>v.id===key),mine=b.classList.contains('user'),pad=mine?0:13;
-    const r=b.getBoundingClientRect(),area=$('cvMsgs').getBoundingClientRect(),top=Math.max(r.top,area.top+6);
-    // the copy: where the message is, only the part on screen (a long reply), without its buttons and the line under it
-    clearTimeout(focus._back);focus.querySelector('.focus-lift')?.remove();
-    const card=el('div','focus-lift '+(mine?'mine':'reply')),copy=b.cloneNode(true);
-    copy.classList.remove('pressing','has-receipt');copy.removeAttribute('data-key');copy.removeAttribute('style');
-    copy.querySelectorAll('.send-receipt,.message-actions,.code-copy,.outbox-state').forEach(n=>n.remove());
-    copy.style.cssText='width:'+r.width+'px;margin-top:'+(r.top-top)+'px';card.append(copy);
-    card.style.cssText='left:'+(r.left-pad)+'px;top:'+(top-pad)+'px;width:'+(r.width+2*pad)+'px';focus.insertBefore(card,menuBox);
-    focusMenu.replaceChildren();
-    const item=(label,name,act)=>{const row=el('button','menu-row');row.type='button';row.append(el('span','',label));row.insertAdjacentHTML('beforeend',icon(name));row.onclick=()=>{closeSheet(focus.id);act().catch(e=>toast(e.message,true));};focusMenu.append(row);};
-    item('复制','copy',async()=>copyText(await fullText(b,m)));
-    item('选择文字','select',async()=>selectText(await fullText(b,m),'长按文字选出要的部分，或点「选择全文」。'));
-    if(navigator.share)item('分享','share',async()=>{try{await navigator.share({text:await fullText(b,m)});}catch(e){if(e.name!=='AbortError')throw e;}});
-    window.navigationUI?.haptic?.();openSheet(focus.id);
-    // lifted a little, with the menu under it, or over it, or (no room for either) the copy moved up to make room
-    const view=viewportBox(),lo=safe.offsetHeight+8,hi=view.height-safe.offsetWidth-8,mw=menuBox.offsetWidth,mh=menuBox.offsetHeight,gap=10,s=mine?1.035:1.012,grow=(s-1)/2;
-    const room=(hi-lo-mh-gap)/s;if(card.offsetHeight>room)card.style.height=Math.max(80,room)+'px';  // too tall: its top part
-    const w=card.offsetWidth,h=card.offsetHeight,x=r.left-pad,y=top-pad;
-    let dy=0,below=y+h*(1+grow)+gap+mh<=hi;
-    if(!below&&y-h*grow-gap-mh<lo)dy=hi-mh-gap-(y+h*(1+grow)),below=true;
-    if(y+dy-h*grow<lo)dy=lo-(y-h*grow);
-    card.style.setProperty('--lx','0px');card.style.setProperty('--ly',dy+'px');card.style.setProperty('--ls',s);
-    const left=Math.max(12,Math.min(innerWidth-12-mw,mine?x+w*(1+grow)-mw:x-w*grow));
-    menuBox.style.left=left+'px';menuBox.style.top=(below?y+dy+h*(1+grow)+gap:y-h*grow-gap-mh)+'px';menuBox.style.transformOrigin=(mine?'right ':'left ')+(below?'top':'bottom');
-    b.style.visibility='hidden';lifted=b;
+  // 选择文字: the words as they read in the conversation, large, with nothing else that a finger could catch
+  const readerBody=sheet('readerSheet','选择文字'),readerFoot=el('div','reader-foot'),readerCopy=el('button','big','复制全部');
+  readerFoot.append(readerCopy);$('readerSheet').querySelector('.box').append(readerFoot);
+  let readerWords='';readerCopy.onclick=()=>copyText(readerWords);
+  function openReader(text,hint='长按文字选出要的部分，拖动两端调整。'){
+    readerWords=text;const words=el('div','reader-text');words.innerHTML=md(text);readerBody.replaceChildren(el('div','hint',hint),words);
+    openSheet('readerSheet');readerBody.scrollTop=0;
   }
-  // hold: a finger that stays put. Its release is listened for on what it went down on too (rewritten words leave the page).
-  const bubbleAt=t=>{const b=t?.closest?.('#cvMsgs .bub');return b&&!t.closest('button,a,input,textarea,select,summary')?b:null;};
-  // swallow: while the finger that lifted a message is still down, and a moment after it comes up, a click is not a tap:
-  // letting go makes one, and it landed on the open menu's backdrop and shut it at once.
-  // (A new finger on the screen means the old one is gone, should its release have been missed; at most 8 s in any case.)
-  let hold=null,swallow=-1e9,heldAt=0;
-  function letGo(){if(!hold)return;clearTimeout(hold.give);clearTimeout(hold.lift);hold.b.classList.remove('pressing');hold=null;}
-  function released(){letGo();if(swallow===Infinity)swallow=performance.now();}
-  document.addEventListener('touchstart',e=>{if(swallow===Infinity&&e.touches.length===1)swallow=-1e9;},{capture:true,passive:true});
-  $('cvMsgs').addEventListener('touchstart',e=>{letGo();if(e.touches.length!==1||overlays.length||window.workspaceUI?.composing)return;const b=bubbleAt(e.target);if(!b)return;const t=e.touches[0];
-    hold={b,x:t.clientX,y:t.clientY,give:setTimeout(()=>b.classList.add('pressing'),130),lift:setTimeout(()=>{letGo();swallow=Infinity;heldAt=performance.now();focusMessage(b);},450)};
-    for(const name of ['touchend','touchcancel'])e.target.addEventListener(name,released,{once:true,passive:true});},{passive:true});
-  $('cvMsgs').addEventListener('touchmove',e=>{const t=e.touches[0];if(hold&&t&&Math.hypot(t.clientX-hold.x,t.clientY-hold.y)>8)letGo();},{passive:true});
-  $('cvMsgs').addEventListener('scroll',letGo,{passive:true});
-  for(const name of ['touchend','touchcancel'])document.addEventListener(name,released,{capture:true,passive:true});
-  document.addEventListener('click',e=>{const now=performance.now();if(swallow===Infinity?now-heldAt<8000:now-swallow<400){e.stopPropagation();e.preventDefault();}},true);
-  $('cvMsgs').addEventListener('click',e=>{const b=bubbleAt(e.target);if(b?.classList.contains('user')&&!String(getSelection?.()||''))focusMessage(b);},true);  // not after picking words with a mouse
-  // a right-click on a computer (no click follows it); Android sends one for a long press too, its finger still down
-  $('cvMsgs').addEventListener('contextmenu',e=>{const b=bubbleAt(e.target);if(!b)return;e.preventDefault();if(overlays.some(o=>o.id===focus.id))return;if(hold){swallow=Infinity;heldAt=performance.now();}letGo();focusMessage(b);});
+  const msgMenu=el('div','msg-menu');msgMenu.setAttribute('role','menu');msgMenu.setAttribute('aria-label','消息');msgMenu.hidden=true;$('convView').append(msgMenu);
+  // pick: the message the menu is for, where on it the finger was, and (a long one shown in part) its whole words
+  let pick=null,down=null,dismissed=-1e9,opening=0;
+  const reduced=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const picking=()=>{const s=getSelection?.();return !!s&&!s.isCollapsed&&String(s).trim()!=='';};
+  const tappable=t=>{const b=t?.closest?.('#cvMsgs .bub');return b&&!b.classList.contains('note')&&!b.onclick&&!t.closest('button,a,input,textarea,select,summary,label,img,video,.message-actions,.outbox-refs,.sent-images')?b:null;};
+  function openMenu(b,x,y){
+    closeMenu(true);if(!cur||!b.isConnected)return;
+    const m=loaded.find(v=>v.id===b.dataset.key),r=b.getBoundingClientRect();
+    const p=pick={b,m,x:x-r.left,y:y-r.top,full:null,words:null};
+    if(m?.truncated&&!m.streaming){p.full=fullText(b,m);p.full.then(t=>{p.words=t;},()=>{});}  // read now, there by the time 复制 is tapped
+    msgMenu.replaceChildren();
+    const item=(label,name,act)=>{const btn=el('button');btn.type='button';btn.setAttribute('role','menuitem');btn.innerHTML=icon(name);btn.append(el('span','',label));
+      btn.onclick=()=>{closeMenu();act();};msgMenu.append(btn);window.navigationUI?.tapTick?.(btn);};
+    // in the tap itself (Safari writes the clipboard nowhere else): the words, or the promise of them
+    item('复制','copy',()=>copyText(p.words??p.full??textOf(b,m)));
+    item('选择文字','select',()=>Promise.resolve(p.words??p.full??textOf(b,m)).then(t=>openReader(t),e=>toast(e.message,true)));
+    if(navigator.share)item('分享','share',async()=>{try{await navigator.share({text:p.words??await(p.full??textOf(b,m))});}catch(e){if(e.name!=='AbortError')toast(e.message,true);}});
+    msgMenu.getAnimations().forEach(a=>a.cancel());msgMenu.classList.remove('closing');msgMenu.hidden=false;b.classList.add('picked');
+    if(!place())return;
+    if(!reduced())msgMenu.animate([{opacity:0,transform:'scale(.9)'},{opacity:1,transform:'none'}],{duration:200,easing:'cubic-bezier(.2,1.25,.4,1)'});
+    window.navigationUI?.haptic?.();
+  }
+  // Over one of yours, or under it when there is no room; by the finger on a reply (often taller than the screen), over the
+  // line tapped or under it. Kept on the screen and clear of the back-swipe strip on the left.
+  function place(){
+    const p=pick;if(!p)return false;const b=p.b,r=b.getBoundingClientRect(),area=$('cvMsgs').getBoundingClientRect(),host=$('convView').getBoundingClientRect();
+    const lo=Math.max(area.top,0)+8,hi=Math.min(area.bottom,viewportBox().height)-8,mw=msgMenu.offsetWidth,mh=msgMenu.offsetHeight,mine=b.classList.contains('user');
+    const ax=mine?r.left+r.width/2:r.left+p.x,ay=r.top+p.y;
+    if(!b.isConnected||(mine?r.bottom<lo||r.top>hi:ay<lo||ay>hi)){closeMenu();return false;}
+    let top,below;
+    if(mine&&r.top-10-mh>=lo){top=r.top-10-mh;below=false;}else if(mine&&r.bottom+10+mh<=hi){top=r.bottom+10;below=true;}
+    else if(ay-16-mh>=lo){top=ay-16-mh;below=false;}else{top=Math.min(hi-mh,ay+24);below=true;}
+    const left=Math.max(20,Math.min(innerWidth-12-mw,ax-mw/2));
+    msgMenu.style.left=(left-host.left)+'px';msgMenu.style.top=(top-host.top)+'px';msgMenu.style.transformOrigin=Math.round(ax-left)+'px '+(below?'0':'100%');
+    return true;
+  }
+  function closeMenu(now=false){
+    clearTimeout(opening);if(!pick)return;pick.b.classList.remove('picked');pick=null;
+    if(now||reduced()||msgMenu.hidden){msgMenu.hidden=true;return;}
+    msgMenu.classList.add('closing');msgMenu.animate([{opacity:1},{opacity:0}],{duration:120,easing:'ease-in'}).onfinish=()=>{if(!pick){msgMenu.hidden=true;msgMenu.classList.remove('closing');}};
+  }
+  document.addEventListener('pointerdown',e=>{
+    clearTimeout(opening);
+    down={x:e.clientX,y:e.clientY,t:performance.now(),type:e.pointerType,busy:e.pointerType!=='mouse'&&typingField()||!!window.workspaceUI?.composing||picking()};  // a tap that puts the keyboard away
+    if(pick&&!msgMenu.contains(e.target)){closeMenu();if($('cvMsgs').contains(e.target))dismissed=performance.now();}
+  },true);
+  $('cvMsgs').addEventListener('click',e=>{
+    const b=tappable(e.target),d=down;down=null;
+    // not a press held (the phone's own selection), nor one that moved
+    if(!b||!d||d.busy||e.defaultPrevented||e.detail>1||overlays.length||picking()||performance.now()-dismissed<600||performance.now()-d.t>500||Math.hypot(e.clientX-d.x,e.clientY-d.y)>12)return;
+    if(d.type==='mouse')opening=setTimeout(()=>openMenu(b,e.clientX,e.clientY),240);  // a double click picks a word instead
+    else openMenu(b,e.clientX,e.clientY);
+  });
+  // a right-click; a long press on a phone (Android sends one too) is left to the phone's own selection
+  $('cvMsgs').addEventListener('contextmenu',e=>{
+    if((e.pointerType||down?.type)!=='mouse'||picking()||overlays.length)return;const b=tappable(e.target);if(!b)return;
+    e.preventDefault();openMenu(b,e.clientX,e.clientY);
+  });
+  $('cvMsgs').addEventListener('scroll',()=>{if(pick)place();},{passive:true});  // moved under it by new words: it follows
+  addEventListener('wheel',e=>{if(pick&&!msgMenu.contains(e.target))closeMenu();},{passive:true});
+  addEventListener('resize',()=>closeMenu(true));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&pick)closeMenu();});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)closeMenu(true);});
+  new MutationObserver(()=>{if($('convView').inert||$('convView').style.display==='none')closeMenu(true);}).observe($('convView'),{attributes:true,attributeFilter:['inert','style']});
   function openSearch(){if(!cur)return;const target={...cur};searchBody.innerHTML='';const input=el('input');input.type='search';input.placeholder='查找这段对话的完整内容';input.setAttribute('aria-label','查找消息关键词');const go=el('button','big','查找'),results=el('div'),more=el('button','','更多结果');more.hidden=true;let next=null,version=0;
     async function search(append=false){const q=input.value.trim();if(!q)return;const v=++version;go.disabled=true;try{const j=await api('/api/chat/search?app='+target.app+'&id='+encodeURIComponent(target.id)+'&query='+encodeURIComponent(q)+(append&&next?'&cursor='+encodeURIComponent(next):''));if(v!==version)return;if(!append)results.innerHTML='';for(const hit of j.items){const b=el('button','search-hit',hit.snippet);b.append(el('small','',(hit.origin==='other_chat'?'来自其他对话':hit.role==='user'?'你':'助手')+' · '+stamp(hit.time)));b.onclick=()=>{dismissOverlays();jump(hit.id).catch(e=>toast(e.message,true));};results.append(b);}if(!j.items.length&&!append)results.append(el('div','hint','没有找到匹配消息'));next=j.next_cursor;more.hidden=!j.has_more;}catch(e){toast(e.message,true);}finally{go.disabled=false;}}
     go.onclick=()=>search();more.onclick=()=>search(true);input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)search();};searchBody.append(input,go,results,more);openSheet('historySearch');}
@@ -267,6 +308,6 @@
   $('newMessages').onclick=()=>{if(historyWindow)loadConversation(true);else jumpToLatest();};
   // hidden: what was running out is shown whole; back on screen, what came meanwhile shows as it is
   document.addEventListener('visibilitychange',()=>{if(document.hidden){pauseStream();settleFlows();}else{quietUntil=performance.now()+2000;if(!window.workspaceUI?.paused)resumeStream();}});
-  window.readingUI={loadList,onOpen,loadConversation,decorateMessage,decorateRows(){},flowText,pauseStream,resumeStream,get streamActive(){return streamActive;},get historyWindow(){return historyWindow;}};
+  window.readingUI={loadList,onOpen,loadConversation,decorateMessage,decorateRows(){},flowText,holding,closeMenu,pauseStream,resumeStream,get streamActive(){return streamActive;},get historyWindow(){return historyWindow;}};
   if(cur){onOpen({},cur);loadConversation(true);}else loadList(false,true);
 })();

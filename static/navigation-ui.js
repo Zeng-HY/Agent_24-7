@@ -270,7 +270,7 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
   addEventListener('resize',()=>{const top=overlays.at(-1);if(top&&top.id!==drawer.id&&$(top.id))tickRoom($(top.id));});
   function bindSheet(node){if(boundSheet.has(node))return;boundSheet.add(node);const box=node.querySelector('.box');if(!box)return;
     box.addEventListener('touchstart',e=>{sheetDrag=null;if(e.touches.length!==1||overlays.at(-1)?.id!==node.id||!isPhoneSheet(node))return;const t=e.touches[0],target=e.target;
-      if(target.closest?.('input:not(.tap-tick),textarea,select,[contenteditable]'))return;
+      if(target.closest?.('input:not(.tap-tick),textarea,select,[contenteditable],.reader-text'))return;  // 选择文字: a finger there picks words
       if(!target.closest?.('.sh-head'))for(let p=target;p&&p!==node;p=p.parentElement)if(p.scrollTop>0)return;
       sheetDrag={node,box,x:t.clientX,y:t.clientY,dy:0,decided:false,h:box.offsetHeight||1};track(sheetDrag,t.clientX,t.clientY);},{passive:true});
     box.addEventListener('touchmove',e=>{const s=sheetDrag;if(!s||s.box!==box)return;if(e.touches.length!==1){endSheet(false);return;}const t=e.touches[0],dx=t.clientX-s.x,dy=t.clientY-s.y;
