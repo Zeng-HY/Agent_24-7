@@ -31,6 +31,8 @@ SSE：继续使用现有网页实时连接；iOS 后台可能暂停连接，回�
 
 ## Codemagic
 
+免费账号侧载使用 `ios-sideload` 工作流：以 iPhoneOS SDK 构建 Release arm64 App，生成 `Payload/App.app` 结构的 `AgentRemote-unsigned.ipa`。下载后在 Windows 的 Sideloadly 中用自己的 Apple 账号签名安装；该 IPA 尚未签名，不能直接点击安装。首次用 USB 连接并在手机确认信任，按 iOS 提示启用开发者模式。账号和验证码由用户亲自输入，不放入 Codemagic、GitHub 或聊天。免费签名七天有效；自动刷新需要电脑运行 Sideloadly Daemon，且手机经 USB 或已配置的 Wi-Fi 可连接。官方说明：https://sideloadly.io/faq.html 。真机安装和业务功能需实际验收。
+
 根目录 codemagic.yaml 提供手动 ios-simulator 工作流：mac_mini_m2、Xcode 26.2、Node 24.14.0，最多 30 分钟，无自动触发、签名和发布。运行 npm ci、测试、Web 构建、cap add/sync、SPM 解析和无签名模拟器编译。产物仅 App.zip 和 Package.resolved，不上传日志、聊天或服务端运行状态。模拟器包不能直接装到 iPhone；设备包/TestFlight 需要另行配置 Apple Developer 签名。
 
 Codemagic 官方截至 2026-10-22 列出个人账户每月 500 M2 分钟。登录后核对账户额度，勿开启付费计划。参考：
