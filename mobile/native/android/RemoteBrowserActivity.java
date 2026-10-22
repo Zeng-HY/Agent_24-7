@@ -17,6 +17,7 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
 
 /** Plain remote WebView. Never attach Capacitor or a JavascriptInterface to it. */
 public class RemoteBrowserActivity extends AppCompatActivity {
@@ -30,6 +31,26 @@ public class RemoteBrowserActivity extends AppCompatActivity {
     private boolean loadFailed;
     private int authAttempts;
     private static final int FILE = 41, MEDIA = 42;
+    private String accountUrl() { Uri u = Uri.parse(entry); return u.getScheme() + "://" + u.getAuthority() + "/account"; }
+    private TextView toolbarAction(String text, String description, Runnable action) {
+        TextView button = new TextView(this); button.setText(text); button.setTextSize(14);
+        button.setTextColor(0xff486185); button.setGravity(android.view.Gravity.CENTER);
+        int pad = (int)(14 * getResources().getDisplayMetrics().density);
+        button.setPadding(pad, pad, pad, pad); button.setMinHeight((int)(48 * getResources().getDisplayMetrics().density));
+        button.setContentDescription(description); button.setFocusable(true); button.setOnClickListener(v -> action.run());
+        return button;
+    }
+    private void applyAccountTheme(String url) {
+        if (!BrowserPolicy.sameOrigin(entry, url) || !"/account".equals(Uri.parse(url).getPath())) return;
+        try (java.io.InputStream stream = getAssets().open("account-theme.js")) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096]; int count;
+            while ((count = stream.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            String script = new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+            // Trusted bundled presentation code only; no returned page data, credentials or native bridge.
+            web.evaluateJavascript(script, null);
+        } catch (java.io.IOException ignored) { /* Original server page remains usable. */ }
+    }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -37,17 +58,20 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         if (!BrowserPolicy.validEntry(entry)) { finish(); return; }
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xfff6f8fc);
+        root.setBackgroundColor(0xfff3f5fa);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets p = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.ime());
             view.setPadding(p.left, p.top, p.right, p.bottom);
             return insets;
         });
         LinearLayout bar = new LinearLayout(this);
-        Button close = new Button(this); close.setText("返回"); close.setOnClickListener(v -> finish());
-        TextView host = new TextView(this); host.setText(Uri.parse(entry).getAuthority()); host.setTextColor(0xff243a57);
-        Button reload = new Button(this); reload.setText("重试"); reload.setOnClickListener(v -> { authAttempts = 0; web.loadUrl(entry); });
-        bar.addView(close); bar.addView(host, new LinearLayout.LayoutParams(0, -2, 1)); bar.addView(reload);
+        TextView close = toolbarAction("‹", "返回启动页", () -> finish()); close.setTextSize(28);
+        TextView host = new TextView(this); host.setText(Uri.parse(entry).getAuthority()); host.setTextColor(0xff7a889c);
+        host.setTextSize(11); host.setSingleLine(true); host.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        TextView account = toolbarAction("账号", "账号与电脑", () -> web.loadUrl(accountUrl()));
+        account.setTag("account-navigation");
+        TextView reload = toolbarAction("↻", "重新加载当前页面", () -> { authAttempts = 0; web.reload(); }); reload.setTextSize(22);
+        bar.addView(close); bar.addView(host, new LinearLayout.LayoutParams(0, -2, 1)); bar.addView(account); bar.addView(reload);
         bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
         root.addView(bar);
         status = new TextView(this); status.setTextColor(0xff243a57); status.setPadding(24, 12, 24, 12);
@@ -72,11 +96,11 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 if (!BrowserPolicy.sameOrigin(entry, url)) { view.stopLoading(); fail("已停止跳转到其他服务地址。"); return; }
-                loadFailed = false; web.setVisibility(View.VISIBLE); status.setText("正在连接…");
+                loadFailed = false; web.setVisibility(View.VISIBLE); status.setVisibility(View.VISIBLE); status.setText("正在连接…");
             }
             @Override public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
-                if (!loadFailed) status.setText("首次连接请完成网页中的电脑配对。关闭窗口不会退出账号。");
+                if (!loadFailed) { status.setVisibility(View.GONE); applyAccountTheme(url); }
             }
             @Override public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler, String host, String realm) {
                 // Only authenticate the explicitly selected HTTPS origin, never a cross-origin resource.
@@ -95,8 +119,10 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
                 if (!request.isForMainFrame()) return;
                 int code = response.getStatusCode();
-                fail(code == 401 ? "尚未通过服务登录。点重试重新输入管理员提供的账号密码。"
-                    : code == 404 ? "这个入口尚未启用。返回启动页，使用首次连接入口。"
+                fail(code == 401 ? "登录已过期或尚未登录。点右上角“账号”重新登录。"
+                    : code == 403 ? "尚未选择可访问的电脑，或绑定已被撤销。点右上角“账号”查看。"
+                    : code == 404 ? "这个页面不存在。点右上角“账号”返回电脑列表。"
+                    : code == 502 || code == 503 || code == 504 ? "电脑暂时无法连接。请确认电脑已开机且接入服务正在运行，然后重试。"
                     : "服务返回 HTTP " + code + "。稍后重试，或联系服务管理员。");
             }
         });
@@ -127,7 +153,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         web.loadUrl(entry);
     }
 
-    private void fail(String text) { loadFailed = true; status.setText(text); web.setVisibility(View.INVISIBLE); }
+    private void fail(String text) { loadFailed = true; status.setVisibility(View.VISIBLE); status.setText(text); web.setVisibility(View.INVISIBLE); }
 
     private void askForLogin(HttpAuthHandler handler) {
         if (authHandler != null) { handler.cancel(); return; }
@@ -135,14 +161,14 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         LinearLayout fields = new LinearLayout(this); fields.setOrientation(LinearLayout.VERTICAL); fields.setPadding(40, 8, 40, 0);
         TextView help = new TextView(this);
         help.setText((authAttempts++ > 0 ? "上次登录未通过，请检查账号密码。\n" : "")
-            + "服务地址：" + Uri.parse(entry).getAuthority() + "\n这是服务管理员提供的入口账号，不是手机或 Tailscale 账号。登录后还需输入电脑配对码。");
+            + "服务地址：" + Uri.parse(entry).getAuthority() + "\n此页面要求额外的服务验证，请使用管理员提供的入口账号。它与个人账号可能不同。");
         EditText user = new EditText(this); user.setHint("服务账号"); user.setSingleLine(true);
         user.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         EditText password = new EditText(this); password.setHint("服务密码"); password.setSingleLine(true);
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         fields.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         fields.addView(help); fields.addView(user); fields.addView(password);
-        authDialog = new AlertDialog.Builder(this).setTitle("首次连接 · 服务登录").setView(fields)
+        authDialog = new AlertDialog.Builder(this).setTitle("服务访问验证").setView(fields)
             .setPositiveButton("登录", null).setNegativeButton("暂不连接", (d, w) -> cancelAuth())
             .setOnCancelListener(d -> cancelAuth()).create();
         authDialog.setOnShowListener(d -> authDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -194,7 +220,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         }
     }
     @Override protected void onPause() { if (web != null) { web.onPause(); CookieManager.getInstance().flush(); } super.onPause(); }
-    @Override protected void onResume() { super.onResume(); if (web != null) { web.onResume(); web.setVisibility(View.VISIBLE); } }
+    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
     @Override protected void onDestroy() {
         if (authHandler != null) { authHandler.cancel(); authHandler = null; }
         if (authDialog != null) authDialog.dismiss();

@@ -2,25 +2,21 @@
 <html lang="zh-CN"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#f3f5fa">
 <title>Pocket Agent Desk</title><link rel="stylesheet" href="app.css"></head>
-<body><main><p class="eyebrow">AGENT REMOTE · 移动端</p><h1>Pocket Agent Desk</h1>
-<p>连接自己的电脑，继续桌面上的工作。</p>
-<section id="onboarding" class="onboarding" hidden aria-label="首次连接说明">
-<h2>新手机，从这里开始</h2>
-<p>使用此公网服务，不需要安装 Tailscale，也不需要提前在浏览器登录。</p>
-<ol><li><strong>服务登录</strong><br>填写管理员提供的入口账号和密码。没有账号？请向服务管理员索取。</li>
-<li><strong>电脑配对</strong><br>登录后输入电脑端生成的一次性配对码，授权这台手机访问电脑。</li></ol>
-<p class="hint">入口账号密码与配对码是两回事。多用户注册尚未确认启用，此版本默认连接现有服务。</p>
-</section>
-<form id="connect"><label for="origin">HTTPS 服务地址</label>
-<input id="origin" type="url" required autocomplete="url" spellcheck="false" inputmode="url">
-<details><summary>高级设置</summary>
-<label for="entry">服务入口</label><select id="entry"><option value="home">现有服务（首次配对 / 已配对连接）</option><option value="account">多用户账号（需管理员确认已启用）</option></select>
-<p class="hint">多用户入口需服务器完成部署。登录及设备选择在服务器页面完成。</p>
-</details>
-<button id="open" type="submit">打开服务</button>
-<button id="compat" type="submit" class="secondary" hidden>兼容登录（系统浏览器）</button>
-<button id="forget" type="button" class="secondary">恢复默认地址</button></form>
-<p id="status" role="status" aria-live="polite"></p>
-<p class="hint">请核对服务地址后登录。此启动页只保存地址和入口；退出账号请在服务页面操作。关闭顶部浏览器即可返回。</p>
+<body><main>
+<header class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Pocket Agent Desk</span><span class="edition">0.3</span></header>
+<section class="intro"><p class="eyebrow">YOUR DESK, WITH YOU</p><h1>继续你的工作<span>从这里开始。</span></h1><p class="lead">登录自己的账号，连接自己的电脑。<br>桌面上的对话与文件，随时接着用。</p></section>
+<form id="connect" class="connection-card">
+<div class="card-heading"><span class="connection-dot" aria-hidden="true"></span><div><h2>账号入口</h2><p>受邀注册 · 登录 · 选择电脑</p></div></div>
+<button id="open" type="submit" class="primary">进入账号 <span aria-hidden="true">↗</span></button>
+<p class="note">无需 Tailscale，也无需提前在浏览器登录。</p>
+<details><summary>连接设置</summary><div class="settings">
+<label for="origin">服务地址</label><input id="origin" type="url" required autocomplete="url" spellcheck="false" inputmode="url">
+<label for="entry">打开页面</label><select id="entry"><option value="account">账号与电脑</option><option value="home">继续已选择的电脑</option></select>
+<button id="compat" type="submit" class="text-button" hidden>使用系统浏览器打开</button>
+<button id="forget" type="button" class="text-button">恢复默认设置</button>
+</div></details></form>
+<p id="status" class="status" role="status" aria-live="polite"></p>
+<footer><span class="footer-line"></span><p>仅连接你有权访问的电脑。<br>还没有账号？向服务管理员获取邀请。</p></footer>
 </main><script type="module" src="app.js"></script></body></html>

@@ -9,14 +9,12 @@ let saved = {};
 try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch {}
 try { $('origin').value = normalizeOrigin(saved.origin || DEFAULT_ORIGIN); }
 catch { $('origin').value = DEFAULT_ORIGIN; }
-$('entry').value = android ? 'home' : saved.entry === 'account' ? 'account' : 'home';
+$('entry').value = android ? (saved.flowVersion === 3 && saved.entry === 'home' ? 'home' : 'account') : saved.entry === 'home' ? 'home' : 'account';
 $('compat').hidden = !android;
-$('onboarding').hidden = !android;
-if (android) $('open').textContent = '连接电脑 · 登录与配对';
 $('forget').onclick = () => {
   localStorage.removeItem(key);
   $('origin').value = DEFAULT_ORIGIN;
-  $('entry').value = 'home';
+  $('entry').value = 'account';
   $('status').textContent = '已恢复默认地址。服务中的登录状态未更改。';
 };
 $('connect').onsubmit = async event => {
@@ -27,7 +25,7 @@ $('connect').onsubmit = async event => {
     const origin = normalizeOrigin($('origin').value);
     const entry = $('entry').value;
     const url = entryUrl(origin, entry);
-    localStorage.setItem(key, JSON.stringify({ origin, entry }));
+    localStorage.setItem(key, JSON.stringify({ origin, entry, flowVersion: 3 }));
     if (!Capacitor.isNativePlatform()) {
       $('status').textContent = '网页预览已验证地址：' + url + '。应用内连接需安装移动应用；本预览不会访问服务。';
       return;
@@ -39,7 +37,7 @@ $('connect').onsubmit = async event => {
     }
     if (android) {
       await RemoteBrowser.open({ url });
-      $('status').textContent = '请在连接窗口中登录，并按提示输入电脑配对码。';
+      $('status').textContent = '账号页已打开。登录后选择你已绑定的电脑。';
       return;
     }
     await InAppBrowser.openInWebView({ url, options: {

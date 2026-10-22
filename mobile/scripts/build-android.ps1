@@ -27,7 +27,7 @@ Push-Location android
 try { Invoke-Checked '.\gradlew.bat' @('--no-daemon', '--console=plain', ':app:testDebugUnitTest', 'assembleDebug') }
 finally { Pop-Location }
 New-Item -ItemType Directory -Force build | Out-Null
-$apkOutput = 'build/PocketAgentDesk-0.2.0-debug.apk'
+$apkOutput = 'build/PocketAgentDesk-0.3.0-debug.apk'
 Copy-Item android/app/build/outputs/apk/debug/app-debug.apk $apkOutput -Force
 Invoke-Checked "$AndroidSdk/build-tools/36.0.0/apksigner.bat" @('verify', '--verbose', '--print-certs', $apkOutput)
 Get-FileHash $apkOutput -Algorithm SHA256

@@ -19,6 +19,18 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public class FirstLoginTest {
+    @Test public void accountNavigationReturnsToTheSameOriginAccountPage() {
+        Intent intent = new Intent(RuntimeEnvironment.getApplication(), RemoteBrowserActivity.class)
+            .putExtra("url", "https://example.com:8443/");
+        try (var controller = Robolectric.buildActivity(RemoteBrowserActivity.class, intent).setup()) {
+            RemoteBrowserActivity activity = controller.get();
+            activity.getWindow().getDecorView().findViewWithTag("account-navigation").performClick();
+            WebView web = ReflectionHelpers.getField(activity, "web");
+            assertEquals("https://example.com:8443/account", web.getUrl());
+            web.getWebViewClient().onPageFinished(web, "https://example.com:8443/account");
+            assertTrue(shadowOf(web).getLastEvaluatedJavascript().contains("data-pad-theme"));
+        }
+    }
     @Test public void freshBrowserShowsNativeCredentialsAndCanCancelWithoutLogin() {
         Intent intent = new Intent(RuntimeEnvironment.getApplication(), RemoteBrowserActivity.class)
             .putExtra("url", "https://example.com/");

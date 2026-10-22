@@ -18,20 +18,24 @@ function launch(platform, saved = {}) {
   vm.runInContext(code, context);
   return { nodes, calls, submit: id => nodes.get('connect').onsubmit({ preventDefault() {}, submitter: { id } }) };
 }
-test('Android migrates stale account entry and opens native first-login browser', async () => {
-  const app = launch('android', { origin: DEFAULT_ORIGIN, entry: 'account' });
-  assert.equal(app.nodes.get('entry').value, 'home');
-  assert.equal(app.nodes.get('onboarding').hidden, false);
+test('Android migrates legacy pairing settings to personal account entry', async () => {
+  const app = launch('android', { origin: DEFAULT_ORIGIN, entry: 'home' });
+  assert.equal(app.nodes.get('entry').value, 'account');
   await app.submit('open');
   assert.equal(app.calls[0][0], 'native');
-  assert.equal(app.calls[0][1].url, DEFAULT_ORIGIN + '/');
+  assert.equal(app.calls[0][1].url, DEFAULT_ORIGIN + '/account');
 });
 test('iOS retains its selected entry and official browser', async () => {
   const app = launch('ios', { entry: 'account' });
   await app.submit('open');
   assert.equal(app.calls[0][0], 'webview');
   assert.equal(app.calls[0][1].url, DEFAULT_ORIGIN + '/account');
-  assert.equal(app.nodes.get('onboarding').hidden, true);
+});
+test('explicit current-version home choice is preserved; reset returns to account', () => {
+  const app = launch('android', { entry: 'home', flowVersion: 3 });
+  assert.equal(app.nodes.get('entry').value, 'home');
+  app.nodes.get('forget').onclick();
+  assert.equal(app.nodes.get('entry').value, 'account');
 });
 test('web preview and rejected URLs never open a remote browser', async () => {
   const preview = launch('web'); await preview.submit('open'); assert.equal(preview.calls.length, 0);

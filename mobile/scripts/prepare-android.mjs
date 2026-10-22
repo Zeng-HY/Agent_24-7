@@ -12,7 +12,8 @@ await replace('android/app/build.gradle', 'android {', 'android {\n    buildTool
 await replace('android/app/build.gradle', 'dependencies {', 'dependencies {\n    testImplementation "org.robolectric:robolectric:4.17"');
 await replace('android/app/build.gradle', 'buildToolsVersion "36.0.0"', 'buildToolsVersion "36.0.0"\n    testOptions { unitTests.includeAndroidResources = true }');
 const appGradle = await readFile('android/app/build.gradle', 'utf8');
-await writeFile('android/app/build.gradle', appGradle.replace(/versionCode \d+/, 'versionCode 2').replace(/versionName "[^"]+"/, 'versionName "0.2.0"'));
+await writeFile('android/app/build.gradle', appGradle.replace(/versionCode \d+/, 'versionCode 3').replace(/versionName "[^"]+"/, 'versionName "0.3.0"'));
+await copyFile('dist/account-theme.js', 'android/app/src/main/assets/account-theme.js');
 await replace('android/app/src/main/AndroidManifest.xml', 'android:allowBackup="true"',
   'android:allowBackup="false"\n        android:usesCleartextTraffic="false"');
 await replace('android/app/src/main/AndroidManifest.xml',
