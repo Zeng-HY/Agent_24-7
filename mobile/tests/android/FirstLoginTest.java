@@ -7,6 +7,7 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import androidx.appcompat.app.AlertDialog;
 import org.junit.Test;
+import org.junit.Before;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
@@ -19,6 +20,10 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public class FirstLoginTest {
+    @Before public void skipNetworkUpdateCheck() {
+        RuntimeEnvironment.getApplication().getSharedPreferences("app-updates",0)
+            .edit().putLong("checked",System.currentTimeMillis()).commit();
+    }
     @Test public void normalPageHasNoNativeAddressToolbarOrInjectedTheme() {
         Intent intent = new Intent(RuntimeEnvironment.getApplication(), RemoteBrowserActivity.class)
             .putExtra("url", "https://example.com:8443/account");

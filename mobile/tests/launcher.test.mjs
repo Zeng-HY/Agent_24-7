@@ -11,7 +11,7 @@ function launch(platform, saved = {}) {
     document: { getElementById(id) { if (!nodes.has(id)) nodes.set(id, {}); return nodes.get(id); } },
     localStorage: { getItem: () => JSON.stringify(saved), setItem() {}, removeItem() {} },
     Capacitor: { getPlatform: () => platform, isNativePlatform: () => platform !== 'web' },
-    registerPlugin: () => ({ open: async x => calls.push(['native', x]) }),
+    registerPlugin: () => ({ open: async x => calls.push(['native', x]), checkUpdate: async () => calls.push(['update']) }),
     InAppBrowser: browser, DefaultWebViewOptions: {}, DefaultSystemBrowserOptions: {},
     DEFAULT_ORIGIN, normalizeOrigin, entryUrl
   });
@@ -42,4 +42,12 @@ test('web preview and rejected URLs never open a remote browser', async () => {
   const app = launch('android'); app.nodes.get('origin').value = 'https://user:secret@example.com/';
   await app.submit('open'); assert.equal(app.calls.length, 0);
   assert.equal(app.nodes.get('open').disabled, false);
+});
+test('only Android exposes the native update action', async () => {
+  const app=launch('android');
+  assert.equal(app.nodes.get('update').hidden,false);
+  await app.nodes.get('update').onclick();
+  assert.deepEqual(app.calls,[['update']]);
+  assert.equal(launch('ios').nodes.get('update').hidden,true);
+  assert.equal(launch('web').nodes.get('update').hidden,true);
 });

@@ -44,6 +44,18 @@ npm run dev
 
 ## 接入方式
 
+### Android 应用内更新
+
+0.5.0 起，在启动页的「连接设置 → 检查 App 更新」手动检查；进入遥控页时每天最多自动检查一次。检查失败静默等待一小时后重试，手动检查不受这个间隔限制。「稍后」跳过该版本的自动提醒，仍可手动更新。首次从 0.4.0 或更早版本升级须手动覆盖安装一次。
+
+版本源为本仓库 GitHub Releases，需要手机可访问 GitHub。只识别 `PocketAgentDesk-版本名-版本号.apk`，例如 `PocketAgentDesk-0.5.0-5.apk`；优先选择更大的 Android versionCode，忽略 Windows/iOS 文件。debug 测试包允许预发布版，正式包只接收非预发布版。发布资产必须有 GitHub 返回的 SHA-256 digest。
+
+下载由原生层执行，显示进度，可取消和重试；HTTPS 重定向限制在 GitHub 官方下载主机，最大 128 MiB。下载后核对长度、SHA-256、包名、版本和与已安装 APK 完全相同的签名。使用 Android 系统安装器覆盖安装，不静默安装、不卸载或清空数据。首次安装更新需要用户允许本应用的“安装未知应用”权限；拒绝权限或取消安装不影响现有版本。
+
+发布下一版：更新 `mobile/android-version.json` 的 name 并递增 code，在**保留原签名密钥的同一构建环境**运行 `mobile/scripts/build-android.ps1`。测试后把输出 APK 附到对应提交的 GitHub Release，保留生成的文件名；测试包选 Pre-release。仅 push 源码、Windows Actions 产物或保存 Release 草稿均不会通知手机。不要用其他电脑自动生成的 debug key 签包，不提交签名私钥。正式签名迁移另行安排，当前更新器保守拒绝不同签名。
+
+自动测试覆盖版本选择、更新来源、版本回退、包名和签名拒绝，以及原生更新入口。Android 系统安装确认、厂商权限界面和覆盖后登录状态仍需真机验收。
+
 启动页只保存 HTTPS origin 和 home/account 入口。默认 IP 为当前服务，域名启用后可直接在界面替换。`com.pocketagentdesk.remote` 仅为候选 bundle ID，未注册 Apple App ID，显示名也可修改。
 
 iOS 应用通过官方 InAppBrowser 的独立 WKWebView 打开服务；Android 主窗口见上节。远端页面不放进带 Capacitor 桥接的主 WebView。服务器正常返回 remote.html 并注入 window.MACHINE，保留 static、诊断测速和全部业务接口。当前单用户使用现有配对入口；多用户云端部署完成后选择多用户账号入口。不替换或绕过另一任务的认证。

@@ -9,6 +9,10 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "RemoteBrowser")
 public class RemoteBrowserPlugin extends Plugin {
     @PluginMethod
+    public void checkUpdate(PluginCall call) {
+        getActivity().runOnUiThread(() -> { AppUpdater.check(getActivity(), true); call.resolve(); });
+    }
+    @PluginMethod
     public void open(PluginCall call) {
         String url = call.getString("url", "");
         if (!BrowserPolicy.validEntry(url)) { call.reject("仅支持 HTTPS 服务入口"); return; }

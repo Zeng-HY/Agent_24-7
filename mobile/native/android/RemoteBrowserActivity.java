@@ -152,6 +152,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             }
         });
         web.loadUrl(entry);
+        AppUpdater.check(this, false);
     }
 
     private void fail(String text) { loadFailed = true; status.setText(text); failurePanel.setVisibility(View.VISIBLE); web.setVisibility(View.GONE); }
