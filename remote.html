@@ -1212,15 +1212,14 @@ setMode('chat'); replaceUIState();
   const toggle=make('input','setting-switch'+('switch' in HTMLInputElement.prototype?'':' drawn'));
   toggle.type='checkbox';toggle.id='diagnosticSpeedSwitch';toggle.setAttribute('switch','');toggle.checked=enabled;
   row.append(make('span','','显示操作耗时'),toggle);
-  const probe=make('button','menu-row setting-row','测当前连接（3 次小请求）');probe.type='button';probe.id='diagnosticProbe';
+  const probe=make('button','menu-row setting-row','测一下连接');probe.type='button';probe.id='diagnosticProbe';
   const clear=make('button','menu-row setting-row','清空记录');clear.type='button';
-  const note=make('div','setting-note','记录真实图片上传、消息提交的请求耗时，包含网络和电脑处理，不含模型生成，也不是纯带宽测速。记录仅保留在本页内存，不保存消息或文件名。');
   const output=make('div','setting-note');output.id='diagnosticResults';output.style.whiteSpace='pre-wrap';output.setAttribute('aria-live','polite');
-  group.append(row,probe,clear);settings.append(title,group,note,output);
-  function format(r){return r.label+'：'+(r.ms/1000).toFixed(3)+' 秒'+(r.bytes?' · '+(r.bytes/1000000).toFixed(2)+' MB':'')+' · '+r.result+(r.background?'（切过后台，仅供参考）':'');}
+  group.append(row,probe,clear);document.addEventListener('DOMContentLoaded',()=>settings.append(title,group,output));
+  function format(r){return r.label+'：'+(r.ms/1000).toFixed(3)+' 秒'+(r.bytes?' · '+(r.bytes/1000000).toFixed(2)+' MB':'')+' · '+r.result+(r.background?'（切过后台）':'');}
   function paint(){
     toggle.checked=enabled;probe.disabled=!enabled||probing;clear.disabled=!records.length;
-    output.textContent=records.length?records.map(r=>r.time+' '+format(r)).join('\n\n'):(enabled?'已开启，下一次上传或提交后会显示记录。':'未开启');
+    output.textContent=records.length?records.map(r=>r.time+' '+format(r)).join('\n\n'):(enabled?'暂无记录':'');
   }
   function add(r,epoch,notify=true){
     if(!enabled||epoch!==generation)return;

@@ -84,11 +84,11 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (BrowserPolicy.sameOrigin(entry, request.getUrl().toString())) return false;
-                status.setText("已停止跳转到其他服务地址。请返回启动页核对地址。");
+                status.setText("已阻止打开其他地址");
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                if (!BrowserPolicy.sameOrigin(entry, url)) { view.stopLoading(); fail("已停止跳转到其他服务地址。"); return; }
+                if (!BrowserPolicy.sameOrigin(entry, url)) { view.stopLoading(); fail("已阻止打开其他地址"); return; }
                 loadFailed = false; failurePanel.setVisibility(View.GONE); web.setVisibility(View.VISIBLE);
             }
             @Override public void onPageFinished(WebView view, String url) {
@@ -104,19 +104,19 @@ public class RemoteBrowserActivity extends AppCompatActivity {
                 askForLogin(handler);
             }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                handler.cancel(); fail("证书验证失败，已停止连接。请让管理员检查服务证书，不要关闭安全验证。");
+                handler.cancel(); fail("证书无效，已停止连接");
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) fail("暂时连不上服务。检查网络和服务地址，再点重试；公网入口无需 Tailscale。");
+                if (request.isForMainFrame()) fail("连不上服务");
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
                 if (!request.isForMainFrame()) return;
                 int code = response.getStatusCode();
-                fail(code == 401 ? "登录已过期或尚未登录。点“账号”重新登录。"
-                    : code == 403 ? "尚未选择可访问的电脑，或绑定已被撤销。点“账号”查看。"
-                    : code == 404 ? "这个页面不存在。点“账号”返回电脑列表。"
-                    : code == 502 || code == 503 || code == 504 ? "电脑暂时无法连接。请确认电脑已开机且接入服务正在运行，然后重试。"
-                    : "服务返回 HTTP " + code + "。稍后重试，或联系服务管理员。");
+                fail(code == 401 ? "请重新登录"
+                    : code == 403 ? "没有可用的电脑"
+                    : code == 404 ? "页面不存在"
+                    : code == 502 || code == 503 || code == 504 ? "电脑不在线"
+                    : "出错了（HTTP " + code + "）");
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -130,7 +130,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
                 if (!mime.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES, mime.toArray(new String[0]));
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
                 try { startActivityForResult(intent, FILE); }
-                catch (android.content.ActivityNotFoundException e) { fileResult.onReceiveValue(null); fileResult = null; status.setText("未找到文件选择器，请安装系统文件应用。"); }
+                catch (android.content.ActivityNotFoundException e) { fileResult.onReceiveValue(null); fileResult = null; status.setText("没有可用的文件选择器"); }
                 return true;
             }
             @Override public void onPermissionRequest(PermissionRequest request) {
@@ -161,8 +161,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         authHandler = handler;
         LinearLayout fields = new LinearLayout(this); fields.setOrientation(LinearLayout.VERTICAL); fields.setPadding(40, 8, 40, 0);
         TextView help = new TextView(this);
-        help.setText((authAttempts++ > 0 ? "上次登录未通过，请检查账号密码。\n" : "")
-            + "服务地址：" + Uri.parse(entry).getAuthority() + "\n此页面要求额外的服务验证，请使用管理员提供的入口账号。它与个人账号可能不同。");
+        help.setText((authAttempts++ > 0 ? "账号或密码不对\n" : "") + Uri.parse(entry).getAuthority());
         EditText user = new EditText(this); user.setHint("服务账号"); user.setSingleLine(true);
         user.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         EditText password = new EditText(this); password.setHint("服务密码"); password.setSingleLine(true);
@@ -174,7 +173,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             .setOnCancelListener(d -> cancelAuth()).create();
         authDialog.setOnShowListener(d -> authDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             String name = user.getText().toString().trim(), secret = password.getText().toString();
-            if (name.isEmpty() || secret.isEmpty()) { password.setError("请填写服务账号和密码"); return; }
+            if (name.isEmpty() || secret.isEmpty()) { password.setError("请填写账号和密码"); return; }
             HttpAuthHandler pending = authHandler; authHandler = null;
             password.setText(""); authDialog.dismiss(); authDialog = null;
             // Credentials are handed to WebView for this challenge, never stored by the launcher or logged.
@@ -185,7 +184,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
 
     private void cancelAuth() {
         if (authHandler != null) { authHandler.cancel(); authHandler = null; }
-        fail("尚未登录。向服务管理员获取入口账号密码后，点重试。新手机不需要先安装 Tailscale。");
+        fail("请先登录");
     }
     private void requestMedia(PermissionRequest request) {
         if (mediaRequest != null || !BrowserPolicy.sameOrigin(entry, request.getOrigin().toString())) { request.deny(); return; }
