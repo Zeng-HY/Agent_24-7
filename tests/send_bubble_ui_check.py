@@ -35,7 +35,7 @@ window.watch = words => {
     window.frames.push([...document.querySelectorAll('#cvMsgs .bub.user')].filter(n => n.textContent.includes(words)).map(n => {
       const s = getComputedStyle(n);
       return {key: n.dataset.key, problem: n.classList.contains('problem'), line: n.querySelector('.send-receipt')?.textContent || '',
-              bg: s.backgroundColor, opacity: s.opacity};
+              bg: s.backgroundColor, opacity: s.opacity, popping: n.getAnimations().length > 0};
     }));
     requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
@@ -136,7 +136,7 @@ def main():
             frames = frames[next((i for i, f in enumerate(frames) if f), len(frames)):]  # from the tap's first frame on
             counts = sorted({len(f) for f in frames})
             ok(f"{name}: from the tap on, in every frame the message is there exactly once", counts == [1], f"bubbles per frame: {counts}, {len(frames)} frames")
-            looks = {(b["bg"], b["opacity"], b["problem"]) for f in frames for b in f}
+            looks = {(b["bg"], b["opacity"], b["problem"]) for f in frames for b in f if not b["popping"]}  # its pop fades it in (0.25.0)
             ok(f"{name}: always the solid blue bubble, never pale or framed in red", looks == {(BLUE, "1", False)}, looks)
             said = []
             for f in frames:

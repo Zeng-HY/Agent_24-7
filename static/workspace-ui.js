@@ -12,7 +12,7 @@
     const values=[...outbox.values()],done=values.filter(v=>v.state==='delivered').sort((a,b)=>b.started-a.started).slice(0,60),open=values.filter(v=>v.state!=='delivered');
     localStorage.setItem(outboxKey,JSON.stringify([...done,...open]));
   }
-  const css=el('style');css.textContent=`.bub.user.outbox .outbox-refs{font-size:12px;opacity:.8;margin-top:4px}.bub.user.has-receipt{position:relative;margin-bottom:38px}.bub.user .send-receipt{position:absolute;right:6px;top:100%;margin-top:5px;font-size:12px;line-height:16px;font-weight:400;color:var(--muted);white-space:nowrap;pointer-events:none}.bub.user .send-receipt.sending{animation:sendPulse 1.4s ease-in-out infinite}.bub.user .send-receipt.done::before{content:'✓ ';color:var(--green)}@keyframes sendPulse{50%{opacity:.35}}.bub.user.outbox.problem{position:relative}.bub.user.outbox.problem::before{content:'!';position:absolute;left:-30px;top:50%;margin-top:-10px;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font:700 13px/20px -apple-system,sans-serif;text-align:center}.bub.user.outbox.problem button.outbox-state{display:block;border:0;background:transparent;padding:0;margin-top:6px;min-height:28px;color:inherit;font-size:13px;font-weight:600;text-align:left}.bub.user.outbox .message-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.bub.user.outbox.problem .message-actions button{border:0;border-radius:999px;background:rgba(255,255,255,.22);color:#fff;padding:6px 14px;min-height:36px;font-size:13px;font-weight:500}.bub.user.outbox.problem .message-actions button.outbox-replace{background:#fff;color:var(--blue)}.bub.user.outbox .outbox-why{flex-basis:100%;font-size:12px;line-height:1.5;opacity:.85;white-space:normal}.input-test-bar{padding:8px 12px;font-size:12px;background:#fff7ed;color:#92400e}.input-test-bar a{color:inherit}.diagnostic-events{max-height:50dvh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}`;document.head.append(css);
+  const css=el('style');css.textContent=`.bub.user.outbox{transform-origin:100% 100%}.bub.user.outbox .outbox-refs{font-size:12px;opacity:.8;margin-top:4px}.bub.user.has-receipt{position:relative;margin-bottom:38px}.bub.user .send-receipt{position:absolute;right:6px;top:100%;margin-top:5px;font-size:12px;line-height:16px;font-weight:400;color:var(--muted);white-space:nowrap;pointer-events:none}.bub.user .send-receipt.sending{animation:sendPulse 1.4s ease-in-out infinite}.bub.user .send-receipt.done::before{content:'✓ ';color:var(--green)}@keyframes sendPulse{50%{opacity:.35}}.bub.user.outbox.problem{position:relative}.bub.user.outbox.problem::before{content:'!';position:absolute;left:-30px;top:50%;margin-top:-10px;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font:700 13px/20px -apple-system,sans-serif;text-align:center}.bub.user.outbox.problem button.outbox-state{display:block;border:0;background:transparent;padding:0;margin-top:6px;min-height:28px;color:inherit;font-size:13px;font-weight:600;text-align:left}.bub.user.outbox .message-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.bub.user.outbox.problem .message-actions button{border:0;border-radius:999px;background:rgba(255,255,255,.22);color:#fff;padding:6px 14px;min-height:36px;font-size:13px;font-weight:500}.bub.user.outbox.problem .message-actions button.outbox-replace{background:#fff;color:var(--blue)}.bub.user.outbox .outbox-why{flex-basis:100%;font-size:12px;line-height:1.5;opacity:.85;white-space:normal}.input-test-bar{padding:8px 12px;font-size:12px;background:#fff7ed;color:#92400e}.input-test-bar a{color:inherit}.diagnostic-events{max-height:50dvh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}`;document.head.append(css);
   const events=[];
   function logEvent(e){if(!testMode)return;const vv=window.visualViewport;events.push({time:Math.round(performance.now()),event:e.type,inputType:e.inputType||null,composing,version:editVersion,focused:document.activeElement?.id||document.activeElement?.tagName,length:input.value.length,selection:[input.selectionStart,input.selectionEnd],visible:document.visibilityState,viewport:vv?{height:vv.height,top:vv.offsetTop,scale:vv.scale}:null});if(events.length>300)events.shift();}
   function saveScene(){
@@ -38,8 +38,24 @@
     const item={rid,app:me.app,id:me.id,started:ticket.started,state:'sending',note:ticket.note,text:ticket.text,originalText:extra.originalText??input.value,transport:extra.transport||'legacy',body:extra.body||null,images:extra.images||[],settings:extra.settings||null,base:extra.base||null,references:extra.references||[]};
     outbox.set(rid,item);try{saveOutbox();}catch(e){outbox.delete(rid);throw Error('无法保存发送副本，未发送。请释放浏览器存储空间后重试');}
     if(!extra.plan){input.value='';editVersion++;writeDraft(me,'');window.referencesUI?.clear(me);autoGrow();updateSendButton();}
-    requestAnimationFrame(()=>{if(cur&&chatKey(cur)===chatKey(me))jumpToLatest();});  // the caller has drawn the bubble: show it
+    // The caller draws the bubble next: it springs up out of the send button's corner while the list glides up to it,
+    // as WhatsApp's and iMessage's do (10-22). The list used to jump.
+    // (a microtask: it runs once the caller has drawn the bubble, before the frame is painted)
+    justSent.set(rid,performance.now());const box=$('cvMsgs'),from=box.scrollTop;
+    queueMicrotask(()=>{if(cur&&chatKey(cur)===chatKey(me))glide(box,from);});
     saveScene();return item;
+  }
+  const justSent=new Map(),still=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function pop(node){if(still()||!node.animate)return;node.animate([{opacity:0,transform:'translateY(24px) scale(.78)'},{opacity:1,offset:.3},{opacity:1,transform:'none'}],{duration:460,easing:'cubic-bezier(.2,1.3,.32,1)'});}
+  let gliding=0;$('cvMsgs').addEventListener('touchstart',()=>{gliding=0;},{passive:true});  // a finger takes over
+  function glide(box,from){
+    const end=()=>box.scrollHeight-box.clientHeight;
+    if(still()||end()-from>box.clientHeight*1.5||end()<=from+1){jumpToLatest();return;}  // from far up: straight there
+    const id=++gliding,start=performance.now();box.scrollTop=from;
+    const step=now=>{if(gliding!==id)return;const t=Math.min(1,Math.max(0,now-start)/320);
+      box.scrollTop=Math.max(box.scrollTop,Math.round(from+(end()-from)*(1-Math.pow(1-t,3))));  // never back up: a redraw may be at the end already
+      if(t<1)requestAnimationFrame(step);else{gliding=0;jumpToLatest();}};
+    requestAnimationFrame(step);
   }
   // receivedAt: when the PC confirmed it; the bubble stands in until the conversation's own copy of it comes
   function received(item){if(item.state==='delivered'&&!item.receivedAt)item.receivedAt=Date.now();}
@@ -116,6 +132,7 @@
   }
   function paintReceipt(node,said){node.classList.add('has-receipt');node.append(el('span','send-receipt '+said.k,said.text));}
   function renderOutbox(node,item){
+    const sent=justSent.get(item.rid);justSent.delete(item.rid);if(performance.now()-sent<1500)queueMicrotask(()=>pop(node));  // drawn for the first time, just sent (and by then in the page)
     node.className='bub user outbox'+(item.line?'':' problem');node.replaceChildren();
     node.append(document.createTextNode(item.originalText||item.text||''));
     if(item.images?.length)codexUI?.renderImages(node,item.images.map(v=>v.meta).filter(Boolean));
