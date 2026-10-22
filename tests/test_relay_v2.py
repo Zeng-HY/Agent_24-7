@@ -134,6 +134,25 @@ class V2Tests(unittest.IsolatedAsyncioTestCase):
         async with self.client.post(self.origin+'/account/reset',headers=headers,json={'code':reset,'password':'changed-password'}) as r:self.assertEqual(r.status,200)
         self.assertFalse(self.store.valid(token))
 
+    async def test_six_digit_codes_sign_in_on_the_page_and_logins_wait_their_turn(self):
+        headers={'Origin':self.origin}
+        async with self.client.post(self.origin+'/account/register',headers=headers,json={'email':'code@example.test','password':'code-account-password'}) as r:self.assertEqual(r.status,200)
+        address,kind,code,pin=self.mail.sent[-1]
+        self.assertEqual((address,kind),('code@example.test','signup'));self.assertRegex(pin,r'^[0-9]{6}$')
+        async with self.client.post(self.origin+'/account/verify',headers=headers,json={'email':'code@example.test','pin':'12345x'}) as r:self.assertEqual(r.status,400)
+        async with self.client.post(self.origin+'/account/verify',headers=headers,json={'email':'code@example.test','pin':pin}) as r:
+            self.assertEqual(r.status,200);session=r.cookies[COOKIE].value
+        async with self.client.get(self.origin+'/account/state',headers={'Cookie':COOKIE+'='+session}) as r:self.assertEqual(r.status,200)  # signed in by the code
+        async with self.client.post(self.origin+'/account/forgot',headers=headers,json={'email':'code@example.test'}) as r:self.assertEqual(r.status,200)
+        pin=self.mail.sent[-1][3]
+        async with self.client.post(self.origin+'/account/reset',headers=headers,json={'email':'code@example.test','pin':pin,'password':'code-password-changed'}) as r:
+            self.assertEqual(r.status,200);self.assertIn(COOKIE,r.cookies)
+        self.assertTrue(await asyncio.to_thread(self.store.login,'code@example.test','code-password-changed'))
+        # three at once: all signed in (two password checks run at a time; the third waits rather than 429)
+        async def login(name):
+            async with self.client.post(self.origin+'/account/login',headers=headers,json={'name':name,'password':'password-for-'+name}) as r:return r.status
+        self.assertEqual(await asyncio.gather(login('alice'),login('bob'),login('alice')),[200,200,200])
+
     async def test_cross_device_stream_forgery_and_no_post_replay_on_reconnect(self):
         with self.assertRaises(WSServerHandshakeError) as denied:
             await self.client.ws_connect(self.origin+'/tunnel/connect',headers={'Authorization':'Bearer wrong'})

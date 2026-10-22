@@ -222,7 +222,7 @@ def bind_window(binding):
             except Exception:continue
             if result.get('approved'):
                 if not re.fullmatch('[0-9a-f]{32}',str(result.get('device',''))):continue
-                binding['device']=result['device'];save(binding);approved.set();window.destroy();return
+                binding['device']=result['device'];save(binding);approved.set();time.sleep(1.2);window.destroy();return
     threading.Thread(target=poll,daemon=True).start()
     webview.start(gui='edgechromium',private_mode=True,debug=False)
     return approved.is_set()

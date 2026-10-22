@@ -38,4 +38,45 @@ class IdentityTests(unittest.TestCase):
             self.assertTrue(1<=result.exception.seconds<=31)
 
 
+    def test_six_digit_codes_sign_up_and_reset_with_a_few_tries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store=Identity(Path(temp)/'state.db')
+            code=store.email_grant('signup','new@example.test','new-account-password')
+            self.assertRegex(code.pin,r'^[0-9]{6}$')
+            wrong='%06d'%((int(code.pin)+1)%10**6)
+            with self.assertRaisesRegex(ValueError,'验证码不对'):store.consume_pin('new@example.test','signup',wrong)
+            with self.assertRaisesRegex(ValueError,'验证码已失效'):store.consume_pin('new@example.test','reset',code.pin)  # a sign-up code resets nothing
+            owner=store.consume_pin(' New@Example.test ','signup',code.pin)
+            self.assertEqual(store.user('new@example.test')['id'],owner)
+            with self.assertRaisesRegex(ValueError,'验证码已失效'):store.consume_pin('new@example.test','signup',code.pin)  # once
+            session=store.login('new@example.test','new-account-password')
+            with store.connect() as db:db.execute('DELETE FROM attempts')  # 10 tries an address per 15 minutes; a fresh quarter of an hour
+            # five wrong codes spend it; a new one works, and the link of the spent one is gone too
+            spent=store.email_grant('reset','new@example.test')
+            for _ in range(4):
+                with self.assertRaisesRegex(ValueError,'验证码不对'):store.consume_pin('new@example.test','reset','000000' if spent.pin!='000000' else '111111','another-password')
+            with self.assertRaisesRegex(ValueError,'验证码已失效'):store.consume_pin('new@example.test','reset','000000' if spent.pin!='000000' else '111111','another-password')
+            with self.assertRaisesRegex(ValueError,'验证码已失效'):store.consume_pin('new@example.test','reset',spent.pin,'another-password')
+            with self.assertRaises(ValueError):store.consume_email(spent,'another-password')
+            fresh=store.email_grant('reset','new@example.test')
+            self.assertEqual(store.consume_pin('new@example.test','reset',fresh.pin,'another-password'),owner)
+            self.assertFalse(store.valid(session))
+            self.assertTrue(store.login('new@example.test','another-password'))
+            self.assertTrue(store.valid(store.start_session(owner)))
+
+    def test_mail_budget_spent_only_by_mail_sent_and_a_full_house_says_so_for_everyone(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store=Identity(Path(temp)/'state.db',account_limit=2)
+            # 忘记密码 and 重新发送 for addresses with nothing to send: no mail, no share of the hour's budget
+            for i in range(130):
+                self.assertIsNone(store.email_grant('reset',f'nobody{i}@example.test'))
+                self.assertIsNone(store.resend_signup(f'nobody{i}@example.test'))
+            code=store.email_grant('signup','real@example.test','real-account-password')
+            store.consume_pin('real@example.test','signup',code.pin)
+            store.register('alice','alice-password',store.grant('invite'))
+            # full: the same answer for a taken address and a new one
+            for email in ('real@example.test','new@example.test'):
+                with self.assertRaisesRegex(ValueError,'名额已满'):store.email_grant('signup',email,'some-password-here')
+
+
 if __name__=='__main__':unittest.main()

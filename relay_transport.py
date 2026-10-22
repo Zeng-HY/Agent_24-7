@@ -89,7 +89,8 @@ class TunnelHub:
     async def proxy(self, request, token, device, target):
         conn=self.connections.get(device)
         if not conn or not self.allowed(conn,token): raise web.HTTPServiceUnavailable(text='电脑未连接')
-        if self.active>=64 or sum(item[0] is conn for item in self.pending.values())>=16: raise web.HTTPServiceUnavailable(headers={'Retry-After':'2'})
+        # 16 at a time per computer (an open chat holds one for as long as it is open); 256 in all
+        if self.active>=256 or sum(item[0] is conn for item in self.pending.values())>=16: raise web.HTTPServiceUnavailable(headers={'Retry-After':'2'})
         self.active+=1
         ident=secrets.token_hex(16)
         future=asyncio.get_running_loop().create_future()

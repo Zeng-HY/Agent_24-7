@@ -78,4 +78,56 @@ class UI(unittest.TestCase):
                 loop.call_soon_threadsafe(loop.stop);thread.join();loop.close()
 
 
+    def test_codes_typed_on_the_page_sign_in_and_reset_and_closed_sign_up_says_so(self):
+        """Sign-up and 忘记密码 with the six digits from the email, typed where they were asked for; without mail
+        set up on the server, 暂未开放注册 instead of the way in."""
+        with tempfile.TemporaryDirectory() as temp:
+            store=Identity(Path(temp)/'state.db');mail=Mail()
+            service=Service('https://relay.test',store,mail)
+            loop=asyncio.new_event_loop();runner=web.AppRunner(service.app,access_log=None)
+            async def start():
+                await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+                return site._server.sockets[0].getsockname()[1]
+            thread=threading.Thread(target=loop.run_forever,daemon=True);thread.start()
+            port=asyncio.run_coroutine_threadsafe(start(),loop).result()
+            try:
+                with sync_playwright() as pw:
+                    browser=pw.chromium.launch(channel='chrome',headless=True)
+                    page=browser.new_context(viewport={'width':390,'height':844}).new_page();errors=[]
+                    page.on('pageerror',lambda e:errors.append(str(e)))
+                    def forward(route):
+                        request=route.request;p=urlsplit(request.url)
+                        headers=request.all_headers();headers['Host']='relay.test'
+                        conn=http.client.HTTPConnection('127.0.0.1',port,timeout=10)
+                        conn.request(request.method,p.path+('?'+p.query if p.query else ''),body=request.post_data_buffer,headers=headers)
+                        response=conn.getresponse()
+                        route.fulfill(status=response.status,headers={k:v for k,v in response.getheaders() if k.lower() not in ('connection','content-length')},body=response.read())
+                        conn.close()
+                    page.route('https://relay.test/**',forward)
+                    page.goto('https://relay.test/account');page.locator('#mode').wait_for(state='visible')
+                    page.locator('#mode').click();page.locator('#name').fill('typed@example.test');page.locator('#password').fill('typed-account-password')
+                    page.locator('#submit').click()
+                    page.locator('#code').wait_for(state='visible')
+                    self.assertEqual((page.locator('#title').inner_text(),page.locator('#sentTo').inner_text()),('输入验证码','typed@example.test'))
+                    page.locator('#code').press_sequentially(mail.sent[-1][3])  # the sixth digit sends it
+                    page.locator('#signed').wait_for(state='visible')
+                    page.locator('#menuButton').click();page.get_by_role('button',name='退出登录',exact=True).click()
+                    page.locator('#forgot').wait_for(state='visible');page.locator('#forgot').click()
+                    page.locator('#name').fill('typed@example.test');page.locator('#submit').click()
+                    page.locator('#code').wait_for(state='visible')
+                    self.assertEqual(page.locator('#title').inner_text(),'重置密码')
+                    page.locator('#code').fill(mail.sent[-1][3]);page.locator('#password').fill('typed-password-changed');page.locator('#submit').click()
+                    page.locator('#signed').wait_for(state='visible')
+                    self.assertTrue(store.login('typed@example.test','typed-password-changed'))
+                    mail.ready=False  # no mail on the server: no way in that cannot work
+                    page.locator('#menuButton').click();page.get_by_role('button',name='退出登录',exact=True).click()
+                    page.reload();page.locator('#closed').wait_for(state='visible')
+                    self.assertEqual((page.locator('#closed').inner_text(),page.locator('#mode').is_visible(),page.locator('#forgot').is_visible()),('暂未开放注册',False,False))
+                    self.assertEqual(errors,[])
+                    browser.close()
+            finally:
+                asyncio.run_coroutine_threadsafe(runner.cleanup(),loop).result()
+                loop.call_soon_threadsafe(loop.stop);thread.join();loop.close()
+
+
 if __name__=='__main__':unittest.main()
