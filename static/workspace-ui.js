@@ -12,7 +12,7 @@
     const values=[...outbox.values()],done=values.filter(v=>v.state==='delivered').sort((a,b)=>b.started-a.started).slice(0,60),open=values.filter(v=>v.state!=='delivered');
     localStorage.setItem(outboxKey,JSON.stringify([...done,...open]));
   }
-  const css=el('style');css.textContent=`.bub.user.outbox .outbox-state{display:block;margin-top:4px;font-size:12px;opacity:.8}.bub.user.outbox .outbox-refs{font-size:12px;opacity:.8;margin-top:4px}.bub.user.outbox.problem{background:#fff;color:var(--text);border:1px solid #fca5a5}.bub.user.outbox.problem button.outbox-state{border:0;background:transparent;padding:0;min-height:28px;color:var(--red);font-size:13px;font-weight:500;opacity:1;text-align:left}.bub.user.outbox .message-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.bub.user.outbox.problem .message-actions button{border:0;border-radius:999px;background:var(--bg);color:var(--text);padding:6px 14px;min-height:36px;font-size:13px;font-weight:500}.bub.user.outbox.problem .message-actions button.outbox-replace{background:#eef2ff;color:var(--blue)}.bub.user.outbox .outbox-why{flex-basis:100%;font-size:12px;line-height:1.5;color:var(--muted);white-space:normal}.input-test-bar{padding:8px 12px;font-size:12px;background:#fff7ed;color:#92400e}.input-test-bar a{color:inherit}.diagnostic-events{max-height:50dvh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}`;document.head.append(css);
+  const css=el('style');css.textContent=`.bub.user.outbox .outbox-refs{font-size:12px;opacity:.8;margin-top:4px}.bub.user.has-receipt{position:relative;margin-bottom:38px}.bub.user .send-receipt{position:absolute;right:6px;top:100%;margin-top:5px;font-size:12px;line-height:16px;font-weight:400;color:var(--muted);white-space:nowrap;pointer-events:none}.bub.user .send-receipt.sending{animation:sendPulse 1.4s ease-in-out infinite}.bub.user .send-receipt.done::before{content:'✓ ';color:var(--green)}@keyframes sendPulse{50%{opacity:.35}}.bub.user.outbox.problem{position:relative}.bub.user.outbox.problem::before{content:'!';position:absolute;left:-30px;top:50%;margin-top:-10px;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font:700 13px/20px -apple-system,sans-serif;text-align:center}.bub.user.outbox.problem button.outbox-state{display:block;border:0;background:transparent;padding:0;margin-top:6px;min-height:28px;color:inherit;font-size:13px;font-weight:600;text-align:left}.bub.user.outbox .message-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.bub.user.outbox.problem .message-actions button{border:0;border-radius:999px;background:rgba(255,255,255,.22);color:#fff;padding:6px 14px;min-height:36px;font-size:13px;font-weight:500}.bub.user.outbox.problem .message-actions button.outbox-replace{background:#fff;color:var(--blue)}.bub.user.outbox .outbox-why{flex-basis:100%;font-size:12px;line-height:1.5;opacity:.85;white-space:normal}.input-test-bar{padding:8px 12px;font-size:12px;background:#fff7ed;color:#92400e}.input-test-bar a{color:inherit}.diagnostic-events{max-height:50dvh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}`;document.head.append(css);
   const events=[];
   function logEvent(e){if(!testMode)return;const vv=window.visualViewport;events.push({time:Math.round(performance.now()),event:e.type,inputType:e.inputType||null,composing,version:editVersion,focused:document.activeElement?.id||document.activeElement?.tagName,length:input.value.length,selection:[input.selectionStart,input.selectionEnd],visible:document.visibilityState,viewport:vv?{height:vv.height,top:vv.offsetTop,scale:vv.scale}:null});if(events.length>300)events.shift();}
   function saveScene(){
@@ -38,9 +38,12 @@
     const item={rid,app:me.app,id:me.id,started:ticket.started,state:'sending',note:ticket.note,text:ticket.text,originalText:extra.originalText??input.value,transport:extra.transport||'legacy',body:extra.body||null,images:extra.images||[],settings:extra.settings||null,base:extra.base||null,references:extra.references||[]};
     outbox.set(rid,item);try{saveOutbox();}catch(e){outbox.delete(rid);throw Error('无法保存发送副本，未发送。请释放浏览器存储空间后重试');}
     if(!extra.plan){input.value='';editVersion++;writeDraft(me,'');window.referencesUI?.clear(me);autoGrow();updateSendButton();}
+    requestAnimationFrame(()=>{if(cur&&chatKey(cur)===chatKey(me))jumpToLatest();});  // the caller has drawn the bubble: show it
     saveScene();return item;
   }
-  function update(me,ticket){const rid=ticket.request_id||ticket.rid,item=outbox.get(rid);if(!item)return;Object.assign(item,{state:ticket.state,note:ticket.note,offset:ticket.offset,check_text:ticket.check_text,draft:ticket.draft||null});try{saveOutbox();}catch(e){}if(cur&&chatKey(cur)===chatKey(me)){renderMsgs(currentMessages);window.claudeUI?.renderQueue?.();}}
+  // receivedAt: when the PC confirmed it; the bubble stands in until the conversation's own copy of it comes
+  function received(item){if(item.state==='delivered'&&!item.receivedAt)item.receivedAt=Date.now();}
+  function update(me,ticket){const rid=ticket.request_id||ticket.rid,item=outbox.get(rid);if(!item)return;Object.assign(item,{state:ticket.state,note:ticket.note,offset:ticket.offset,check_text:ticket.check_text,draft:ticket.draft||null});received(item);try{saveOutbox();}catch(e){}if(cur&&chatKey(cur)===chatKey(me)){renderMsgs(currentMessages);window.claudeUI?.renderQueue?.();}}
   // Text sitting in Claude's box on the PC turned this message away (10-12: an "e" typed there). Send it again, replacing
   // exactly that text: the card goes, the message comes back as it was (text, pictures, references) and is sent at once.
   async function resendReplacing(item){
@@ -67,36 +70,63 @@
     if(hasText||hasImages||window.referencesUI?.count()){toast('当前有新草稿，请先处理；发送副本仍保留在卡片中',true);return;}
     input.value=item.originalText??item.text??'';editVersion++;saveDraft();autoGrow();
     if(item.references?.length)referencesUI.restore(cur,item.references);
-    if(['codex','claude'].includes(item.app))await codexUI.restoreSubmission(item);
+    if(['codex','claude','deepseek'].includes(item.app))await codexUI.restoreSubmission(item);
     updateSendButton();input.focus();
+  }
+  // The conversation's own copy of a message sent from here, once the PC's record has it: Codex's and DeepSeek's by the
+  // request's number, Claude's by its words (the same words sent twice take one row each, in order). Words are no receipt
+  // for Codex or DeepSeek: there they only find the copy of a message the PC has confirmed by its number already, in a
+  // record that keeps no number (older Codex), so that its bubble does not stay beside it.
+  const plain=t=>String(t||'').replace(/^(\s*\[图片\])+/,'').replace(/\s+/g,'');
+  function sameMessage(m,item,words){
+    if(m.client_request_id===item.rid||m.request_id&&m.request_id===item.rid)return true;
+    if(item.transport==='legacy'?item.app==='codex':item.state!=='delivered'||m.client_request_id||m.request_id)return false;
+    const want=plain(item.check_text||item.text),after=new Date(m.time).getTime()-item.started;
+    return !!want&&words(m)===want&&after>-120000&&after<1800000;  // Claude may read it from its queue a while later
+  }
+  // What the line under the bubble says; null: a problem, said in the bubble with what can be done about it (10-22).
+  // Every message sent from here is the blue bubble at once and only this line changes. Before, it was pale on its way,
+  // turned into a white box framed in red when the PC had not confirmed it within 25 s or the page had reloaded meanwhile,
+  // and once confirmed it went until the conversation's own copy came: a gap, as if it appeared only when the PC had it.
+  const GRACE=120000,LONG_QUEUE=1800000;  // still unconfirmed, or queued, this long after it was sent: it needs a look
+  function line(item){
+    if(item.state==='delivered')return {k:'done',text:'电脑已接收'};
+    if(item.state==='queued'&&Date.now()-item.started<LONG_QUEUE)return {k:'queued',text:'已排队，这一轮结束后发出'};
+    if(item.state==='sending'||item.state==='pressed')return {k:'sending',text:'发送中…'};
+    if(item.state==='unconfirmed'&&Date.now()-item.started<GRACE)return {k:'sending',text:'确认中…'};
+    return null;
   }
   function decorateRows(rows){
     if(!cur)return;
     for(let i=rows.length-1;i>=0;i--)if(rows[i].key?.startsWith('pending:'))rows.splice(i,1);
-    for(const item of outbox.values()){
-      if(item.app!==cur.app||item.id!==cur.id)continue;
-      const matched=rows.some(r=>r.message?.client_request_id===item.rid || (item.app!=='codex'&&item.transport==='legacy'&&r.message?.role==='user'&&r.message.text?.trim()===(item.check_text||item.text)?.trim()&&Math.abs(new Date(r.message.time).getTime()-item.started)<120000));
-      if(matched){if(item.state!=='delivered'){item.state='delivered';item.note='已确认送达';try{saveOutbox();}catch(e){}}continue;}
-      // delivered: the conversation itself shows it; queued: shown above the input box (claude-ui.js)
-      if(item.state==='delivered'||item.state==='queued'&&item.app!=='codex')continue;
-      rows.push({key:'outbox:'+item.rid,workspace:{...item,body:undefined},created:item.started/1000});
+    const users=rows.filter(r=>r.message?.role==='user'&&!r.message.pending),said=new Map(),words=m=>{if(!said.has(m))said.set(m,plain(m.text));return said.get(m);};
+    const taken=new Map();let changed=false;
+    for(const item of [...outbox.values()].filter(v=>v.app===cur.app&&v.id===cur.id).sort((a,b)=>a.started-b.started)){
+      const row=users.find(r=>!taken.has(r)&&sameMessage(r.message,item,words));
+      if(row){taken.set(row,item);if(item.state!=='delivered'){item.state='delivered';item.note='已确认送达';changed=true;}if(!item.receivedAt){received(item);changed=true;}continue;}
+      // confirmed, its copy not here yet: Claude's is in its record already (it was checked there) and comes with the next
+      // read; Codex's and DeepSeek's may wait for the running turn's next step
+      if(item.state==='delivered'&&!(Date.now()-item.receivedAt<(item.transport==='legacy'?12000:600000)))continue;
+      rows.push({key:'outbox:'+item.rid,workspace:{...item,body:undefined,line:line(item)},created:item.started/1000});
     }
+    if(changed)try{saveOutbox();}catch(e){}
+    // 电脑已接收 moves onto the conversation's copy, and stays under the newest one until you say something after it
+    const last=rows.findLast(r=>r.workspace||r.message?.role==='user');
+    if(last&&taken.has(last))last.receipt={k:'done',text:'电脑已接收'};
   }
-  // A message sent from the phone looks like any other message: faded while it is on its way. Only a
-  // problem adds a line, and tapping that line shows what can be done about it.
+  function paintReceipt(node,said){node.classList.add('has-receipt');node.append(el('span','send-receipt '+said.k,said.text));}
   function renderOutbox(node,item){
-    const waiting=['sending','pressed'].includes(item.state),problem=!waiting;
-    node.className='bub user outbox'+(waiting?' pending':' problem');node.replaceChildren();
+    node.className='bub user outbox'+(item.line?'':' problem');node.replaceChildren();
     node.append(document.createTextNode(item.originalText||item.text||''));
     if(item.images?.length)codexUI?.renderImages(node,item.images.map(v=>v.meta).filter(Boolean));
     if(item.references?.length)node.append(el('div','outbox-refs',item.references.map(v=>window.filesUI?.isFile(v)?filesUI.label(v):(v.kind==='skill'?'$':'@')+(v.name||v.title)).join(' · ')));
-    if(waiting){node.append(el('span','outbox-state','发送中…'));return;}
-    const state=el('button','outbox-state',item.app==='codex'?(item.transport==='legacy'?'旧记录待核对 ›':({rejected:'未提交 ›',queued:'已排队 ›',cancelled:'已取消 ›'}[item.state]||'结果待核对 ›')):(item.state==='rejected'?'没发出去 ›':'没确认送达 ›')),actions=el('div','message-actions');actions.hidden=true;
+    if(item.line){paintReceipt(node,item.line);return;}
+    // a problem: the bubble says it, and tapping that shows what can be done about it
+    const state=el('button','outbox-state',item.app==='codex'?(item.transport==='legacy'?'旧记录待核对 ›':({rejected:'未提交 ›',queued:'已排队 ›',cancelled:'已取消 ›'}[item.state]||'结果待核对 ›')):({rejected:'没发出去 ›',queued:'已排队 ›'}[item.state]||'没确认送达 ›')),actions=el('div','message-actions');actions.hidden=true;
     state.setAttribute('aria-expanded','false');state.onclick=()=>{actions.hidden=!actions.hidden;state.setAttribute('aria-expanded',String(!actions.hidden));};
-    if(!['rejected','cancelled'].includes(item.state)){const check=el('button','','重新核对');check.onclick=async()=>{check.disabled=true;const result=await pollReceipts(item.rid);const latest=outbox.get(item.rid);if(!latest)return;toast(latest.state==='delivered'?'已送达':result?.errors?'暂时连不上电脑':latest.state==='queued'?'还在排队':'还没确认；不会自动重发',!!result?.errors);if(check.isConnected)check.disabled=false;};actions.append(check);}
-    else if(item.note)actions.append(el('div','outbox-why',item.note)); // why it was not sent: the toast is gone by the time one looks
-    if(item.state==='rejected'&&item.draft){const shown=item.draft.length>8?item.draft.slice(0,8)+'…':item.draft,swap=el('button','outbox-replace','换掉电脑上的「'+shown+'」再发');swap.onclick=()=>resendReplacing(outbox.get(item.rid));actions.append(swap);}
-    if(item.note)actions.append(el('div','outbox-why',item.note));
+    const why=()=>{if(item.note)actions.append(el('div','outbox-why',item.note));};  // the toast is gone by the time one looks
+    if(!['rejected','cancelled'].includes(item.state)){const check=el('button','','重新核对');check.onclick=async()=>{check.disabled=true;const result=await pollReceipts(item.rid);const latest=outbox.get(item.rid);if(!latest)return;toast(latest.state==='delivered'?'已送达':result?.errors?'暂时连不上电脑':latest.state==='queued'?'还在排队':'还没确认；不会自动重发',!!result?.errors);if(check.isConnected)check.disabled=false;};actions.append(check);why();}
+    else{why();if(item.state==='rejected'&&item.draft){const shown=item.draft.length>8?item.draft.slice(0,8)+'…':item.draft,swap=el('button','outbox-replace','换掉电脑上的「'+shown+'」再发');swap.onclick=()=>resendReplacing(outbox.get(item.rid));actions.append(swap);}}
     const back=el('button','','恢复草稿');back.onclick=()=>{const latest=outbox.get(item.rid);if(latest)restore(latest);};
     const remove=el('button','','移除');remove.onclick=()=>dismiss(outbox.get(item.rid));
     actions.append(back,remove);node.append(state,actions);
@@ -104,11 +134,13 @@
   function queued(me){return [...outbox.values()].filter(v=>v.app===me?.app&&v.id===me?.id&&v.state==='queued').map(v=>({rid:v.rid,text:v.originalText||v.text||''}));}
   async function pollReceipts(onlyRid=null){
     if(pollingOutbox||document.hidden||composing||testMode==='pause'||!cur)return;pollingOutbox=true;const me={...cur};
-    let errors=0;try{for(const item of [...outbox.values()].filter(v=>v.id===me.id&&v.app===me.app&&(!onlyRid||v.rid===onlyRid)&&['unconfirmed','pressed','queued'].includes(v.state)).slice(-8)){
+    // DeepSeek's queued ones are settled by the conversation's copy, as its receipt says accepted all the while
+    let errors=0;try{for(const item of [...outbox.values()].filter(v=>v.id===me.id&&v.app===me.app&&(!onlyRid||v.rid===onlyRid)&&['unconfirmed','pressed','queued'].includes(v.state)&&!(v.transport==='deepseek'&&v.state==='queued')).slice(-8)){
       try{let delivered=false;
         if(item.transport==='codex'){const r=await api('/api/codex/receipt?id='+encodeURIComponent(item.id)+'&request_id='+item.rid);delivered=r.state==='accepted';if(['queued','cancelled','rejected'].includes(r.state)){item.state=r.state;item.note=r.result?.text||r.state;}}
+        else if(item.transport==='deepseek'){const r=await api('/api/deepseek/receipt?request_id='+encodeURIComponent(item.rid));if(r.state==='accepted'){if(item.body?.intent!=='queue')delivered=true;else{item.state='queued';item.note='已排队';}}}
         else if(item.app!=='codex'&&item.offset!=null){const r=await api('/api/chat/check',{app:item.app,id:item.id,offset:item.offset,text:item.check_text||item.text});delivered=r.delivered;if(r.queued){item.state='queued';item.note='已进入 Claude 队列，等待读取';}}
-        if(delivered){item.state='delivered';item.note=item.app==='codex'?'已交给 Codex':'已确认送达';const ticket=pendingSends.get(item.app+':'+item.id);if((ticket?.request_id||ticket?.rid)===item.rid){ticket.state='delivered';ticket.note=item.note;persistPending();}}
+        if(delivered){item.state='delivered';item.note=item.app==='codex'?'已交给 Codex':'已确认送达';received(item);const ticket=pendingSends.get(item.app+':'+item.id);if((ticket?.request_id||ticket?.rid)===item.rid){ticket.state='delivered';ticket.note=item.note;persistPending();}}
       }catch(e){errors++;}
     }saveOutbox();if(cur&&chatKey(cur)===chatKey(me)&&!composing){renderMsgs(currentMessages);window.claudeUI?.renderQueue?.();}return {errors};}finally{pollingOutbox=false;}
   }
@@ -127,7 +159,8 @@
       if(cur?.id!==c.id)return;const node=[...$('cvMsgs').children].find(n=>n.dataset.key===saved.anchor);if(node)$('cvMsgs').scrollTop+=node.getBoundingClientRect().top-$('cvMsgs').getBoundingClientRect().top-(saved.anchorOffset||0);
       if(saved.selection)input.setSelectionRange(Math.min(saved.selection[0],input.value.length),Math.min(saved.selection[1],input.value.length));
     }catch(e){}finally{restoring=false;}}
-  window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,decorateRows,renderOutbox,pollReceipts,saveScene,diagnostics,queued,dismissRid(rid){return dismiss(outbox.get(rid));},
+  window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,decorateRows,renderOutbox,paintReceipt,pollReceipts,saveScene,diagnostics,queued,dismissRid(rid){return dismiss(outbox.get(rid));},
+    has(rid){return outbox.has(rid)||dismissed.has(rid);},  // a send this page keeps (deepseek-ui.js: its draft has left the box)
     canPoll(){return !document.hidden&&!composing&&testMode!=='pause';},get paused(){return testMode==='pause';}};
   // Migrate the previous single pending entry without inventing delivery success.
   for(const [key,ticket] of pendingSends){const [app,...parts]=key.split(':'),id=parts.join(':'),rid=ticket.request_id||ticket.rid;if(dismissed.has(rid)){pendingSends.delete(key);continue;}if(rid&&!outbox.has(rid)&&ticket.state!=='delivered')outbox.set(rid,{...ticket,rid,app,id,transport:ticket.request_id?'codex':'legacy',images:[],body:ticket.submission||null});}persistPending();

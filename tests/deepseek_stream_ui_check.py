@@ -29,7 +29,9 @@ def main():
         box.click();assert 'open' in box.get_attribute('class')
         page.locator('#cvText').fill('尚未发送的草稿')
         thought={**thought,'text':thought['text']+'新的思考'};send(2,[thought,final],['live:a:0','live:a:1'])
-        assert 'open' in box.get_attribute('class');assert '新的思考' in box.inner_text();assert page.locator('#cvText').input_value()=='尚未发送的草稿'
+        # the new words run out rather than land at once (10-22): wait for them
+        page.wait_for_function("document.querySelector('.thinking').innerText.includes('新的思考')",timeout=3000)
+        assert 'open' in box.get_attribute('class');assert page.locator('#cvText').input_value()=='尚未发送的草稿'
         tool=dict(id='tool:call',role='tool',order=102,tool_status='running',text='正在执行：读取文件')
         send(3,[tool],['live:a:0','live:a:1']);assert '进行中' in page.locator('details.tools summary').inner_text()
         tool={**tool,'tool_status':'completed','text':'已完成：读取文件'}
