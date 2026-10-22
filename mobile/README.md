@@ -1,6 +1,25 @@
-# Agent Remote iOS 工程
+# Agent Remote 移动端工程
 
-本目录是独立 Capacitor 启动器。Node 24.14.0、npm 11.9.0；Capacitor core/cli/ios 8.5.3，InAppBrowser 4.1.0。依赖由 package-lock.json 固定。Codemagic 是云服务，无需 Windows 桌面安装包。未安装 Android SDK。
+本目录是独立 Capacitor 启动器。Node 24.14.0、npm 11.9.0；Capacitor core/cli/ios/android 8.5.3，InAppBrowser 4.1.0。依赖由 package-lock.json 固定。iOS 使用 Codemagic；Android 可在 Windows 局部工具链构建。
+
+## Android APK
+
+要求 Java 21、Android SDK Platform 36、Build Tools 36.0.0、Platform Tools。Android 最低 8.0（API 26），目标 API 36。工具链可放在忽略目录 `.toolchain/jdk/<JDK目录>` 和 `.toolchain/sdk`，不改变全局 Java 或其他项目环境。首次安装从 Adoptium 和 Android 官方站下载；本机使用 Temurin 21.0.12.1+1 和 commandlinetools 15859902。
+
+```powershell
+Set-Location D:\Personal\agent_remote\mobile
+npm run android:build
+# 也可以指定已有工具链：
+pwsh -NoProfile -File scripts/build-android.ps1 -JavaHome C:\path\jdk-21 -AndroidSdk C:\path\android-sdk
+```
+
+脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
+
+这是 Android 自动生成的 **debug 测试签名包**，不是正式发行签名。测试签名通常保存在用户私有目录 `~/.android/debug.keystore`，不上传仓库。换电脑或重建该密钥后，旧测试包可能需要卸载后才能安装（会丢失应用本地状态）。长期正式更新需另行生成稳定 release keystore，私有保存并离线备份；本任务不生成正式签名或公开 Release。
+
+Android 采用隔离进程 WebView；插件源码实现 Cookie flush、HTML 文件/图片选择和返回键历史导航，配置不主动清 Cookie。持久化还取决于服务 Cookie 有效期；会话 Cookie 不保证跨进程重启保留。文件选择、照片、Cookie 跨重启、SSE 恢复以及实际上传仍须手机验收。无连接设备时不能声称已安装或已完成业务测试。
+
+当前 IP 入口仍有外层 BasicAuth；插件原生 WebView 未实现其登录弹窗。Android 启动页提供“兼容登录（系统浏览器）”，使用官方插件的 Custom Tabs 打开同一 HTTPS 页面，供现有入口登录使用。该窗口使用系统浏览器自己的 Cookie，与隔离 WebView 独立。后端账号入口部署后可使用常规“打开服务”；不会为了 App 改写后端认证。2026-10-22 本机探测域名 TLS 失败，因此默认 IP 保留，可手动改地址。
 
 ## 本地运行
 
