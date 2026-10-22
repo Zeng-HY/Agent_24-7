@@ -6,5 +6,4 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" -X utf8 relay_setup.py
-if errorlevel 1 pause
+start "" ".venv\Scripts\pythonw.exe" "%~dp0relay_desktop.py"

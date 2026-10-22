@@ -1,0 +1,15 @@
+/* Injected by the authenticated relay only. Device scope is fixed per tab. */
+(()=>{'use strict';const match=location.pathname.match(/^\/d\/([0-9a-f]{32})(?:\/|$)/);if(!match)return;
+const base='/d/'+match[1];window.RELAY_BASE=base;
+function scoped(value){if(typeof value!=='string')return value;try{const u=new URL(value,location.href);if(u.origin!==location.origin||/^\/(?:d\/|account(?:\/|$)|device-auth\/)/.test(u.pathname))return value;u.pathname=base+u.pathname;return u.href;}catch{return value;}}
+const fetch0=window.fetch.bind(window);window.fetch=(input,init)=>fetch0(input instanceof Request?new Request(scoped(input.url),input):scoped(String(input)),init);
+const ES=window.EventSource;window.EventSource=class extends ES{constructor(url,options){super(scoped(String(url)),options)}};
+const open0=window.open.bind(window);window.open=(url,...args)=>open0(scoped(String(url)),...args);
+const attr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){return attr.call(this,name,['src','href','action','poster'].includes(name)?scoped(String(value)):value);};
+for(const [prototype,key] of [[HTMLImageElement.prototype,'src'],[HTMLAnchorElement.prototype,'href'],[HTMLMediaElement.prototype,'src'],[HTMLScriptElement.prototype,'src'],[HTMLLinkElement.prototype,'href']]){const desc=Object.getOwnPropertyDescriptor(prototype,key);if(desc?.set)Object.defineProperty(prototype,key,{...desc,set(value){desc.set.call(this,scoped(String(value)))}});}
+const xhr=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...args){return xhr.call(this,method,scoped(String(url)),...args)};
+const html=value=>String(value).replace(/((?:src|href|action|poster)=["'])\/(?!\/|d\/|account(?:\/|["']))/g,'$1'+base+'/');
+const inner=Object.getOwnPropertyDescriptor(Element.prototype,'innerHTML');if(inner?.set)Object.defineProperty(Element.prototype,'innerHTML',{...inner,set(value){inner.set.call(this,html(value))}});
+const adjacent=Element.prototype.insertAdjacentHTML;Element.prototype.insertAdjacentHTML=function(where,value){return adjacent.call(this,where,html(value))};
+document.addEventListener('DOMContentLoaded',()=>{const nav=document.querySelector('#navSheet .box');if(nav){const section=document.createElement('div');section.className='relay-menu';for(const [label,action] of [['账号与电脑',()=>location.assign('/account')],['刷新',()=>location.reload()],['连接设置',()=>{const d=document.createElement('dialog');const title=document.createElement('h2');title.textContent='连接设置';const address=document.createElement('p');address.textContent=location.origin;const close=document.createElement('button');close.textContent='关闭';close.onclick=()=>d.remove();d.append(title,address,close);document.body.append(d);d.showModal();}]]){const b=document.createElement('button');b.className='menu-row';b.textContent=label;b.onclick=action;section.append(b);}nav.append(section);}const subtitle=document.getElementById('appSubtitle');if(subtitle){subtitle.disabled=false;subtitle.onclick=()=>location.assign('/account');} });
+})();

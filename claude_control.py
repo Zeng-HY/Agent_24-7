@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib,json,re,secrets,threading,time
 from datetime import datetime,timezone
 from pathlib import Path
+from app_paths import DATA
 from urllib.parse import urlsplit
 import chats
 import winctl
@@ -106,7 +107,7 @@ class Controller:
         self.desktop=desktop;self.cache={};self.choices={};self.lock=threading.RLock();self.menu_context=None;self.steer_submissions={}
         from claude_archive import SessionActions
         self.session_actions = SessionActions(self)
-        self.catalog_path=Path(__file__).parent/'attachments'/'claude-catalog.json'
+        self.catalog_path=DATA/'attachments'/'claude-catalog.json'
         try:self.catalogs=json.loads(self.catalog_path.read_text(encoding='utf-8'))
         except (OSError,ValueError):self.catalogs={}
         # The mode choices last read from the desktop menu, so the phone lists them at once (10-11); the menu

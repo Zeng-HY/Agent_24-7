@@ -10,3 +10,10 @@ __pycache__/
 *.pyc
 # screenshots from tests/motion_check.py --shots
 shots/
+dist/
+build/
+.toolchain/
+*.spec
+!deploy/windows/AgentRemote.spec
+*.env
+device-v2.bin

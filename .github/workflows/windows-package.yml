@@ -1,0 +1,64 @@
+name: Windows test installer
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/relay-027]
+permissions:
+  contents: read
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned build requirements
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+      - name: Test identity, transport and migration
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          foreach ($pattern in @('test_relay_identity.py','test_relay_v2.py','test_relay_vault.py','test_relay_desktop.py','test_relay_migration.py')) {
+            .venv\Scripts\python.exe -m unittest discover -s tests -p $pattern -q
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed: $pattern" }
+          }
+      - name: Build with the runner's existing Inno compiler
+        shell: pwsh
+        run: |
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (!(Test-Path -LiteralPath $compiler)) { throw 'Preinstalled compiler unavailable; no compiler installation attempted' }
+          New-Item -ItemType Directory -Force .toolchain | Out-Null
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile '.toolchain\MicrosoftEdgeWebview2Setup.exe'
+          $signature = Get-AuthenticodeSignature '.toolchain\MicrosoftEdgeWebview2Setup.exe'
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Microsoft Corporation*') { throw 'Bootstrapper signature invalid' }
+          .\deploy\windows\build.ps1 -InnoCompiler $compiler
+      - name: Smoke-test installed files in the disposable runner
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'AgentRemote-install-smoke'
+          $install = Start-Process -FilePath '.\dist\AgentRemote-0.27.0-dev-Setup.exe' -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',('/DIR="'+$target+'"')) -WindowStyle Hidden -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
+          $env:AR_DATA_DIR = Join-Path $env:RUNNER_TEMP 'AgentRemote-empty-data'
+          $smoke = Start-Process -FilePath (Join-Path $target 'AgentRemote.exe') -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) { throw 'Installed runtime self-test failed' }
+          Get-FileHash '.\dist\AgentRemote-0.27.0-dev-Setup.exe' -Algorithm SHA256 | Format-List | Out-File '.\dist\installer-sha256.txt' -Encoding utf8
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: AgentRemote-0.27.0-dev-Windows
+          path: |
+            dist/AgentRemote-0.27.0-dev-Setup.exe
+            dist/installer-sha256.txt
+          retention-days: 7
+          if-no-files-found: error

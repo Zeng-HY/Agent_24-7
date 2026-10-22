@@ -25,6 +25,7 @@ import time
 import unicodedata
 import uuid
 from pathlib import Path
+from app_paths import DATA
 
 import chats
 
@@ -193,7 +194,7 @@ class Files:
                  drives=None, places=None):
         self.secret = (secret or "").encode("utf-8")
         self.inbox = Path(inbox) if inbox else known_place(KNOWN[1][2], KNOWN[1][3]) / INBOX_NAME
-        self.registry_file = Path(registry) if registry else HERE / "attachments" / "phone-files.json"
+        self.registry_file = Path(registry) if registry else DATA / "attachments" / "phone-files.json"
         self.lock = threading.RLock()
         self._drives_fn = drives or local_drives
         self._drives = (0.0, [])

@@ -2,15 +2,12 @@
 <html lang="zh-CN"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<meta name="theme-color" content="#f3f5fa">
+<meta name="theme-color" content="#f6f6f6">
 <title>Pocket Agent Desk</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Pocket Agent Desk</span><span class="edition">0.3</span></header>
-<section class="intro"><p class="eyebrow">YOUR DESK, WITH YOU</p><h1>继续你的工作<span>从这里开始。</span></h1><p class="lead">登录自己的账号，连接自己的电脑。<br>桌面上的对话与文件，随时接着用。</p></section>
+<header class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Agent Remote</span></header>
 <form id="connect" class="connection-card">
-<div class="card-heading"><span class="connection-dot" aria-hidden="true"></span><div><h2>账号入口</h2><p>受邀注册 · 登录 · 选择电脑</p></div></div>
-<button id="open" type="submit" class="primary">进入账号 <span aria-hidden="true">↗</span></button>
-<p class="note">无需 Tailscale，也无需提前在浏览器登录。</p>
+<button id="open" type="submit" class="primary">登录</button>
 <details><summary>连接设置</summary><div class="settings">
 <label for="origin">服务地址</label><input id="origin" type="url" required autocomplete="url" spellcheck="false" inputmode="url">
 <label for="entry">打开页面</label><select id="entry"><option value="account">账号与电脑</option><option value="home">继续已选择的电脑</option></select>
@@ -18,5 +15,5 @@
 <button id="forget" type="button" class="text-button">恢复默认设置</button>
 </div></details></form>
 <p id="status" class="status" role="status" aria-live="polite"></p>
-<footer><span class="footer-line"></span><p>仅连接你有权访问的电脑。<br>还没有账号？向服务管理员获取邀请。</p></footer>
+
 </main><script type="module" src="app.js"></script></body></html>

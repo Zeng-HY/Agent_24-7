@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib,json,os,queue,re,sqlite3,subprocess,threading,time,uuid
 from pathlib import Path
+from app_paths import DATA
 from contextlib import contextmanager
 from urllib.parse import quote
 import chats
@@ -83,7 +84,7 @@ class NewConversations:
     def __init__(self,history,references,bridge,desktop,root=None):
         self.history=history;self.references=references;self.bridge=bridge;self.desktop=desktop
         self.claude=None  # claude_control.Controller, set by remote.py: a new Claude conversation's model and effort
-        self.root=Path(root or Path(__file__).parent/'attachments');self.root.mkdir(exist_ok=True,parents=True)
+        self.root=Path(root or DATA/'attachments');self.root.mkdir(exist_ok=True,parents=True)
         self.db=self.root/'new-conversations.sqlite';self.lock=threading.RLock();self.active=set();self.traces={}
         self.scanned={}  # request id -> the Codex record (path, size, mtime) last searched for it in vain
         with self._db() as con:

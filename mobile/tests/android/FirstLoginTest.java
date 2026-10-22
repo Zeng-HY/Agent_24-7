@@ -19,16 +19,20 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public class FirstLoginTest {
-    @Test public void accountNavigationReturnsToTheSameOriginAccountPage() {
+    @Test public void normalPageHasNoNativeAddressToolbarOrInjectedTheme() {
         Intent intent = new Intent(RuntimeEnvironment.getApplication(), RemoteBrowserActivity.class)
-            .putExtra("url", "https://example.com:8443/");
+            .putExtra("url", "https://example.com:8443/account");
         try (var controller = Robolectric.buildActivity(RemoteBrowserActivity.class, intent).setup()) {
             RemoteBrowserActivity activity = controller.get();
-            activity.getWindow().getDecorView().findViewWithTag("account-navigation").performClick();
+            assertNull(activity.getWindow().getDecorView().findViewWithTag("account-navigation"));
             WebView web = ReflectionHelpers.getField(activity, "web");
-            assertEquals("https://example.com:8443/account", web.getUrl());
-            web.getWebViewClient().onPageFinished(web, "https://example.com:8443/account");
-            assertTrue(shadowOf(web).getLastEvaluatedJavascript().contains("data-pad-theme"));
+            web.getWebViewClient().onPageFinished(web,"https://example.com:8443/account");
+            LinearLayout panel = ReflectionHelpers.getField(activity, "failurePanel");
+            assertEquals(android.view.View.GONE,panel.getVisibility());
+            assertNull(shadowOf(web).getLastEvaluatedJavascript());
+            ReflectionHelpers.callInstanceMethod(activity,"fail",ReflectionHelpers.ClassParameter.from(String.class,"Offline"));
+            assertEquals(android.view.View.VISIBLE,panel.getVisibility());
+            assertEquals(android.view.View.GONE,web.getVisibility());
         }
     }
     @Test public void freshBrowserShowsNativeCredentialsAndCanCancelWithoutLogin() {

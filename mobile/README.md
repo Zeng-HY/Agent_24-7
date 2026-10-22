@@ -13,21 +13,19 @@ npm run android:build
 pwsh -NoProfile -File scripts/build-android.ps1 -JavaHome C:\path\jdk-21 -AndroidSdk C:\path\android-sdk
 ```
 
-脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-0.3.0-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
+脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-0.4.0-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
 
 这是 Android 自动生成的 **debug 测试签名包**，不是正式发行签名。测试签名通常保存在用户私有目录 `~/.android/debug.keystore`，不上传仓库。换电脑或重建该密钥后，旧测试包可能需要卸载后才能安装（会丢失应用本地状态）。长期正式更新需另行生成稳定 release keystore，私有保存并离线备份；本任务不生成正式签名或公开 Release。
 
 Android 0.2.0 的主连接窗口改用独立原生 Activity 中的普通 WebView，支持服务器 BasicAuth 原生输入框；远端 WebView 不挂载 Capacitor 或 JavascriptInterface。它与启动器处于同一应用进程，靠浏览器同源规则隔离存储，不再宣称独立进程。密码只交给当前 WebView 认证处理器，启动器不保存或记录密码。窗口仅允许当前 HTTPS origin 内导航，不忽略证书错误、不允许明文或混合内容。Cookie 会 flush 到应用存储，不主动清除；会话 Cookie 不保证跨进程重启保留。
 
-0.3.0 默认打开 `/account`，流程为“受邀注册／个人账号登录 → 选择已绑定的电脑 → 遥控”。无需 Tailscale、浏览器既有登录记录或旧手机配对码。2026-10-22 实测公网账号页返回 200，匿名根入口返回 303 到账号页。电脑绑定在电脑端完成，新设备仍需管理员启用专属隧道。首次升级自动迁移旧入口选择；之后明确选择“继续已选择的电脑”会保存。右上角“账号”始终返回当前服务的账号页。旧 BasicAuth 弹窗仅在服务实际发出相应挑战时出现。
+0.4.0 默认打开 `/account`，使用服务器统一的邮箱/旧账号登录页面。正常页面不再显示原生 IP、账号和刷新工具栏，也不注入 APK 内的账号主题。系统栏、挖孔和键盘避让由原生层统一处理；遥控页面中的账号、刷新和连接设置位于侧边菜单。网络或证书失败时使用原生故障页，提供重试、账号和连接设置。
 
-登录页视觉增强由 APK 内的 `account-theme.js` 提供，仅对同源 `/account` 且具备预期表单结构的页面生效。保留服务器输入框、原按钮、事件处理和原请求逻辑；只调整布局、标签与操作分组，添加重复提交拦截。不读取密码、邀请码、Cookie，不向原生端返回网页数据，不修改后端文件。未知页面结构保持原样。登录、受邀注册、重置密码分别展示，已登录时显示电脑列表及账号安全设置。浏览器端打开服务器仍是服务器原有样式；这套增强当前仅由 Android 主窗口加载。
-
-本地设计预览：先 `npm run build`，再 `node scripts/preview-account.mjs`；打开 `http://127.0.0.1:4184/account`。这是固定演示数据，不访问后端，不创建账号、不发送设备指令。相关 DOM 测试使用兼容当前 Node 的固定 jsdom 26.1.0。
+请先部署 0.27 账号服务再验收统一登录样式；仅更新 APK 不会改变旧服务器 HTML。服务器未启用 SMTP 时，旧账号登录仍可使用，邮箱注册暂不开放。新设备由电脑端窗口登录确认，不再要求用户复制绑定码或设备 ID。
 
 文件和图片通过 Android 系统文件选择器上传；窗口保留返回键历史导航，音视频采集按系统权限询问。直接拍照、下载、Cookie 跨进程重启、SSE 恢复及真实上传仍需手机验收。原“兼容登录（系统浏览器）”仅保留作备用窗口；其 Cookie 独立，不能用来给主窗口预先登录。iOS 继续使用官方 InAppBrowser，现有签名与云工作流不变。
 
-原生源码在 `native/android/`，由 prepare 脚本写入可重新生成的 Android 工程。构建包含 JS 入口／表单增强测试、Java origin 策略测试和 Robolectric 原生认证／账号导航测试（固定 4.17）；本地框架测试不等于手机连真实后端验收。APK 版本为 0.3.0/versionCode 3，沿用原 debug 签名，可覆盖安装旧测试版。
+原生源码在 `native/android/`，由 prepare 脚本写入可重新生成的 Android 工程。构建包含 JS 入口测试、Java origin 策略测试和 Robolectric 原生认证／无地址栏及故障页测试（固定 4.17）；本地框架测试不等于手机连真实后端验收。APK 版本为 0.4.0/versionCode 4，沿用原 debug 签名，可覆盖安装旧测试版。
 
 ## 本地运行
 

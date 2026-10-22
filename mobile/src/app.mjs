@@ -37,7 +37,7 @@ $('connect').onsubmit = async event => {
     }
     if (android) {
       await RemoteBrowser.open({ url });
-      $('status').textContent = '账号页已打开。登录后选择你已绑定的电脑。';
+      $('status').textContent = '';
       return;
     }
     await InAppBrowser.openInWebView({ url, options: {
@@ -46,7 +46,9 @@ $('connect').onsubmit = async event => {
       closeButtonText: '返回',
       android: { ...DefaultWebViewOptions.android, hardwareBack: true, isIsolated: true }
     }});
-    $('status').textContent = '已打开服务。登录失效时请在服务内重新登录。';
+    $('status').textContent = '';
   } catch (error) { $('status').textContent = error.message || '打开失败，请检查地址与网络。'; }
   finally { $('open').disabled = false; $('compat').disabled = false; }
 };
+
+if (Capacitor.isNativePlatform() && typeof $('connect').requestSubmit === 'function') $('connect').requestSubmit();

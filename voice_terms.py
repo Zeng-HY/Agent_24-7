@@ -13,9 +13,10 @@ from __future__ import annotations
 import re
 import threading
 from pathlib import Path
+from app_paths import DATA
 
 HERE = Path(__file__).resolve().parent
-TERMS_FILE = HERE / "voice_terms.txt"
+TERMS_FILE = DATA / "voice_terms.txt"
 MAX_HOTWORDS = 60
 MAX_FILE_CHARS = 20000
 

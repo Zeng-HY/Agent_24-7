@@ -16,7 +16,7 @@ if [[ -e /opt/agent-relay/relay_cloud.py || -e /etc/systemd/system/agent-relay.s
 fi
 install -d -o root -g root -m 755 /opt/agent-relay
 install -d -o agent-relay -g agent-relay -m 700 /var/lib/agent-relay
-for file in relay_cloud.py relay_accounts.py relay_gateway.py relay_account.html; do
+for file in relay_cloud.py relay_accounts.py relay_gateway.py relay_account.html relay_account_legacy.html; do
     install -o root -g root -m 644 "$file" "/opt/agent-relay/$file"
 done
 install -o root -g root -m 644 agent-relay.service /etc/systemd/system/agent-relay.service

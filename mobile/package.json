@@ -31,7 +31,6 @@
   "devDependencies": {
     "@capacitor/cli": "8.5.3",
     "esbuild": "0.28.2",
-    "jsdom": "26.1.0",
     "yaml": "2.9.1"
   }
 }

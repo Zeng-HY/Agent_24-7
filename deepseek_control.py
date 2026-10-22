@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64, bisect, copy, hashlib, hmac, http.client, json, os, re, sqlite3, subprocess, threading, time, uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from app_paths import DATA
 from types import SimpleNamespace
 from contextlib import contextmanager
 from deepseek_stream import public_messages,merge_row
@@ -299,7 +300,7 @@ class Client:
 class Bridge:
     def __init__(self, client=None, root=None, links=None):
         self.client=client or Client();self.lock=threading.RLock();self.cache=(0,None);self.links=links
-        self.root=Path(root or Path(__file__).parent/'attachments');self.root.mkdir(exist_ok=True,parents=True)
+        self.root=Path(root or DATA/'attachments');self.root.mkdir(exist_ok=True,parents=True)
         self.db=self.root/'deepseek-requests.sqlite';self.uploads=None
         self.events=Interactions(self.client)
         self.transcripts={}

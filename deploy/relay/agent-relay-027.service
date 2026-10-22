@@ -1,0 +1,26 @@
+[Unit]
+Description=Agent Remote 0.27 account and outbound device gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent-relay
+Group=agent-relay
+WorkingDirectory=/opt/agent-relay-027
+EnvironmentFile=-/etc/agent-relay/smtp.env
+ExecStart=/opt/agent-relay-027/.venv/bin/python /opt/agent-relay-027/relay_service.py --state /var/lib/agent-relay/accounts.sqlite3 --origin https://8.166.15.235 --port 18771 --trusted-proxy
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-relay
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=768M
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

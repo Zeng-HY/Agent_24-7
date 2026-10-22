@@ -58,7 +58,7 @@ class CloudHandler(Handler):
         token = self.token()
         path = parsed.path
         if path == '/account' and self.command in ('GET', 'HEAD'):
-            self.reply(200, (Path(__file__).with_name('relay_account.html')).read_bytes(), 'text/html; charset=utf-8')
+            self.reply(200, (Path(__file__).with_name('relay_account_legacy.html')).read_bytes(), 'text/html; charset=utf-8')
             return
         if path.startswith('/account/'):
             self.account_request(path, token)

@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from app_paths import DATA
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -448,7 +449,7 @@ class Bridge:
         self.lock = threading.RLock()
         self.cache = {}
         self.delivery_evidence_cache = {}
-        self.data_root = HERE / "attachments"
+        self.data_root = DATA / "attachments"
         self.references = None
         self.dismiss_manager = None
 
@@ -671,9 +672,9 @@ class Bridge:
             except Exception:
                 result["desktop_dismiss"] = {"status": "retained", "reason": "dismiss_unavailable"}
         # No message bodies or credentials in transport diagnostics.
-        if self.data_root == HERE / "attachments":
+        if self.data_root == DATA / "attachments":
             try:
-                with (HERE / "logs" / time.strftime("%Y%m%d.log")).open("a", encoding="utf-8") as log:
+                with (DATA / "logs" / time.strftime("%Y%m%d.log")).open("a", encoding="utf-8") as log:
                     elapsed = round((time.time()-row[0])*1000) if row else 0
                     log.write(f"{time.strftime('%H:%M:%S')} codex request={rid} state={result.get('delivery_state','accepted')} intent={result.get('intent','')} turn={result.get('turn_id','')} elapsed_ms={elapsed}\n")
             except OSError:

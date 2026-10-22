@@ -148,7 +148,8 @@ class DismissManager:
             if not spec: return
             spec.update(version=self.version, expires=time.time()+max(0, deadline-time.monotonic()))
             python = Path(__file__).parent/".venv/Scripts/python.exe"
-            proc = subprocess.Popen([str(python), "-X", "utf8", str(Path(__file__).resolve()), "--worker"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW)
+            worker_command = [sys.executable, "--dismiss-worker"] if getattr(sys, "frozen", False) else [str(python), "-X", "utf8", str(Path(__file__).resolve()), "--worker"]
+            proc = subprocess.Popen(worker_command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW)
             inbox = queue.Queue()
             def read():
                 for line in proc.stdout:

@@ -37,12 +37,13 @@ from datetime import datetime
 from email.header import decode_header, make_header
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from app_paths import DATA
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 HERE = Path(__file__).resolve().parent
-CONFIG_FILE = HERE / "remote_config.json"
+CONFIG_FILE = DATA / "remote_config.json"
 PAGE_FILE = HERE / "remote.html"
-LOG_DIR = HERE / "logs"
+LOG_DIR = DATA / "logs"
 
 try:
     import chats  # Codex and Claude conversations: lists from their files, sends through their links
@@ -70,7 +71,7 @@ import notify  # a notification on the phone (Bark, ntfy) when a conversation is
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
 
-VERSION = "0.26.0-dev"
+VERSION = "0.27.0-dev"
 
 # Static files are cached for a day, so each script's URL carries the service's version and an update is
 # fetched at once. remote.html holds no version of its own (it used to, once per script, and drifted);
@@ -124,7 +125,7 @@ STATIC_FILES = {  # served without the token: home-screen icons and the web app 
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_FILE.exists():
-        cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8")))
+        cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig")))
     changed = not CONFIG_FILE.exists()
     for key in RETIRED_KEYS:
         changed = cfg.pop(key, None) is not None or changed
@@ -1002,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     server.new_chats.claude = server.claude  # a new Claude conversation's model and effort are picked through its menus
     server.machine = machine_facts(cfg)  # type: ignore[attr-defined]
     server.owner = machines.Owner()  # type: ignore[attr-defined]  (this computer's Tailscale account, let in without the token)
-    server.computers = machines.Computers(server.machine["name"], HERE / "attachments" / "computers.json")  # type: ignore[attr-defined]
+    server.computers = machines.Computers(server.machine["name"], DATA / "attachments" / "computers.json")  # type: ignore[attr-defined]
     server.computers.spawn(server.computers.look)  # the first tap on the computer's name need not wait for it
     server.notifier = notify.Notifier(cfg, server.machine["name"], log, lambda: save_config(cfg))  # type: ignore[attr-defined]
     server.notifier.start()
