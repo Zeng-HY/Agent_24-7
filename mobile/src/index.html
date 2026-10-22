@@ -5,10 +5,19 @@
 <title>Pocket Agent Desk</title><link rel="stylesheet" href="app.css"></head>
 <body><main><p class="eyebrow">AGENT REMOTE · 移动端</p><h1>Pocket Agent Desk</h1>
 <p>连接自己的电脑，继续桌面上的工作。</p>
+<section id="onboarding" class="onboarding" hidden aria-label="首次连接说明">
+<h2>新手机，从这里开始</h2>
+<p>使用此公网服务，不需要安装 Tailscale，也不需要提前在浏览器登录。</p>
+<ol><li><strong>服务登录</strong><br>填写管理员提供的入口账号和密码。没有账号？请向服务管理员索取。</li>
+<li><strong>电脑配对</strong><br>登录后输入电脑端生成的一次性配对码，授权这台手机访问电脑。</li></ol>
+<p class="hint">入口账号密码与配对码是两回事。多用户注册尚未确认启用，此版本默认连接现有服务。</p>
+</section>
 <form id="connect"><label for="origin">HTTPS 服务地址</label>
 <input id="origin" type="url" required autocomplete="url" spellcheck="false" inputmode="url">
-<label for="entry">服务入口</label><select id="entry"><option value="home">当前遥控入口</option><option value="account">多用户账号入口</option></select>
+<details><summary>高级设置</summary>
+<label for="entry">服务入口</label><select id="entry"><option value="home">现有服务（首次配对 / 已配对连接）</option><option value="account">多用户账号（需管理员确认已启用）</option></select>
 <p class="hint">多用户入口需服务器完成部署。登录及设备选择在服务器页面完成。</p>
+</details>
 <button id="open" type="submit">打开服务</button>
 <button id="compat" type="submit" class="secondary" hidden>兼容登录（系统浏览器）</button>
 <button id="forget" type="button" class="secondary">恢复默认地址</button></form>

@@ -13,13 +13,17 @@ npm run android:build
 pwsh -NoProfile -File scripts/build-android.ps1 -JavaHome C:\path\jdk-21 -AndroidSdk C:\path\android-sdk
 ```
 
-脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
+脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-0.2.0-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
 
 这是 Android 自动生成的 **debug 测试签名包**，不是正式发行签名。测试签名通常保存在用户私有目录 `~/.android/debug.keystore`，不上传仓库。换电脑或重建该密钥后，旧测试包可能需要卸载后才能安装（会丢失应用本地状态）。长期正式更新需另行生成稳定 release keystore，私有保存并离线备份；本任务不生成正式签名或公开 Release。
 
-Android 采用隔离进程 WebView；插件源码实现 Cookie flush、HTML 文件/图片选择和返回键历史导航，配置不主动清 Cookie。持久化还取决于服务 Cookie 有效期；会话 Cookie 不保证跨进程重启保留。文件选择、照片、Cookie 跨重启、SSE 恢复以及实际上传仍须手机验收。无连接设备时不能声称已安装或已完成业务测试。
+Android 0.2.0 的主连接窗口改用独立原生 Activity 中的普通 WebView，支持服务器 BasicAuth 原生输入框；远端 WebView 不挂载 Capacitor 或 JavascriptInterface。它与启动器处于同一应用进程，靠浏览器同源规则隔离存储，不再宣称独立进程。密码只交给当前 WebView 认证处理器，启动器不保存或记录密码。窗口仅允许当前 HTTPS origin 内导航，不忽略证书错误、不允许明文或混合内容。Cookie 会 flush 到应用存储，不主动清除；会话 Cookie 不保证跨进程重启保留。
 
-当前 IP 入口仍有外层 BasicAuth；插件原生 WebView 未实现其登录弹窗。Android 启动页提供“兼容登录（系统浏览器）”，使用官方插件的 Custom Tabs 打开同一 HTTPS 页面，供现有入口登录使用。该窗口使用系统浏览器自己的 Cookie，与隔离 WebView 独立。后端账号入口部署后可使用常规“打开服务”；不会为了 App 改写后端认证。2026-10-22 本机探测域名 TLS 失败，因此默认 IP 保留，可手动改地址。
+首次连接无需 Tailscale 或浏览器已有登录记录：点击“连接电脑 · 登录与配对”，输入管理员提供的公网入口账号密码，然后在服务器配对页输入电脑端生成的十分钟一次性配对码。服务账号和电脑配对码不是同一个凭据。当前多用户账号服务尚未确认切换到公网，不能把 `/account` 当作自助注册入口。安卓启动时默认现有入口；其他入口收进高级设置。管理员在电脑上签发配对码的命令为 `.venv\Scripts\python.exe relay_gateway.py pair --label "Android 手机"`（在仓库根目录运行，配对码不要提交或发布）。
+
+文件和图片通过 Android 系统文件选择器上传；窗口保留返回键历史导航，音视频采集按系统权限询问。直接拍照、下载、Cookie 跨进程重启、SSE 恢复及真实上传仍需手机验收。原“兼容登录（系统浏览器）”仅保留作备用窗口；其 Cookie 独立，不能用来给主窗口预先登录。iOS 继续使用官方 InAppBrowser，现有签名与云工作流不变。
+
+原生源码在 `native/android/`，由 prepare 脚本写入可重新生成的 Android 工程。构建包含 JS 入口测试、Java origin 策略测试和 Robolectric 原生认证弹窗测试（固定 4.17）；本地框架测试不等于手机连真实后端验收。APK 版本为 0.2.0/versionCode 2，沿用原 debug 签名，可覆盖安装旧测试版。
 
 ## 本地运行
 
@@ -40,7 +44,7 @@ npm run dev
 
 启动页只保存 HTTPS origin 和 home/account 入口。默认 IP 为当前服务，域名启用后可直接在界面替换。`com.pocketagentdesk.remote` 仅为候选 bundle ID，未注册 Apple App ID，显示名也可修改。
 
-原生应用通过官方 InAppBrowser 的独立 WKWebView 打开服务。远端页面不放进带 Capacitor 桥接的主 WebView。服务器正常返回 remote.html 并注入 window.MACHINE，保留 static、诊断测速和全部业务接口。当前单用户选“当前遥控入口”；多用户云端部署完成后选“多用户账号入口”。不替换或绕过另一任务的认证。
+iOS 应用通过官方 InAppBrowser 的独立 WKWebView 打开服务；Android 主窗口见上节。远端页面不放进带 Capacitor 桥接的主 WebView。服务器正常返回 remote.html 并注入 window.MACHINE，保留 static、诊断测速和全部业务接口。当前单用户使用现有配对入口；多用户云端部署完成后选择多用户账号入口。不替换或绕过另一任务的认证。
 
 Cookie：服务器设置的 Secure/HttpOnly/SameSite=Strict Cookie 留在服务 WebView；启动页不读取、不复制 Cookie，不保存密码。与 Safari 的登录状态不保证共享；需要在 App 内重新登录。关闭窗口不等于退出，退出须走服务页面。Cookie 跨关闭/重启持久性仍需 iOS 实测。
 

@@ -1,14 +1,18 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { InAppBrowser, DefaultWebViewOptions, DefaultSystemBrowserOptions } from '@capacitor/inappbrowser';
 import { DEFAULT_ORIGIN, normalizeOrigin, entryUrl } from './settings.mjs';
 const $ = id => document.getElementById(id);
 const key = 'agent-remote.connection.v1';
+const RemoteBrowser = registerPlugin('RemoteBrowser');
+const android = Capacitor.getPlatform() === 'android';
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch {}
 try { $('origin').value = normalizeOrigin(saved.origin || DEFAULT_ORIGIN); }
 catch { $('origin').value = DEFAULT_ORIGIN; }
-$('entry').value = saved.entry === 'account' ? 'account' : 'home';
-$('compat').hidden = Capacitor.getPlatform() !== 'android';
+$('entry').value = android ? 'home' : saved.entry === 'account' ? 'account' : 'home';
+$('compat').hidden = !android;
+$('onboarding').hidden = !android;
+if (android) $('open').textContent = '连接电脑 · 登录与配对';
 $('forget').onclick = () => {
   localStorage.removeItem(key);
   $('origin').value = DEFAULT_ORIGIN;
@@ -31,6 +35,11 @@ $('connect').onsubmit = async event => {
     if (event.submitter?.id === 'compat') {
       await InAppBrowser.openInSystemBrowser({ url, options: DefaultSystemBrowserOptions });
       $('status').textContent = '已打开系统浏览器登录窗口，其登录状态与应用内窗口独立。';
+      return;
+    }
+    if (android) {
+      await RemoteBrowser.open({ url });
+      $('status').textContent = '请在连接窗口中登录，并按提示输入电脑配对码。';
       return;
     }
     await InAppBrowser.openInWebView({ url, options: {

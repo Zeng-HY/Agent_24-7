@@ -24,9 +24,10 @@ if (!(Test-Path android)) { Invoke-Checked 'npx.cmd' @('cap', 'add', 'android') 
 Invoke-Checked 'npx.cmd' @('cap', 'sync', 'android')
 Invoke-Checked 'node' @('scripts/prepare-android.mjs')
 Push-Location android
-try { Invoke-Checked '.\gradlew.bat' @('--no-daemon', '--console=plain', 'assembleDebug') }
+try { Invoke-Checked '.\gradlew.bat' @('--no-daemon', '--console=plain', ':app:testDebugUnitTest', 'assembleDebug') }
 finally { Pop-Location }
 New-Item -ItemType Directory -Force build | Out-Null
-Copy-Item android/app/build/outputs/apk/debug/app-debug.apk build/PocketAgentDesk-debug.apk -Force
-Invoke-Checked "$AndroidSdk/build-tools/36.0.0/apksigner.bat" @('verify', '--verbose', '--print-certs', 'build/PocketAgentDesk-debug.apk')
-Get-FileHash build/PocketAgentDesk-debug.apk -Algorithm SHA256
+$apkOutput = 'build/PocketAgentDesk-0.2.0-debug.apk'
+Copy-Item android/app/build/outputs/apk/debug/app-debug.apk $apkOutput -Force
+Invoke-Checked "$AndroidSdk/build-tools/36.0.0/apksigner.bat" @('verify', '--verbose', '--print-certs', $apkOutput)
+Get-FileHash $apkOutput -Algorithm SHA256
