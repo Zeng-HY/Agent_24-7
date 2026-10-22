@@ -52,7 +52,7 @@ class DiagnosticSpeedTests(unittest.TestCase):
 
     def test_off_has_no_records_or_extra_requests(self):
         self.assertEqual(self.upload(),{'ok':True})
-        self.assertEqual(self.page.locator('#diagnosticResults').inner_text(),'未开启')
+        self.assertEqual(self.page.locator('#diagnosticResults').inner_text(),'')
         self.assertEqual(self.page.evaluate('calls.length'),1)
         self.assertTrue(self.page.locator('#diagnosticProbe').is_disabled())
 
@@ -87,7 +87,7 @@ class DiagnosticSpeedTests(unittest.TestCase):
         self.assertNotIn('图片上传：',self.page.locator('#diagnosticResults').inner_text())
         self.page.locator('#diagnosticSpeedSwitch').uncheck()
         self.upload()
-        self.assertEqual(self.page.locator('#diagnosticResults').inner_text(),'未开启')
+        self.assertEqual(self.page.locator('#diagnosticResults').inner_text(),'')
 
 
 if __name__=='__main__':unittest.main()

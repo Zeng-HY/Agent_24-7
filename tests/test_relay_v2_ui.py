@@ -58,7 +58,7 @@ class UI(unittest.TestCase):
                     page.locator('#name').fill('new@example.test');page.locator('#password').fill('new-user-password')
                     page.locator('#form').evaluate('(form)=>form.requestSubmit()')
                     page.locator('#resend').wait_for(state='visible')
-                    page.locator('#resend').click();page.get_by_text('验证邮件已重新发送',exact=True).wait_for()
+                    page.locator('#resend').click();page.get_by_text('已重新发送',exact=True).wait_for()
                     self.assertEqual(len(mail.sent),2)
                     page.locator('#mode').click();page.locator('#name').fill('alice');page.locator('#password').fill('password-for-alice')
                     page.locator('#submit').click();page.locator('#signed').wait_for(state='visible')

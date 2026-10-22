@@ -212,7 +212,7 @@ def bind_window(binding):
     webview.settings['ALLOW_FILE_URLS']=False
     webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER']=False
     window=webview.create_window('Agent Remote',binding['origin']+'/account?authorize='+request['id'],width=500,height=700,min_size=(380,540),
-        background_color='#f6f6f6',js_api=None)
+        background_color='#ffffff',js_api=None)
     approved=threading.Event();closed=threading.Event()
     window.events.closed+=lambda:closed.set()
     window.events.before_show+=lambda:harden_window(window,binding['origin'])

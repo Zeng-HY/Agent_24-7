@@ -15,7 +15,7 @@ $('forget').onclick = () => {
   localStorage.removeItem(key);
   $('origin').value = DEFAULT_ORIGIN;
   $('entry').value = 'account';
-  $('status').textContent = '已恢复默认地址。服务中的登录状态未更改。';
+  $('status').textContent = '已恢复默认';
 };
 $('connect').onsubmit = async event => {
   event.preventDefault();
@@ -27,12 +27,12 @@ $('connect').onsubmit = async event => {
     const url = entryUrl(origin, entry);
     localStorage.setItem(key, JSON.stringify({ origin, entry, flowVersion: 3 }));
     if (!Capacitor.isNativePlatform()) {
-      $('status').textContent = '网页预览已验证地址：' + url + '。应用内连接需安装移动应用；本预览不会访问服务。';
+      $('status').textContent = url;
       return;
     }
     if (event.submitter?.id === 'compat') {
       await InAppBrowser.openInSystemBrowser({ url, options: DefaultSystemBrowserOptions });
-      $('status').textContent = '已打开系统浏览器登录窗口，其登录状态与应用内窗口独立。';
+      $('status').textContent = '已在浏览器中打开';
       return;
     }
     if (android) {
@@ -47,7 +47,7 @@ $('connect').onsubmit = async event => {
       android: { ...DefaultWebViewOptions.android, hardwareBack: true, isIsolated: true }
     }});
     $('status').textContent = '';
-  } catch (error) { $('status').textContent = error.message || '打开失败，请检查地址与网络。'; }
+  } catch (error) { $('status').textContent = error.message || '打不开，请检查地址和网络'; }
   finally { $('open').disabled = false; $('compat').disabled = false; }
 };
 
