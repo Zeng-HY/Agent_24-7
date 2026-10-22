@@ -21,8 +21,9 @@ if not exist ".venv\Scripts\python.exe" (
   exit /b 1
 )
 echo 安装需要的 Python 包……
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt
-if errorlevel 1 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+rem pip in UTF-8 mode (-X utf8): otherwise it reads requirements.txt in the system code page, GBK on a Chinese Windows.
+".venv\Scripts\python.exe" -X utf8 -m pip install --disable-pip-version-check -q -r requirements.txt
+if errorlevel 1 ".venv\Scripts\python.exe" -X utf8 -m pip install --disable-pip-version-check -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 if errorlevel 1 (
   echo Python 包没装上，看上面的错误。
   pause

@@ -232,7 +232,8 @@ def main(argv: list[str] | None = None) -> int:
     CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     voice = cfg.get("voice") is not False
     say(f"1/4 这台电脑叫「{cfg['name']}」，" + ("开语音。" if voice else "不开语音（没有语音模型）。"))
-    if voice and subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r",
+    # pip in UTF-8 mode, as in 安装.cmd: it reads a requirements file in the system code page otherwise (GBK, 10-22)
+    if voice and subprocess.run([sys.executable, "-X", "utf8", "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r",
                                  str(HERE / "requirements-voice.txt")]).returncode != 0:
         say("语音要用的包没装上，看上面的错误。")
         return 1
