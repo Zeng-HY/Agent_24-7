@@ -102,6 +102,8 @@ public class FirstLoginTest {
             assertFalse(activity.onAppearanceMessage("{",android.net.Uri.parse("https://example.com"),true));
             assertTrue(activity.onAppearanceMessage(message,android.net.Uri.parse("https://example.com"),true));
             assertEquals("dark",ThemePolicy.get(activity));
+            assertFalse(activity.acceptThemeRead(org.json.JSONObject.quote(message.replace("dark","light")),"https://example.com/account",token));
+            assertEquals("dark",ThemePolicy.get(activity));
             assertTrue((Boolean)ReflectionHelpers.getField(activity,"themeEventsActive"));
             LinearLayout root=ReflectionHelpers.getField(activity,"root");
             assertEquals(0xff000000,((android.graphics.drawable.ColorDrawable)root.getBackground()).getColor());

@@ -67,12 +67,15 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         }catch(Exception invalid){return false;}
     }
     private void syncTheme(){
-        if(!themeReady||web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return;
+        if(themeEventsActive||!themeReady||web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return;
         final String url=web.getUrl(),token=documentToken;
         web.evaluateJavascript("window.TeleplyTheme ? JSON.stringify({mode:window.TeleplyTheme.get(),resolved:document.documentElement.dataset.theme,document:window.__teleplyAppearanceDocument}) : null",value->{
-            if(!token.equals(documentToken)||!url.equals(web.getUrl()))return;
-            try{Object raw=new JSONTokener(value).nextValue();if(raw instanceof String)receiveAppearance((String)raw,Uri.parse(url),true);}catch(Exception invalid){}
+            acceptThemeRead(value,url,token);
         });
+    }
+    boolean acceptThemeRead(String value,String url,String token){
+        if(themeEventsActive||!token.equals(documentToken)||web==null||!url.equals(web.getUrl()))return false;
+        try{Object raw=new JSONTokener(value).nextValue();return raw instanceof String&&receiveAppearance((String)raw,Uri.parse(url),true);}catch(Exception invalid){return false;}
     }
     private void seedTheme(){
         if(web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl())||documentToken.equals(seededToken))return;
