@@ -26,7 +26,9 @@ else:
     (build/'windows-build.json').write_text(json.dumps(version),encoding='utf-8')
     numeric=version['version'].split('-')[0]+'.'+str(version['build'])
     (build/'windows-version.iss').write_text('#define AppVersion "'+version['version']+'"\n#define AppNumericVersion "'+numeric+'"\n',encoding='utf-8')
-    (build/'windows-release-notes.md').write_text('## 本版重点\n\n'+'\n'.join('- '+s for s in summary)+'\n\n<details>\n<summary>更新详情</summary>\n\n'+notes['details']+'\n\n</details>\n',encoding='utf-8')
+    # dev.5 displays the first 500 characters of the Release body literally.
+    # Keep that body concise and plain; the manifest carries the full details.
+    (build/'windows-release-notes.md').write_text('本版变化\n\n'+'\n\n'.join('• '+s for s in summary)+'\n\n安装说明\n自启选项改为“开机时启动”。dev.5 可通过检查更新升级；已装 dev.6/build 6 请手动覆盖安装。\n安卓外链支持另需安装本次附带的补充 APK。真实手机及另一台电脑上的原始链接仍待验收。\n',encoding='utf-8')
 
 if '--manifest' not in sys.argv:
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
