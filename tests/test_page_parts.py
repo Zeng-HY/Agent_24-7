@@ -88,6 +88,8 @@ class Parts(unittest.TestCase):
             page.evaluate("document.getElementById('cvText').value='unsent fixture'")
             page.clock.run_for(1000);page.clock.fast_forward(17000)
             page.wait_for_function("pageParts.snapshot().some(r=>r.key==='claudeUI'&&r.status==='timeout')")
+            page.get_by_role('button',name='关闭加载提示',exact=True).click()
+            self.assertFalse(page.locator('#partsNotice').is_visible())
             page.evaluate('pageParts.retry()')
             self.assertEqual(len(requests),1)
             self.assertEqual(page.locator('#cvText').input_value(),'unsent fixture')
