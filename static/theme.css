@@ -1,6 +1,6 @@
 /* Appearance controls are shared by the launcher, account page and remote UI. */
-:root{--theme-panel:#f4f4f6;--theme-edge:#d6d6dc;--theme-focus:#2563eb;--theme-text:#171719;color-scheme:light}
-:root[data-theme=dark]{color-scheme:dark;--bg:#000;--card:#141414;--line:#333;--text:#eee;--ink:#eee;--muted:#a8a8a8;--soft:#1e1e1e;--blue:#8ab4ff;--green:#66d997;--red:#ff9a9a;--danger:#ff9a9a;--amber:#efbd6a;--theme-panel:#1e1e1e;--theme-edge:#767676;--theme-focus:#8ab4ff;--theme-text:#eee;--shadow:0 8px 32px #0008;background:#000;color:#eee}
+:root{--page-bg:#fff;--panel-bg:#fff;--sidebar-bg:#f4f5f7;--chat-bg:#fff;background:var(--page-bg);--theme-panel:#f4f4f6;--theme-edge:#d6d6dc;--theme-focus:#2563eb;--theme-text:#171719;color-scheme:light}
+:root[data-theme=dark]{--page-bg:#000;--panel-bg:#141414;--sidebar-bg:#141414;--chat-bg:#000;color-scheme:dark;--bg:#000;--card:#141414;--line:#333;--text:#eee;--ink:#eee;--muted:#a8a8a8;--soft:#1e1e1e;--blue:#8ab4ff;--green:#66d997;--red:#ff9a9a;--danger:#ff9a9a;--amber:#efbd6a;--theme-panel:#1e1e1e;--theme-edge:#767676;--theme-focus:#8ab4ff;--theme-text:#eee;--shadow:0 8px 32px #0008;background:#000;color:#eee}
 .theme-title{font-size:13px;font-weight:500;color:var(--muted,#6b7280);margin:6px 0 10px}
 .theme-choices{display:flex;gap:6px;flex:none;padding:5px;border:1px solid var(--theme-edge);border-radius:16px;background:var(--theme-panel)}
 .theme-choices button{flex:1;min-height:44px;padding:8px 10px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--theme-text);font-family:inherit;font-size:14px;font-weight:500;line-height:1.4;cursor:pointer;white-space:nowrap}
@@ -16,8 +16,8 @@
 :root[data-theme=dark] :is(button,.chip,.sub-card,.code-wrap,.reference-chip,.voice-pill,.msg-menu,.new-composer,.codex-card,.option-card){color:#eee;background-color:#1e1e1e;border-color:#767676}
 :root[data-theme=dark] :is(.icon-btn,.menu-row,.nav-links button,.text-button,.reveal,.tree-add,.ctx-ring,.runtime-bar){background:transparent;color:inherit}
 :root[data-theme=dark] :is(.sheet .box,dialog,.menu,.device-options,.action-menu,.theme-settings-panel){background:#1e1e1e;color:#eee;border-color:#767676}
-:root[data-theme=dark] :is(.primary,.device-actions>button,button.big,#cvBtn,.chip.on){background:#8ab4ff;color:#101010;border-color:#8ab4ff;box-shadow:none}
-:root[data-theme=dark] :is(.primary,.device-actions>button,button.big,#cvBtn):hover{background:#b1cdff}
+:root[data-theme=dark] :is(.primary,.device-connect,button.big,[id="cvBtn"],.chip.on){background:#8ab4ff;color:#101010;border-color:#8ab4ff;box-shadow:none}
+:root[data-theme=dark] :is(.primary,.device-connect,button.big,[id="cvBtn"]):hover{background:#b1cdff}
 :root[data-theme=dark] :is(.field input,.field select,#approval .field select){background-color:#1e1e1e;color:#eee}
 :root[data-theme=dark] :is(.bub.user){background:#1e1e1e;color:#eee;border:1px solid #333}
 :root[data-theme=dark] :is(.bub.assistant,.bub.note){background:transparent}
@@ -49,3 +49,15 @@
 :root[data-theme=dark] .ask-pill .ask-dot{background:#efbd6a}
 
 :root[data-theme=dark] :is(.field input,.field select,.connection-card input,.connection-card select){border:1px solid #767676}
+
+.connection-error{box-sizing:border-box;max-width:440px;margin:12vh auto;padding:24px;color:var(--theme-text);font:16px/1.7 system-ui,sans-serif}
+.connection-error h1{font-size:24px}.connection-error a{display:flex;justify-content:center;align-items:center;min-height:48px;margin-top:12px;padding:8px 16px;border:1px solid var(--theme-edge);border-radius:14px;color:var(--theme-text);text-decoration:none;background:var(--theme-panel)}
+.device-actions .device-connect:disabled{background:var(--soft,#f4f4f6);color:var(--muted,#86868b);border:1px solid var(--line,#ddd);opacity:1;cursor:default;box-shadow:none;transform:none}
+.device-actions .icon-button{background:transparent;color:var(--ink,#111113)}
+
+:root[data-theme=dark] .device-actions .device-connect:disabled{background:var(--soft);color:var(--muted);border:1px solid var(--line);opacity:1;box-shadow:none;transform:none}
+:root[data-theme=dark] .device-actions .icon-button{background:transparent;color:var(--ink)}
+
+.device-actions .device-connect:disabled{transition:none}
+
+:root[data-theme=dark] .tree-app .mark.code-symbol{color:var(--text)}

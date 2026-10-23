@@ -9,18 +9,24 @@
   function apply() {
     const dark = mode === 'dark' || (mode === 'system' && media.matches);
     root.dataset.theme = dark ? 'dark' : 'light'; root.dataset.themeMode = mode;
-    let meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = dark ? '#000000' : '#ffffff';
+    const metas=[...document.querySelectorAll('meta[name="theme-color"]')];
+    let meta=metas.shift();if(!meta){meta=document.createElement('meta');meta.name='theme-color';document.head.append(meta);}
+    for(const duplicate of metas)duplicate.remove();
+    meta.content=dark?'#000000':'#ffffff';
     let icon = document.querySelector('link[rel="icon"]');
     if (!icon) { icon = document.createElement('link'); icon.rel = 'icon'; document.head.append(icon); }
     icon.type = 'image/svg+xml'; icon.href = asset(dark ? 'favicon-dark.svg' : 'favicon.svg');
     document.querySelectorAll('[data-theme-choice]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeChoice === mode)));
-    dispatchEvent(new CustomEvent('teleply-theme-change', {detail:{mode, resolved:root.dataset.theme}}));
+    const detail={mode,resolved:root.dataset.theme};
+    dispatchEvent(new CustomEvent('teleply-theme-change',{detail}));
+    try{if(window.__teleplyAppearanceDocument)window.TeleplyAppearance?.postMessage(JSON.stringify({...detail,document:window.__teleplyAppearanceDocument}));}catch{}
   }
   function set(value) { if (!valid(value)) return false; mode=value; try {localStorage.setItem(KEY,value);} catch {} apply(); return true; }
   window.TeleplyTheme = {set, get:()=>mode};
   media.addEventListener('change',()=>{if(mode==='system')apply();});
   addEventListener('storage',e=>{if(e.key===KEY || e.key===null){mode=valid(e.newValue)?e.newValue:'system';apply();}});
+  addEventListener('pageshow',apply);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)apply();});
   apply();
   function choices(container) {
     const title=document.createElement('h2');title.className='theme-title';title.textContent='外观';

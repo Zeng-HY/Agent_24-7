@@ -153,8 +153,8 @@ document.addEventListener('keydown',event=>{if(event.key==='Tab')document.docume
   .app-heading .machine-switch:not(:disabled)::after { content:' ⌄'; }
   .computer-here { color:var(--blue); }
   section { border:0; border-radius:var(--radius); padding:16px; margin:12px 16px 0; }
-  .conversation-home { margin:0; border-radius:0; min-height:calc(100dvh - 120px); padding:12px 16px; }
-  body[data-current-mode="chat"] { background:#fff; }
+  .conversation-home { margin:0; border-radius:0; min-height:calc(100dvh - var(--app-header-height, 0px)); padding:12px 16px calc(16px + env(safe-area-inset-bottom)); }
+  body[data-current-mode="chat"] { background:var(--page-bg,#fff); padding-bottom:0; min-height:100dvh; }
   .chips { gap:8px; padding-bottom:16px; }
   .chip { min-height:44px; padding:8px 16px; border:0; border-radius:999px; font-weight:500; }
   .conv { padding:16px 4px; cursor:pointer; border-color:var(--bg); border-radius:8px; }
@@ -175,7 +175,7 @@ document.addEventListener('keydown',event=>{if(event.key==='Tab')document.docume
   .badge.codex { background:#111111; color:#fff; }
   .badge.deepseek { background:#4d6bfe; color:#fff; }  /* DeepSeek's own blue, as Claude's orange and Codex's black (10-20) */
   #convHint { padding:16px 4px; }
-  #convView { background:#fff; height:100dvh; }
+  #convView { background:var(--chat-bg,#fff); height:100dvh; }
   .cv-top { padding:calc(8px + env(safe-area-inset-top)) 12px 8px; gap:8px; border:0; flex:none; }
   .cv-top .back { color:var(--text); padding:10px; }
   #cvTitle { font-size:17px; font-weight:600; } #cvMeta { margin-top:4px; }
@@ -625,6 +625,10 @@ if (window.visualViewport) {
   visualViewport.addEventListener('scroll', keyboardCheck);
 }
 window.addEventListener('resize', fitView);
+const pageHeader=document.querySelector('body>header');
+function measurePageHeader(){if(pageHeader)document.documentElement.style.setProperty('--app-header-height',pageHeader.getBoundingClientRect().height+'px');}
+if(pageHeader&&window.ResizeObserver)new ResizeObserver(measurePageHeader).observe(pageHeader);
+measurePageHeader();
 
 function openConv(c, fromHistory = false) {
   if(window.newChatUI?.route(c,fromHistory))return;
@@ -1109,7 +1113,12 @@ function syncInert() {
 function fitOverlays() {
   const view = viewportBox();
   for (const o of overlays) {
-    const node = $(o.id); node.style.top = view.top + 'px'; node.style.height = view.height + 'px'; node.style.bottom = 'auto';
+    const node = $(o.id);
+    if(node.classList.contains('drawer')&&!keyboardCut){
+      for(const key of ['top','height','bottom'])node.style.removeProperty(key);
+      node.style.setProperty('--overlay-height','100dvh');continue;
+    }
+    node.style.top = view.top + 'px'; node.style.height = view.height + 'px'; node.style.bottom = 'auto';
     node.style.setProperty('--overlay-height',view.height+'px');
     if (node.classList.contains('popover') && o.anchor) {
       const r = o.anchor.getBoundingClientRect(), box = node.querySelector('.box'), h = view.height, top = view.top;

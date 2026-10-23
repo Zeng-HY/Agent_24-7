@@ -122,6 +122,8 @@ class TunnelHub:
             status=metadata.get('status')
             if not isinstance(status,int) or not 200<=status<=599: raise ValueError('invalid status')
             if not self.allowed(conn,token): raise PermissionError()
+            if status in (502,503,504) and request.method=='GET' and (request.headers.get('Sec-Fetch-Mode')=='navigate' or 'text/html' in request.headers.get('Accept','')):
+                raise web.HTTPServiceUnavailable(text='电脑连接中断，请重试')
             headers={k:v for k,v in metadata.get('headers',{}).items() if k.lower() in RESPONSE_HEADERS and isinstance(v,str)}
             headers.update({'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Agent-Remote-Transport':'wss'})
             if request.method=='GET' and urlsplit(target).path in ('/','/input-diagnostics') and any(k.lower()=='content-type' and 'text/html' in v for k,v in headers.items()):

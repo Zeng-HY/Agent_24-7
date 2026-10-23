@@ -49,6 +49,41 @@ class V2Tests(unittest.IsolatedAsyncioTestCase):
         async with self.client.get(self.origin+'/account/config') as response:
             version=(await response.json())['version'];self.assertEqual(version,json.loads((Path(__file__).resolve().parents[1]/'windows-version.json').read_text())['version'])
 
+    async def test_offline_select_and_document_navigation_recover(self):
+        self.tasks[0].cancel();await asyncio.gather(self.tasks[0],return_exceptions=True)
+        await self.service.hub.disconnect(self.devices[0])
+        async with self.client.get(self.origin+'/account/state',headers=self.headers()) as r:
+            data=await r.json();self.assertFalse(data['devices'][0]['connectable'])
+        async with self.client.post(self.origin+'/account/select',json={'id':self.devices[0]},headers=self.headers()) as r:
+            self.assertEqual(r.status,409);self.assertEqual((await r.json())['code'],'device_offline')
+        async with self.client.get(self.origin+'/d/'+self.devices[0]+'/',headers={**self.headers(),'Accept':'text/html'}) as r:
+            self.assertEqual(r.status,503);self.assertIn('text/html',r.headers['Content-Type']);self.assertIn('返回我的电脑',await r.text())
+        async with self.client.get(self.origin+'/d/'+self.devices[0]+'/api/status',headers=self.headers()) as r:
+            self.assertEqual(r.status,503);self.assertIn('error',await r.json())
+        async with self.client.post(self.origin+'/account/select',json={'id':self.devices[1]},headers=self.headers()) as r:
+            self.assertEqual(r.status,404)
+
+    async def test_online_and_disconnect_after_select(self):
+        async with self.client.get(self.origin+'/account/state',headers=self.headers()) as r:
+            self.assertTrue((await r.json())['devices'][0]['connectable'])
+        async with self.client.post(self.origin+'/account/select',json={'id':self.devices[0]},headers=self.headers()) as r:
+            self.assertEqual(r.status,200)
+        self.tasks[0].cancel();await asyncio.gather(self.tasks[0],return_exceptions=True);await self.service.hub.disconnect(self.devices[0])
+        async with self.client.get(self.origin+'/d/'+self.devices[0]+'/',headers={**self.headers(),'Sec-Fetch-Mode':'navigate'}) as r:
+            self.assertEqual(r.status,503);self.assertIn('/account?choose=1',await r.text())
+
+    async def test_legacy_availability_coalesces_authenticated_probes(self):
+        calls=[];healthy=[True]
+        async def status(req):
+            calls.append(req.headers.get('Authorization'));await asyncio.sleep(.05)
+            return web.json_response({'ok':healthy[0]})
+        app=web.Application();app.router.add_get('/api/status',status);port=await self.start(app)
+        row={'id':'test-legacy','port':port,'gateway_secret':'probe-secret'}
+        self.assertEqual(await asyncio.gather(*(self.service.connectable(row) for _ in range(5))),[True]*5)
+        self.assertEqual(calls,['Bearer probe-secret'])
+        healthy[0]=False;self.assertFalse(await self.service.connectable(row,fresh=True))
+        row['port']=0;self.assertFalse(await self.service.connectable(row))
+
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.runners=[];self.tasks=[]
         self.store=Identity(Path(self.tmp.name)/'state.sqlite3')

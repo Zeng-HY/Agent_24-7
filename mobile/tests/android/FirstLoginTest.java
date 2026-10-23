@@ -87,6 +87,43 @@ public class FirstLoginTest {
             assertNull(shadowOf(web).getLastEvaluatedJavascript());
         }
     }
+    @Test public void appearanceMessageIsOriginFrameEnumAndDocumentBound() throws Exception {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),RemoteBrowserActivity.class).putExtra("url","https://example.com/account");
+        try(var controller=Robolectric.buildActivity(RemoteBrowserActivity.class,intent).setup()){
+            RemoteBrowserActivity activity=controller.get();
+            WebView web=ReflectionHelpers.getField(activity,"web");
+            ReflectionHelpers.setField(activity,"themeReady",true);
+            String token=ReflectionHelpers.getField(activity,"documentToken");
+            String message=new org.json.JSONObject().put("mode","dark").put("resolved","dark").put("document",token).toString();
+            assertFalse(activity.onAppearanceMessage(message,android.net.Uri.parse("https://evil.example"),true));
+            assertFalse(activity.onAppearanceMessage(message,android.net.Uri.parse("https://example.com"),false));
+            assertFalse(activity.onAppearanceMessage(message.replace("dark","invalid"),android.net.Uri.parse("https://example.com"),true));
+            assertFalse(activity.onAppearanceMessage(message.replace(token,"old-document"),android.net.Uri.parse("https://example.com"),true));
+            assertFalse(activity.onAppearanceMessage("{",android.net.Uri.parse("https://example.com"),true));
+            assertTrue(activity.onAppearanceMessage(message,android.net.Uri.parse("https://example.com"),true));
+            assertEquals("dark",ThemePolicy.get(activity));
+            assertTrue((Boolean)ReflectionHelpers.getField(activity,"themeEventsActive"));
+            LinearLayout root=ReflectionHelpers.getField(activity,"root");
+            assertEquals(0xff000000,((android.graphics.drawable.ColorDrawable)root.getBackground()).getColor());
+            String light=message.replace("dark","light");
+            assertTrue(activity.onAppearanceMessage(light,android.net.Uri.parse("https://example.com"),true));
+            assertEquals(0xffffffff,((android.graphics.drawable.ColorDrawable)root.getBackground()).getColor());
+            web.getWebViewClient().onPageStarted(web,"https://example.com/account",null);
+            assertFalse(activity.onAppearanceMessage(message,android.net.Uri.parse("https://example.com"),true));
+            assertEquals("light",ThemePolicy.get(activity));
+        }
+    }
+    @Test public void finishedPageSeedsThemeOnlyOnce() {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),RemoteBrowserActivity.class).putExtra("url","https://example.com/account");
+        try(var controller=Robolectric.buildActivity(RemoteBrowserActivity.class,intent).setup()){
+            RemoteBrowserActivity activity=controller.get();WebView web=ReflectionHelpers.getField(activity,"web");
+            web.getWebViewClient().onPageFinished(web,"https://example.com/account");
+            String first=shadowOf(web).getLastEvaluatedJavascript();
+            ThemePolicy.save(activity,"dark");
+            web.getWebViewClient().onPageFinished(web,"https://example.com/account");
+            assertEquals(first,shadowOf(web).getLastEvaluatedJavascript());
+        }
+    }
     @Test public void freshBrowserShowsNativeCredentialsAndCanCancelWithoutLogin() {
         Intent intent = new Intent(RuntimeEnvironment.getApplication(), RemoteBrowserActivity.class)
             .putExtra("url", "https://example.com/");

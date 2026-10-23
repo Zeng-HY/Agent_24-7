@@ -11,6 +11,7 @@ await replace('android/variables.gradle', 'minSdkVersion = 24', 'minSdkVersion =
 await replace('android/app/build.gradle', 'android {', 'android {\n    buildToolsVersion "36.0.0"');
 await replace('android/app/build.gradle', 'dependencies {', 'dependencies {\n    testImplementation "org.robolectric:robolectric:4.17"');
 await replace('android/app/build.gradle', 'buildToolsVersion "36.0.0"', 'buildToolsVersion "36.0.0"\n    testOptions { unitTests.includeAndroidResources = true }');
+await replace('android/app/build.gradle', 'dependencies {', 'dependencies {\n    implementation "androidx.webkit:webkit:$androidxWebkitVersion"');
 const appGradle = await readFile('android/app/build.gradle', 'utf8');
 const version = JSON.parse(await readFile('android-version.json', 'utf8'));
 if (!/^\d+\.\d+\.\d+$/.test(version.name) || !Number.isSafeInteger(version.code) || version.code < 1) throw new Error('Invalid Android version');

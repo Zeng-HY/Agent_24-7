@@ -18,15 +18,22 @@ final class ThemePolicy {
         return new androidx.appcompat.app.AlertDialog.Builder(c,dark(c)?androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert:androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert);
     }
     static void apply(Activity a, View root) {
-        boolean dark=dark(a);int bg=dark?0xff000000:0xffffffff;
-        a.getWindow().setStatusBarColor(bg);a.getWindow().setNavigationBarColor(bg);
+        apply(a,root,dark(a));
+    }
+    static void apply(Activity a, View root, boolean dark) {
+        int bg=dark?0xff000000:0xffffffff;
+        a.getWindow().setStatusBarColor(android.os.Build.VERSION.SDK_INT>=35?android.graphics.Color.TRANSPARENT:bg);
+        a.getWindow().setNavigationBarColor(android.os.Build.VERSION.SDK_INT>=35?android.graphics.Color.TRANSPARENT:bg);
+        if(android.os.Build.VERSION.SDK_INT>=29){a.getWindow().setNavigationBarContrastEnforced(false);a.getWindow().setStatusBarContrastEnforced(false);}
         a.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(bg));
         if(root!=null) root.setBackgroundColor(bg);
-        View decor=a.getWindow().getDecorView();
+        View decor=a.getWindow().getDecorView();decor.setBackgroundColor(bg);
+        View content=a.findViewById(android.R.id.content);if(content!=null)content.setBackgroundColor(bg);
         androidx.core.view.WindowInsetsControllerCompat bars=WindowCompat.getInsetsController(a.getWindow(),decor);
         bars.setAppearanceLightStatusBars(!dark);bars.setAppearanceLightNavigationBars(!dark);
     }
     static void text(View view,boolean dark) {
+        if(view instanceof android.widget.Button)view.setBackgroundTintList(android.content.res.ColorStateList.valueOf(dark?0xff1e1e1e:0xfff4f4f6));
         if(view instanceof TextView) ((TextView)view).setTextColor(dark?0xffeeeeee:0xff333333);
         if(view instanceof ViewGroup) for(int i=0;i<((ViewGroup)view).getChildCount();i++) text(((ViewGroup)view).getChildAt(i),dark);
     }

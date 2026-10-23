@@ -38,14 +38,18 @@ with sync_playwright() as pw:
     ctx.route('**/*',route);ctx.add_init_script(fixture.INIT);page=ctx.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
     page.goto(fixture.ORIGIN+PREFIX+'/');page.wait_for_function('window.navigationUI && window.codexUI && window.readingUI')
     page.locator('header [aria-label="打开导航"]').click();page.wait_for_timeout(500)
-    row=page.locator('.relay-menu button').filter(has_text='连接设置');r=row.bounding_box();footer=page.locator('.nav-foot').bounding_box();menu=page.locator('.relay-menu').bounding_box()
+    row=page.locator('.relay-menu button').filter(has_text='刷新');r=row.bounding_box();footer=page.locator('.nav-foot').bounding_box();menu=page.locator('.relay-menu').bounding_box()
     assert menu['y']+menu['height']<=footer['y']+1
     assert footer['y']+footer['height']>=830
     xs=page.locator('.relay-menu .nav-action-label').evaluate_all('(ns)=>ns.map(n=>n.getBoundingClientRect().left)');assert max(xs)-min(xs)<1
     tree=page.locator('.tree-app .tree-name').first.bounding_box();assert abs(tree['x']-xs[0])<1,(tree,xs)
-    ticks=page.evaluate('window.__haptics');page.touchscreen.tap(r['x']+r['width']-10,r['y']+r['height']/2)
-    page.wait_for_selector('dialog.ar-connection[open]');assert page.evaluate('window.__haptics')>ticks
-    page.locator('.ar-done').click();page.screenshot(path=str(OUT/'drawer.png'));page.locator('#navSheet [aria-label="关闭导航"]').click()
+    assert not page.locator('.relay-menu button').filter(has_text='连接设置').count()
+    page.evaluate("navigator.vibrate=()=>{sessionStorage.setItem('footerTick','1');return true}")
+    with page.expect_navigation():page.touchscreen.tap(r['x']+r['width']-10,r['y']+r['height']/2)
+    page.wait_for_function('window.navigationUI && window.codexUI && window.readingUI')
+    assert page.evaluate("sessionStorage.getItem('footerTick')")=='1'
+    page.locator('header [aria-label="打开导航"]').click();page.wait_for_timeout(450)
+    page.screenshot(path=str(OUT/'drawer.png'));page.locator('#navSheet [aria-label="关闭导航"]').click()
     page.evaluate('c=>openConv(c)',fixture.fake_chat('codex','c4'));page.wait_for_function('!document.getElementById("cvBtn").disabled || !!document.querySelector("#modelChoice .composer-label")');page.wait_for_timeout(500)
     centers=page.locator('#addImageBtn,#modelChoice,#modeChoice').evaluate_all('(ns)=>ns.map(n=>{const r=n.getBoundingClientRect();return r.y+r.height/2})');assert max(centers)-min(centers)<1,centers
     assert not page.get_by_text('发送会立即补充给这一轮',exact=True).count()

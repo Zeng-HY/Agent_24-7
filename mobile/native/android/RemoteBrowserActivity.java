@@ -17,35 +17,71 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.UUID;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import androidx.webkit.WebMessageCompat;
+import org.json.JSONObject;
+import org.json.JSONTokener;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
-/** Plain remote WebView. Never attach Capacitor or a JavascriptInterface to it. */
+/** Remote WebView: no Capacitor or general JavascriptInterface; only a restricted appearance message. */
 public class RemoteBrowserActivity extends AppCompatActivity {
     private WebView web;
     private LinearLayout root;
-    private boolean themeReady;
+    private boolean themeReady,themeMessaging,themeEventsActive,foreground;
+    private String documentToken=UUID.randomUUID().toString(),seededToken=null,resolvedTheme=null;
     private final android.os.Handler themeHandler=new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable themePoll=new Runnable(){public void run(){syncTheme();themeHandler.postDelayed(this,500);}};
+    private final Runnable themePoll=new Runnable(){public void run(){if(!foreground)return;syncTheme();if(!themeEventsActive)themeHandler.postDelayed(this,500);}};
     private void applyTheme(){
-        ThemePolicy.apply(this,root);
-        if(web!=null)web.setBackgroundColor(ThemePolicy.dark(this)?0xff000000:0xffffffff);
-        if(failurePanel!=null)ThemePolicy.text(failurePanel,ThemePolicy.dark(this));
+        boolean dark=resolvedTheme==null?ThemePolicy.dark(this):"dark".equals(resolvedTheme);
+        ThemePolicy.apply(this,root,dark);
+        if(web!=null)web.setBackgroundColor(dark?0xff000000:0xffffffff);
+        if(failurePanel!=null)ThemePolicy.text(failurePanel,dark);
+    }
+    // This listener accepts appearance only; it exposes no general native API to remote pages.
+    private void installAppearanceChannel(){
+        try{
+            if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
+                Uri uri=Uri.parse(entry);String origin=uri.getScheme()+"://"+uri.getAuthority();
+                WebViewCompat.addWebMessageListener(web,"TeleplyAppearance",Collections.singleton(origin),
+                    (view,message,sourceOrigin,isMainFrame,reply)->{if(message.getType()==WebMessageCompat.TYPE_STRING)onAppearanceMessage(message.getData(),sourceOrigin,isMainFrame);});
+                themeMessaging=true;
+            }
+        }catch(RuntimeException|LinkageError unavailable){themeMessaging=false;}
+    }
+    boolean onAppearanceMessage(String value,Uri sourceOrigin,boolean mainFrame){
+        if(!receiveAppearance(value,sourceOrigin,mainFrame))return false;
+        themeEventsActive=true;themeHandler.removeCallbacks(themePoll);return true;
+    }
+    boolean receiveAppearance(String value,Uri sourceOrigin,boolean mainFrame){
+        if(!mainFrame||!themeReady||loadFailed||isFinishing()||isDestroyed()||web==null||value==null||value.length()>256||
+            !BrowserPolicy.sameOrigin(entry,String.valueOf(sourceOrigin))||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return false;
+        try{
+            JSONObject data=new JSONObject(value);String mode=data.getString("mode"),resolved=data.getString("resolved");
+            if(data.length()!=3||!documentToken.equals(data.getString("document"))||!ThemePolicy.valid(mode)||
+                !("light".equals(resolved)||"dark".equals(resolved))||(!"system".equals(mode)&&!mode.equals(resolved)))return false;
+            ThemePolicy.save(this,mode);resolvedTheme=resolved;applyTheme();return true;
+        }catch(Exception invalid){return false;}
     }
     private void syncTheme(){
-        applyTheme();
         if(!themeReady||web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return;
-        final String url=web.getUrl();
-        web.evaluateJavascript("window.TeleplyTheme ? window.TeleplyTheme.get() : null",value->{
-            if(!themeReady||!url.equals(web.getUrl())||value==null)return;
-            String mode=value.replace("\"", "");
-            if(ThemePolicy.valid(mode)&&!mode.equals(ThemePolicy.get(this))){ThemePolicy.save(this,mode);applyTheme();}
+        final String url=web.getUrl(),token=documentToken;
+        web.evaluateJavascript("window.TeleplyTheme ? JSON.stringify({mode:window.TeleplyTheme.get(),resolved:document.documentElement.dataset.theme,document:window.__teleplyAppearanceDocument}) : null",value->{
+            if(!token.equals(documentToken)||!url.equals(web.getUrl()))return;
+            try{Object raw=new JSONTokener(value).nextValue();if(raw instanceof String)receiveAppearance((String)raw,Uri.parse(url),true);}catch(Exception invalid){}
         });
     }
     private void seedTheme(){
-        if(web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return;
-        final String url=web.getUrl(), mode=ThemePolicy.get(this);
-        web.evaluateJavascript("(()=>{try{localStorage.setItem('teleply.theme.v1','"+mode+"')}catch(e){};if(window.TeleplyTheme)window.TeleplyTheme.set('"+mode+"');return true})()",result->{if(url.equals(web.getUrl())){themeReady=true;web.postVisualStateCallback(0,new WebView.VisualStateCallback(){public void onComplete(long id){if(!isFinishing())web.setAlpha(1f);}});}});
+        if(web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl())||documentToken.equals(seededToken))return;
+        final String url=web.getUrl(),mode=ThemePolicy.get(this),token=documentToken;
+        seededToken=token;themeReady=true;
+        web.evaluateJavascript("(()=>{window.__teleplyAppearanceDocument='"+token+"';try{localStorage.setItem('teleply.theme.v1','"+mode+"')}catch(e){};if(window.TeleplyTheme)window.TeleplyTheme.set('"+mode+"');return true})()",result->{
+            if(!token.equals(documentToken)||!url.equals(web.getUrl()))return;
+            syncTheme();web.postVisualStateCallback(0,new WebView.VisualStateCallback(){public void onComplete(long id){if(!isFinishing()&&token.equals(documentToken))web.setAlpha(1f);}});
+        });
     }
     private TextView status;
     private LinearLayout failurePanel;
@@ -111,7 +147,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         settings.setSupportMultipleWindows(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
-        applyTheme();
+        installAppearanceChannel();applyTheme();
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (BrowserPolicy.sameOrigin(entry, request.getUrl().toString())) return false;
@@ -121,10 +157,11 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 if (!BrowserPolicy.sameOrigin(entry, url)) { view.stopLoading(); fail("已阻止打开其他地址"); return; }
-                themeReady=false;applyTheme();web.setAlpha(0f);
+                themeReady=false;themeEventsActive=false;themeHandler.removeCallbacks(themePoll);if(foreground)themeHandler.post(themePoll);documentToken=UUID.randomUUID().toString();seededToken=null;resolvedTheme=null;applyTheme();web.setAlpha(0f);
                 loadFailed = false; failurePanel.setVisibility(View.GONE); web.setVisibility(View.VISIBLE);
             }
             @Override public void onPageFinished(WebView view, String url) {
+                if(!url.equals(view.getUrl()))return;
                 seedTheme();
                 CookieManager.getInstance().flush();
                 if (!loadFailed) failurePanel.setVisibility(View.GONE);
@@ -276,15 +313,25 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             fileResult.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0])); fileResult = null;
         }
     }
-    @Override protected void onPause() { themeHandler.removeCallbacks(themePoll); if (web != null) { web.onPause(); CookieManager.getInstance().flush(); } super.onPause(); }
-    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); applyTheme();themeHandler.removeCallbacks(themePoll);themeHandler.post(themePoll); }
+    @Override protected void onPause() { foreground=false;themeHandler.removeCallbacks(themePoll); if (web != null) { web.onPause(); CookieManager.getInstance().flush(); } super.onPause(); }
+    @Override protected void onResume() {
+        super.onResume();foreground=true;if(web!=null)web.onResume();resolvedTheme=null;applyTheme();themeHandler.removeCallbacks(themePoll);
+        if(!themeEventsActive)themeHandler.post(themePoll);refreshAppearance();
+    }
+    private void refreshAppearance(){
+        if(themeReady&&web!=null&&BrowserPolicy.sameOrigin(entry,web.getUrl()))
+            web.evaluateJavascript("if(window.TeleplyTheme)window.TeleplyTheme.set(window.TeleplyTheme.get())",null);
+    }
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration){
+        super.onConfigurationChanged(configuration);resolvedTheme=null;applyTheme();refreshAppearance();
+    }
     @Override protected void onDestroy() {
         themeHandler.removeCallbacks(themePoll);
         if (authHandler != null) { authHandler.cancel(); authHandler = null; }
         if (authDialog != null) authDialog.dismiss();
         if (fileResult != null) fileResult.onReceiveValue(null);
         if (mediaRequest != null) mediaRequest.deny();
-        if (web != null) { web.stopLoading(); web.destroy(); }
+        if (web != null) { if(themeMessaging)WebViewCompat.removeWebMessageListener(web,"TeleplyAppearance");web.stopLoading(); web.destroy(); }
         super.onDestroy();
     }
 }

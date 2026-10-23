@@ -6,12 +6,12 @@
   shield.id='chatBackdrop';edge.id='backGestureEdge';shield.setAttribute('aria-hidden','true');edge.setAttribute('aria-hidden','true');document.body.append(shield,edge);
   deco.setAttribute('aria-hidden','true');deco.append(el('i','nav-shadow'));drawer.append(deco);
   const EASE='cubic-bezier(.32,.72,0,1)',PUSH=.3,DIM=.1,FULL=360,R=40,SHEET='.sheet:not(.drawer):not(.popover):not(.dialog-sheet)';
-  const style=el('style');style.textContent=`#chatBackdrop{display:none;position:fixed;inset:0;z-index:39;background:#fff;pointer-events:none}body.chat-open #chatBackdrop{display:block}body.chat-open>header,body.chat-open>[data-mode]{visibility:hidden}body.chat-open #convView{overscroll-behavior:none}#cvMsgs{overscroll-behavior-y:contain}
+  const style=el('style');style.textContent=`#chatBackdrop{display:none;position:fixed;inset:0;z-index:39;background:var(--chat-bg,#fff);pointer-events:none}body.chat-open #chatBackdrop{display:block}body.chat-open>header,body.chat-open>[data-mode]{visibility:hidden}body.chat-open #convView{overscroll-behavior:none}#cvMsgs{overscroll-behavior-y:contain}
 #backGestureEdge{position:fixed;left:0;top:var(--chat-top,0px);height:var(--chat-height,100dvh);width:20px;z-index:41;display:none;touch-action:pan-y}body.chat-open:not(.has-overlay) #backGestureEdge{display:block}body[data-current-mode="chat"]:not(.chat-open):not(.has-overlay) #backGestureEdge{display:block;top:0;height:100dvh}
 body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibility:visible}body.chat-motion #chatBackdrop{display:block;background:#000;opacity:0}#convView.chat-moving{box-shadow:-8px 0 24px rgba(0,0,0,.08)}#convView.chat-leaving{pointer-events:none}
 .sheet:not(.is-open){pointer-events:none}
-#navSheet{background:transparent;opacity:1;transition:none}#navSheet .box{width:300px;background:var(--bg);border-radius:0;box-shadow:none;overflow:hidden;transform:translate3d(-100%,0,0);transition:none}
-#navSheet .nav-edge{position:absolute;top:0;bottom:0;left:0;width:${R}px;z-index:1;pointer-events:none;opacity:0;background:radial-gradient(circle at 100% 100%,transparent ${R-1}px,var(--bg) ${R}px) top left/${R}px ${R}px no-repeat,radial-gradient(circle at 100% 0,transparent ${R-1}px,var(--bg) ${R}px) bottom left/${R}px ${R}px no-repeat}
+#navSheet{height:100dvh;bottom:auto;background:transparent;opacity:1;transition:none}#navSheet .box{width:300px;background:var(--sidebar-bg,var(--bg));padding-bottom:0;border-radius:0;box-shadow:none;overflow:hidden;transform:translate3d(-100%,0,0);transition:none}
+#navSheet .nav-edge{position:absolute;top:0;bottom:0;left:0;width:${R}px;z-index:1;pointer-events:none;opacity:0;background:radial-gradient(circle at 100% 100%,transparent ${R-1}px,var(--sidebar-bg,var(--bg)) ${R}px) top left/${R}px ${R}px no-repeat,radial-gradient(circle at 100% 0,transparent ${R-1}px,var(--sidebar-bg,var(--bg)) ${R}px) bottom left/${R}px ${R}px no-repeat}
 #navSheet .nav-shadow{position:absolute;top:0;bottom:0;right:100%;width:28px;background:linear-gradient(to left,rgba(29,35,48,.13),rgba(29,35,48,0))}
 #navSheet .nav-strip{position:absolute;top:0;left:300px;width:90px;height:100%;min-height:0;margin:0;padding:0;opacity:.01;z-index:2;-webkit-tap-highlight-color:transparent}
 @media (max-width:699.98px){${SHEET}{opacity:1;background-color:rgba(29,35,48,0);transition:background-color .28s ease}${SHEET}.is-open{background-color:rgba(29,35,48,.22);transition-duration:.36s}${SHEET} .box{transform:translate3d(0,100%,0);transition:transform .28s ${EASE}}${SHEET}.is-open .box{transform:none;transition-duration:.42s}}`;
@@ -27,14 +27,13 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
 #navSheet .nav-links>button .icon,#navSheet .nav-action-icon{display:block;flex:none;width:24px;height:24px}
 #navSheet .nav-action-icon svg{display:block;width:24px;height:24px}
 #navSheet .tree-row{gap:12px}
-#navSheet .nav-foot{order:3;flex:none;min-height:60px;padding:8px 16px 8px 28px;gap:12px}
+#navSheet .nav-foot{order:3;flex:none;min-height:60px;padding:8px 16px calc(8px + env(safe-area-inset-bottom)) 28px;gap:12px}
 #navSheet #serviceDot{margin:0 6px}
 #navSheet .relay-menu .menu-row:active{background:var(--line)}
 `;document.head.append(footerCSS);
   function prepareFooter(){
     const paths={'账号与电脑':'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0M17 8h5v9h-5',
-      '刷新':'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-1.7L20 8M4 16l2.4 2.7A7 7 0 0 0 18 17',
-      '连接设置':'M10 13a5 5 0 0 0 7 .1l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7-.1l-3 3a5 5 0 0 0 7 7l2-2'};
+      '刷新':'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-1.7L20 8M4 16l2.4 2.7A7 7 0 0 0 18 17'};
     drawer.querySelectorAll('.relay-menu button').forEach(button=>{
       if(!button.dataset.footerReady){
         const title=button.textContent.trim(),path=paths[title];button.dataset.footerReady='1';button.type='button';

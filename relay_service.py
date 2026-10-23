@@ -13,7 +13,7 @@ from relay_accounts import TTL, digest
 from relay_identity import Identity, Limited, BindingError
 from relay_mail import Mailer
 from relay_transport import TunnelHub, MAX_BODY, REQUEST_HEADERS, RESPONSE_HEADERS
-from relay_pages import scoped_page
+from relay_pages import scoped_page, device_error_page
 
 COOKIE='__Host-ar_account'
 HERE=Path(__file__).resolve().parent
@@ -46,6 +46,7 @@ class Service:
         self.trusted_proxy=trusted_proxy
         self.kdf=asyncio.Semaphore(2);self.kdf_ip={}  # source address -> [lock, requests holding or awaiting it]
         self.legacy_counts={}
+        self.availability_tasks={};self.availability_cache={};self.probe_slots=asyncio.Semaphore(4)
         self.app=web.Application(client_max_size=MAX_BODY,middlewares=[self.guard])
         self.app.router.add_get('/tunnel/connect',self.hub.control)
         self.app.router.add_get('/tunnel/stream/{stream:[0-9a-f]{32}}',self.hub.stream)
@@ -53,7 +54,46 @@ class Service:
         self.app.on_cleanup.append(self.close)
 
     async def close(self,app):
+        for task in self.availability_tasks.values():task.cancel()
+        await asyncio.gather(*self.availability_tasks.values(),return_exceptions=True)
         for ident in list(self.hub.connections): await self.hub.disconnect(ident)
+
+    async def connectable(self, row, fresh=False):
+        connection=self.hub.connections.get(row['id'])
+        if connection and not connection.socket.closed:return True
+        port,secret=row['port'],row['gateway_secret']
+        if not isinstance(port,int) or not 0<port<65536 or not secret:return False
+        key=(row['id'],port,digest(secret));now=asyncio.get_running_loop().time()
+        cached=self.availability_cache.get(key)
+        if not fresh and cached and now-cached[0]<2:return cached[1]
+        async def probe():
+            try:
+                async with self.probe_slots,ClientSession(timeout=ClientTimeout(total=1.5)) as client:
+                    async with client.get('http://127.0.0.1:'+str(port)+'/api/status',allow_redirects=False,
+                            headers={'Host':self.authority,'Origin':self.origin,'Authorization':'Bearer '+secret}) as response:
+                        if response.status!=200:return False
+                        data=await response.content.read(16385)
+                        return len(data)<=16384 and json.loads(data).get('ok') is True
+            except (ClientError,TimeoutError,ValueError,TypeError,AttributeError):return False
+        task=self.availability_tasks.get(key)
+        if task is None:
+            task=asyncio.create_task(probe());self.availability_tasks[key]=task
+        try:
+            result=await asyncio.shield(task);self.availability_cache[key]=(asyncio.get_running_loop().time(),result)
+            return result
+        finally:
+            if task.done() and self.availability_tasks.get(key) is task:self.availability_tasks.pop(key,None)
+            if len(self.availability_cache)>256:
+                self.availability_cache={k:v for k,v in self.availability_cache.items() if now-v[0]<2}
+
+    def device_error(self, request, status):
+        document=request.headers.get('Sec-Fetch-Mode')=='navigate' or 'text/html' in request.headers.get('Accept','')
+        if request.method=='GET' and document and request.path.startswith('/d/'):
+            version=json.loads((HERE/'windows-version.json').read_text())['version'].encode('ascii')
+            return web.Response(body=device_error_page(status).replace(b'__TELEPLY_VERSION__',version),status=status,content_type='text/html',headers={
+                'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff',
+                'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"})
+        return None
 
     @web.middleware
     async def guard(self, request, handler):
@@ -79,12 +119,17 @@ class Service:
         except ValueError as exc:
             return web.json_response({'error':str(exc)},status=400,headers={'Cache-Control':'no-store'})
         except (ClientError,TimeoutError,ConnectionError):
+            recovery=self.device_error(request,502)
+            if recovery is not None:return recovery
             return web.json_response({'error':'电脑连接中断，请重试'},status=502,headers={'Cache-Control':'no-store'})
         except web.HTTPException as exc:
             # A document navigation must recover to login, never strand a phone on an API JSON error.
             document = request.headers.get('Sec-Fetch-Mode') == 'navigate' or 'text/html' in request.headers.get('Accept','')
             if exc.status == 401 and request.method == 'GET' and document and request.path.startswith('/d/'):
                 return web.HTTPSeeOther(location='/account?choose=1',headers={'Cache-Control':'no-store'})
+            if exc.status in (403,404,502,503,504):
+                recovery=self.device_error(request,exc.status)
+                if recovery is not None:return recovery
             headers={k:v for k,v in exc.headers.items() if k.lower() not in ('content-type','content-length')}
             headers['Cache-Control']='no-store'
             # aiohttp's own text is "503: Service Unavailable"; the page shows this to people
@@ -169,7 +214,7 @@ class Service:
             for d in devices:
                 row=self.store.device(token,d['id'])
                 online=d['id'] in self.hub.connections
-                d.update(online=online,legacy=bool(row['port']),transport='wss' if online else 'legacy' if row['port'] else 'offline',url='/d/'+d['id']+'/')
+                d.update(connectable=await self.connectable(row),online=online,legacy=bool(row['port']),transport='wss' if online else 'legacy' if row['port'] else 'offline',url='/d/'+d['id']+'/')
             return web.json_response({'devices':devices,'email':self.store.profile(token),'usage':self.store.usage_for(token)})
         if request.method!='POST': raise web.HTTPMethodNotAllowed(request.method,['POST'])
         data=await self.data(request)
@@ -211,7 +256,10 @@ class Service:
             await self.hub.disconnect(ident)
         elif action=='select':
             ident=data.get('id','')
-            if not self.store.device(token,ident): raise web.HTTPNotFound()
+            row=self.store.device(token,ident)
+            if not row: raise web.HTTPNotFound()
+            if not await self.connectable(row,fresh=True):
+                return web.json_response({'error':'电脑已离线，请等待上线后再连接','code':'device_offline'},status=409,headers={'Cache-Control':'no-store'})
             result['url']='/d/'+ident+'/'
         else: raise web.HTTPNotFound()
         response=web.json_response(result,headers={'Cache-Control':'no-store'})
@@ -271,6 +319,9 @@ class Service:
             async with client.request(request.method,'http://127.0.0.1:'+str(row['port'])+target,
                     headers=headers,data=body() if request.method=='POST' else None,allow_redirects=False) as upstream:
                 if not self.store.device(token,row['id']): raise web.HTTPUnauthorized()
+                if upstream.status in (502,503,504):
+                    recovery=self.device_error(request,upstream.status)
+                    if recovery is not None:return recovery
                 if request.method=='GET' and urlsplit(target).path in ('/','/input-diagnostics') and 'text/html' in upstream.headers.get('Content-Type',''):
                     page=bytearray()
                     async for chunk in upstream.content.iter_chunked(65536):
