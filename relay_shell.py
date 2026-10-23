@@ -7,36 +7,51 @@ class Shell:
     def __init__(self,controller):
         from System import Action,Uri
         from System.Drawing import Color,ContentAlignment,Font,FontStyle,Point,Size
-        from System.Windows.Forms import Panel,TableLayoutPanel,RowStyle,SizeType,DockStyle,Label,Button,CheckBox,FlatStyle,ContextMenuStrip,ToolStripMenuItem
+        from System.Windows.Forms import Panel,TableLayoutPanel,RowStyle,SizeType,DockStyle,Label,Button,CheckBox,FlatStyle,ContextMenuStrip,ToolStripMenuItem,ToolStripSeparator,Padding
         from Microsoft.Web.WebView2.WinForms import WebView2,CoreWebView2CreationProperties
         self.c=controller;self.form=controller.window.native;self.local=self.form.webview
-        D=lambda n:round(n*self.form.DeviceDpi/96)
+        graphics=self.form.CreateGraphics();scale=graphics.DpiX/96.;graphics.Dispose()
+        D=lambda n:round(n*scale)
         self.remote_ready=threading.Event();self.pending_url=None;self.remote_showing=False;self.last_remote=False;self.synchronizing=False
         self.Action=Action;self.Uri=Uri;self.disposed=False
+        from relay_chrome import icon,button,menu_style
+        self.chrome_images=[]
         root=TableLayoutPanel();root.Dock=DockStyle.Fill;root.BackColor=Color.White;root.RowCount=3;root.ColumnCount=1
-        root.RowStyles.Add(RowStyle(SizeType.Absolute,D(48)));root.RowStyles.Add(RowStyle(SizeType.Percent,100));root.RowStyles.Add(RowStyle(SizeType.Absolute,D(44)))
+        root.RowStyles.Add(RowStyle(SizeType.Absolute,D(56)));root.RowStyles.Add(RowStyle(SizeType.Percent,100));root.RowStyles.Add(RowStyle(SizeType.Absolute,D(44)))
         top=Panel();top.Dock=DockStyle.Fill;top.BackColor=Color.White
-        self.gear=Button();self.gear.Text='⚙';self.gear.AccessibleName='设置';self.gear.Size=Size(D(40),D(40));self.gear.Location=Point(D(12),D(4));self.gear.BackColor=Color.White;self.gear.FlatStyle=FlatStyle.Flat;self.gear.FlatAppearance.BorderSize=0;self.gear.Font=Font('Segoe UI Symbol',15)
-        title=Label();title.Text='Agent Remote';title.Font=Font('Segoe UI',11,FontStyle.Bold);title.Dock=DockStyle.Fill;title.TextAlign=ContentAlignment.MiddleCenter
+        self.gear=Button();self.gear.Text='';self.gear.AccessibleName='设置';self.gear.Size=Size(D(40),D(40));self.gear.Location=Point(D(16),D(8));self.gear.BackColor=Color.White;self.gear.FlatStyle=FlatStyle.Flat;self.gear.FlatAppearance.BorderSize=0;self.gear.Font=Font('Segoe UI Symbol',15)
+        title=Label();title.Text='Agent Remote';title.Font=Font('Segoe UI',13.5,FontStyle.Bold);title.TextAlign=ContentAlignment.MiddleCenter;title.UseCompatibleTextRendering=True;self.title=title
         top.Controls.Add(title);top.Controls.Add(self.gear);self.gear.BringToFront()
-        self.back_button=Button();self.back_button.Text='‹';self.back_button.AccessibleName='返回';self.back_button.Size=Size(D(40),D(40));self.back_button.FlatStyle=FlatStyle.Flat;self.back_button.FlatAppearance.BorderSize=0;self.back_button.BackColor=Color.White;self.back_button.Font=Font('Segoe UI',16);self.back_button.Visible=False
+        self.back_button=Button();self.back_button.Text='';self.back_button.AccessibleName='返回';self.back_button.Size=Size(D(40),D(40));self.back_button.FlatStyle=FlatStyle.Flat;self.back_button.FlatAppearance.BorderSize=0;self.back_button.BackColor=Color.White;self.back_button.Font=Font('Segoe UI',16);self.back_button.Visible=False
         top.Controls.Add(self.back_button);self.back_button.BringToFront()
-        top.SizeChanged+=lambda sender,args:setattr(self.back_button,'Location',Point(top.Width-D(52),D(4)))
+        def align(sender=None,args=None):
+            height=top.ClientSize.Height
+            self.gear.Location=Point(D(12),(height-self.gear.Height)//2)
+            self.back_button.Location=Point(top.ClientSize.Width-D(52),(height-self.back_button.Height)//2)
+            title.SetBounds(D(64),0,max(1,top.ClientSize.Width-D(128)),height)
+        top.SizeChanged+=align
+        for control,name in [(self.gear,'gear'),(self.back_button,'back')]:
+            bitmap=icon(name,D(20));self.chrome_images.append(bitmap);button(control,bitmap)
         self.back_button.Click+=lambda sender,args:self.dispatch('back')
         bottom=Panel();bottom.Dock=DockStyle.Fill;bottom.BackColor=Color.White
-        self.startup=CheckBox();self.startup.Text='登录时启动';self.startup.AccessibleName='登录时启动';self.startup.AutoSize=True;self.startup.Font=Font('Microsoft YaHei UI',9);self.startup.Location=Point(D(16),D(12));self.startup.Checked=controller.startup;self.startup.BackColor=Color.White
-        self.version=Label();self.version.Text=controller.version;self.version.Font=Font('Segoe UI',9);self.version.ForeColor=Color.Gray;self.version.Dock=DockStyle.Right;self.version.Width=D(150);self.version.TextAlign=ContentAlignment.MiddleRight;self.version.Padding=__import__('System.Windows.Forms',fromlist=['Padding']).Padding(0,0,D(16),0)
+        self.startup=CheckBox();self.startup.Text='登录时启动';self.startup.AccessibleName='登录时启动';self.startup.AutoSize=True;self.startup.Font=Font('Microsoft YaHei UI',9);self.startup.Location=Point(D(24),D(12));self.startup.Checked=controller.startup;self.startup.BackColor=Color.White
+        self.version=Label();self.version.Text=controller.version;self.version.Font=Font('Segoe UI',9);self.version.ForeColor=Color.Gray;self.version.Dock=DockStyle.Right;self.version.Width=D(150);self.version.TextAlign=ContentAlignment.MiddleRight;self.version.Padding=__import__('System.Windows.Forms',fromlist=['Padding']).Padding(0,0,D(24),0)
         bottom.Controls.Add(self.startup);bottom.Controls.Add(self.version)
         self.center=Panel();self.center.Dock=DockStyle.Fill;self.center.BackColor=Color.White
         self.local.Parent.Controls.Remove(self.local);self.local.Dock=DockStyle.Fill;self.center.Controls.Add(self.local)
         self.remote=WebView2();self.remote.Dock=DockStyle.Fill;self.remote.Visible=False
         self.remote.CreationProperties=self.local.CreationProperties
         self.center.Controls.Add(self.remote)
+        for panel in (root,top,bottom,self.center):panel.Margin=Padding(0);panel.Padding=Padding(0)
         root.Controls.Add(top,0,0);root.Controls.Add(self.center,0,1);root.Controls.Add(bottom,0,2)
-        self.form.Controls.Add(root);root.BringToFront();self.root=root
+        self.form.Controls.Add(root);root.BringToFront();self.root=root;align()
         self.menu=ContextMenuStrip();self.items={}
+        self.menu_renderer=menu_style(self.menu,scale)
         for label,action in [('账号与电脑','account'),('检查更新','check-update'),('迁移旧版','legacy'),('迁移详情','migration-info'),('重新绑定','rebind'),('退出','quit')]:
-            item=ToolStripMenuItem(label);item.Click+=lambda sender,args,a=action:self.dispatch(a);self.menu.Items.Add(item);self.items[action]=item
+            if action=='quit':self.menu.Items.Add(ToolStripSeparator())
+            item=ToolStripMenuItem(label);item.AutoSize=False;item.Size=Size(D(216),D(40));item.Padding=Padding(D(8),D(4),D(8),D(4))
+            bitmap=icon(action,D(18));self.chrome_images.append(bitmap);item.Image=bitmap
+            item.Click+=lambda sender,args,a=action:self.dispatch(a);self.menu.Items.Add(item);self.items[action]=item
         self.gear.Click+=lambda sender,args:self.open_menu()
         self.startup.CheckedChanged+=self.toggle_startup
         self.remote.CoreWebView2InitializationCompleted+=self.initialized
@@ -51,7 +66,7 @@ class Shell:
         from System.Drawing import Point
         self.items['legacy'].Enabled=not self.c.binding.get('device')
         self.items['migration-info'].Enabled=bool(self.c.migration)
-        self.menu.Show(self.gear,Point(0,self.gear.Height))
+        self.menu.Show(self.gear,Point(0,self.gear.Height+6))
 
     def toggle_startup(self,sender,args):
         if self.synchronizing:return
@@ -117,4 +132,5 @@ class Shell:
 
     def close(self):
         self.invoke(lambda:(self.remote.Dispose(),self.menu.Dispose()))
+        for bitmap in self.chrome_images:bitmap.Dispose()
         self.disposed=True

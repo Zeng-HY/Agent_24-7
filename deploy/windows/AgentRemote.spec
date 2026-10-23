@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, coll
 root=Path(SPECPATH).parents[1]
 datas=[(str(root/'remote.html'),'.'),(str(root/'voice_tidy_prompt.txt'),'.'),
        (str(root/'static'),'static'),(str(root/'desktop_status.html'),'.'),
-       (str(root/'windows-version.json'),'.'),(str(root/'build/windows-build.json'),'.')]
+       (str(root/'windows-version.json'),'.'),(str(root/'build/windows-build.json'),'.'),(str(root/'build/AgentRemote.Chrome.dll'),'.')]
 datas+=collect_data_files('webview')
 hidden=collect_submodules('comtypes',filter=lambda name:'.test' not in name)+collect_submodules('win32com',filter=lambda name:'.test' not in name)
 a=Analysis([str(root/'relay_desktop.py')],pathex=[str(root)],binaries=collect_dynamic_libs('uiautomation'),datas=datas,

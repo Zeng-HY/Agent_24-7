@@ -365,6 +365,19 @@ def smoke():
             assert acted.wait(5) and actions==['check-update'];trace('local action')
             assert c.shell.remote_ready.wait(15);trace('remote ready')
             assert c.window.native.Invoke(Func[Boolean](lambda:Application.OpenForms.Count==1))
+            assert c.window.native.Invoke(Func[Boolean](lambda:abs((c.shell.gear.Top+c.shell.gear.Height/2)-(c.shell.title.Top+c.shell.title.Height/2))<=1))
+            render_dir=os.environ.get('AR_SMOKE_RENDER_DIR')
+            if render_dir:
+                def capture():
+                    from System.Drawing import Bitmap,Rectangle
+                    from System.Drawing.Imaging import ImageFormat
+                    folder=Path(render_dir);folder.mkdir(parents=True,exist_ok=True)
+                    top=c.shell.root.GetControlFromPosition(0,0)
+                    graphics=top.CreateGraphics();print('Chrome render:',c.shell.title.Font.Name,c.shell.menu.Font.Name,graphics.DpiX,top.DeviceDpi);graphics.Dispose()
+                    bitmap=Bitmap(top.Width,top.Height);top.DrawToBitmap(bitmap,Rectangle(0,0,top.Width,top.Height));bitmap.Save(str(folder/'header.png'),ImageFormat.Png);bitmap.Dispose()
+                    menu=c.shell.menu;menu.CreateControl();menu.PerformLayout();menu.Size=menu.PreferredSize
+                    bitmap=Bitmap(menu.Width,menu.Height);menu.DrawToBitmap(bitmap,Rectangle(0,0,menu.Width,menu.Height));bitmap.Save(str(folder/'menu.png'),ImageFormat.Png);bitmap.Dispose()
+                c.shell.invoke(capture)
             assert c.window.native.Invoke(Func[Boolean](lambda:not c.shell.remote.CoreWebView2.Settings.IsWebMessageEnabled and not c.shell.remote.CoreWebView2.Settings.AreHostObjectsAllowed))
             loaded=threading.Event()
             def watch_navigation():

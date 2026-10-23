@@ -1,6 +1,7 @@
 """Generate build identity and the exact Release asset manifest, never credentials."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -21,3 +22,8 @@ else:
     (build/'windows-build.json').write_text(json.dumps(version),encoding='utf-8')
     numeric=version['version'].split('-')[0]+'.'+str(version['build'])
     (build/'windows-version.iss').write_text('#define AppVersion "'+version['version']+'"\n#define AppNumericVersion "'+numeric+'"\n',encoding='utf-8')
+
+if '--manifest' not in sys.argv:
+    compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+    subprocess.run([str(compiler),'/nologo','/target:library','/optimize+','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll',
+        '/out:'+str(root/'build/AgentRemote.Chrome.dll'),str(root/'deploy/windows/ChromeRenderer.cs')],check=True)
