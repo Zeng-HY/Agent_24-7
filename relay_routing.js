@@ -1,6 +1,12 @@
 /* Injected by the authenticated relay only. Device scope is fixed per tab. */
 (()=>{'use strict';const match=location.pathname.match(/^\/d\/([0-9a-f]{32})(?:\/|$)/);if(!match)return;
 const base='/d/'+match[1];window.RELAY_BASE=base;
+try{localStorage.setItem('ar-last-device',match[1]);}catch{}
+// Pointer taps and programmatic dialog focus must not leave keyboard rings on iOS.
+if(!window.arFocusModality){window.arFocusModality=true;document.documentElement.dataset.input='pointer';
+for(const event of ['pointerdown','touchstart'])document.addEventListener(event,()=>{document.documentElement.dataset.input='pointer';},{capture:true,passive:true});
+document.addEventListener('keydown',event=>{if(event.key==='Tab')document.documentElement.dataset.input='keyboard';},true);}
+const focusStyle=document.createElement('style');focusStyle.textContent='html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:focus,html[data-input="pointer"] dialog:focus{outline:none!important}html[data-input="pointer"] .tree-row:focus,html[data-input="pointer"] .tree-add:focus{box-shadow:none!important}\n';document.head.append(focusStyle);
 function scoped(value){if(typeof value!=='string')return value;try{const u=new URL(value,location.href);if(u.origin!==location.origin||/^\/(?:d\/|account(?:\/|$)|device-auth\/)/.test(u.pathname))return value;u.pathname=base+u.pathname;return u.href;}catch{return value;}}
 const fetch0=window.fetch.bind(window);window.fetch=(input,init)=>fetch0(input instanceof Request?new Request(scoped(input.url),input):scoped(String(input)),init);
 const ES=window.EventSource;window.EventSource=class extends ES{constructor(url,options){super(scoped(String(url)),options)}};
@@ -43,5 +49,5 @@ function connectionSettings(trigger){
   d.addEventListener('click',e=>{const r=d.getBoundingClientRect();if(e.target===d&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom))d.close();});
   d.addEventListener('close',()=>{d.remove();trigger?.focus();});document.body.append(d);d.showModal();
 }
-document.addEventListener('DOMContentLoaded',()=>{const nav=document.querySelector('#navSheet .box');if(nav){const section=document.createElement('div');section.className='relay-menu';for(const [label,action] of [['账号与电脑',()=>location.assign('/account')],['刷新',()=>location.reload()],['连接设置',event=>connectionSettings(event.currentTarget)]]){const b=document.createElement('button');b.className='menu-row';b.textContent=label;b.onclick=action;section.append(b);}nav.append(section);}const subtitle=document.getElementById('appSubtitle');if(subtitle){subtitle.disabled=false;subtitle.onclick=()=>location.assign('/account');} });
+document.addEventListener('DOMContentLoaded',()=>{document.title='Teleply';let appTitle=document.querySelector('meta[name="apple-mobile-web-app-title"]');if(!appTitle){appTitle=document.createElement('meta');appTitle.name='apple-mobile-web-app-title';document.head.append(appTitle);}appTitle.content='Teleply';const nav=document.querySelector('#navSheet .box');if(nav){const section=document.createElement('div');section.className='relay-menu';for(const [label,action] of [['账号与电脑',()=>location.assign('/account?choose=1')],['刷新',()=>location.reload()],['连接设置',event=>connectionSettings(event.currentTarget)]]){const b=document.createElement('button');b.className='menu-row';b.textContent=label;b.onclick=action;section.append(b);}nav.append(section);}const subtitle=document.getElementById('appSubtitle');if(subtitle){subtitle.disabled=false;subtitle.onclick=()=>location.assign('/account?choose=1');} });
 })();

@@ -3,7 +3,7 @@
   let listKey='',listCursor=null,listHasMore=false,listBusy=false,query='',loadGeneration=0,listSig='';
   let me=null,loaded=[],cursor=null,hasMore=false,historyWindow=false,initialPage=null,fetching=null,source=null,streamActive=false,streamSeq=0,streamGeneration=0,retryTimer=null,bufferedEvent=null;
   const expanded=new Map();
-  const css=el('style');css.textContent=`.history-tools{display:flex;justify-content:center;gap:8px;padding:4px 12px;flex:none}.history-tools button{font-size:12px;font-weight:400;min-height:36px;border:0;background:transparent;color:var(--blue);padding:6px 10px}.conversation-search{display:flex;gap:8px;margin:4px 0 12px}.conversation-search input{min-width:0;flex:1;font:inherit;font-size:16px;padding:10px 14px;border:1px solid var(--line);border-radius:16px;background:var(--bg)}.message-actions{display:flex;gap:8px;margin-top:8px}.message-actions button,.code-copy{font-size:12px;font-weight:400;min-height:36px;padding:6px 10px;border:0;background:var(--bg);border-radius:999px;color:var(--muted)}.code-wrap{position:relative}.code-copy{display:block;margin-left:auto}.search-hit{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;font-size:14px;font-weight:400;padding:12px;background:transparent;white-space:pre-wrap}.search-hit small{display:block;color:var(--muted);font-size:12px}.file-row{padding:12px;border:1px solid var(--line);border-radius:16px;overflow-wrap:anywhere}.file-actions{display:flex;gap:8px;margin-top:8px}.file-actions button{font-size:13px;padding:8px 12px;border-radius:999px}.file-preview{width:100%;height:65dvh;border:0}.text-preview{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 ui-monospace,monospace;max-height:65dvh;overflow:auto}.template-row{display:flex;align-items:center;gap:4px}.template-row .insert{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis}.template-row button{font-size:13px;padding:8px;min-height:44px}.template-editor input,.template-editor textarea{box-sizing:border-box;width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:12px;margin:4px 0}.template-editor textarea{min-height:140px}.list-more{display:block;margin:16px auto;font-size:14px;padding:10px 20px;border-radius:999px}.history-note{font-size:12px;text-align:center;color:var(--muted)}`;document.head.append(css);
+  const css=el('style');css.textContent=`.history-tools{display:flex;justify-content:center;gap:8px;padding:4px 12px;flex:none}.history-tools button{font-size:12px;font-weight:400;min-height:36px;border:0;background:transparent;color:var(--blue);padding:6px 10px}.conversation-search{display:flex;gap:8px;margin:4px 0 12px}.conversation-search input{min-width:0;flex:1;font:inherit;font-size:16px;padding:10px 14px;border:1px solid var(--line);border-radius:16px;background:var(--bg)}.message-actions{display:flex;gap:8px;margin-top:8px}.message-actions button,.code-copy{font-size:12px;font-weight:400;min-height:36px;padding:6px 10px;border:0;background:var(--bg);border-radius:999px;color:var(--muted)}.code-wrap{position:relative;overflow:hidden;border-radius:14px;background:#f3f4f6;margin:12px 0;white-space:normal}.code-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:3px 10px 3px 14px;color:var(--muted);font:12px/1.4 -apple-system,BlinkMacSystemFont,sans-serif}.code-wrap .code-copy{display:block;margin-left:auto;min-height:40px;background:transparent;color:var(--text);font-size:12px}.bub .code-wrap pre{margin:0;padding:4px 14px 14px;border-radius:0}.bub .code-wrap pre code{padding:0;background:none;font:inherit}.bub .inline-copy{display:inline-flex;align-items:center;gap:5px;vertical-align:baseline;min-height:28px;margin:0 2px;padding:2px 5px;border:0;border-radius:5px;background:#f3f4f6;color:inherit;font:inherit;max-width:100%;text-align:left}.inline-copy svg{width:13px;height:13px;flex:none;opacity:.55}.bub .inline-copy code{padding:0;background:none;overflow-wrap:anywhere}.search-hit{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;font-size:14px;font-weight:400;padding:12px;background:transparent;white-space:pre-wrap}.search-hit small{display:block;color:var(--muted);font-size:12px}.file-row{padding:12px;border:1px solid var(--line);border-radius:16px;overflow-wrap:anywhere}.file-actions{display:flex;gap:8px;margin-top:8px}.file-actions button{font-size:13px;padding:8px 12px;border-radius:999px}.file-preview{width:100%;height:65dvh;border:0}.text-preview{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 ui-monospace,monospace;max-height:65dvh;overflow:auto}.template-row{display:flex;align-items:center;gap:4px}.template-row .insert{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis}.template-row button{font-size:13px;padding:8px;min-height:44px}.template-editor input,.template-editor textarea{box-sizing:border-box;width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:12px;margin:4px 0}.template-editor textarea{min-height:140px}.list-more{display:block;margin:16px auto;font-size:14px;padding:10px 20px;border-radius:999px}.history-note{font-size:12px;text-align:center;color:var(--muted)}`;document.head.append(css);
   const searchLine=el('div','conversation-search'),listInput=el('input');listInput.type='search';listInput.placeholder='搜索对话标题或文件夹';listInput.setAttribute('aria-label','搜索对话');searchLine.append(listInput);document.querySelector('.conversation-home .chips').after(searchLine);
   const listMore=el('button','list-more','加载更多对话');listMore.hidden=true;listMore.onclick=()=>loadList(true);$('convList').after(listMore);
   let searchTimer;listInput.addEventListener('input',e=>{if(e.isComposing)return;clearTimeout(searchTimer);searchTimer=setTimeout(()=>{query=listInput.value.trim();loadList(false,true);},250);});listInput.addEventListener('compositionend',()=>{query=listInput.value.trim();loadList(false,true);});
@@ -69,20 +69,22 @@
       else text.then(t=>secure?c.writeText(t):Promise.reject(new Error('no clipboard'))).then(done,fail);
     }catch(e){fail();}
   }
+  let copyPress=null;
+  document.addEventListener('pointerdown',event=>{const button=event.target.closest?.('[data-copy-fragment]');if(button)copyPress={node:button.closest('.bub'),at:performance.now()};},true);
+  for(const name of ['pointerup','pointercancel'])document.addEventListener(name,()=>{if(copyPress)setTimeout(()=>{copyPress=null;wake();},100);},true);
+  document.addEventListener('click',event=>{const button=event.target.closest?.('[data-copy-fragment]');if(!button)return;event.preventDefault();event.stopPropagation();copyText(JSON.parse(button.dataset.copyFragment));},true);
   function execCopy(text){  // the old way, for a page not on https (no clipboard API there)
     const t=el('textarea');t.value=text;t.readOnly=true;t.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0';
     (overlays.length?$(overlays.at(-1).id):$('convView')).append(t);let ok=false;try{t.select();t.setSelectionRange(0,text.length);ok=document.execCommand('copy');}catch(e){}t.remove();return ok;
   }
   function decorateMessage(node,m){
-    const f=flows.get(node.dataset.key),running=!!f&&f.shown<f.text.length;if(f)f.node=node;
+    const f=flows.get(node.dataset.key);if(f)f.node=node;
     if(pick?.b===node)node.classList.add('picked');  // redrawn while its menu is open
     if(m.role==='user'&&m.truncated){const actions=el('div','message-actions'),expand=el('button','','展开全文（'+m.length+' 字）');expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);node.append(actions);return;}
     if(m.role!=='assistant'||m.phase==='commentary')return;
     const actions=el('div','message-actions'),copy=el('button','','复制正文');copy.onclick=()=>copyText(m.truncated&&!m.streaming?api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)).then(full=>publicText(full.text)):publicText(m.text));actions.append(copy);
     if(m.truncated){const expand=el('button','',m.streaming?'生成中，完成后可展开':'展开全文（'+m.length+' 字）');expand.disabled=!!m.streaming;expand.onclick=()=>expandMessage(m.id).catch(e=>toast(e.message,true));actions.append(expand);}
     node.append(actions);
-    if(running)return;  // code blocks get their copy button once the reply has run out: its words are rewritten till then
-    node.querySelectorAll('pre').forEach(pre=>{const code=pre.textContent,wrap=el('div','code-wrap'),b=el('button','code-copy','复制代码');b.onclick=()=>copyText(code);pre.before(wrap);wrap.append(b,pre);});
   }
   // ---- a reply runs out smoothly (10-22)
   // Text used to land in lumps: Codex's stream reads its log once a second, DeepSeek's sends up to five updates a second,
@@ -159,18 +161,18 @@
       if(holding(f.node)){f.tick=0;continue;}  // words being picked out of it: it waits till they are let go
       const dt=f.tick?Math.max(0,Math.min(.1,(now-f.tick)/1000)):0;f.tick=now;
       const before=onScreen(f);f.shown=Math.min(f.text.length,f.shown+f.pace*dt);
-      const after=onScreen(f);if(after!==before){words.innerHTML=md(assistantMarkdown(after).markdown);moved=true;}
+      const after=onScreen(f);if(after!==before){words.innerHTML=md(assistantMarkdown(after).markdown,true);moved=true;}
       if(f.shown<f.text.length)going=true;else{f.tick=0;if(!f.streaming)ended.push(f);}
     }
     if(moved&&atEnd)box.scrollTop=box.scrollHeight;
-    // run out: drawn once more as a whole (copy buttons on code, the conversations it created)
+    // Run out: redraw the whole reply and its created-conversation links.
     if(ended.length&&cur&&box.dataset.ready){for(const f of ended)delete f.node.dataset.sig;renderMsgs(currentMessages);}
     if(going)wake();
   }
   // Words being picked out of a message stay as they are till they are let go: a redraw (each update of a reply still being
   // written, each frame of its run-out) would drop them. renderMsgs asks before it redraws a message.
   let heldBack=false;
-  function holding(n){const s=getSelection?.();if(!n||!s||s.isCollapsed||!s.rangeCount||!s.getRangeAt(0).intersectsNode(n))return false;heldBack=true;return true;}
+  function holding(n){if(copyPress?.node===n&&performance.now()-copyPress.at<2000)return true;const s=getSelection?.();if(!n||!s||s.isCollapsed||!s.rangeCount||!s.getRangeAt(0).intersectsNode(n))return false;heldBack=true;return true;}
   document.addEventListener('selectionchange',()=>{if(!heldBack||!getSelection().isCollapsed)return;heldBack=false;if(cur&&$('cvMsgs').dataset.ready)renderMsgs(currentMessages);wake();});
   function settleFlows(){let any=false;for(const f of flows.values())if(f.shown<f.text.length){f.shown=f.text.length;if(f.node?.isConnected){delete f.node.dataset.sig;any=true;}}if(any&&cur&&$('cvMsgs').dataset.ready)renderMsgs(currentMessages);}
   // The release is listened for on what the finger went down on: when the words under it are rewritten, that node leaves the
@@ -203,7 +205,7 @@
     @media (prefers-reduced-motion:reduce){#cvMsgs .bub.user.picked{transform:none}#cvMsgs .bub.user,#cvMsgs .bub.assistant{transition:none}}`;document.head.append(menuCss);
   function textOf(b,m){
     if(m&&typeof m.text==='string')return m.role==='assistant'?publicText(m.text):m.text;
-    const c=b.cloneNode(true);c.querySelectorAll('.send-receipt,.outbox-state,.message-actions,.outbox-refs,.sent-images,.message-origin,.code-copy,.thread-link').forEach(n=>n.remove());return c.textContent.trim();
+    const c=b.cloneNode(true);c.querySelectorAll('.send-receipt,.outbox-state,.message-actions,.outbox-refs,.sent-images,.message-origin,.code-head,.thread-link').forEach(n=>n.remove());return c.textContent.trim();
   }
   async function fullText(b,m){return textOf(b,m?.truncated&&!m.streaming?await api('/api/chat/message?app='+cur.app+'&id='+encodeURIComponent(cur.id)+'&message='+encodeURIComponent(m.id)):m);}
   // 选择文字: the words as they read in the conversation, large, with nothing else that a finger could catch

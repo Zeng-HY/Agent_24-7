@@ -20,7 +20,7 @@ import relay_updates as updates
 from relay_vault import load,save
 from app_paths import DATA,ASSETS
 
-ACTIONS={'bind','retry','account','legacy','check-update','startup','download','install','cancel-download','back','rebind','quit','migration-info'}
+ACTIONS={'bind','retry','account','check-update','startup','download','install','cancel-download','back','rebind','quit'}
 
 
 def local_action(uri):
@@ -80,7 +80,7 @@ class DesktopController:
         import pythoncom
         pythoncom.CoInitialize()
         try:
-            if action in ('account','check-update','migration-info'):
+            if action in ('account','check-update'):
                 if not hasattr(self,'nav_history'):self.nav_history=[]
                 self.nav_history.append((bool(self.shell.remote_showing),self.settings_open,self.update_title,self.update_notes))
             if action=='bind':
@@ -89,7 +89,7 @@ class DesktopController:
             elif action=='account':
                 self.settings_open=False
                 if not self.binding.get('device'):self.begin_auth()
-                else:self.shell.load_account(self.binding['origin']+'/account')
+                else:self.shell.load_account(self.binding['origin']+'/account?choose=1')
             elif action=='startup':
                 desired=not self.startup
                 self.startup_busy=True
@@ -107,9 +107,6 @@ class DesktopController:
                     elif self.binding.get('device'):self.shell.local_view()
                     self.settings_open=False
                 if not self.binding.get('device') and not self.auth_active:self.begin_auth()
-            elif action=='migration-info':
-                self.settings_open=True;self.update_title='迁移详情';self.update_notes=self.migration;self.shell.local_view(returnable=True)
-            elif action=='legacy':self.choose_legacy()
             elif action=='retry':self.start_agent()
             elif action=='check-update':self.check_update()
             elif action=='download':self.download_update()
@@ -398,6 +395,7 @@ def smoke():
             assert c.window.native.Invoke(Func[Boolean](lambda:not c.shell.remote.CreationProperties.IsInPrivateModeEnabled))
             def menu_check():
                 from System.Drawing import Point
+                assert 'legacy' not in c.shell.items and 'migration-info' not in c.shell.items
                 c.shell.open_menu();menu=c.shell.menu;guard=c.shell.menu_dismissal
                 inside=Point(menu.Left+20,menu.Top+20);outside=Point(menu.Right+20,menu.Bottom+20)
                 guard.ObservePointer(False,inside);guard.ObservePointer(True,inside)

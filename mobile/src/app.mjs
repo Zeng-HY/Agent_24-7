@@ -5,6 +5,7 @@ const $ = id => document.getElementById(id);
 const key = 'agent-remote.connection.v1';
 const RemoteBrowser = registerPlugin('RemoteBrowser');
 const android = Capacitor.getPlatform() === 'android';
+if (android) { document.title = '遥应'; document.querySelector('.brand span').textContent = '遥应'; }
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch {}
 try { $('origin').value = normalizeOrigin(saved.origin || DEFAULT_ORIGIN); }

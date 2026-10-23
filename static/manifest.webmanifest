@@ -1,6 +1,6 @@
 {
-  "name": "Remote",
-  "short_name": "Remote",
+  "name": "Teleply",
+  "short_name": "Teleply",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

@@ -157,7 +157,7 @@ final class AppUpdater {
     private static void install(Activity a,File apk,long code) {
         if(!a.getPackageManager().canRequestPackageInstalls()) {
             new AlertDialog.Builder(a).setTitle("允许安装更新")
-                .setMessage("在系统设置中允许 Agent Remote 安装应用，返回后点击“继续安装”。")
+                .setMessage("在系统设置中允许遥应安装应用，返回后点击“继续安装”。")
                 .setPositiveButton("打开设置",(d,w)->{
                     try { a.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+a.getPackageName())));
                         new AlertDialog.Builder(a).setTitle("更新已下载").setPositiveButton("继续安装",(x,y)->install(a,apk,code))

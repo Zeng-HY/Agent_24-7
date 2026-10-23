@@ -4,15 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Remote">
+<meta name="apple-mobile-web-app-title" content="Teleply">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#2563eb">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>电脑遥控</title>
+<title>Teleply</title>
 <!--machine-->
 <script>
+// Pointer taps and programmatic dialog focus must not leave keyboard rings on iOS.
+if(!window.arFocusModality){window.arFocusModality=true;document.documentElement.dataset.input='pointer';
+for(const event of ['pointerdown','touchstart'])document.addEventListener(event,()=>{document.documentElement.dataset.input='pointer';},{capture:true,passive:true});
+document.addEventListener('keydown',event=>{if(event.key==='Tab')document.documentElement.dataset.input='keyboard';},true);}
+
 // Track resource failure separately from initialization failure. Never reload automatically.
 (()=>{
   const names={codexUI:'codex-ui',navigationUI:'navigation-ui',workspaceUI:'workspace-ui',activityUI:'activity-ui',readingUI:'reading-ui',claudeUI:'claude-ui',referencesUI:'references-ui',newChatUI:'new-chat-ui',filesUI:'files-ui',voiceUI:'voice-ui',sidebarUI:'sidebar-ui',deepseekUI:'deepseek-ui',archiveUI:'archive-ui'};
@@ -292,6 +297,7 @@
   @media(min-width:700px) { .conversation-home { max-width:780px; margin:auto; } #cvMsgs,.cv-bottom,.cv-top { width:100%; max-width:820px; margin-left:auto; margin-right:auto; } .sheet:not(.drawer):not(.popover):not(.dialog-sheet) .box { max-width:600px; left:50%; right:auto; width:100%; transform:translate(-50%,12px) scale(.98); } .sheet.is-open:not(.drawer):not(.popover):not(.dialog-sheet) .box { transform:translate(-50%,0) scale(1); } }
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
 
+html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:focus,html[data-input="pointer"] dialog:focus{outline:none!important}html[data-input="pointer"] .tree-row:focus,html[data-input="pointer"] .tree-add:focus{box-shadow:none!important}
 </style>
 </head>
 <body>
@@ -428,7 +434,7 @@ async function openComputers(anchor) {
   }
   if (!(j.others || []).length) list.append(el('p', 'hint', '还没有别的电脑。别的电脑装好、开着时会出现在这里。'));
 }
-if (MACHINE.name) { document.title = '电脑遥控 · ' + MACHINE.name; $('appSubtitle').disabled = false; }
+if (MACHINE.name) { document.title = 'Teleply'; $('appSubtitle').disabled = false; }
 // Only the desktop apps this computer has (MACHINE.apps, looked at again each time the page opens): a chip for each, and no
 // row at all with one app, where 全部 says nothing more (10-20; it used to look only for Claude, so a DeepSeek chip stood
 // on a computer without DeepSeek). With none found the list says so.
@@ -691,10 +697,12 @@ function schedulePoll() {
   }, fast ? 2500 : 8000);
 }
 
-function md(s) {
+function md(s,copyable=false) {
   const lines = String(s).split('\n'), out = [];
-  let inCode = false, code = [], table = null;
+  let fence=null,language='',code=[],table=null;
   const flushTable = () => { if (table) { out.push('<table>' + table.join('') + '</table>'); table = null; } };
+  const copyButton=(text,label,inline=false)=>'<button type="button" class="'+(inline?'inline-copy':'code-copy')+'" data-copy-fragment="'+esc(JSON.stringify(text))+'" aria-label="'+label+'" title="'+label+'">'+(inline?'<code>'+esc(text)+'</code><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 8h11v11H8zM5 16V5h11"/></svg>':label)+'</button>';
+  const codeBlock=(closed=true)=>{const text=code.join('\n'),pre='<pre><code>'+esc(text)+'</code></pre>';if(!copyable)return pre;const label=!closed?'复制当前内容':/^(?:sh|bash|shell|zsh|cmd|powershell|ps1|bat)$/i.test(language)?'复制命令':/^(?:prompt|text|txt|md|markdown)$/i.test(language)?'复制文本':language?'复制代码':'复制内容';return '<div class="code-wrap"><div class="code-head"><span>'+esc(language||'文本')+'</span>'+copyButton(text,label)+'</div>'+pre+'</div>';};
   const inline = t => {
     // Parse links before escaping; never turn code spans or unsafe schemes into navigation.
     const parts=/`([^`]+)`|\[([^\]]+)\]\((?:<([^>\n]+)>|([^\s)]+))\)/g;
@@ -702,7 +710,7 @@ function md(s) {
     let result='',last=0;
     for(const m of t.matchAll(parts)){
       result+=plain(t.slice(last,m.index));last=m.index+m[0].length;
-      if(m[1]!==undefined){result+='<code>'+esc(m[1])+'</code>';continue;}
+      if(m[1]!==undefined){result+=copyable?copyButton(m[1],'复制行内内容',true):'<code>'+esc(m[1])+'</code>';continue;}
       const label=plain(m[2]),target=m[3]||m[4];
       if(/^https:\/\//i.test(target)){
         try{const u=new URL(target);if(u.username||u.password)throw Error();result+='<a href="'+esc(u.href)+'" target="_blank" rel="noopener noreferrer">'+label+'</a>';continue;}catch{}
@@ -713,8 +721,9 @@ function md(s) {
     return result+plain(t.slice(last));
   };
   for (const line of lines) {
-    if (/^\s*```/.test(line)) { if (inCode) { out.push('<pre>' + esc(code.join('\n')) + '</pre>'); code = []; inCode = false; } else { flushTable(); inCode = true; } continue; }
-    if (inCode) { code.push(line); continue; }
+    const marker=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if(fence){if(marker&&marker[1][0]===fence[0]&&marker[1].length>=fence.length&&!marker[2].trim()){out.push(codeBlock());code=[];fence=null;}else code.push(line);continue;}
+    if(marker){flushTable();fence=marker[1];language=marker[2].trim().split(/\s+/)[0].slice(0,32);continue;}
     if (/^\s*\|.*\|\s*$/.test(line)) {
       if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) continue;
       const cells = line.trim().replace(/^\||\|$/g, '').split('|').map(c => '<td>' + inline(c.trim()) + '</td>').join('');
@@ -724,9 +733,9 @@ function md(s) {
     const h = line.match(/^#{1,6}\s+(.*)$/);
     out.push(h ? '<b>' + inline(h[1]) + '</b>' : inline(line));
   }
-  if (inCode) out.push('<pre>' + esc(code.join('\n')) + '</pre>');
+  if(fence)out.push(codeBlock(false));
   flushTable();
-  return out.join('\n').replace(/\n?(<table>|<\/table>|<pre>|<\/pre>)\n?/g, '$1');
+  return out.join('\n').replace(/\n?(<table>|<\/table>|<pre>|<\/pre>)\n?/g, '$1').replace(/\n*(<div class="code-wrap">)/g,'$1').replace(/(<\/pre><\/div>)\n*/g,'$1');
 }
 
 // A reply's words as markdown, and the conversations it says it created (a button each under the text)
@@ -744,7 +753,7 @@ function assistantMarkdown(text) {
 // The words go in a box of their own, which the smooth run-out of a reply rewrites (reading-ui.js, 10-22)
 function renderAssistantText(node,text) {
   const {markdown,links}=assistantMarkdown(text);
-  node.innerHTML='<div class="reply-text">'+md(markdown)+'</div>';
+  node.innerHTML='<div class="reply-text">'+md(markdown,true)+'</div>';
   for(const link of links){
     if(link.kind!=='threadId'){node.append(el('div','hint','新对话正在准备中'));continue;}
     const button=el('button','thread-link');button.innerHTML=icon('chat');button.append(document.createTextNode('打开新建对话'));

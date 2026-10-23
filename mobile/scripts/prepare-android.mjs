@@ -63,3 +63,8 @@ await replace(`${res}/values/styles.xml`, '<item name="android:background">@draw
 // Use the smaller distribution without sources; Gradle itself remains pinned.
 await replace('android/gradle/wrapper/gradle-wrapper.properties',
   'gradle-8.14.3-all.zip', 'gradle-8.14.3-bin.zip');
+
+// The application id stays stable so existing installations can update in place.
+const stringsPath = `${res}/values/strings.xml`;
+const strings = await readFile(stringsPath, "utf8");
+await writeFile(stringsPath, strings.replace(/(<string name="(?:app_name|title_activity_main)">)[^<]*(<\/string>)/g, "$1遥应$2"));

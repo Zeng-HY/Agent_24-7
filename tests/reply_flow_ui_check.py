@@ -33,7 +33,8 @@ window.watch = key => {
   window.seen = []; window.watching = true;
   const loop = () => { if (!window.watching) return;
     const n = document.querySelector(`#cvMsgs [data-key="${key}"] .reply-text`), box = document.getElementById('cvMsgs');
-    window.seen.push({t: performance.now(), len: n ? n.textContent.replace(/\\s/g, '').length : -1, end: box.scrollHeight - box.scrollTop - box.clientHeight});
+    const words=n?.cloneNode(true);words?.querySelectorAll('.code-head').forEach(e=>e.remove());
+    window.seen.push({t: performance.now(), len: words ? words.textContent.replace(/\\s/g, '').length : -1, end: box.scrollHeight - box.scrollTop - box.clientHeight});
     requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
 };

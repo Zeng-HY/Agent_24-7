@@ -19,11 +19,11 @@ class Navigation(unittest.TestCase):
         c.shell.load_account.side_effect=lambda url:setattr(c.shell,'remote_showing',True)
         c.shell.local_view.side_effect=lambda **kw:setattr(c.shell,'remote_showing',False)
         c.shell.show_account.side_effect=lambda:setattr(c.shell,'remote_showing',True)
-        c.migration='fixture details'
-        c.dispatch('migration-info');self.assertTrue(c.settings_open)
+        c.check_update=lambda:(setattr(c,'settings_open',True),setattr(c,'update_title','检查更新'),setattr(c,'update_notes','fixture details'),c.shell.local_view(returnable=True))
+        c.dispatch('check-update');self.assertTrue(c.settings_open)
         c.dispatch('account');self.assertTrue(c.shell.remote_showing);self.assertFalse(c.settings_open)
         c.dispatch('back');self.assertFalse(c.shell.remote_showing);self.assertTrue(c.settings_open)
-        self.assertEqual(c.update_title,'迁移详情')
+        self.assertEqual(c.update_title,'检查更新')
         c.dispatch('back');self.assertFalse(c.settings_open);self.assertEqual(c.nav_history,[])
 
     def test_file_registry_rejects_outside_changed_and_other_thread(self):
@@ -53,11 +53,11 @@ class PhoneLinks(unittest.TestCase):
                 if path=='/account/state' and not signed[0]:return r.fulfill(status=401,content_type='application/json',body='{"error":"expired"}')
                 data={'email_enabled':True} if path=='/account/config' else {'devices':[{'id':'a'*32,'label':'Fixture PC','online':True}]} if path=='/account/state' else {}
                 r.fulfill(content_type='application/json',body=json.dumps(data))
-            page.route('https://relay.test/**',route);page.goto('https://relay.test/account')
+            page.route('https://relay.test/**',route);page.goto('https://relay.test/account?choose=1')
             page.locator('#signed').wait_for(state='visible');signed[0]=False;page.reload()
             page.locator('#auth').wait_for(state='visible');page.locator('#name').fill('fixture');page.locator('#password').fill('fixture-password')
             page.locator('#submit').click();page.locator('#signed').wait_for(state='visible')
-            self.assertEqual(page.url,'https://relay.test/account');self.assertEqual(page.locator('.device-name').inner_text(),'Fixture PC')
+            self.assertEqual(page.url,'https://relay.test/account?choose=1');self.assertEqual(page.locator('.device-name').inner_text(),'Fixture PC')
             browser.close()
 
     def test_webkit_and_android_touch_links_and_device_scope(self):

@@ -23,7 +23,7 @@ class MobileLayout(unittest.TestCase):
                 elif path=='/account/state':data={'email':'test@example.test','devices':[{'id':'a'*32,'label':'家里电脑','online':True}]}
                 else:data={}
                 r.fulfill(content_type='application/json',body=json.dumps(data))
-            page.route('https://relay.test/**',route);page.goto('https://relay.test/account')
+            page.route('https://relay.test/**',route);page.goto('https://relay.test/account?choose=1')
             page.locator('#signed').wait_for(state='visible')
             for width,height in [(390,844),(320,568),(844,390)]:
                 page.set_viewport_size({'width':width,'height':height})

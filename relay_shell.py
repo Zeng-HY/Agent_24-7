@@ -57,7 +57,7 @@ class Shell:
         self.menu_renderer=menu_style(self.menu,scale)
         from AgentRemoteChrome import MenuDismissal
         self.menu_dismissal=MenuDismissal(self.menu,self.form)
-        for label,action in [('账号与电脑','account'),('检查更新','check-update'),('迁移旧版','legacy'),('迁移详情','migration-info'),('重新绑定','rebind'),('退出','quit')]:
+        for label,action in [('账号与电脑','account'),('检查更新','check-update'),('重新绑定','rebind'),('退出','quit')]:
             if action=='quit':self.menu.Items.Add(ToolStripSeparator())
             item=ToolStripMenuItem(label);item.AutoSize=False;item.Size=Size(D(216),D(40));item.Padding=Padding(D(8),D(4),D(8),D(4))
             bitmap=icon(action,D(18));self.chrome_images.append(bitmap);item.Image=bitmap
@@ -75,8 +75,6 @@ class Shell:
     def open_menu(self):
         from System.Drawing import Point
         if self.menu.Visible:self.menu.Close();return
-        self.items['legacy'].Enabled=not self.c.binding.get('device')
-        self.items['migration-info'].Enabled=bool(self.c.migration)
         self.menu.Show(self.gear,Point(self.gear.Width-self.menu.PreferredSize.Width,self.gear.Height+6))
 
     def toggle_startup(self,sender,args):

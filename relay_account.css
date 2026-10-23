@@ -35,3 +35,5 @@ body:has(#signed:not([hidden])) .mark{width:36px;height:36px}
 .device-actions>.icon-button{width:44px;min-width:44px;padding:0;background:transparent;color:var(--ink);border-radius:14px}
 .device-actions>.icon-button:hover{background:#e8e8ec}
 @media(max-width:360px){body:has(#signed:not([hidden])){padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}body:has(#signed:not([hidden])) .brand{font-size:24px}}
+
+html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:focus,html[data-input="pointer"] dialog:focus{outline:none!important}html[data-input="pointer"] .tree-row:focus,html[data-input="pointer"] .tree-add:focus{box-shadow:none!important}

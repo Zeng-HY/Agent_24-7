@@ -58,6 +58,7 @@ public class FirstLoginTest {
             .putExtra("url", "https://example.com:8443/account");
         try (var controller = Robolectric.buildActivity(RemoteBrowserActivity.class, intent).setup()) {
             RemoteBrowserActivity activity = controller.get();
+            assertEquals("遥应", activity.getApplicationInfo().loadLabel(activity.getPackageManager()).toString());
             assertNull(activity.getWindow().getDecorView().findViewWithTag("account-navigation"));
             WebView web = ReflectionHelpers.getField(activity, "web");
             web.getWebViewClient().onPageFinished(web,"https://example.com:8443/account");
