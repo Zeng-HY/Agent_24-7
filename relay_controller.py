@@ -317,6 +317,11 @@ class DesktopController:
 def smoke():
     """Exercise both isolated controls in one real native window without user state."""
     import webview
+    def trace(message):
+        path=os.environ.get('AR_SMOKE_LOG')
+        if path:
+            with open(path,'a',encoding='utf-8') as f:f.write(message+'\n')
+    trace('start')
     from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -333,16 +338,16 @@ def smoke():
     c.dispatch=dispatch
     c.window=webview.create_window('Single-window smoke',html=(ASSETS/'desktop_status.html').read_text(encoding='utf-8'),width=440,height=640,hidden=True,js_api=None)
     def configure():
-        c.harden_local()
+        trace('configure');c.harden_local()
         from relay_shell import Shell
-        c.shell=Shell(c)
+        c.shell=Shell(c);trace('configured')
     c.window.events.before_show+=configure
     c.window.events.loaded+=lambda:c.ui_actions.set()
     def test():
         try:
             from System import Func,Boolean,Object
             from System.Windows.Forms import Application
-            assert c.ui_actions.wait(15)
+            assert c.ui_actions.wait(15);trace('local loaded')
             for _ in range(100):
                 if c.window.evaluate_js('typeof window.render')=='function':break
                 time.sleep(.1)
@@ -350,24 +355,24 @@ def smoke():
             c.window.evaluate_js('window.render('+json.dumps({'name':'Test PC','state':'已连接'})+')')
             assert c.window.evaluate_js('document.getElementById("name").textContent')=='Test PC'
             c.window.evaluate_js('location.href="agentremote-action://check-update"')
-            assert acted.wait(5) and actions==['check-update']
-            assert c.shell.remote_ready.wait(15)
+            assert acted.wait(5) and actions==['check-update'];trace('local action')
+            assert c.shell.remote_ready.wait(15);trace('remote ready')
             assert c.window.native.Invoke(Func[Boolean](lambda:Application.OpenForms.Count==1))
             assert c.window.native.Invoke(Func[Boolean](lambda:not c.shell.remote.CoreWebView2.Settings.IsWebMessageEnabled and not c.shell.remote.CoreWebView2.Settings.AreHostObjectsAllowed))
             loaded=threading.Event()
             def watch_navigation():
                 c.shell.remote.CoreWebView2.NavigationCompleted+=lambda sender,args:loaded.set()
             c.shell.invoke(watch_navigation)
-            c.shell.load_account(c.binding['origin']+'/account');assert loaded.wait(10)
+            c.shell.load_account(c.binding['origin']+'/account');assert loaded.wait(10);trace('remote loaded')
             def remote_js(script):
                 task=c.window.native.Invoke(Func[Object](lambda:c.shell.remote.CoreWebView2.ExecuteScriptAsync(script)))
                 return json.loads(str(task.Result))
             assert remote_js('getComputedStyle(document.body).paddingTop')=='24px'
             remote_js('document.getElementById("email").value="fixture@example.test"')
-            c.shell.local_view(returnable=True);c.shell.back()
+            trace('form filled');c.shell.local_view(returnable=True);c.shell.back()
             assert remote_js('document.getElementById("email").value')=='fixture@example.test'
             remote_js('location.href="agentremote-action://install"');time.sleep(.2)
-            assert actions==['check-update']
+            assert actions==['check-update'];trace('remote blocked')
             c.shell.invoke(lambda:setattr(c.shell.startup,'Checked',False))
             for _ in range(50):
                 if actions[-1]=='startup':break
@@ -376,12 +381,14 @@ def smoke():
             c.shell.sync()
             assert c.window.native.Invoke(Func[Boolean](lambda:c.shell.startup.Checked))
             assert c.window.native.Invoke(Func[Boolean](lambda:Application.OpenForms.Count==1))
-        except Exception as exc:errors.append(repr(exc))
+        except Exception as exc:errors.append(repr(exc));trace('error '+repr(exc))
         finally:
+            trace('closing')
             if getattr(c,'shell',None):c.shell.close()
-            c.window.destroy()
+            c.window.destroy();trace('closed')
     timer=threading.Timer(45,c.window.destroy);timer.daemon=True;timer.start()
     try:webview.start(test,gui='edgechromium',private_mode=True,debug=False)
-    finally:timer.cancel();server.shutdown();server.server_close()
+    finally:
+        trace('webview returned');timer.cancel();server.shutdown();server.server_close()
     if errors:print('Native smoke:',errors)
     return 1 if errors else 0
