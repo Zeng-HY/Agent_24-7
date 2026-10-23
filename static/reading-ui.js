@@ -15,7 +15,9 @@
   function preserveList(render){const top=document.querySelector('header').getBoundingClientRect().bottom,row=[...document.querySelectorAll('.conv')].find(n=>n.getBoundingClientRect().bottom>top),key=row?.dataset.key,y=row?.getBoundingClientRect().top;render();if(scrollY>40&&key){const n=[...document.querySelectorAll('.conv')].find(n=>n.dataset.key===key);if(n)window.scrollBy(0,n.getBoundingClientRect().top-y);}}
   async function loadList(more=false,reset=false){
     if(listBusy||!window.workspaceUI?.canPoll())return;const key=convApp+'|'+query;if(key!==listKey){reset=true;listKey=key;}listBusy=true;listMore.disabled=true;
-    try{const j=await api('/api/chats?app='+convApp+'&limit=40&query='+encodeURIComponent(query)+(more&&listCursor?'&cursor='+encodeURIComponent(listCursor):''));if(key!==convApp+'|'+query)return;
+    // Reuse the request started by the inline shell, even if it finished before this module downloaded.
+    const first=takeInitialConvPage(convApp);
+    try{const j=await ((!more&&!query&&first)||api('/api/chats?app='+convApp+'&limit='+CONV_PAGE_SIZE+'&query='+encodeURIComponent(query)+(more&&listCursor?'&cursor='+encodeURIComponent(listCursor):'')));if(key!==convApp+'|'+query)return;
       const incoming=j.items||[];
       if(reset)convItems=incoming;else if(more){const ids=new Set(convItems.map(v=>v.app+':'+v.id));convItems.push(...incoming.filter(v=>!ids.has(v.app+':'+v.id)));}else{const fresh=new Map(incoming.map(v=>[v.app+':'+v.id,v]));const olderItems=convItems.filter(v=>!fresh.has(v.app+':'+v.id));convItems=[...incoming,...olderItems];}
       if(more||reset||!listCursor){listCursor=j.next_cursor;listHasMore=!!j.has_more;}

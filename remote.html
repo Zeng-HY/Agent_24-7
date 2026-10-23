@@ -470,11 +470,19 @@ function setConvApp(a) {
   document.querySelectorAll('.chip[data-app]').forEach(b => b.classList.toggle('on', b.dataset.app === a));
   loadConvs();
 }
-let convLoading = false;
+const CONV_PAGE_SIZE = 20;
+let convLoading = false, initialConvPage = null;
+function takeInitialConvPage(app) {
+  const first = initialConvPage; initialConvPage = null;
+  return first?.app === app ? first.promise : null;
+}
 async function loadConvs() {
   if(window.readingUI)return readingUI.loadList();
   if (convLoading) return; convLoading = true;
-  try { const j = await api('/api/chats?app=' + convApp + '&limit=40'); convItems = j.items; renderConvs(); }
+  const app = convApp;
+  const request = api('/api/chats?app=' + app + '&limit=' + CONV_PAGE_SIZE);
+  initialConvPage = {app, promise: request};
+  try { const j = await request; if (!window.readingUI && app === convApp) { convItems = j.items; renderConvs(); } }
   catch (e) { $('convHint').textContent = '读不到对话：' + e.message; }
   finally { convLoading = false; }
 }

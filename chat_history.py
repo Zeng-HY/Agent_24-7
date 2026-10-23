@@ -61,6 +61,7 @@ class Transcript:
 class History:
     def __init__(self,roots=None,secret=''):
         self.entries=OrderedDict();self.lock=threading.RLock();self.roots=roots or [];self.secret=secret.encode();self.files={};self.catalog_cache=(0,[],[])
+        self.catalog_load_lock=threading.Lock();self.catalog_generation=0
     def transcript(self,app,tid):
         if app=='deepseek':
             import deepseek_control
@@ -77,8 +78,13 @@ class History:
         return item,entry.refresh()
     def _load(self):
         """(conversations of every app, DeepSeek sessions in no workspace that no conversation claims), 10 s."""
+        # The home list and sidebar arrive together. Only one request scans a cold catalog.
+        with self.catalog_load_lock:
+            return self._load_catalog()
+    def _load_catalog(self):
         with self.lock:
             if time.monotonic()-self.catalog_cache[0]<10:return self.catalog_cache[1],self.catalog_cache[2]
+            generation=self.catalog_generation
         items=[]
         try:items+=chats.codex_threads(1000000)
         except Exception:pass
@@ -86,11 +92,13 @@ class History:
         found=deepseek_control.listing()
         items+=chats.claude_sessions(1000000);items+=copy.deepcopy(found['top']);items.sort(key=lambda v:(-v['updated'],v['app'],v['id']))
         stray=copy.deepcopy(found['ungrouped'])
-        with self.lock:self.catalog_cache=(time.monotonic(),items,stray)
+        with self.lock:
+            if generation==self.catalog_generation:self.catalog_cache=(time.monotonic(),items,stray)
         return items,stray
     def invalidate(self):
         """Read the lists again at the next ask: one was archived or restored from the phone (archives.py)."""
-        with self.lock:self.catalog_cache=(0,[],[])
+        with self.lock:
+            self.catalog_generation+=1;self.catalog_cache=(0,[],[])
     def catalog(self):
         return list(self._load()[0])
     def ungrouped(self):
