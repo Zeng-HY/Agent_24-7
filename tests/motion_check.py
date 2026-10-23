@@ -912,7 +912,7 @@ def run_notify(check):
 
 def run_update(check):
     """10-14: the service restarted with new code. Nothing is pinned over the page: the drawer offers a reload, and the
-    page reloads itself when it comes back to the screen with nothing half done."""
+    page only reloads when the user explicitly selects the update action."""
     ok = check
     served = {"version": "0.19.0"}  # what the service says now; the page was given 0.19.0 when it loaded
 
@@ -949,12 +949,16 @@ def run_update(check):
         page.wait_for_timeout(1200)
         ok("back on screen while typing: no reload", page.evaluate("window.__same") == 1)
         page.evaluate("document.activeElement.blur(); closeConv(true)")
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_timeout(1200)
+        ok("returning to an idle page also preserves it", page.evaluate("window.__same") == 1)
+        page.evaluate("openSheet('navSheet')")
         with page.expect_navigation(timeout=8000):
-            page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            page.get_by_role('button',name='有新版，点此刷新',exact=True).click()
         page.wait_for_function("window.voiceUI", timeout=20000)
         page.wait_for_timeout(900)
         after = page.evaluate("({same: window.__same ?? null, toast: document.getElementById('toast').textContent})")
-        ok("back on screen with nothing half done: the page reloads itself and says so", after == {"same": None, "toast": "页面已更新到新版"}, after)
+        ok("explicit update action reloads the page and says so", after == {"same": None, "toast": "页面已更新到新版"}, after)
         ok("no page errors around the update", not errors, errors[:3])
         browser.close()
 

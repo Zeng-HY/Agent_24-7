@@ -308,7 +308,7 @@ def main():
     if args.self_test:
         try:
             import aiohttp,webview,win32crypt,win32security,comtypes,remote
-            assert remote.VERSION=='0.27.0-dev' and remote.chats is not None
+            assert remote.chats is not None
             assert (ASSETS/'remote.html').is_file()
             import relay_controller,relay_updates,relay_instance
             assert (ASSETS/'desktop_status.html').is_file()

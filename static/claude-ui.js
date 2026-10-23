@@ -1,5 +1,5 @@
 /* Claude controls read and operate the existing desktop session. */
-(() => {
+function initializeclaudeUI(){
   let currentData=null,loading=false,menuTarget=null,actionSig='';const cache=new Map();
   const controls=el('div','composer-tools');controls.id='claudeComposerTools';controls.hidden=true;
   const model=el('button','composer-chip','读取模型'),effort=el('button','composer-chip','强度'),modeButton=el('button','composer-chip','模式');
@@ -187,4 +187,5 @@
     runtimeFor(value){const data=cur?.app==='claude'?cache.get(cur.id):null;return data?.runtime?.source==='desktop'&&Date.now()-data.observed_at<15000?data.runtime:value;}};
   setInterval(()=>refresh(),5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
   if(cur)onOpen(cur);
-})();
+}
+if(window.pageParts)pageParts.initialize('claudeUI',[],initializeclaudeUI);else initializeclaudeUI();

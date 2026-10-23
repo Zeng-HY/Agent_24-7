@@ -6,7 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,Mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from relay_identity import Identity,BindingError
 from relay_controller import local_action
@@ -14,6 +14,15 @@ import relay_desktop as d
 
 
 class Controller(unittest.TestCase):
+    def test_failed_startup_change_keeps_previous_value(self):
+        from relay_controller import DesktopController
+        c=DesktopController.__new__(DesktopController)
+        c.stop=threading.Event();c.action_lock=threading.Lock();c.startup=True;c.shell=Mock()
+        with patch.object(d,'set_startup',side_effect=OSError('fixture')):
+            c.dispatch('startup')
+        self.assertTrue(c.startup)
+        c.shell.sync.assert_called()
+
     def test_local_commands_accept_no_payload_or_remote_navigation(self):
         self.assertEqual(local_action('agentremote-action://check-update'),'check-update')
         for uri in ['https://example.test','agentremote-action://install?url=https://evil.test','agentremote-action://bind/extra','agentremote-action://exit','javascript:alert(1)']:

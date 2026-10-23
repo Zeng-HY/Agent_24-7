@@ -13,24 +13,32 @@
 <title>电脑遥控</title>
 <!--machine-->
 <script>
-// Every file of the page comes on its own connection. When one fails (10-11: Tailscale answered 502), that part never
-// runs and the page looks whole but is not: no Claude buttons, no microphone. Once the page has loaded, check that every
-// part is there; if one is missing, reload once (the open chat comes back), and if it still is, say so.
-addEventListener('load', () => {
-  const parts = {deepseekUI:'deepseek-ui', codexUI:'codex-ui', navigationUI:'navigation-ui', workspaceUI:'workspace-ui', activityUI:'activity-ui', readingUI:'reading-ui', claudeUI:'claude-ui', referencesUI:'references-ui', newChatUI:'new-chat-ui', filesUI:'files-ui', archiveUI:'archive-ui', voiceUI:'voice-ui', sidebarUI:'sidebar-ui'};
-  const missing = Object.keys(parts).filter(k => !window[k]).map(k => parts[k]);
-  let last = 0, before = '';
-  try { last = +sessionStorage.getItem('lbr_parts_reload') || 0; before = sessionStorage.getItem('lbr_parts_missing') || ''; sessionStorage.removeItem('lbr_parts_missing'); } catch (e) {}
-  if (before && window.api) api('/api/debug/client', {ua:navigator.userAgent, events:[{t:Math.round(performance.now()), e:'parts-missing', before, now:missing.join(',')}]}).catch(() => {});
-  if (!missing.length) return;
-  if (Date.now() - last > 60000) {
-    try { sessionStorage.setItem('lbr_parts_reload', String(Date.now())); sessionStorage.setItem('lbr_parts_missing', missing.join(',')); } catch (e) {}
-    location.reload(); return;
+// Track resource failure separately from initialization failure. Never reload automatically.
+(()=>{
+  const names={codexUI:'codex-ui',navigationUI:'navigation-ui',workspaceUI:'workspace-ui',activityUI:'activity-ui',readingUI:'reading-ui',claudeUI:'claude-ui',referencesUI:'references-ui',newChatUI:'new-chat-ui',filesUI:'files-ui',voiceUI:'voice-ui',sidebarUI:'sidebar-ui',deepseekUI:'deepseek-ui',archiveUI:'archive-ui'};
+  const records=new Map(),pending=new Map(),dismissed=new Set();let finished=false,retrying=false,pumping=false;
+  const record=k=>{if(!records.has(k))records.set(k,{key:k,name:names[k],status:'loading',attempts:0,since:Date.now(),url:'',error:''});return records.get(k);};
+  function keyFor(url){try{const file=new URL(url,location.href).pathname.split('/').pop();return Object.keys(names).find(k=>names[k]+'.js'===file);}catch{return null;}}
+  function scan(){for(const script of document.scripts){const k=keyFor(script.src);if(k){const r=record(k);if(!r.url)r.url=script.src;}}}
+  function pump(){if(pumping)return;pumping=true;try{for(const [key,item] of pending){if(item.started||!item.dependencies.every(k=>!!window[k]))continue;item.started=true;const r=record(key);try{item.start();r.status=window[key]?'ready':'execution';}catch(e){r.status='execution';r.error=String(e.message||'初始化失败').slice(0,160);}}}finally{pumping=false;}}
+  const failed=()=>[...records.values()].filter(r=>!window[r.key]&&['download','execution','timeout','waiting'].includes(r.status));
+  const signature=()=>failed().map(r=>r.key+':'+r.status).join(',');
+  function render(){scan();pump();for(const r of records.values())if(window[r.key])r.status='ready';const bad=failed();const box=document.getElementById('partsNotice');if(!box)return;
+    box.hidden=!bad.length||dismissed.has(signature());const retry=document.getElementById('partsRetry');retry.disabled=retrying;retry.textContent=retrying?'重试中…':'重试';
+    const detail=document.getElementById('partsDetailsText');if(detail)detail.textContent=bad.map(r=>r.name+'：'+({download:'下载失败',execution:'执行失败',timeout:'加载超时（未重复执行）',waiting:'等待依赖恢复'}[r.status])+(r.error?'；'+r.error:'')).join('\n');
   }
-  const note = document.createElement('button'); note.className = 'parts-missing'; note.textContent = '页面有部分没加载出来（' + missing.join('、') + '），点这里重新加载';
-  note.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top) + 8px);z-index:100;padding:12px;border:0;border-radius:12px;background:#b91c1c;color:#fff;font-size:14px';
-  note.onclick = () => location.reload(); document.body.append(note);
-});
+  async function retry(){if(retrying)return;retrying=true;render();try{for(const k of Object.keys(names)){const r=records.get(k);if(!r||window[k]||r.status!=='download'||r.attempts>=1||!r.url)continue;r.attempts++;r.status='loading';r.since=Date.now();await new Promise(resolve=>{const tag=document.createElement('script'),u=new URL(r.url);u.searchParams.set('ar_retry','1');tag.src=u.href;tag.async=false;let settled=false;const done=()=>{if(settled)return;settled=true;clearTimeout(timer);resolve();};const timer=setTimeout(()=>{if(!window[k]&&r.status==='loading')r.status='timeout';done();render();},15000);tag.onload=done;tag.onerror=done;document.body.append(tag);});render();}}finally{retrying=false;render();}}
+  addEventListener('error',e=>{if(e.target?.tagName==='SCRIPT'){const k=keyFor(e.target.src);if(k){const r=record(k);r.status='download';r.url=e.target.src;}}else{const k=keyFor(e.filename);if(k){const r=record(k);r.status='execution';r.error=String(e.message||'脚本异常').slice(0,160);}}render();},true);
+  addEventListener('load',e=>{if(e.target?.tagName==='SCRIPT'){const k=keyFor(e.target.src);if(k){const r=record(k);if(r.status!=='waiting'&&r.status!=='execution')r.status=window[k]?'ready':'execution';render();}}},true);
+  addEventListener('DOMContentLoaded',()=>{scan();document.getElementById('partsDismiss').onclick=()=>{dismissed.add(signature());render();};document.getElementById('partsRetry').onclick=()=>{if(failed().some(r=>r.status==='download'&&r.attempts<1))retry();else{document.getElementById('partsDetails').showModal();render();}};document.getElementById('partsInfo').onclick=()=>{document.getElementById('partsDetails').showModal();render();};document.getElementById('partsClose').onclick=()=>document.getElementById('partsDetails').close();document.getElementById('partsReload').onclick=()=>{if(confirm('重新加载页面？未发送内容请先确认已保存。')){window.workspaceUI?.saveScene();location.reload();}};render();});
+  addEventListener('load',()=>{finished=true;scan();for(const r of records.values())if(!window[r.key]&&r.status==='loading')r.status='execution';render();if(failed().some(r=>r.status==='download'&&r.attempts<1))retry();});
+  document.addEventListener('click',e=>{const b=e.target.closest?.('#addImageBtn,#modelChoice,#modeChoice,[aria-label="新建对话"]');if(!b)return;const key=b.matches('[aria-label="新建对话"]')?'newChatUI':'codexUI';if(!window[key]){e.preventDefault();e.stopImmediatePropagation();window.pageParts.inform(key);}},true);
+  let referenceExplained=false;document.addEventListener('input',e=>{if(e.target.id==='cvText'&&e.target.value.endsWith('@')&&!window.referencesUI&&!referenceExplained){referenceExplained=true;window.pageParts.inform('referencesUI');}});
+  const timer=setInterval(()=>{scan();let loading=false;for(const r of records.values()){if(window[r.key])r.status='ready';else if(r.status==='loading'){loading=true;if(Date.now()-r.since>15000)r.status='timeout';}}render();if(finished&&!loading&&!retrying)clearInterval(timer);},1000);
+  window.pageParts={snapshot:()=>[...records.values()].map(({key,name,status,attempts,error})=>({key,name,status,attempts,error})),retry,
+    initialize(key,dependencies,start){record(key).status='waiting';pending.set(key,{dependencies,start,started:false});pump();},
+    inform(key){if(!window[key]&&window.toast)toast('此功能暂不可用，请在加载提示中查看详情',true);}};
+})();
 </script>
 <style>
   :root { --bg:#f4f5f7; --card:#fff; --line:#e1e4ea; --text:#1d2330; --muted:#6b7280; --blue:#2563eb; --green:#16a34a; --red:#dc2626; --amber:#d97706; }
@@ -60,6 +68,7 @@ addEventListener('load', () => {
   .sheet .sh-head { padding:12px 14px; border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; }
   .sheet .sh-head b { flex:1; word-break:break-all; }
   .sheet .sh-body { padding:12px 14px; overflow:auto; display:flex; flex-direction:column; gap:10px; }
+  .parts-notice{position:relative;margin:8px 12px;padding:4px 8px;display:flex;align-items:center;gap:4px;background:#fff5e7;border:1px solid #efdec0;border-radius:12px;color:#77511c;font-size:13px}.parts-notice[hidden]{display:none}.parts-notice span{flex:1;min-width:0}.parts-notice button{font-size:13px;min-height:44px;min-width:44px;padding:8px;border:0;background:transparent;color:inherit}.parts-details{width:min(420px,calc(100vw - 32px));border:0;border-radius:18px;padding:20px}.parts-details pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 monospace;max-height:45vh;overflow:auto}.parts-details::backdrop{background:#0004}
   .toast { position:fixed; left:50%; bottom:calc(18px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:#111; color:#fff; padding:10px 16px; border-radius:20px; font-size:14px; opacity:0; transition:opacity .2s; z-index:90; max-width:90vw; pointer-events:none; }
   .toast.show { opacity:.95; }
 
@@ -293,6 +302,8 @@ addEventListener('load', () => {
   </div>
   <div id="connectionNote" class="connection-note" role="status" hidden></div>
 </header>
+<aside id="partsNotice" class="parts-notice" role="status" hidden><span>部分功能暂不可用</span><button id="partsRetry" type="button">重试</button><button id="partsInfo" type="button">详情</button><button id="partsDismiss" type="button" aria-label="关闭加载提示">×</button></aside>
+<dialog id="partsDetails" class="parts-details"><h2>加载详情</h2><pre id="partsDetailsText"></pre><button id="partsReload" type="button">重新加载页面</button><button id="partsClose" type="button">关闭</button></dialog>
 
 <!-- ======================= conversations ======================= -->
 <section data-mode="chat" class="conversation-home">
@@ -993,8 +1004,7 @@ function sendNew() { window.newChatUI?.open(); }
 
 // ---------------------------------------------------------------- is the PC reachable
 // The service was restarted with new code after this page loaded: it now says another version than the one it put into
-// the page (MACHINE.version). The page reloads itself the next time it comes back to the screen with nothing half done,
-// and says so for a moment; till then the drawer's status line offers it. Before 10-14 a button stayed pinned over the
+// the page (MACHINE.version). The drawer offers an explicit refresh; returning to the screen never reloads it. Before 10-14 a button stayed pinned over the
 // top right, and from 0.18 on for good: the page compared with a version written into it that nobody had updated.
 let pageOutdated = false;
 async function refreshStatus() { if(document.hidden || (window.workspaceUI && !workspaceUI.canPoll()))return; try { const status=await api('/api/status');serviceOnline = true;pageOutdated=!!(status.ui_version&&MACHINE.version&&status.ui_version!==MACHINE.version); } catch (e) { serviceOnline = false; } updateConnection(); }
@@ -1181,7 +1191,7 @@ refreshStatus(); setInterval(refreshStatus, 2000);
 setInterval(() => { if (mode === 'chat' && !cur && !document.hidden && (window.workspaceUI?.canPoll() ?? true)) loadConvs(); }, 10000);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || (window.workspaceUI && !workspaceUI.canPoll())) return;
-  refreshStatus().then(() => { if (pageOutdated && quietMoment()) reloadForUpdate(); });  // back on screen: the moment to update
+  refreshStatus();  // Offer an update; never replace a user's page automatically.
   if (mode === 'chat') { if (cur) loadConv(false); else loadConvs(); }
 });
 try { if (sessionStorage.getItem('lbr_page_updated')) { sessionStorage.removeItem('lbr_page_updated'); setTimeout(() => toast('页面已更新到新版'), 600); } } catch (e) {}

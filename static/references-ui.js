@@ -1,7 +1,7 @@
 /* Search by partial name; selections are server-bound and travel with the send snapshot.
    Files and folders on the computer are references too (10-20, files-ui.js): up to 20 besides the 8 others, each a
    chip with 📄/📁; one still going up from the phone holds the send until it is there. */
-(() => {
+function initializereferencesUI(){
   const input=$('cvText'),drafts=new Map();let generation=0,timer=null,trigger=null,suggestions=[],selectedIndex=-1,pickerTarget=null,pickerKind='chat',nextOffset=0,hasMore=false;
   const key=me=>'lbr_references_'+chatKey(me);
   const isFile=v=>v&&(v.kind==='file'||v.kind==='folder');
@@ -57,4 +57,5 @@
     fileCount(me=cur,withPending=false){return entries(me).filter(v=>isFile(v)&&(withPending||!v.status)).length;},
     pendingCount(me=cur){return entries(me).filter(v=>isFile(v)&&v.status).length;}};
   if(cur)paint();
-})();
+}
+if(window.pageParts)pageParts.initialize('referencesUI',['claudeUI'],initializereferencesUI);else initializereferencesUI();
