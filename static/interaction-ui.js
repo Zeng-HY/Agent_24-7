@@ -5,7 +5,7 @@
   const preferences=saved('teleply-list-display',{}),expanded=saved('teleply-activity-expanded',{});
   const toolExpanded=new Map();
   const turns=new Map(),activeTurns=new Map(),unreliableTimes=saved('teleply-activity-clock-unknown',{});let pendingTurn=null;
-  const button=(text,action)=>{const b=el('button','',text);b.type='button';b.onclick=action;return b;};
+  const button=(text,action)=>{const b=el('button','tp-button',text);b.type='button';b.onclick=action;return b;};
   const iconButton=(name,label,action)=>{const b=button('',action);b.className='tp-icon-button';b.innerHTML=icon(name);b.setAttribute('aria-label',label);b.title=label;return b;};
   function meta(data){if(!cur)return;const key=chatKey(cur);turns.set(key,{...(turns.get(key)||{}),...(data.activity_turns||{})});if(data.activity_current)activeTurns.set(key,data.activity_current);}
   function control(me,data){if(cur&&chatKey(cur)===chatKey(me)){const question=(data.questions||[]).find(q=>q.status==='pending');pendingTurn=question?(question.turn_id||data.active_turn_id):null;tick();}}
