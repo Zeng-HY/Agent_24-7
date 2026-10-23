@@ -36,7 +36,7 @@ class Shell:
             bitmap=icon(name,D(20));self.chrome_images.append(bitmap);button(control,bitmap)
         self.back_button.Click+=lambda sender,args:self.dispatch('back')
         bottom=Panel();bottom.Dock=DockStyle.Fill;bottom.BackColor=Color.White
-        self.startup=CheckBox();self.startup.Text='登录时启动';self.startup.AccessibleName='登录时启动';self.startup.AutoSize=True;self.startup.Font=Font('Microsoft YaHei UI',9);self.startup.Location=Point(D(24),D(12));self.startup.Checked=controller.startup;self.startup.BackColor=Color.White
+        self.startup=CheckBox();self.startup.Text='开机时启动';self.startup.AccessibleName='开机时启动';self.startup.AutoSize=True;self.startup.Font=Font('Microsoft YaHei UI',9);self.startup.Location=Point(D(24),D(12));self.startup.Checked=controller.startup;self.startup.BackColor=Color.White
         self.version=Label();self.version.Text=controller.version;self.version.Font=Font('Segoe UI',9);self.version.ForeColor=Color.Gray;self.version.Dock=DockStyle.Right;self.version.Width=D(150);self.version.TextAlign=ContentAlignment.MiddleRight;self.version.Padding=__import__('System.Windows.Forms',fromlist=['Padding']).Padding(0,0,D(24),0)
         bottom.Controls.Add(self.startup);bottom.Controls.Add(self.version)
         self.center=Panel();self.center.Dock=DockStyle.Fill;self.center.BackColor=Color.White
