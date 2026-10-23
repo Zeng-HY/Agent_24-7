@@ -14,7 +14,7 @@ import relay_desktop
 class DesktopTests(unittest.TestCase):
     def test_failed_manual_migration_restores_existing_destination(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';data=root/'data'
+            root=Path(temp).resolve();old=root/'old';data=root/'data'
             (old/'attachments').mkdir(parents=True);(data/'attachments').mkdir(parents=True)
             cfg={'port':8765,'token':'disposable-token'}
             (old/'remote_config.json').write_text(json.dumps(cfg))
