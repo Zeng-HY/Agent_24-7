@@ -368,11 +368,19 @@ def smoke():
             assert c.window.native.Invoke(Func[Boolean](lambda:not c.shell.remote.CoreWebView2.Settings.IsWebMessageEnabled and not c.shell.remote.CoreWebView2.Settings.AreHostObjectsAllowed))
             loaded=threading.Event()
             def watch_navigation():
-                c.shell.remote.CoreWebView2.NavigationCompleted+=lambda sender,args:loaded.set()
+                def completed(sender,args):
+                    if args.IsSuccess and str(c.shell.remote.CoreWebView2.Source).startswith(c.binding['origin']+'/'):loaded.set()
+                c.shell.remote.CoreWebView2.NavigationCompleted+=completed
             c.shell.invoke(watch_navigation)
             c.shell.load_account(c.binding['origin']+'/account');assert loaded.wait(10);trace('remote loaded')
             def remote_js(script):
                 task=c.window.native.Invoke(Func[Object](lambda:c.shell.remote.CoreWebView2.ExecuteScriptAsync(script)))
+                # Reading Task.Result before completion can hold Python's GIL while
+                # the UI callback needs it. Yield with a bound, then read the result.
+                deadline=time.monotonic()+15
+                while not task.IsCompleted:
+                    if time.monotonic()>deadline:raise TimeoutError('WebView script did not complete')
+                    time.sleep(.02)
                 return json.loads(str(task.Result))
             assert remote_js('getComputedStyle(document.body).paddingTop')=='24px'
             remote_js('document.getElementById("email").value="fixture@example.test"')
