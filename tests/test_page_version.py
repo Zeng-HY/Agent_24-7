@@ -18,7 +18,7 @@ class PageVersionTest(unittest.TestCase):
 
     def test_the_page_has_no_version_of_its_own(self):
         page = remote.PAGE_FILE.read_text(encoding="utf-8")
-        self.assertNotIn("?v=", page)
+        self.assertNotRegex(page, r"[?]v=0[.]")
 
     def test_only_local_scripts_are_stamped(self):
         page = (b'<script src="https://cdn.example.com/x.js"></script>'

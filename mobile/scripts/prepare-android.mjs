@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, copyFile, cp } from 'node:fs/promises';
 
 // Keep generated native projects disposable, as in the iOS build.
 async function replace(path, from, to) {
@@ -36,7 +36,7 @@ manifest=manifest.replace('</manifest>', `    <uses-permission android:name="and
 await writeFile(manifestPath,manifest);
 const source = 'android/app/src/main/java/com/pocketagentdesk/remote';
 await mkdir(source, { recursive: true });
-for (const name of ['RemoteBrowserPlugin', 'BrowserPolicy', 'RemoteBrowserActivity', 'AppUpdater', 'UpdatePolicy'])
+for (const name of ['RemoteBrowserPlugin', 'BrowserPolicy', 'RemoteBrowserActivity', 'AppUpdater', 'UpdatePolicy', 'ThemePolicy'])
   await copyFile(`native/android/${name}.java`, `${source}/${name}.java`);
 const tests = 'android/app/src/test/java/com/pocketagentdesk/remote';
 await mkdir(tests, { recursive: true });
@@ -50,16 +50,15 @@ public class MainActivity extends BridgeActivity {
     @Override public void onCreate(Bundle state) {
         registerPlugin(RemoteBrowserPlugin.class);
         super.onCreate(state);
+        ThemePolicy.apply(this,getBridge().getWebView());
     }
 }
 `);
 // The launcher icon is the Agent Remote mark (written by brand/make_icons.py), not Capacitor's; launching shows plain white.
 const res = 'android/app/src/main/res';
-for (const name of ['drawable/agent_remote_mark.xml', 'drawable/agent_remote_tile.xml',
-  'mipmap-anydpi-v26/ic_launcher.xml', 'mipmap-anydpi-v26/ic_launcher_round.xml'])
-  await copyFile(`resources/android/${name}`, `${res}/${name}`);
-await replace(`${res}/values/styles.xml`, '<item name="android:background">@drawable/splash</item>',
-  '<item name="android:background">@android:color/white</item>');
+await cp('resources/android', res, {recursive:true});
+const stylesPath=`${res}/values/styles.xml`;
+await writeFile(stylesPath,(await readFile(stylesPath,'utf8')).replace(/<item name="android:background">(?:@drawable\/splash|@android:color\/white)<\/item>/g,'<item name="android:background">@color/teleply_window_background</item>'));
 // Use the smaller distribution without sources; Gradle itself remains pinned.
 await replace('android/gradle/wrapper/gradle-wrapper.properties',
   'gradle-8.14.3-all.zip', 'gradle-8.14.3-bin.zip');

@@ -303,7 +303,7 @@ class DesktopController:
         def picture(name):
             with Image.open(ASSETS/'static'/name) as image:return image.convert('RGBA')
         # The tray shows the mark; its dot is the connection light, dimmed while this computer is not connected
-        lit,dim=picture('app.ico'),picture('tray-offline.png')
+        lit,dim=picture('tray-online.png'),picture('tray-offline.png')
         def action(name):return lambda icon,item:threading.Thread(target=self.dispatch,args=(name,),daemon=True).start()
         self.icon=pystray.Icon('AgentRemote',dim,'Agent Remote',menu=pystray.Menu(
             pystray.MenuItem('打开主窗口',lambda icon,item:self.show(),default=True),

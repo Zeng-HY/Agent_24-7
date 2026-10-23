@@ -1,15 +1,16 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
+<script src="/theme.js"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Teleply">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#2563eb">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=__TELEPLY_VERSION__">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=__TELEPLY_VERSION__">
+<link rel="manifest" href="/manifest.webmanifest?v=__TELEPLY_VERSION__">
 <title>Teleply</title>
 <!--machine-->
 <script>
@@ -299,6 +300,7 @@ document.addEventListener('keydown',event=>{if(event.key==='Tab')document.docume
 
 html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:focus,html[data-input="pointer"] dialog:focus{outline:none!important}html[data-input="pointer"] .tree-row:focus,html[data-input="pointer"] .tree-add:focus{box-shadow:none!important}
 </style>
+<link rel="stylesheet" href="/theme.css?v=__TELEPLY_VERSION__">
 </head>
 <body>
 <header>
@@ -442,7 +444,7 @@ for (const chip of document.querySelectorAll('.conversation-home .chip[data-app]
 if (Array.isArray(MACHINE.apps) && MACHINE.apps.length < 2) document.querySelector('.conversation-home .chips').style.display = 'none';
 const NO_APPS = Array.isArray(MACHINE.apps) && !MACHINE.apps.length
   ? '这台电脑上没找到 Codex、Claude 或 DeepSeek Harness 桌面版。装好后刷新这个页面；也可以在 remote_config.json 里用 "apps" 指定。' : '';
-addEventListener('load', () => { if (!$('settingsBody').children.length) $('settingsBtn').style.display = 'none'; }); // no voice: nothing to set
+// Appearance settings remain available without voice support.
 
 // ---------------------------------------------------------------- modes
 const MODES = {chat:['对话','电脑上的工作，随时继续']}; // 任务 went 10-12; the sidebar lists conversations by project (sidebar-ui.js)

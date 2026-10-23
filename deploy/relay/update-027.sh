@@ -7,15 +7,16 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 target=/opt/agent-relay-027
 test -f "$target/relay_service.py" || { echo '还没装 0.27：先运行 stage-027.sh'; exit 1; }
-files=(relay_service.py relay_identity.py relay_accounts.py relay_mail.py relay_transport.py relay_pages.py relay_routing.js relay_account.html relay_account.css relay_account.js)
+files=(windows-version.json static/theme.js static/theme.css static/favicon.svg static/favicon-dark.svg static/favicon.ico static/icon-maskable-512.png static/apple-touch-icon.png relay_service.py relay_identity.py relay_accounts.py relay_mail.py relay_transport.py relay_pages.py relay_routing.js relay_account.html relay_account.css relay_account.js)
 for file in "${files[@]}"; do test -f "$file" || { echo "包里缺 $file"; exit 1; }; done
 keep="$target/previous-$(date +%Y%m%d-%H%M%S)"
 install -d -o root -g root -m 755 "$keep"
 for file in "${files[@]}"; do
-    cp -a "$target/$file" "$keep/" 2>/dev/null || true
+    install -d -m 755 "$(dirname "$keep/$file")" "$(dirname "$target/$file")"
+    cp -a "$target/$file" "$keep/$file" 2>/dev/null || true
     install -o root -g root -m 644 "$file" "$target/$file"
 done
-systemctl restart agent-relay-027.service
+systemctl restart agent-relay-027.service || true
 for attempt in {1..30}; do
     if curl --fail --silent --max-time 2 --output /dev/null -H 'Host: 8.166.15.235' http://127.0.0.1:18771/account; then
         echo "已更新。换下的文件在 $keep"

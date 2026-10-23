@@ -1,10 +1,18 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { InAppBrowser, DefaultWebViewOptions, DefaultSystemBrowserOptions } from '@capacitor/inappbrowser';
 import { DEFAULT_ORIGIN, normalizeOrigin, entryUrl } from './settings.mjs';
+async function start() {
 const $ = id => document.getElementById(id);
 const key = 'agent-remote.connection.v1';
 const RemoteBrowser = registerPlugin('RemoteBrowser');
 const android = Capacitor.getPlatform() === 'android';
+if (android) {
+  let nativeSync=false;
+  const restore=async()=>{nativeSync=true;try{const {mode}=await RemoteBrowser.getTheme();window.TeleplyTheme?.set(mode);await RemoteBrowser.setTheme({mode});}finally{nativeSync=false;}};
+  await restore();
+  addEventListener('teleply-theme-change',e=>{if(!nativeSync)RemoteBrowser.setTheme({mode:e.detail.mode}).catch(()=>{});});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)restore().catch(()=>{});});
+}
 if (android) { document.title = '遥应'; document.querySelector('.brand span').textContent = '遥应'; }
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch {}
@@ -58,3 +66,6 @@ $('connect').onsubmit = async event => {
 };
 
 if (Capacitor.isNativePlatform() && typeof $('connect').requestSubmit === 'function') $('connect').requestSubmit();
+
+}
+window.teleplyReady=start().catch(()=>{document.getElementById("status").textContent="启动失败，请重新打开";});

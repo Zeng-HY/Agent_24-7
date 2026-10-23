@@ -9,6 +9,17 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "RemoteBrowser")
 public class RemoteBrowserPlugin extends Plugin {
     @PluginMethod
+    public void getTheme(PluginCall call) {
+        com.getcapacitor.JSObject result=new com.getcapacitor.JSObject();result.put("mode",ThemePolicy.get(getContext()));call.resolve(result);
+    }
+    @PluginMethod
+    public void setTheme(PluginCall call) {
+        String mode=call.getString("mode", "");
+        if(!ThemePolicy.valid(mode)){call.reject("Invalid theme");return;}
+        ThemePolicy.save(getContext(),mode);
+        getActivity().runOnUiThread(()->{ThemePolicy.apply(getActivity(),getBridge().getWebView());call.resolve();});
+    }
+    @PluginMethod
     public void checkUpdate(PluginCall call) {
         getActivity().runOnUiThread(() -> { AppUpdater.check(getActivity(), true); call.resolve(); });
     }

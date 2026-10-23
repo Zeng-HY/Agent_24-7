@@ -81,7 +81,7 @@ SCRIPT_SRC = re.compile(rb'(<script src="(/[A-Za-z0-9_.\-]+\.js))(?:\?[^"]*)?"')
 
 
 def stamp_page(page: bytes) -> bytes:
-    return SCRIPT_SRC.sub(lambda m: m.group(1) + b"?v=" + VERSION.encode("ascii") + b'"', page)
+    return SCRIPT_SRC.sub(lambda m: m.group(1) + b"?v=" + VERSION.encode("ascii") + b'"', page).replace(b'__TELEPLY_VERSION__', VERSION.encode('ascii'))
 
 DEFAULT_CONFIG = {
     "port": 8765,
@@ -119,6 +119,12 @@ STATIC_FILES = {  # served without the token: home-screen icons and the web app 
     "/apple-touch-icon-precomposed.png": ("apple-touch-icon.png", "image/png"),
     "/icon-192.png": ("icon-192.png", "image/png"),
     "/icon-512.png": ("icon-512.png", "image/png"),
+    "/theme.js": ("theme.js", "application/javascript"),
+    "/theme.css": ("theme.css", "text/css"),
+    "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/favicon-dark.svg": ("favicon-dark.svg", "image/svg+xml"),
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+    "/icon-maskable-512.png": ("icon-maskable-512.png", "image/png"),
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
 }
 
@@ -334,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
             if not file.is_file():
                 self._json({"error": "没有这个文件"}, 404)
                 return
-            self._send(200, file.read_bytes(), ctype, {"Cache-Control": "public, max-age=86400"})
+            self._send(200, file.read_bytes().replace(b'__TELEPLY_VERSION__', VERSION.encode('ascii')) if name == 'manifest.webmanifest' else file.read_bytes(), ctype, {"Cache-Control": "public, max-age=86400"})
             return
         if path in ("/", "/input-diagnostics"):
             if not self._authorized():

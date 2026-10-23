@@ -178,7 +178,7 @@ iPhone 上微信收到的文件不在「文件」App 里。先在微信里打开
 | `notify.py` | 做完推送：找出刚做完的对话，发给 Bark 和 ntfy |
 | `ntfy_feed.py` | 安卓的 ntfy App 从本服务订阅推送（按 ntfy 服务器的方式回应） |
 | `voice.py`、`voice_local.py`、`voice_terms.py` | 语音输入（可选） |
-| `brand/` | 标志：一个 A，横杠换成「已连接」的那个点。改图形后运行 `python brand/make_icons.py`，重新生成 Windows 图标、托盘断线图标、手机主屏幕图标和安卓/iOS App 图标 |
+| `brand/` | Teleply 定稿 SVG 是唯一图形来源。运行 `python brand/make_icons.py`（Pillow、skia-python）生成 Windows、网页、Android 和 iOS 图标；托盘绿点表示已连接，黄点表示其他状态。设置中的外观支持跟随系统、浅色和纯黑深色。 |
 
 ## 限制
 

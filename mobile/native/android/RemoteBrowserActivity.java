@@ -23,6 +23,30 @@ import androidx.core.view.WindowInsetsControllerCompat;
 /** Plain remote WebView. Never attach Capacitor or a JavascriptInterface to it. */
 public class RemoteBrowserActivity extends AppCompatActivity {
     private WebView web;
+    private LinearLayout root;
+    private boolean themeReady;
+    private final android.os.Handler themeHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable themePoll=new Runnable(){public void run(){syncTheme();themeHandler.postDelayed(this,500);}};
+    private void applyTheme(){
+        ThemePolicy.apply(this,root);
+        if(web!=null)web.setBackgroundColor(ThemePolicy.dark(this)?0xff000000:0xffffffff);
+        if(failurePanel!=null)ThemePolicy.text(failurePanel,ThemePolicy.dark(this));
+    }
+    private void syncTheme(){
+        applyTheme();
+        if(!themeReady||web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return;
+        final String url=web.getUrl();
+        web.evaluateJavascript("window.TeleplyTheme ? window.TeleplyTheme.get() : null",value->{
+            if(!themeReady||!url.equals(web.getUrl())||value==null)return;
+            String mode=value.replace("\"", "");
+            if(ThemePolicy.valid(mode)&&!mode.equals(ThemePolicy.get(this))){ThemePolicy.save(this,mode);applyTheme();}
+        });
+    }
+    private void seedTheme(){
+        if(web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl()))return;
+        final String url=web.getUrl(), mode=ThemePolicy.get(this);
+        web.evaluateJavascript("(()=>{try{localStorage.setItem('teleply.theme.v1','"+mode+"')}catch(e){};if(window.TeleplyTheme)window.TeleplyTheme.set('"+mode+"');return true})()",result->{if(url.equals(web.getUrl())){themeReady=true;web.postVisualStateCallback(0,new WebView.VisualStateCallback(){public void onComplete(long id){if(!isFinishing())web.setAlpha(1f);}});}});
+    }
     private TextView status;
     private LinearLayout failurePanel;
     private String entry;
@@ -43,7 +67,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         super.onCreate(state);
         entry = getIntent().getStringExtra("url");
         if (!BrowserPolicy.validEntry(entry)) { finish(); return; }
-        LinearLayout root = new LinearLayout(this);
+        root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xffffffff);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
@@ -87,6 +111,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         settings.setSupportMultipleWindows(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
+        applyTheme();
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (BrowserPolicy.sameOrigin(entry, request.getUrl().toString())) return false;
@@ -96,9 +121,11 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 if (!BrowserPolicy.sameOrigin(entry, url)) { view.stopLoading(); fail("已阻止打开其他地址"); return; }
+                themeReady=false;applyTheme();web.setAlpha(0f);
                 loadFailed = false; failurePanel.setVisibility(View.GONE); web.setVisibility(View.VISIBLE);
             }
             @Override public void onPageFinished(WebView view, String url) {
+                seedTheme();
                 CookieManager.getInstance().flush();
                 if (!loadFailed) failurePanel.setVisibility(View.GONE);
             }
@@ -197,7 +224,8 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         fields.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         fields.addView(help); fields.addView(user); fields.addView(password);
-        authDialog = new AlertDialog.Builder(this).setTitle("服务访问验证").setView(fields)
+        ThemePolicy.text(fields,ThemePolicy.dark(this));
+        authDialog = ThemePolicy.dialog(this).setTitle("服务访问验证").setView(fields)
             .setPositiveButton("登录", null).setNegativeButton("暂不连接", (d, w) -> cancelAuth())
             .setOnCancelListener(d -> cancelAuth()).create();
         authDialog.setOnShowListener(d -> authDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -248,9 +276,10 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             fileResult.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0])); fileResult = null;
         }
     }
-    @Override protected void onPause() { if (web != null) { web.onPause(); CookieManager.getInstance().flush(); } super.onPause(); }
-    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
+    @Override protected void onPause() { themeHandler.removeCallbacks(themePoll); if (web != null) { web.onPause(); CookieManager.getInstance().flush(); } super.onPause(); }
+    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); applyTheme();themeHandler.removeCallbacks(themePoll);themeHandler.post(themePoll); }
     @Override protected void onDestroy() {
+        themeHandler.removeCallbacks(themePoll);
         if (authHandler != null) { authHandler.cancel(); authHandler = null; }
         if (authDialog != null) authDialog.dismiss();
         if (fileResult != null) fileResult.onReceiveValue(null);

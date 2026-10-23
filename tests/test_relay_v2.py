@@ -32,6 +32,16 @@ class V2Tests(unittest.IsolatedAsyncioTestCase):
         self.runners.append(runner)
         return site._server.sockets[0].getsockname()[1]
 
+    async def test_public_theme_assets_and_version_are_available_without_login(self):
+        async with self.client.get(self.origin+'/account') as response:
+            self.assertEqual(response.status,200)
+            html=await response.text();self.assertIn('/account/theme.js?v=',html);self.assertNotIn('__TELEPLY_VERSION__',html)
+        for name in ['theme.js','theme.css','favicon.svg','favicon-dark.svg','apple-touch-icon.png']:
+            async with self.client.get(self.origin+'/account/'+name) as response:
+                self.assertEqual(response.status,200,name);self.assertGreater(len(await response.read()),100)
+        async with self.client.get(self.origin+'/account/config') as response:
+            version=(await response.json())['version'];self.assertEqual(version,json.loads((Path(__file__).resolve().parents[1]/'windows-version.json').read_text())['version'])
+
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.runners=[];self.tasks=[]
         self.store=Identity(Path(self.tmp.name)/'state.sqlite3')

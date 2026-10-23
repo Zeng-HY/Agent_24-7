@@ -1,0 +1,51 @@
+/* Appearance controls are shared by the launcher, account page and remote UI. */
+:root{--theme-panel:#f4f4f6;--theme-edge:#d6d6dc;--theme-focus:#2563eb;--theme-text:#171719;color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark;--bg:#000;--card:#141414;--line:#333;--text:#eee;--ink:#eee;--muted:#a8a8a8;--soft:#1e1e1e;--blue:#8ab4ff;--green:#66d997;--red:#ff9a9a;--danger:#ff9a9a;--amber:#efbd6a;--theme-panel:#1e1e1e;--theme-edge:#767676;--theme-focus:#8ab4ff;--theme-text:#eee;--shadow:0 8px 32px #0008;background:#000;color:#eee}
+.theme-title{font-size:13px;font-weight:500;color:var(--muted,#6b7280);margin:6px 0 10px}
+.theme-choices{display:flex;gap:6px;flex:none;padding:5px;border:1px solid var(--theme-edge);border-radius:16px;background:var(--theme-panel)}
+.theme-choices button{flex:1;min-height:44px;padding:8px 10px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--theme-text);font-family:inherit;font-size:14px;font-weight:500;line-height:1.4;cursor:pointer;white-space:nowrap}
+.theme-choices button[aria-checked=true]{border-color:var(--theme-focus);color:var(--theme-focus);background:var(--card,#fff)}
+.theme-choices button:focus-visible,.theme-settings>summary:focus-visible{outline:2px solid var(--theme-focus);outline-offset:3px}
+.theme-settings{position:fixed;top:max(12px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));display:flex;justify-content:flex-end;margin:0;z-index:8}
+.theme-settings>summary{margin:0 0 0 auto;width:max-content;min-height:44px;padding:12px;cursor:pointer;list-style:none;font-size:14px;color:var(--theme-text)}
+.theme-settings>summary::-webkit-details-marker{display:none}
+.theme-settings-panel{position:absolute;right:0;top:48px;width:min(320px,calc(100vw - 40px));padding:16px;border:1px solid var(--theme-edge);border-radius:20px;background:var(--card,#fff);box-shadow:0 12px 40px #0002}
+:root[data-theme=dark] body,:root[data-theme=dark] body[data-current-mode=chat],:root[data-theme=dark] #convView,:root[data-theme=dark] .conversation-home,:root[data-theme=dark] .cv-top,:root[data-theme=dark] .cv-bottom,:root[data-theme=dark] header{background:#000;color:#eee}
+:root[data-theme=dark] :is(input,textarea,select){color:#eee;background:#1e1e1e;border-color:#767676;caret-color:#8ab4ff}
+:root[data-theme=dark] :is(input,textarea,select):focus{background:#1e1e1e;outline:2px solid #8ab4ff;outline-offset:2px;box-shadow:none}
+:root[data-theme=dark] :is(button,.chip,.sub-card,.code-wrap,.reference-chip,.voice-pill,.msg-menu,.new-composer,.codex-card,.option-card){color:#eee;background-color:#1e1e1e;border-color:#767676}
+:root[data-theme=dark] :is(.icon-btn,.menu-row,.nav-links button,.text-button,.reveal,.tree-add,.ctx-ring,.runtime-bar){background:transparent;color:inherit}
+:root[data-theme=dark] :is(.sheet .box,dialog,.menu,.device-options,.action-menu,.theme-settings-panel){background:#1e1e1e;color:#eee;border-color:#767676}
+:root[data-theme=dark] :is(.primary,.device-actions>button,button.big,#cvBtn,.chip.on){background:#8ab4ff;color:#101010;border-color:#8ab4ff;box-shadow:none}
+:root[data-theme=dark] :is(.primary,.device-actions>button,button.big,#cvBtn):hover{background:#b1cdff}
+:root[data-theme=dark] :is(.field input,.field select,#approval .field select){background-color:#1e1e1e;color:#eee}
+:root[data-theme=dark] :is(.bub.user){background:#1e1e1e;color:#eee;border:1px solid #333}
+:root[data-theme=dark] :is(.bub.assistant,.bub.note){background:transparent}
+:root[data-theme=dark] :is(.bub pre,.bub code,.inline-copy,#readerSheet .reader-text pre,#readerSheet .reader-text code){background:#141414;color:#eee;border-color:#333}
+:root[data-theme=dark] .code-wrap{background:#141414;border:1px solid #333}
+:root[data-theme=dark] .code-wrap pre{background:transparent}
+:root[data-theme=dark] :is(a,.thread-link){color:#8ab4ff}
+:root[data-theme=dark] :is(.thread-link,.nav-links button.selected,.sub-card.running,.option-card[aria-checked=true],.model-list-row[aria-checked=true],.effort-choices button[aria-checked=true],.new-apps button[aria-checked=true],.new-pick-row[aria-selected=true],.reference-result[aria-selected=true],.pcf-row[aria-selected=true],.pcf-places button[aria-current=true]){background:#17253b;color:#b1cdff;border-color:#8ab4ff}
+:root[data-theme=dark] :is(.connection-note,.pending-alert,.optbox,.parts-notice,.composer-chip.is-plan){background:#302513;color:#efbd6a;border-color:#927144}
+:root[data-theme=dark] :is(.voice-pill.error,.reference-chip.is-file.is-failed,.ds-actions .ds-reject){background:#351d20;color:#ff9a9a;border-color:#bb7777}
+:root[data-theme=dark] :is(.composer-chip.is-full,.ds-actions .ds-allow){background:#142b20;color:#8ce2af;border-color:#619779}
+:root[data-theme=dark] :is(.cv-row,#cvText,.ctx-ring span){background:#1e1e1e;color:#eee;box-shadow:none}
+:root[data-theme=dark] .cv-row{border:1px solid #767676}
+:root[data-theme=dark] #cvText{border:0}
+:root[data-theme=dark] .bub.note.thinking.long::after{background:linear-gradient(to right,transparent,#000 2.5em)}
+:root[data-theme=dark] .brand,:root[data-theme=dark] .brand .mark{color:#fff}
+:root[data-theme=dark] .theme-choices button[aria-checked=true]{background:#17253b;color:#b1cdff;border-color:#8ab4ff}
+:root[data-theme=dark] :is(.conv:active,.menu button:hover,.device-options button:hover,.text-button:hover,.tree-row:active,.msg-menu button:active){background:#292929}
+:root[data-theme=dark] dialog::backdrop{background:#000a}
+:root[data-theme=dark] .toast{background:#eee;color:#111}
+:root[data-theme=dark] ::selection{background:#365780;color:#fff}
+:root[data-theme=dark] :focus-visible{outline-color:#8ab4ff}
+:root[data-theme=dark] ::placeholder{color:#a8a8a8;opacity:1}
+
+:root[data-theme=dark] .ask-pill .ask-go{color:#efbd6a}
+
+:root[data-theme=dark] #cvMsgs .bub.assistant.picked{background:#17253b}
+:root[data-theme=dark] .new-inline-status{background:#1e1e1e;color:#a8a8a8}
+:root[data-theme=dark] .ask-pill .ask-dot{background:#efbd6a}
+
+:root[data-theme=dark] :is(.field input,.field select,.connection-card input,.connection-card select){border:1px solid #767676}

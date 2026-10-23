@@ -117,14 +117,18 @@ class Service:
     async def route(self, request):
         path=request.path
         token=request.cookies.get(COOKIE,'')
+        theme_files = {'theme.js': 'application/javascript', 'theme.css': 'text/css', 'favicon.svg': 'image/svg+xml', 'favicon-dark.svg': 'image/svg+xml', 'favicon.ico': 'image/x-icon', 'icon-maskable-512.png': 'image/png', 'apple-touch-icon.png': 'image/png'}
+        if path.startswith('/account/') and path[9:] in theme_files and request.method in ('GET','HEAD'):
+            name=path[9:]
+            return web.Response(body=(HERE/'static'/name).read_bytes(),content_type=theme_files[name],headers={'Cache-Control':'no-cache'})
         if path in ('/account','/account/ui.css','/account/ui.js') and request.method in ('GET','HEAD'):
             name={'/account':'relay_account.html','/account/ui.css':'relay_account.css','/account/ui.js':'relay_account.js'}[path]
-            response=web.Response(body=(HERE/name).read_bytes(),content_type={'html':'text/html','css':'text/css','js':'application/javascript'}[name.rsplit('.',1)[1]])
+            response=web.Response(body=(HERE/name).read_bytes().replace(b'__TELEPLY_VERSION__',json.loads((HERE/'windows-version.json').read_text())['version'].encode('ascii')),content_type={'html':'text/html','css':'text/css','js':'application/javascript'}[name.rsplit('.',1)[1]])
             response.headers.update({'Cache-Control':'no-store','Referrer-Policy':'no-referrer',
                 'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"})
             return response
         if path=='/account/config':
-            return web.json_response({'email_enabled':self.mailer.ready,'version':'0.27.0-dev'})
+            return web.json_response({'email_enabled':self.mailer.ready,'version':json.loads((HERE/'windows-version.json').read_text())['version']})
         if path.startswith('/device-auth/'):
             return await self.device_auth(request,token)
         if path.startswith('/account/'):

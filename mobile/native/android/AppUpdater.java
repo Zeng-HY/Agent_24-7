@@ -1,7 +1,7 @@
 package com.pocketagentdesk.remote;
 
 import android.app.Activity;
-import android.app.AlertDialog;
+import androidx.appcompat.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
@@ -50,7 +50,7 @@ final class AppUpdater {
                     if(!manual && prefs.getLong("skipped",0)==update.code) return;
                     String detail=String.format(java.util.Locale.ROOT,"%.1f MB",update.size/1048576.0);
                     if(!update.notes.isEmpty()) detail+="\n\n"+update.notes;
-                    new AlertDialog.Builder(a).setTitle("发现新版本 "+update.version).setMessage(detail)
+                    ThemePolicy.dialog(a).setTitle("发现新版本 "+update.version).setMessage(detail)
                         .setPositiveButton("下载更新",(d,w)->download(a,update))
                         .setNegativeButton("稍后",(d,w)->prefs.edit().putLong("skipped",update.code).apply()).show();
                 });
@@ -93,7 +93,7 @@ final class AppUpdater {
         AtomicBoolean cancelled=new AtomicBoolean();
         ProgressBar progress=new ProgressBar(a,null,android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
-        AlertDialog dialog=new AlertDialog.Builder(a).setTitle("正在下载 "+release.version).setView(progress)
+        AlertDialog dialog=ThemePolicy.dialog(a).setTitle("正在下载 "+release.version).setView(progress)
             .setNegativeButton("取消",(d,w)->cancelled.set(true)).create();
         dialog.setCanceledOnTouchOutside(false);dialog.setOnCancelListener(d->cancelled.set(true));dialog.show();
         new Thread(() -> {
@@ -113,7 +113,7 @@ final class AppUpdater {
                 a.runOnUiThread(()->{dialog.dismiss();if(alive(a)) offerInstall(a,apk,release.code);});
             } catch(Exception e) {
                 part.delete();
-                a.runOnUiThread(()->{if(alive(a)){dialog.dismiss();if(!cancelled.get())new AlertDialog.Builder(a)
+                a.runOnUiThread(()->{if(alive(a)){dialog.dismiss();if(!cancelled.get())ThemePolicy.dialog(a)
                     .setTitle("更新未完成").setMessage("下载或校验失败，原版本未改动。请检查网络后重试。")
                     .setPositiveButton("重试",(d,w)->download(a,release)).setNegativeButton("取消",null).show();}});
             } finally { if(c!=null)c.disconnect();busy.set(false); }
@@ -151,16 +151,16 @@ final class AppUpdater {
         StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return s.toString();
     }
     private static void offerInstall(Activity a,File apk,long code) {
-        new AlertDialog.Builder(a).setTitle("更新已下载").setMessage("覆盖安装会保留应用数据。")
+        ThemePolicy.dialog(a).setTitle("更新已下载").setMessage("覆盖安装会保留应用数据。")
             .setPositiveButton("安装",(d,w)->install(a,apk,code)).setNegativeButton("稍后",null).show();
     }
     private static void install(Activity a,File apk,long code) {
         if(!a.getPackageManager().canRequestPackageInstalls()) {
-            new AlertDialog.Builder(a).setTitle("允许安装更新")
+            ThemePolicy.dialog(a).setTitle("允许安装更新")
                 .setMessage("在系统设置中允许遥应安装应用，返回后点击“继续安装”。")
                 .setPositiveButton("打开设置",(d,w)->{
                     try { a.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+a.getPackageName())));
-                        new AlertDialog.Builder(a).setTitle("更新已下载").setPositiveButton("继续安装",(x,y)->install(a,apk,code))
+                        ThemePolicy.dialog(a).setTitle("更新已下载").setPositiveButton("继续安装",(x,y)->install(a,apk,code))
                             .setNegativeButton("取消",null).show();
                     } catch(Exception e) { message(a,"无法打开安装权限设置"); }
                 }).setNegativeButton("取消",null).show();return;

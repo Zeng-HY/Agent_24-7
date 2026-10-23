@@ -53,7 +53,7 @@ public class FirstLoginTest {
         RuntimeEnvironment.getApplication().getSharedPreferences("app-updates",0)
             .edit().putLong("checked",System.currentTimeMillis()).commit();
     }
-    @Test public void normalPageHasNoNativeAddressToolbarOrInjectedTheme() {
+    @Test public void normalPageHasNoAddressToolbarAndOnlyFixedThemeSync() {
         Intent intent = new Intent(RuntimeEnvironment.getApplication(), RemoteBrowserActivity.class)
             .putExtra("url", "https://example.com:8443/account");
         try (var controller = Robolectric.buildActivity(RemoteBrowserActivity.class, intent).setup()) {
@@ -64,10 +64,27 @@ public class FirstLoginTest {
             web.getWebViewClient().onPageFinished(web,"https://example.com:8443/account");
             LinearLayout panel = ReflectionHelpers.getField(activity, "failurePanel");
             assertEquals(android.view.View.GONE,panel.getVisibility());
-            assertNull(shadowOf(web).getLastEvaluatedJavascript());
+            assertTrue(shadowOf(web).getLastEvaluatedJavascript().contains("teleply.theme.v1"));
+            assertTrue(shadowOf(web).getLastEvaluatedJavascript().contains("'system'"));
             ReflectionHelpers.callInstanceMethod(activity,"fail",ReflectionHelpers.ClassParameter.from(String.class,"Offline"));
             assertEquals(android.view.View.VISIBLE,panel.getVisibility());
             assertEquals(android.view.View.GONE,web.getVisibility());
+        }
+    }
+    @Test public void appearanceOnlyAcceptsFixedModesAndPersists() {
+        var context=RuntimeEnvironment.getApplication();
+        ThemePolicy.save(context,"dark");assertEquals("dark",ThemePolicy.get(context));assertTrue(ThemePolicy.dark(context));
+        ThemePolicy.save(context,"dark');fetch('https://evil')");assertEquals("dark",ThemePolicy.get(context));
+        ThemePolicy.save(context,"light");assertFalse(ThemePolicy.dark(context));
+        ThemePolicy.save(context,"system");assertEquals("system",ThemePolicy.get(context));
+    }
+    @Test public void remoteThemeIsNotInjectedIntoOtherOrigins() {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),RemoteBrowserActivity.class).putExtra("url","https://example.com/account");
+        try(var controller=Robolectric.buildActivity(RemoteBrowserActivity.class,intent).setup()) {
+            WebView web=ReflectionHelpers.getField(controller.get(),"web");
+            web.loadUrl("https://other.example/account");
+            web.getWebViewClient().onPageFinished(web,"https://other.example/account");
+            assertNull(shadowOf(web).getLastEvaluatedJavascript());
         }
     }
     @Test public void freshBrowserShowsNativeCredentialsAndCanCancelWithoutLogin() {

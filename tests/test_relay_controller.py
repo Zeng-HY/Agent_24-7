@@ -75,10 +75,10 @@ class Controller(unittest.TestCase):
                 self.assertTrue((data/'pending-migration.json').exists())
                 self.assertFalse((data/'remote_config.json').exists())
 
-    def test_tray_dot_is_lit_only_while_connected(self):
+    def test_tray_status_dot_is_green_only_while_connected(self):
         from relay_controller import DesktopController
         seen=[];views=[(False,'连接中'),(True,'已连接'),(True,'已连接'),(False,'断线重连')]
-        dot=lambda image:image.getpixel((128,154))[:3]  # the middle of the dot in the 256 px tray picture
+        dot=lambda image:image.getpixel((42,214))[:3]  # centre of the lower-left status dot
         class Hook(list):
             def __iadd__(self,handler):self.append(handler);return self
         class Icon:
@@ -102,6 +102,6 @@ class Controller(unittest.TestCase):
             return {'online':online,'state':state}
         c.view=view
         with patch.dict(sys.modules,{'webview':webview,'pystray':pystray}):c.run()
-        lit,dim=(255,255,255),(92,92,99)
+        lit,dim=(22,136,75),(196,131,0)
         self.assertEqual(seen,[('start',dim,'Agent Remote'),('dot',dim),('title','Agent Remote · 连接中'),('dot',lit),
             ('title','Agent Remote · 已连接'),('dot',dim),('title','Agent Remote · 断线重连')])
