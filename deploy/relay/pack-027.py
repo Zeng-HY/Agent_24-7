@@ -23,7 +23,9 @@ def main():
             info = zipfile.ZipInfo.from_file(ROOT / 'deploy' / 'relay' / name, name)
             if name.endswith('.sh'):
                 info.external_attr = 0o755 << 16
-            z.writestr(info, (ROOT / 'deploy' / 'relay' / name).read_bytes(), zipfile.ZIP_DEFLATED)
+            data=(ROOT / 'deploy' / 'relay' / name).read_bytes()
+            if name.endswith('.sh'):data=data.replace(b'\r\n',b'\n')
+            z.writestr(info, data, zipfile.ZIP_DEFLATED)
     print(out)
 
 

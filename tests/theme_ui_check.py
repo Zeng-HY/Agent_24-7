@@ -24,6 +24,7 @@ with sync_playwright() as p:
         c.route('**/*',route);page=c.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto(ORIGIN+'/');page.wait_for_function('window.TeleplyTheme && document.querySelector("[data-theme-choice]")')
         assert page.locator('html').get_attribute('data-theme')=='dark'
+        assert page.locator('link[rel=icon]').count()==1
         assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(0, 0, 0)'
         page.evaluate("openSheet('settingsSheet')")
         page.locator('[data-theme-choice=system]').focus();page.keyboard.press('ArrowRight')
