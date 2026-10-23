@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <script src="/theme.js"></script>
+<link rel="stylesheet" href="/interaction.css?v=__TELEPLY_VERSION__">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -20,7 +21,7 @@ document.addEventListener('keydown',event=>{if(event.key==='Tab')document.docume
 
 // Track resource failure separately from initialization failure. Never reload automatically.
 (()=>{
-  const names={codexUI:'codex-ui',navigationUI:'navigation-ui',workspaceUI:'workspace-ui',activityUI:'activity-ui',readingUI:'reading-ui',claudeUI:'claude-ui',referencesUI:'references-ui',newChatUI:'new-chat-ui',filesUI:'files-ui',voiceUI:'voice-ui',sidebarUI:'sidebar-ui',deepseekUI:'deepseek-ui',archiveUI:'archive-ui'};
+  const names={interactionUI:'interaction-ui',codexUI:'codex-ui',navigationUI:'navigation-ui',workspaceUI:'workspace-ui',activityUI:'activity-ui',readingUI:'reading-ui',claudeUI:'claude-ui',referencesUI:'references-ui',newChatUI:'new-chat-ui',filesUI:'files-ui',voiceUI:'voice-ui',sidebarUI:'sidebar-ui',deepseekUI:'deepseek-ui',archiveUI:'archive-ui'};
   const records=new Map(),pending=new Map(),dismissed=new Set();let finished=false,retrying=false,pumping=false,wired=false;
   const record=k=>{if(!records.has(k))records.set(k,{key:k,name:names[k],status:'loading',attempts:0,since:Date.now(),url:'',error:''});return records.get(k);};
   function keyFor(url){try{const file=new URL(url,location.href).pathname.split('/').pop();return Object.keys(names).find(k=>names[k]+'.js'===file);}catch{return null;}}
@@ -550,7 +551,9 @@ function convRow(c, child = false) {
 function renderConvs() {
   const box = $('convList'); box.innerHTML = '';
   if (!convItems.length) box.appendChild(el('div', 'hint', NO_APPS || '没有对话。'));
-  for (const c of convItems) {
+  let previousGroup=null;
+  for (const c of (window.interactionUI?.list(convItems)||convItems)) {
+    const heading=window.interactionUI?.groupName(c);if(heading&&heading!==previousGroup){box.append(el('h3','display-group',heading));previousGroup=heading;}
     const row = convRow(c), k = convKey(c), open = convFolds.has(k), count = c.child_count || 0;
     pressable(row, c.group ? () => toggleFold(c) : c.kind ? () => openChild(c, null) : () => openConv(c));
     box.appendChild(row);
@@ -805,6 +808,7 @@ function renderMsgs(list, note) {
   window.workspaceUI?.decorateRows(rows);
   window.readingUI?.decorateRows(rows);
   window.newChatUI?.decorateRows(rows);
+  window.interactionUI?.decorate(rows);
   // Replies that arrive while the conversation is on screen run out smoothly (reading-ui.js, 10-22). Not on the first
   // paint, not older pages put in front, and not a pile of new rows at once (回到最新, back from the background).
   const keys = new Set(rows.map(r => r.key));
@@ -816,7 +820,9 @@ function renderMsgs(list, note) {
     if (!n) { n = document.createElement(row.items ? 'details' : 'div'); n.dataset.key = row.key; }
     const sig = JSON.stringify(row);
     if (n.dataset.sig !== sig && !window.readingUI?.holding?.(n)) {  // not under words being picked out of it (reading-ui.js)
-      if (row.newCreation) {
+      if (row.activity) {
+        window.interactionUI.render(n,row.activity);
+      } else if (row.newCreation) {
         window.newChatUI?.renderFirst(n,row.newCreation);
       } else if (row.workspace) {
         window.workspaceUI?.renderOutbox(n,row.workspace);
@@ -1138,6 +1144,7 @@ function openSheet(id, anchor = null, fromHistory = false) {
   node.style.zIndex = 60 + overlays.length * 2;
   node.setAttribute('role','dialog'); node.setAttribute('aria-modal','true'); node.tabIndex = -1;
   overlays.push({id,trigger,anchor});
+  window.interactionUI?.opened(node);
   syncInert(); fitOverlays(); node.getBoundingClientRect(); requestAnimationFrame(()=> { node.classList.add('is-open'); node.focus({preventScroll:true}); });
   if (!fromHistory) replaceUIState();
 }
@@ -1341,5 +1348,6 @@ setMode('chat'); replaceUIState();
 <script src="/sidebar-ui.js"></script>
 <script src="/deepseek-ui.js"></script>
 <script src="/archive-ui.js"></script>
+<script src="/interaction-ui.js"></script>
 </body>
 </html>

@@ -1,4 +1,18 @@
 /* Appearance controls are shared by the launcher, account page and remote UI. */
+/* Teleply component contract: see docs/design-language.md. */
+:root{--tp-control:44px;--tp-icon:22px;--tp-stroke:1.8;--tp-radius-card:16px;--tp-radius-panel:24px;--tp-radius-pill:999px;--tp-space:8px;--tp-control-fill:#f4f5f7;--tp-control-ink:#1d2330;--tp-focus:#2563eb;--tp-control-shadow:0 4px 18px #1d233008;--tp-press-scale:.97}
+:root[data-theme=dark]{--tp-control-fill:#1e1e1e;--tp-control-ink:#eee;--tp-focus:#8ab4ff;--tp-control-shadow:0 4px 18px #0003}
+.tp-icon-button,.tp-button{min-height:var(--tp-control);border:0;border-radius:var(--tp-radius-pill);display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 16px;font-family:inherit;font-size:14px;font-weight:500;line-height:1.4;background:var(--tp-control-fill);color:var(--tp-control-ink);cursor:pointer;transition:transform 100ms,background-color 120ms;box-sizing:border-box}
+.tp-icon-button{width:var(--tp-control);height:var(--tp-control);padding:11px;flex:none;box-shadow:var(--tp-control-shadow)}
+.tp-icon-button svg{display:block;width:var(--tp-icon);height:var(--tp-icon);stroke-width:var(--tp-stroke)}
+.tp-toolbar{display:inline-flex;align-items:center;padding:2px;border-radius:var(--tp-radius-pill);background:var(--tp-control-fill);box-shadow:var(--tp-control-shadow);flex:none}
+.tp-toolbar .tp-icon-button{background:transparent;box-shadow:none}.tp-forward svg{transform:rotate(180deg)}
+:is(.tp-icon-button,.tp-button):active:not(:disabled){transform:scale(var(--tp-press-scale))}
+:is(.tp-icon-button,.tp-button):focus-visible{outline:2px solid var(--tp-focus);outline-offset:3px}
+:is(.tp-icon-button,.tp-button):disabled{opacity:.35;cursor:default;box-shadow:none}
+.tp-header-title{min-width:0;text-align:center}.tp-header-title strong{display:block;font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tp-header-title small{display:block;color:var(--muted,#6b7280);font-size:12px;margin-top:3px}
+.tp-menu>button{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;width:100%;padding:12px 18px;border:0;border-radius:0;background:transparent;color:var(--tp-control-ink);text-align:left;font-size:14px}.tp-menu>button[aria-pressed=true]::after{content:'✓';font-size:16px}.tp-menu>button:focus-visible{outline:2px solid var(--tp-focus);outline-offset:-3px}
+@media(prefers-reduced-motion:reduce){:is(.tp-icon-button,.tp-button){transition:none}:is(.tp-icon-button,.tp-button):active:not(:disabled){transform:none}}
 :root{--page-bg:#fff;--panel-bg:#fff;--sidebar-bg:#f4f5f7;--chat-bg:#fff;background:var(--page-bg);--theme-panel:#f4f4f6;--theme-edge:#d6d6dc;--theme-focus:#2563eb;--theme-text:#171719;color-scheme:light}
 :root[data-theme=dark]{--page-bg:#000;--panel-bg:#141414;--sidebar-bg:#141414;--chat-bg:#000;color-scheme:dark;--bg:#000;--card:#141414;--line:#333;--text:#eee;--ink:#eee;--muted:#a8a8a8;--soft:#1e1e1e;--blue:#8ab4ff;--green:#66d997;--red:#ff9a9a;--danger:#ff9a9a;--amber:#efbd6a;--theme-panel:#1e1e1e;--theme-edge:#767676;--theme-focus:#8ab4ff;--theme-text:#eee;--shadow:0 8px 32px #0008;background:#000;color:#eee}
 .theme-title{font-size:13px;font-weight:500;color:var(--muted,#6b7280);margin:6px 0 10px}

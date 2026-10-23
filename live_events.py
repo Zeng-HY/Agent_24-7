@@ -21,7 +21,9 @@ def merge_live_messages(page,entry,state,previous=None):
                     return m
             return None
         def public(m):
-            result={k:v for k,v in m.items() if k!='legacy'}
+            from activity_records import public_message
+            result=public_message(m)
+            result.pop('legacy',None)
             result.update(length=len(m['text']),truncated=len(m['text'])>6000,text=m['text'][:6000])
             return result
         # Promote live rows already shown by this connection even if their committed
@@ -76,7 +78,7 @@ def stream(handler,history,bridge,tasks,app,tid):
                 _,entry=history.transcript(app,tid)
                 messages,live_ids=merge_live_messages(page,entry,state,previous)
                 page={**page,'messages':messages}
-            meta={k:page.get(k) for k in ('status','runtime','title','folder')}
+            meta={k:page.get(k) for k in ('status','runtime','title','folder','activity_turns','activity_current')}
             clean_control={k:v for k,v in (control or {}).items() if k!='observed_at'}
             changed=[m for m in messages if previous.get(m['id'])!=m]
             if seq==0:payload={'type':'snapshot','protocol':1,'app':app,'id':tid,'chat':page,'control':control}
@@ -134,7 +136,7 @@ def deepseek_stream(handler,tid):
             now=time.monotonic()
             if dirty and (sequence==0 or now-last_update>=.2):
                 page,live=presentation.page();messages=page['messages']
-                meta={k:page.get(k) for k in ('status','runtime','title','folder')}
+                meta={k:page.get(k) for k in ('status','runtime','title','folder','activity_turns','activity_current')}
                 changed=[m for m in messages if previous.get(m['id'])!=m]
                 if sequence==0:payload={'type':'snapshot','protocol':1,'app':'deepseek','id':tid,'chat':page,'control':None}
                 elif changed or meta!=previous_meta or live!=previous_live:

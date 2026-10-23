@@ -101,6 +101,8 @@ DEFAULT_CONFIG = {
 RETIRED_KEYS = ("browser", "profile", "userscripts", "window", "download_dir", "inbox", "urls", "dialog_wait_seconds",
                 "chooser_wait_seconds", "question_wait_seconds", "page_pins", "win_presets")
 STATIC_FILES = {  # served without the token: home-screen icons and the web app manifest
+    '/interaction-ui.js': ('interaction-ui.js','application/javascript; charset=utf-8'),
+    '/interaction.css': ('interaction.css','text/css; charset=utf-8'),
     '/deepseek-ui.js': ('deepseek-ui.js','application/javascript; charset=utf-8'),
     "/navigation-ui.js": ("navigation-ui.js", "application/javascript; charset=utf-8"),
     "/claude-ui.js": ("claude-ui.js", "application/javascript; charset=utf-8"),
@@ -437,7 +439,7 @@ class Handler(BaseHTTPRequestHandler):
             try:self._json(self.server.new_chats.options(self._query().get('app','')))
             except chats.ChatError as exc:self._json({'error':str(exc)},400)
             return
-        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/file", "/api/file/text", "/api/file/meta"):
+        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta"):
             self._reading_get(path)
             return
         if path.startswith("/api/chat") and chats is None:
@@ -450,7 +452,7 @@ class Handler(BaseHTTPRequestHandler):
             q = self._query()
             limit = max(5, min(100, int(q.get("limit", "40") or 40)))
             try:
-                result=self.history.conversations(q.get("app", "all"),limit,q.get("cursor", ""),q.get("query", ""))
+                result=self.history.conversations(q.get("app", "all"),limit,q.get("cursor", ""),q.get("query", ""),q.get('sort','updated'),q.get('status','all'),self.server.tasks.apply_status)
                 apps=self.server.machine["apps"]  # an app this computer lacks lists nothing, even with files left behind (10-20)
                 result['items']=[v for v in self.server.tasks.apply_status(result['items']) if v.get('app') in apps]
                 self._json(result)
@@ -693,6 +695,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/chat/search':self._json(self.history.search(app,tid,q.get('query',''),q.get('cursor','')))
             elif path=='/api/chat/message':self._json(self.history.message(app,tid,q.get('message','')))
             elif path=='/api/chat/files':self._json(self.history.list_files(app,tid))
+            elif path=='/api/chat/diff':self._json(self.history.diff(app,tid,q.get('ref',''),q.get('offset',0)))
             else:
                 meta=self.history.file(app,tid,q.get('file',''))
                 if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind']})

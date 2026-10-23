@@ -14,17 +14,17 @@
   menu('查找消息',openSearch);menu('对话文件',openFiles);menu('常用提示语',openTemplates);
   function preserveList(render){const top=document.querySelector('header').getBoundingClientRect().bottom,row=[...document.querySelectorAll('.conv')].find(n=>n.getBoundingClientRect().bottom>top),key=row?.dataset.key,y=row?.getBoundingClientRect().top;render();if(scrollY>40&&key){const n=[...document.querySelectorAll('.conv')].find(n=>n.dataset.key===key);if(n)window.scrollBy(0,n.getBoundingClientRect().top-y);}}
   async function loadList(more=false,reset=false){
-    if(listBusy||!window.workspaceUI?.canPoll())return;const key=convApp+'|'+query;if(key!==listKey){reset=true;listKey=key;}listBusy=true;listMore.disabled=true;
+    if(listBusy||!window.workspaceUI?.canPoll())return;const display=window.interactionUI?.query()||'';const key=convApp+'|'+query+display;if(key!==listKey){reset=true;listKey=key;}listBusy=true;listMore.disabled=true;
     // Reuse the request started by the inline shell, even if it finished before this module downloaded.
     const first=takeInitialConvPage(convApp);
-    try{const j=await ((!more&&!query&&first)||api('/api/chats?app='+convApp+'&limit='+CONV_PAGE_SIZE+'&query='+encodeURIComponent(query)+(more&&listCursor?'&cursor='+encodeURIComponent(listCursor):'')));if(key!==convApp+'|'+query)return;
+    try{const j=await ((!more&&!query&&!display&&first)||api('/api/chats?app='+convApp+'&limit='+CONV_PAGE_SIZE+'&query='+encodeURIComponent(query)+display+(more&&listCursor?'&cursor='+encodeURIComponent(listCursor):'')));if(key!==convApp+'|'+query+(window.interactionUI?.query()||''))return;
       const incoming=j.items||[];
       if(reset)convItems=incoming;else if(more){const ids=new Set(convItems.map(v=>v.app+':'+v.id));convItems.push(...incoming.filter(v=>!ids.has(v.app+':'+v.id)));}else{const fresh=new Map(incoming.map(v=>[v.app+':'+v.id,v]));const olderItems=convItems.filter(v=>!fresh.has(v.app+':'+v.id));convItems=[...incoming,...olderItems];}
       if(more||reset||!listCursor){listCursor=j.next_cursor;listHasMore=!!j.has_more;}
       // the list is read every 10 s; rebuilt only when it changed, or once a minute for its "x 分钟前" (10-14: a rebuild under
       // a finger made scrolling and tapping catch)
-      const sig=JSON.stringify([convItems,Math.floor(Date.now()/60000)]);if(more||reset||sig!==listSig){listSig=sig;preserveList(renderConvs);}$('convHint').textContent=(query?'搜索结果':'按最近活动排序')+(j.total!=null?' · '+j.total+' 个对话':'');listMore.hidden=!listHasMore;
-    }catch(e){$('convHint').textContent='读取失败：'+e.message;}finally{listBusy=false;listMore.disabled=false;if(key!==convApp+'|'+query)loadList(false,true);}
+      const sig=JSON.stringify([convItems,Math.floor(Date.now()/60000)]);if(more||reset||sig!==listSig){listSig=sig;preserveList(renderConvs);}$('convHint').textContent=(query?'搜索结果':window.interactionUI?.sortLabel()||'按最近活动排序')+(j.total!=null?' · '+j.total+' 个对话':'');listMore.hidden=!listHasMore;
+    }catch(e){$('convHint').textContent='读取失败：'+e.message;}finally{listBusy=false;listMore.disabled=false;if(key!==convApp+'|'+query+(window.interactionUI?.query()||''))loadList(false,true);}
   }
   function merge(items,prepend=false){const map=new Map(loaded.map(m=>[m.id,m]));for(const m of items){if(m.streaming&&map.has(m.id)&&!map.get(m.id).streaming)continue;const full=expanded.get(m.id);map.set(m.id,full&&full.length>=(m.length||m.text.length)&&!m.streaming?{...m,text:full.text,truncated:false}:m);}
     const order=loaded.map(m=>m.id),known=new Set(order);
@@ -33,7 +33,7 @@
     loaded=[...new Set(order)].map(id=>map.get(id));loaded.sort((a,b)=>Number.isFinite(a.order)&&Number.isFinite(b.order)?a.order-b.order:0);}
   function reconcileLive(ids){if(!Array.isArray(ids))return;const active=new Set(ids);loaded=loaded.filter(m=>!m.streaming||active.has(m.id));}
   function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);painted=true;older.hidden=!hasMore;latest.hidden=!historyWindow;}
-  function applyMeta(j){if(!cur)return;chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
+  function applyMeta(j){if(!cur)return;window.interactionUI?.meta(j);chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
   function onOpen(original,current){closeMenu(true);pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;flows.clear();cancelAnimationFrame(frame);frame=0;keysSeen=null;painted=false;}
   async function loadConversation(force=false){
     if(window.newChatUI?.isPreview(cur))return;

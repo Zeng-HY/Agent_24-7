@@ -114,7 +114,7 @@ class PageTests(unittest.TestCase):
     def test_the_list_holds_only_the_apps_this_computer_has(self):
         handler,sent=self.handler('/api/chats?t=secret')
         rows=[{'app':a,'id':a+'1','title':a} for a in ('codex','claude','deepseek')]
-        handler.server.history=SimpleNamespace(conversations=lambda app,limit,cursor,query:{'items':list(rows),'has_more':False})
+        handler.server.history=SimpleNamespace(conversations=lambda app,limit,cursor,query,sort,status,status_resolver:{'items':list(rows),'has_more':False})
         handler.server.tasks=SimpleNamespace(apply_status=lambda items:items)
         handler.do_GET();self.assertEqual([v['app'] for v in json.loads(sent[0][1])['items']],['codex'])
     def test_hello_tells_only_the_name_and_wants_what_the_page_wants(self):

@@ -79,7 +79,7 @@ class PhoneLinks(unittest.TestCase):
                         local=path.removeprefix(base)
                         if local=='/api/chat/files':return out({'items':[{'id':'f'*32,'name':'some file.md','path':'D:\\demo\\some file.md','kind':'text'}]})
                         if local=='/api/file/meta':return out({'kind':'text'})
-                        if local=='/api/file/text':return out({'text':'AUTHORIZED FIXTURE CONTENT'})
+                        if local=='/api/file':return r.fulfill(content_type='text/plain',body='AUTHORIZED FIXTURE CONTENT')
                         if local.startswith('/api/'):return out({})
                         file=ROOT/'static'/local.lstrip('/')
                         if file.is_file():return r.fulfill(body=file.read_bytes(),content_type='application/javascript' if file.suffix=='.js' else 'image/png')
@@ -94,7 +94,7 @@ class PhoneLinks(unittest.TestCase):
                     page.get_by_role('link',name='本地文件',exact=True).tap()
                     page.get_by_text('AUTHORIZED FIXTURE CONTENT',exact=True).wait_for(state='visible')
                     self.assertTrue(page.locator('.msg-menu').is_hidden())
-                    for endpoint in ('/api/chat/files','/api/file/meta','/api/file/text'):
+                    for endpoint in ('/api/chat/files','/api/file'):
                         self.assertIn(base+endpoint,seen);self.assertNotIn(endpoint,seen)
                     shots=os.environ.get('AR_LINK_SHOTS')
                     if shots:page.screenshot(path=str(Path(shots)/(engine+'-file-link.png')))

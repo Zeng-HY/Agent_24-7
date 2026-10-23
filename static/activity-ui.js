@@ -6,6 +6,7 @@
   const stop=el('button','stop-turn','停止当前轮');stop.hidden=true;stop.setAttribute('aria-label','停止当前轮');document.querySelector('.cv-top .cv-title').after(stop);
   const style=el('style');style.textContent='.stop-turn{border:0;border-radius:999px;background:#fff1f2;color:var(--red);font-size:12px;font-weight:500;min-height:44px;padding:8px;white-space:nowrap}';document.head.append(style);
   function onControl(me,data){
+    window.interactionUI?.control(me,data);
     if(!cur||cur.app!=='codex'||cur.id!==me.id)return;control=data;
     const wait=stopping.get(me.id);
     if(wait){const old=(data.recent_turns||[]).find(t=>t.id===wait);if(old&&old.status!=='inProgress'){stopping.delete(me.id);toast(old.status==='interrupted'?'当前轮已停止':'该轮已结束');}}

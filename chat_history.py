@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 import chats
+import activity_records
 
 class HistoryError(Exception):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -35,8 +36,9 @@ class Transcript:
                     raw=f.readline(st.st_size-f.tell())
                     if not raw.endswith(b'\n'):break
                     self.offset=f.tell()
-                    if self.app=='codex' and b'"event_msg"' not in raw[:160]:continue
+                    if self.app=='codex' and b'"event_msg"' not in raw[:160] and b'"response_item"' not in raw[:160]:continue
                     msgs,state=chats._parse(self.app,[raw],self.context)
+                    msgs=activity_records.enrich(self.app,raw,msgs,self.context)
                     for k,v in state.items():
                         if v is not None and v!='':self.state[k]=v
                     for m in msgs:
@@ -115,7 +117,7 @@ class History:
     def child_row(c):
         return {k:c.get(k) for k in ('app','id','title','folder','cwd','updated','status','kind','parent')}|(
             {'parent_title':c['parent_title']} if c.get('parent_title') else {})
-    def conversations(self,app='all',limit=40,cursor='',query=''):
+    def conversations(self,app='all',limit=40,cursor='',query='',sort='updated',status='all',status_resolver=None):
         limit=max(5,min(100,limit));query=query.strip().casefold()[:200]
         found,stray=self._load()
         items=[v for v in found if app=='all' or v['app']==app]
@@ -129,11 +131,19 @@ class History:
             items.sort(key=lambda v:(-v['updated'],v['app'],v['id']))
         elif stray and app in ('all','deepseek'):
             items=sorted(items+[self.bucket(stray)],key=lambda v:(-v['updated'],v['app'],v['id']))
+        if status not in ('all','running','waiting','idle'):raise HistoryError('状态筛选无效')
+        if sort not in ('updated','created'):raise HistoryError('排序无效')
+        if status!='all':
+            items=[v|{'status':chats.summary(v)['status']} if not v.get('kind') else v for v in items]
+            if status_resolver:items=status_resolver(items)
+            items=[v for v in items if v.get('status')==status]
+        def sort_key(v):return (-(v.get(sort) or 0),v['app'],v['id'])
+        items.sort(key=sort_key)
         total=len(items)
         if cursor:
             boundary=decode(cursor)
             if not isinstance(boundary,list) or len(boundary)!=3 or not isinstance(boundary[0],(int,float)) or not all(isinstance(v,str) for v in boundary[1:]):raise HistoryError('分页位置无效')
-            items=[v for v in items if (-v['updated'],v['app'],v['id'])>tuple(boundary)]
+            items=[v for v in items if sort_key(v)>tuple(boundary)]
         page=items[:limit];out=[]
         for item in page:
             if item.get('kind'):out.append(self.child_row(item));continue
@@ -144,7 +154,7 @@ class History:
                 row|={'children':[self.child_row(c) for c in kids[:CHILDREN_SHOWN]],'child_count':len(kids),
                       'child_running':sum(1 for c in kids if c.get('status')=='running')}
             out.append(row)
-        next_cursor=encode([-page[-1]['updated'],page[-1]['app'],page[-1]['id']]) if len(items)>limit and page else None
+        next_cursor=encode(list(sort_key(page[-1]))) if len(items)>limit and page else None
         return {'items':out,'has_more':bool(next_cursor),'next_cursor':next_cursor,'total':total,'now':int(time.time()*1000)}
     def children(self,app,tid,offset=0,limit=50):
         """More children of one conversation, or more of the Ungrouped bucket, past the first CHILDREN_SHOWN."""
@@ -156,7 +166,8 @@ class History:
         return {'items':[self.child_row(c) for c in kids[offset:offset+limit]],'total':len(kids),'offset':offset}
     @staticmethod
     def public_message(m,full=False):
-        result={k:v for k,v in m.items() if k not in ('legacy',)}
+        result=activity_records.public_message(m)
+        result.pop('legacy',None)
         result['length']=len(m['text']);result['truncated']=not full and len(m['text'])>6000
         if result['truncated']:result['text']=m['text'][:6000]
         return result
@@ -178,6 +189,8 @@ class History:
             start=max(0,end-limit);page=rows[start:end]
             return chats.public(item)|{'messages':[self.public_message(m) for m in page], 'status':chats._status(entry.state,entry.mtime/1e9),
                 'size':entry.size,'runtime':chats.runtime_info(app,entry.path),'modified':entry.mtime//1000000,
+                'activity_turns':{k:v for k,v in entry.context.get('activity_turns',{}).items() if k == entry.context.get('activity_turn') or k in {m.get('activity_turn') for m in page}},
+                'activity_current':entry.context.get('activity_turn'),
                 'has_more':start>0,'next_cursor':page[0]['id'] if start>0 and page else None,'has_newer':end<len(rows),'reset':reset,'total':len(rows)}
     def message(self,app,tid,mid):
         _,entry=self.transcript(app,tid)
@@ -185,6 +198,12 @@ class History:
             m=entry.by_id.get(mid)
             if not m:raise HistoryError('消息已变化，请刷新',404)
             return self.public_message(m,True)
+    def diff(self,app,tid,ref,offset=0):
+        _,entry=self.transcript(app,tid)
+        with entry.lock:
+            result=activity_records.diff_page(entry.messages,ref,offset)
+            if result is None:raise HistoryError('这份修改记录不可用，请刷新对话',404)
+            return result
     def search(self,app,tid,query,cursor='',limit=30):
         if not query.strip() or len(query)>200:raise HistoryError('请输入 1 至 200 字的关键词')
         _,entry=self.transcript(app,tid);needle=query.casefold();offset=decode(cursor) if cursor else 0
@@ -201,13 +220,14 @@ class History:
     def list_files(self,app,tid):
         item,entry=self.transcript(app,tid);roots=[Path(r).resolve() for r in self.roots if r]
         if item.get('cwd'):roots.append(Path(item['cwd']).resolve())
-        allowed={'.pdf','.doc','.docx','.xls','.xlsx','.csv','.tsv','.txt','.md','.png','.jpg','.jpeg','.webp','.json','.py','.js','.html','.zip','.pptx'}
+        allowed={'.pdf','.doc','.docx','.xls','.xlsx','.csv','.tsv','.txt','.md','.png','.jpg','.jpeg','.webp','.json','.py','.js','.html','.zip','.pptx','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql'}
         seen=set();out=[]
         with entry.lock:
-            messages=[m for m in entry.messages if m['role']=='assistant' and m.get('phase')!='commentary']
+            messages=[m for m in entry.messages if (m['role']=='assistant' and m.get('phase')!='commentary') or (m.get('current_file') and m.get('tool_status')=='completed')]
             for m in reversed(messages):
-                for match in re.finditer(r'!?\[([^\]]*)\]\((?:<([^>]+)>|([^\n)]+))\)',m['text']):
-                    raw=unquote((match[2] or match[3] or '').strip());raw=re.sub(r':\d+(?:-\d+)?$','',raw)
+                paths=[unquote((match[2] or match[3] or '').strip()) for match in re.finditer(r'!?\[([^\]]*)\]\((?:<([^>]+)>|([^\n)]+))\)',m['text'])] if m['role']=='assistant' else [m['current_file']]
+                for raw in paths:
+                    raw=re.sub(r':\d+(?:-\d+)?$','',raw)
                     if not re.match(r'^[A-Za-z]:[\\/]',raw):continue
                     p=Path(raw)
                     if p.suffix.lower() not in allowed:continue
@@ -218,13 +238,13 @@ class History:
                     except (OSError,ValueError):continue
                     seen.add(str(p));identity=[app,tid,str(p),st.st_size,st.st_mtime_ns]
                     fid=hmac.new(self.secret,json.dumps(identity).encode(),hashlib.sha256).hexdigest()[:32]
-                    suffix=p.suffix.lower();kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html') and st.st_size<=1<<20 else 'download'
+                    suffix=p.suffix.lower();kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and st.st_size<=1<<20 else 'download'
                     self.files[(app,tid,fid)]={'path':p,'size':st.st_size,'mtime':st.st_mtime_ns,'roots':roots,'kind':kind}
                     out.append({'id':fid,'name':p.name,'path':str(p),'size':st.st_size,'modified':st.st_mtime_ns//1000000,'kind':kind,'message_id':m['id']})
                 if len(out)>=100:break
         if len(self.files)>1000:
             for key in list(self.files)[:len(self.files)-1000]:self.files.pop(key,None)
-        return {'items':out,'scope':'助手正式回复中引用、且位于允许目录内的文件'}
+        return {'items':out,'scope':'助手正式回复引用或成功文件操作记录中、且位于允许目录内的当前文件'}
     def file(self,app,tid,fid):
         meta=self.files.get((app,tid,fid))
         if not meta:self.list_files(app,tid);meta=self.files.get((app,tid,fid))

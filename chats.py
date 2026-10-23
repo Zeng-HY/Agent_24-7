@@ -273,14 +273,14 @@ def _codex_rows(where: str, args: tuple, limit: int) -> list[dict]:
             return name if name in cols else fallback
 
         sql = ("select id, " + col("name", "''") + ", title, cwd, rollout_path, "
-               + col("updated_at_ms", "updated_at * 1000") + ", " + col("is_pinned", "0")
+               + col("updated_at_ms", "updated_at * 1000") + ", " + col("is_pinned", "0") + ", " + col("created_at_ms", col("created_at", "0") + " * 1000")
                + " from threads where archived = 0 and " + where
                + " order by 6 desc limit ?")
         rows = con.execute(sql, args + (limit,)).fetchall()
     finally:
         con.close()
     out = []
-    for tid, name, title, cwd, rollout, updated, pinned in rows:
+    for tid, name, title, cwd, rollout, updated, pinned, created in rows:
         cwd = _strip_unc(cwd or "")
         label = (name or "").strip()
         if not label:
@@ -288,7 +288,7 @@ def _codex_rows(where: str, args: tuple, limit: int) -> list[dict]:
             label = one_line(first[0], 60) if first else ""
         out.append({"app": "codex", "id": tid, "title": label or "（无标题）", "cwd": cwd,
                     "folder": Path(cwd).name if cwd else "", "updated": int(updated or 0),
-                    "path": _strip_unc(rollout or ""), "pinned": bool(pinned)})
+                    "path": _strip_unc(rollout or ""), "pinned": bool(pinned), "created": int(created or 0)})
     return out
 
 
@@ -797,7 +797,7 @@ def summary(item: dict) -> dict:
 
 
 def public(item: dict) -> dict:
-    return {k: item.get(k) for k in ("app", "id", "title", "folder", "cwd", "updated", "pinned")}
+    return {k: item.get(k) for k in ("app", "id", "title", "folder", "cwd", "updated", "created", "pinned")}
 
 
 def parse_runtime(app: str, lines: list[bytes]) -> dict:

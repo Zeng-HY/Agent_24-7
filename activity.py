@@ -64,7 +64,7 @@ class TaskCenter:
         for row in rows:
             live=self.live.get(row['id']) if row['app']=='codex' else None
             if live and live.get('source')=='desktop' and now-live['observed_at']<45000:
-                row['status']='running' if live['running'] else 'idle'
+                row['status']='waiting' if live.get('pending') else 'running' if live['running'] else 'idle'
                 row['status_source']='desktop'
         return rows
     def observe(self,tid,data):
