@@ -24,3 +24,14 @@ button:disabled{opacity:.45;cursor:default}.primary.busy:disabled{opacity:1}:foc
 @media(max-width:360px){body{padding:28px 18px}.brand{margin-bottom:32px}h1{font-size:27px}}@media(max-height:650px){body{place-items:start center}.brand{margin-bottom:28px}}@media(prefers-reduced-motion:reduce){*,*::before,*::after,dialog::backdrop{animation:none!important;transition:none!important}}
 
 .action-menu{width:min(320px,calc(100vw - 32px));padding:8px;border-radius:20px}.action-menu button{display:block;width:100%;min-height:48px;padding:12px 16px;text-align:left;border-radius:12px}.action-menu button:hover{background:var(--soft)}#dialogDescription{font-size:14px;line-height:1.6;color:var(--muted)}
+
+/* Device selection is a home screen, not a vertically centred login form. */
+body:has(#signed:not([hidden])){display:block;padding: max(28px,env(safe-area-inset-top)) max(24px,env(safe-area-inset-right)) max(32px,env(safe-area-inset-bottom)) max(24px,env(safe-area-inset-left))}
+body:has(#signed:not([hidden])) main{margin:0 auto;max-width:440px}
+body:has(#signed:not([hidden])) .brand{justify-content:flex-start;font-size:26px;line-height:1.2;font-weight:650;letter-spacing:-.7px;gap:12px;margin:0 0 40px}
+body:has(#signed:not([hidden])) .mark{width:36px;height:36px}
+#signed .section-head{margin-bottom:20px}
+#signed .section-head h1{font-size:24px;letter-spacing:-.5px}
+.device-actions>.icon-button{width:44px;min-width:44px;padding:0;background:transparent;color:var(--ink);border-radius:14px}
+.device-actions>.icon-button:hover{background:#e8e8ec}
+@media(max-width:360px){body:has(#signed:not([hidden])){padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}body:has(#signed:not([hidden])) .brand{font-size:24px}}
