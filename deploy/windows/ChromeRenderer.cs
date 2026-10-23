@@ -2,8 +2,35 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 namespace AgentRemoteChrome {
+    // WebView2 owns child HWNDs on another input thread. WinForms' automatic
+    // dismissal cannot reliably see their clicks. Poll only while this menu is
+    // open; never intercept input or expose a page-to-host bridge.
+    public sealed class MenuDismissal : IDisposable {
+        readonly ContextMenuStrip menu;
+        readonly Form owner;
+        readonly Timer timer = new Timer();
+        bool wasDown;
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+        static bool PointerDown() { return (GetAsyncKeyState(1)&0x8000)!=0 || (GetAsyncKeyState(2)&0x8000)!=0 || (GetAsyncKeyState(4)&0x8000)!=0; }
+        public MenuDismissal(ContextMenuStrip menu,Form owner) {
+            this.menu=menu;this.owner=owner;menu.AutoClose=true;timer.Interval=25;
+            menu.Opened+=Opened;menu.Closed+=Closed;owner.Deactivate+=Deactivated;timer.Tick+=Tick;
+        }
+        void Opened(object sender,EventArgs args) { wasDown=PointerDown();timer.Start(); }
+        void Closed(object sender,ToolStripDropDownClosedEventArgs args) { timer.Stop(); }
+        void Deactivated(object sender,EventArgs args) { if(menu.Visible)menu.Close(ToolStripDropDownCloseReason.AppFocusChange); }
+        void Tick(object sender,EventArgs args) { ObservePointer(PointerDown(),Cursor.Position); }
+        public void ObservePointer(bool down,Point screenPoint) {
+            bool pressed=down&&!wasDown;wasDown=down;
+            if(menu.Visible&&pressed&&!menu.Bounds.Contains(screenPoint))menu.Close(ToolStripDropDownCloseReason.AppClicked);
+        }
+        public void Dispose() {
+            timer.Stop();timer.Tick-=Tick;menu.Opened-=Opened;menu.Closed-=Closed;owner.Deactivate-=Deactivated;timer.Dispose();
+        }
+    }
     public sealed class MenuRenderer : ToolStripProfessionalRenderer {
         readonly float scale;
         public MenuRenderer(float scale) { this.scale=scale; RoundedEdges=false; }

@@ -63,5 +63,6 @@ jobs:
             dist/AgentRemote-*-Setup.exe
             dist/installer-sha256.txt
             dist/windows-update.json
+            build/windows-release-notes.md
           retention-days: 7
           if-no-files-found: error

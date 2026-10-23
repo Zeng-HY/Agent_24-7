@@ -12,6 +12,22 @@ API='https://api.github.com/repos/Zeng-HY/Agent_24-7/releases?per_page=30'
 MAX_SIZE=200*1024*1024
 
 
+def release_notes(data,release):
+    """Use authored highlights; retain the full remote text without rendering HTML."""
+    notes=str(release.get('body') or data.get('notes') or '')
+    summary=data.get('summary')
+    if not summary:
+        from app_paths import ASSETS
+        path=ASSETS/'windows-release-notes.json'
+        try:summary=json.loads(path.read_text(encoding='utf-8')).get(data['version'],{}).get('summary')
+        except (OSError,ValueError,KeyError):summary=None
+    if not isinstance(summary,list) or not 1<=len(summary)<=3 or any(not isinstance(line,str) or not line.strip() or len(line)>160 for line in summary):
+        summary=['此版本未提供简版说明，请展开更新详情。']
+    # New manifests carry plain-text details; GitHub may wrap the same content in <details>.
+    if isinstance(data.get('notes'),str) and data['notes']:notes=data['notes']
+    return summary,notes
+
+
 def metadata():
     from app_paths import ASSETS
     path=ASSETS/'windows-build.json'
@@ -58,7 +74,8 @@ def validate_manifest(data,release,current):
     url=REPO+release['tag_name']+'/'+name
     if not asset or asset.get('browser_download_url')!=url or not allowed_url(url) or asset.get('size')!=data['size'] or asset.get('digest')!='sha256:'+data['sha256']:
         raise ValueError('更新文件与发布清单不一致')
-    return dict(data,url=url,notes=str(release.get('body',''))[:500])
+    summary,notes=release_notes(data,release)
+    return dict(data,url=url,notes=notes,summary=summary)
 
 
 def check(current=None):

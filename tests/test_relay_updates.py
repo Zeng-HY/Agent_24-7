@@ -12,6 +12,22 @@ import relay_updates as u
 
 
 class Updates(unittest.TestCase):
+    def test_authored_summary_and_full_notes_are_not_truncated(self):
+        _,info,r=self.fixture()
+        info['summary']=['设置菜单点击外部即可关闭。']
+        r['body']='完整说明\n'+('详细内容'*400)
+        parsed=u.validate_manifest(info,r,{'build':1})
+        self.assertEqual(parsed['summary'],info['summary'])
+        self.assertEqual(parsed['notes'],r['body'])
+        info['notes']='构建时附带的完整说明'
+        self.assertEqual(u.release_notes(info,r)[1],info['notes'])
+
+    def test_legacy_published_version_has_an_authored_summary(self):
+        summary,notes=u.release_notes({'version':'0.27.0-dev.5'},{'body':'旧版完整说明'})
+        self.assertIn('首次打开',summary[0]);self.assertEqual(notes,'旧版完整说明')
+        summary,_=u.release_notes({'version':'unknown','summary':'not a list'},{'body':'full'})
+        self.assertEqual(len(summary),1);self.assertIn('未提供',summary[0])
+
     def fixture(self,build=2):
         data=b'installer-test'
         info=dict(schema=1,version='0.27.0-dev.2',build=build,commit='a'*40,name='AgentRemote-0.27.0-dev.2-Setup.exe',size=len(data),sha256=hashlib.sha256(data).hexdigest())

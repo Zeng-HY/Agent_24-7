@@ -6,10 +6,12 @@ from urllib.parse import urlsplit
 class Shell:
     def __init__(self,controller):
         from System import Action,Uri
-        from System.Drawing import Color,ContentAlignment,Font,FontStyle,Point,Size
+        from System.Drawing import Color,ContentAlignment,Font,FontStyle,Point,Size,Icon
         from System.Windows.Forms import Panel,TableLayoutPanel,RowStyle,SizeType,DockStyle,Label,Button,CheckBox,FlatStyle,ContextMenuStrip,ToolStripMenuItem,ToolStripSeparator,Padding
         from Microsoft.Web.WebView2.WinForms import WebView2,CoreWebView2CreationProperties
         self.c=controller;self.form=controller.window.native;self.local=self.form.webview
+        from app_paths import ASSETS
+        self.app_icon=Icon(str(ASSETS/'static/app.ico'));self.form.Icon=self.app_icon;self.form.ShowIcon=True
         graphics=self.form.CreateGraphics();scale=graphics.DpiX/96.;graphics.Dispose()
         D=lambda n:round(n*scale)
         self.remote_ready=threading.Event();self.pending_url=None;self.remote_showing=False;self.last_remote=False;self.synchronizing=False
@@ -47,6 +49,8 @@ class Shell:
         self.form.Controls.Add(root);root.BringToFront();self.root=root;align()
         self.menu=ContextMenuStrip();self.items={}
         self.menu_renderer=menu_style(self.menu,scale)
+        from AgentRemoteChrome import MenuDismissal
+        self.menu_dismissal=MenuDismissal(self.menu,self.form)
         for label,action in [('账号与电脑','account'),('检查更新','check-update'),('迁移旧版','legacy'),('迁移详情','migration-info'),('重新绑定','rebind'),('退出','quit')]:
             if action=='quit':self.menu.Items.Add(ToolStripSeparator())
             item=ToolStripMenuItem(label);item.AutoSize=False;item.Size=Size(D(216),D(40));item.Padding=Padding(D(8),D(4),D(8),D(4))
@@ -64,6 +68,7 @@ class Shell:
 
     def open_menu(self):
         from System.Drawing import Point
+        if self.menu.Visible:self.menu.Close();return
         self.items['legacy'].Enabled=not self.c.binding.get('device')
         self.items['migration-info'].Enabled=bool(self.c.migration)
         self.menu.Show(self.gear,Point(0,self.gear.Height+6))
@@ -131,6 +136,6 @@ class Shell:
         self.invoke(lambda:self.remote.CoreWebView2.Navigate('about:blank') if self.remote_ready.is_set() else None)
 
     def close(self):
-        self.invoke(lambda:(self.remote.Dispose(),self.menu.Dispose()))
+        self.invoke(lambda:(self.menu_dismissal.Dispose(),self.remote.Dispose(),self.menu.Dispose(),self.app_icon.Dispose()))
         for bitmap in self.chrome_images:bitmap.Dispose()
         self.disposed=True

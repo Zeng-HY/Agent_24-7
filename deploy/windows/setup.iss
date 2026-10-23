@@ -29,8 +29,8 @@ UninstallDisplayIcon={app}\AgentRemote.exe
 Source: "..\..\dist\AgentRemote\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\.toolchain\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView
 [Icons]
-Name: "{group}\Agent Remote"; Filename: "{app}\AgentRemote.exe"
-Name: "{autodesktop}\Agent Remote"; Filename: "{app}\AgentRemote.exe"
+Name: "{group}\Agent Remote"; Filename: "{app}\AgentRemote.exe"; IconFilename: "{app}\AgentRemote.exe"; AppUserModelID: "AgentRemote.Desktop"
+Name: "{autodesktop}\Agent Remote"; Filename: "{app}\AgentRemote.exe"; IconFilename: "{app}\AgentRemote.exe"; AppUserModelID: "AgentRemote.Desktop"
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; Flags: waituntilterminated; Check: NeedsWebView
 Filename: "{app}\AgentRemote.exe"; Flags: nowait skipifsilent

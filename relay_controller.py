@@ -53,7 +53,10 @@ class DesktopController:
             migration='',version='版本 '+self.version,startup=self.startup,settingsVisible=self.settings_open,
             bindVisible=(not bound and not self.auth_active) or self.state=='需要重新绑定',rebind=self.state=='需要重新绑定',retryVisible=bound and not self.online and self.state!='需要重新绑定',
             accountVisible=True,legacyVisible=not bound and not self.auth_active,updateVisible=bool(self.update_title),
-            updateTitle=self.update_title,updateNotes=self.update_notes,downloadVisible=bool(self.update) and not self.downloading and not self.installer,
+            updateTitle=self.update_title,updateNotes=self.update_notes,
+            updateSummary='\n'.join(self.update.get('summary',[])) if self.update and self.update_notes==self.update.get('notes') else self.update_notes,
+            updateDetails=self.update_notes if self.update and self.update_notes==self.update.get('notes') else '',
+            downloadVisible=bool(self.update) and not self.downloading and not self.installer,
             installVisible=bool(self.installer) and not self.downloading,cancelDownloadVisible=self.downloading,
             downloading=self.downloading,percent=self.percent)
 
@@ -278,6 +281,9 @@ class DesktopController:
 
     def run(self):
         import webview,pystray
+        if os.name=='nt':
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('AgentRemote.Desktop')
         from PIL import Image
         webview.settings['ALLOW_FILE_URLS']=False;webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER']=False
         self.window=webview.create_window('Agent Remote',html=(ASSETS/'desktop_status.html').read_text(encoding='utf-8'),width=440,height=640,min_size=(380,520),hidden=self.hidden,js_api=None,background_color='#ffffff')
@@ -317,7 +323,7 @@ class DesktopController:
                     tray=(view['online'],view['state'])
                     try:self.icon.icon=lit if view['online'] else dim;self.icon.title='Agent Remote · '+view['state']
                     except Exception:pass
-        try:webview.start(loop,gui='edgechromium',private_mode=True,debug=False)
+        try:webview.start(loop,gui='edgechromium',private_mode=True,debug=False,icon=str(ASSETS/'static/app.ico'))
         finally:self.stop.set();self.agent_stop.set();self.auth_stop.set();self.cancel_download.set();self.icon.stop()
 
 
@@ -361,11 +367,34 @@ def smoke():
             else:raise AssertionError('Local view did not load')
             c.window.evaluate_js('window.render('+json.dumps({'name':'Test PC','state':'已连接'})+')')
             assert c.window.evaluate_js('document.getElementById("name").textContent')=='Test PC'
+            notes={'settingsVisible':True,'updateTitle':'发现新版本 test','updateSummary':'修复菜单关闭。','updateDetails':'完整说明\n'+('内容'*400)+'<img src=x>'}
+            c.window.evaluate_js('window.render('+json.dumps(notes)+')')
+            assert c.window.evaluate_js('document.getElementById("updateDetails").open') is False
+            assert c.window.evaluate_js('document.getElementById("updateNotes").textContent')=='修复菜单关闭。'
+            c.window.evaluate_js('document.getElementById("updateDetails").open=true')
+            c.window.evaluate_js('window.render('+json.dumps(notes)+')')
+            assert c.window.evaluate_js('document.getElementById("updateDetails").open') is True
+            assert c.window.evaluate_js('document.getElementById("updateFullNotes").textContent')==notes['updateDetails']
+            assert c.window.evaluate_js('document.querySelector("#updateFullNotes img")===null') is True
+            notes['updateTitle']='另一个版本';c.window.evaluate_js('window.render('+json.dumps(notes)+')')
+            assert c.window.evaluate_js('document.getElementById("updateDetails").open') is False
+            trace('release notes summary and full details')
             c.window.evaluate_js('location.href="agentremote-action://check-update"')
             assert acted.wait(5) and actions==['check-update'];trace('local action')
             assert c.shell.remote_ready.wait(15);trace('remote ready')
             assert c.window.native.Invoke(Func[Boolean](lambda:Application.OpenForms.Count==1))
             assert c.window.native.Invoke(Func[Boolean](lambda:abs((c.shell.gear.Top+c.shell.gear.Height/2)-(c.shell.title.Top+c.shell.title.Height/2))<=1))
+            def menu_check():
+                from System.Drawing import Point
+                c.shell.open_menu();menu=c.shell.menu;guard=c.shell.menu_dismissal
+                inside=Point(menu.Left+20,menu.Top+20);outside=Point(menu.Right+20,menu.Bottom+20)
+                guard.ObservePointer(False,inside);guard.ObservePointer(True,inside)
+                assert menu.Visible,'Inside click dismissed the menu'
+                guard.ObservePointer(False,outside);guard.ObservePointer(True,outside)
+                assert not menu.Visible,'Outside click did not dismiss the menu'
+                assert c.shell.form.Icon is c.shell.app_icon or c.shell.form.Icon.Equals(c.shell.app_icon)
+                assert c.shell.form.ShowIcon
+            c.shell.invoke(menu_check);trace('native outside dismissal and window icon')
             render_dir=os.environ.get('AR_SMOKE_RENDER_DIR')
             if render_dir:
                 def capture():
