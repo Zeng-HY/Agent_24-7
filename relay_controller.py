@@ -206,10 +206,10 @@ class DesktopController:
         from relay_agent import Agent
         owned=None
         try:
-            owned=await asyncio.to_thread(desktop.backend,self.cfg)
+            owned=await asyncio.to_thread(desktop.backend,self.cfg,cancel)
             def state(value):
                 self.online=value=='online'
-                self.state='需要重新绑定' if value=='unauthorized' else '已连接' if self.online else '断线重连'
+                if self.state!='连接失败':self.state='需要重新绑定' if value=='unauthorized' else '已连接' if self.online else '断线重连'
                 if value=='unauthorized':self.detail='设备凭据已失效，请从托盘选择重新绑定。'
             agent=Agent(self.binding['origin'],self.binding['key'],self.cfg['port'],self.cfg['token'],state=state)
             task=asyncio.create_task(agent.run())

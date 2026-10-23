@@ -242,7 +242,7 @@ def healthy(cfg):
     except Exception:return False
 
 
-def backend(cfg):
+def backend(cfg,cancel=None):
     if healthy(cfg):return None
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1',int(cfg['port'])))==0:
@@ -251,9 +251,14 @@ def backend(cfg):
     process=subprocess.Popen(command('--serve'),cwd=DATA,env=env,stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
     for _ in range(50):
+        if cancel is not None and cancel.is_set():break
         if healthy(cfg):return process
         if process.poll() is not None:break
         time.sleep(.2)
+    if process.poll() is None:
+        process.terminate()
+        try:process.wait(timeout=5)
+        except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)
     raise ValueError('本机服务启动失败')
 
 
