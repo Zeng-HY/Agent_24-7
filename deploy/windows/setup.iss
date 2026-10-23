@@ -1,14 +1,14 @@
-﻿#define AppVersion "0.27.0-dev"
+﻿#include "..\..\build\windows-version.iss"
 [Setup]
 AppId={{A8AB7016-CAD6-4E34-88A6-41C1E465F737}
 AppName=Agent Remote
 AppVersion={#AppVersion}
-VersionInfoVersion=0.27.0.0
+VersionInfoVersion={#AppNumericVersion}
 DefaultDirName={localappdata}\Programs\AgentRemote
 DefaultGroupName=Agent Remote
 PrivilegesRequired=lowest
 OutputDir=..\..\dist
-OutputBaseFilename=AgentRemote-0.27.0-dev-Setup
+OutputBaseFilename=AgentRemote-{#AppVersion}-Setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible

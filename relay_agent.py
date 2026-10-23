@@ -4,7 +4,7 @@ import contextlib
 import json
 import random
 from urllib.parse import urlsplit
-from aiohttp import ClientSession, ClientTimeout, WSMsgType
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, ClientResponseError
 from relay_transport import CHUNK, MAX_BODY, REQUEST_HEADERS, RESPONSE_HEADERS
 from relay_service import clean_target
 
@@ -99,6 +99,9 @@ class Agent:
                 started=asyncio.get_running_loop().time()
                 try: await self.once(client)
                 except asyncio.CancelledError: raise
+                except ClientResponseError as exc:
+                    if exc.status in (401,403):self.state('unauthorized');return
+                    self.state('reconnecting')
                 except Exception: self.state('reconnecting')
                 if asyncio.get_running_loop().time()-started>60: delay=1
                 await asyncio.sleep(random.uniform(.8,1.2)*delay)

@@ -62,7 +62,7 @@
 .fd.loose{filter:drop-shadow(0 1px 1.1px rgba(40,50,70,.3))}.fd.loose .b1{fill:#c3cad6}.fd.loose .b2{fill:#8792a4}
 .mark{filter:drop-shadow(0 1px 1.2px rgba(20,24,33,.3))}
 .mark .glyph{fill:none;stroke:#fff;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.mark .m-codex{fill:#1e222a}.mark .m-claude{fill:oklch(.67 .145 42)}.mark .m-deepseek{fill:#4d6bfe}.mark .eye{fill:#fff}
+.mark.code-symbol{filter:none;color:#1e222a}.mark .m-codex{fill:#1e222a}.mark .m-claude{fill:oklch(.67 .145 42)}.mark .m-deepseek{fill:#4d6bfe}.mark .eye{fill:#fff}
 /* running: a slow breathing ring round the green dot */
 .tree-dot{position:absolute;left:26px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:50%;background:var(--green)}
 .tree-dot::after{content:'';position:absolute;inset:0;border-radius:inherit;background:inherit;animation:lbrPing 1.8s ${E} infinite}
@@ -87,7 +87,7 @@
     + `<path class="b2" d="${BUBBLE}"/><path d="${BUBBLE}" fill="url(#lbrShine)"/></svg>`;
   const TILE = 'x="1.5" y="1.5" width="21" height="21" rx="6.2"';
   const MARK = {
-    codex: `<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect class="m-codex" ${TILE}/><rect ${TILE} fill="url(#lbrShine)"/><path class="glyph" d="m7.4 8.6 3.2 3.4-3.2 3.4M12.6 15.6h4.2"/></svg>`,
+    codex: `<svg class="mark code-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-14-2 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
     claude: `<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect class="m-claude" ${TILE}/><rect ${TILE} fill="url(#lbrShine)"/><path class="glyph" d="M12 6.6v10.8M6.6 12h10.8M8.2 8.2l7.6 7.6M15.8 8.2l-7.6 7.6"/></svg>`,
     // DeepSeek's own blue with a curled whale, as Claude's orange and Codex's black (10-20)
     deepseek: `<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect class="m-deepseek" ${TILE}/><rect ${TILE} fill="url(#lbrShine)"/><path class="glyph" d="M6.4 10.6c.9 3.6 3.3 5.9 6.6 5.9 2.7 0 4.6-1.6 4.6-4 0-2.2-1.7-3.6-3.8-3.6-1.7 0-2.9 1-3.2 2.4M6.4 10.6 5.3 8.7M6.4 10.6l2-.6"/><circle class="eye" cx="15.3" cy="11.7" r=".85"/></svg>`};

@@ -12,6 +12,26 @@ import relay_desktop
 
 
 class DesktopTests(unittest.TestCase):
+    def test_failed_manual_migration_restores_existing_destination(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);old=root/'old';data=root/'data'
+            (old/'attachments').mkdir(parents=True);(data/'attachments').mkdir(parents=True)
+            cfg={'port':8765,'token':'disposable-token'}
+            (old/'remote_config.json').write_text(json.dumps(cfg))
+            (data/'remote_config.json').write_text(json.dumps(cfg))
+            (data/'pending-migration.json').write_text(json.dumps({'source':str(old)}))
+            (old/'attachments/a.txt').write_text('new');(old/'attachments/b.txt').write_text('fail')
+            (data/'attachments/a.txt').write_text('original')
+            real=relay_desktop.copy_user_file
+            def copy(source,target):
+                if source==old/'attachments/b.txt':raise OSError('disposable failure')
+                return real(source,target)
+            with patch.object(relay_desktop,'DATA',data),patch.object(relay_desktop,'copy_user_file',side_effect=copy),patch.object(relay_desktop,'stop_legacy_backend',return_value=False):
+                with self.assertRaises(OSError):relay_desktop.complete_migration(cfg)
+            self.assertEqual((data/'attachments/a.txt').read_text(),'original')
+            self.assertTrue((old/'attachments/a.txt').exists())
+            self.assertTrue((data/'pending-migration.json').exists())
+
     def test_unknown_listener_is_never_stopped(self):
         with patch('autostart.occupied',return_value=True),patch.object(relay_desktop,'healthy',return_value=False),patch('subprocess.run') as run:
             with self.assertRaises(ValueError):relay_desktop.stop_legacy_backend(Path('C:/test'),{'port':8765,'token':'test'})

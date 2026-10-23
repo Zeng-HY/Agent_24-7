@@ -10,7 +10,7 @@ from urllib.parse import urlsplit, parse_qsl, urlencode
 from aiohttp import web, ClientSession, ClientTimeout, ClientError
 
 from relay_accounts import TTL, digest
-from relay_identity import Identity, Limited
+from relay_identity import Identity, Limited, BindingError
 from relay_mail import Mailer
 from relay_transport import TunnelHub, MAX_BODY, REQUEST_HEADERS, RESPONSE_HEADERS
 from relay_pages import scoped_page
@@ -72,8 +72,10 @@ class Service:
                 response.headers.setdefault('Referrer-Policy','no-referrer')
                 response.headers.setdefault('X-Content-Type-Options','nosniff')
             return response
+        except BindingError as exc:
+            return web.json_response({'error':str(exc),'code':exc.code},status=400,headers={'Cache-Control':'no-store'})
         except Limited as exc:
-            return web.json_response({'error':str(exc),'retry_after':exc.seconds},status=429,headers={'Retry-After':str(exc.seconds),'Cache-Control':'no-store'})
+            return web.json_response({'error':str(exc),'code':'rate_limited','retry_after':exc.seconds},status=429,headers={'Retry-After':str(exc.seconds),'Cache-Control':'no-store'})
         except ValueError as exc:
             return web.json_response({'error':str(exc)},status=400,headers={'Cache-Control':'no-store'})
         except (ClientError,TimeoutError,ConnectionError):

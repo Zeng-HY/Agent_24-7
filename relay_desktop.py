@@ -32,6 +32,11 @@ class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
 
 
+class ApiError(ValueError):
+    def __init__(self, message, code='network_error', retry_after=2):
+        super().__init__(message);self.code=code;self.retry_after=retry_after
+
+
 def api(origin,path,data,key):
     request=Request(origin+path,data=json.dumps(data).encode(),headers={
         'Content-Type':'application/json','Origin':origin,'Authorization':'Bearer '+key})
@@ -43,13 +48,17 @@ def api(origin,path,data,key):
         try:result=json.loads(exc.read(8192))
         except (ValueError,OSError):result={}
         finally:exc.close()
-        if status==429:
-            wait=result.get('retry_after',30) if isinstance(result,dict) else 30
-            wait=wait if isinstance(wait,int) and 1<=wait<=86400 else 30
-            raise ValueError(f'请求较多，请在 {wait} 秒后重试') from None
-        messages={404:'服务器尚未启用新版接入，请联系管理员',401:'设备授权已失效，请重新绑定',
-                  403:'设备授权已失效，请重新绑定',400:'绑定请求无效或已过期，请重新打开客户端'}
-        raise ValueError(messages.get(status,f'服务器暂时无法连接（HTTP {status}）')) from None
+        if not isinstance(result,dict):result={}
+        retry=result.get('retry_after',30)
+        retry=retry if isinstance(retry,int) and 1<=retry<=86400 else 30
+        code=result.get('code')
+        if status==429:raise ApiError(f'请求较多，请在 {retry} 秒后重试','rate_limited',retry) from None
+        if status in (401,403):raise ApiError('设备授权已失效，请重新绑定','invalid_device_credential') from None
+        if status==400 and code is None and '绑定请求' in result.get('error',''):code='binding_expired'
+        raise ApiError(result.get('error','服务器暂时无法连接'),code or 'server_error') from None
+    except (OSError,ValueError) as exc:
+        if isinstance(exc,ApiError):raise
+        raise ApiError('连不上服务器，正在重试','network_error') from None
 
 
 def startup(enabled, *, shell=None):
@@ -75,6 +84,35 @@ def startup(enabled, *, shell=None):
                     if not backup.exists():shutil.copy2(old,backup)
                     old.unlink()
     elif target.exists(): target.unlink()
+
+
+def preferences():
+    try:return json.loads((DATA/'desktop-preferences.json').read_text(encoding='utf-8'))
+    except (OSError,ValueError):return {}
+
+
+def save_preferences(value):
+    DATA.mkdir(parents=True,exist_ok=True)
+    temp=DATA/'desktop-preferences.json.tmp';temp.write_text(json.dumps(value),encoding='utf-8');temp.replace(DATA/'desktop-preferences.json')
+
+
+def set_startup(enabled):
+    startup(enabled)
+    value=preferences();value['startup']=enabled;save_preferences(value)
+
+
+def select_legacy(path):
+    source=Path(path).resolve()
+    if source==DATA.resolve() or source.is_relative_to(DATA.resolve()) or DATA.resolve().is_relative_to(source) or not (source/'remote.py').is_file():raise ValueError('请选择旧版 agent_remote 文件夹')
+    cfg=json.loads((source/'remote_config.json').read_text(encoding='utf-8-sig'))
+    if not isinstance(cfg,dict) or not isinstance(cfg.get('token'),str) or not cfg['token']:raise ValueError('旧配置无效')
+    port=cfg.get('port',8765)
+    if type(port) is not int or not 1<=port<=65535:raise ValueError('旧配置端口无效')
+    backup=DATA/'migration-backup';backup.mkdir(parents=True,exist_ok=True)
+    for name in ('remote_config.json','voice_terms.txt'):
+        if (DATA/name).is_file():shutil.copy2(DATA/name,backup/('before-manual-'+name))
+    (DATA/'pending-migration.json').write_text(json.dumps({'source':str(source)}),encoding='utf-8')
+    return cfg
 
 
 def detect_legacy():
@@ -127,7 +165,7 @@ def stop_legacy_backend(legacy,cfg):
     import autostart
     import setup_machine
     import win32com.client
-    port=int(cfg['port'])
+    port=int(cfg.get('port',8765))
     if not autostart.occupied(port):return False
     if not healthy(cfg):raise ValueError('旧服务身份未确认，未停止或覆盖现有安装')
     pid=setup_machine.listener(port)
@@ -150,10 +188,21 @@ def complete_migration(cfg):
     if legacy==DATA.resolve():raise ValueError('迁移路径无效')
     fresh=json.loads((legacy/'remote_config.json').read_text(encoding='utf-8-sig'))
     stopped=stop_legacy_backend(legacy,fresh)
+    rollback=DATA/'migration-backup'/('files-'+secrets.token_hex(6))
+    touched=[]
+    def preserve(dest):
+        relative=dest.resolve().relative_to(DATA.resolve())
+        backup=rollback/relative
+        existed=dest.exists()
+        if existed:
+            backup.parent.mkdir(parents=True,exist_ok=True)
+            copy_user_file(dest,backup)
+        touched.append((dest,backup,existed))
     try:
         for name in ('attachments','voice_terms.txt'):
             source=legacy/name
-            if source.is_file():copy_user_file(source,DATA/name)
+            if source.is_file():
+                preserve(DATA/name);copy_user_file(source,DATA/name)
             elif source.is_dir():
                 for parent,dirs,files in os.walk(source,followlinks=False):
                     dirs[:]=[d for d in dirs if not (Path(parent)/d).is_symlink() and not (os.stat(Path(parent)/d,follow_symlinks=False).st_file_attributes & 0x400)]
@@ -167,13 +216,18 @@ def complete_migration(cfg):
                                     if f.read(16)==b'SQLite format 3\x00':continue
                         dest=DATA/name/item.relative_to(source)
                         dest.parent.mkdir(parents=True,exist_ok=True)
-                        copy_user_file(item,dest)
+                        preserve(dest);copy_user_file(item,dest)
+        preserve(DATA/'remote_config.json')
         staged=DATA/'remote_config.migrating'
         staged.write_text(json.dumps(fresh,ensure_ascii=False),encoding='utf-8')
         staged.replace(DATA/'remote_config.json')
+        (DATA/'migration-result.json').write_text(json.dumps({'source':str(legacy),'completed':True}),encoding='utf-8')
         marker.unlink()
         return fresh
     except BaseException:
+        for dest,backup,existed in reversed(touched):
+            if existed:shutil.copy2(backup,dest)
+            else:dest.unlink(missing_ok=True)
         if stopped:
             subprocess.Popen([str(legacy/'.venv/Scripts/pythonw.exe'),str(legacy/'autostart.py')],cwd=legacy,
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
@@ -203,32 +257,7 @@ def backend(cfg):
     raise ValueError('本机服务启动失败')
 
 
-def bind_window(binding):
-    import webview
-    from relay_vault import save
-    request=api(binding['origin'],'/device-auth/start',{'label':socket.gethostname()},binding['key'])
-    if not re.fullmatch('[0-9a-f]{32}',str(request.get('id',''))):raise ValueError('服务器返回的绑定请求无效')
-    binding['pending']=request['id'];save(binding)
-    webview.settings['ALLOW_FILE_URLS']=False
-    webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER']=False
-    window=webview.create_window('Agent Remote',binding['origin']+'/account?authorize='+request['id'],width=500,height=700,min_size=(380,540),
-        background_color='#ffffff',js_api=None)
-    approved=threading.Event();closed=threading.Event()
-    window.events.closed+=lambda:closed.set()
-    window.events.before_show+=lambda:harden_window(window,binding['origin'])
-    def poll():
-        while not closed.wait(2):
-            try:result=api(binding['origin'],'/device-auth/poll',{'id':binding['pending']},binding['key'])
-            except Exception:continue
-            if result.get('approved'):
-                if not re.fullmatch('[0-9a-f]{32}',str(result.get('device',''))):continue
-                binding['device']=result['device'];save(binding);approved.set();time.sleep(1.2);window.destroy();return
-    threading.Thread(target=poll,daemon=True).start()
-    webview.start(gui='edgechromium',private_mode=True,debug=False)
-    return approved.is_set()
-
-
-def harden_window(window,origin):
+def harden_window(window,origin,local_uri=None):
     native=window.native.webview
     def configure(sender=None,args=None):
         if native.CoreWebView2 is not None:
@@ -240,55 +269,9 @@ def harden_window(window,origin):
     configure()
     def navigating(sender,args):
         uri=str(args.Uri)
-        if uri!='about:blank' and urlsplit(uri).scheme+'://'+urlsplit(uri).netloc!=origin:
+        if uri not in ('about:blank',local_uri) and urlsplit(uri).scheme+'://'+urlsplit(uri).netloc!=origin:
             args.Cancel=True
     native.NavigationStarting+=navigating
-
-
-def run_agent(binding,cfg):
-    from relay_agent import Agent
-    def state(value):
-        global connection_state
-        connection_state=value
-    async def run():
-        owned=None
-        try:
-            while not stop.is_set():
-                try:
-                    created=backend(cfg)
-                    if created is not None:owned=created
-                    agent=Agent(binding['origin'],binding['key'],cfg['port'],cfg['token'],state=state)
-                    task=asyncio.create_task(agent.run())
-                    while not stop.is_set() and not task.done():await asyncio.sleep(.5)
-                    task.cancel();await asyncio.gather(task,return_exceptions=True)
-                except Exception:state('offline');await asyncio.sleep(2)
-        finally:
-            if owned is not None and owned.poll() is None:
-                owned.terminate();owned.wait(timeout=5)
-    asyncio.run(run())
-
-
-def tray(binding,cfg):
-    import pystray
-    from PIL import Image,ImageDraw
-    import webbrowser
-    image=Image.new('RGBA',(64,64),(0,0,0,0));draw=ImageDraw.Draw(image)
-    draw.rounded_rectangle((6,8,58,48),radius=8,fill='#171717');draw.line((23,56,41,56),fill='#171717',width=5)
-    def quit_app(icon,item):stop.set();icon.stop()
-    def rebind(icon,item):
-        global rebind_requested
-        rebind_requested=True;quit_app(icon,item)
-    icon=pystray.Icon('AgentRemote',image,'Agent Remote',menu=pystray.Menu(
-        pystray.MenuItem(lambda item:'状态：'+{'online':'已连接','offline':'未连接','reconnecting':'重连中'}.get(connection_state,'未连接'),None,enabled=False),
-        pystray.MenuItem('账号与电脑',lambda:webbrowser.open(binding['origin']+'/account')),
-        pystray.MenuItem('重新绑定',rebind),
-        pystray.MenuItem('禁用登录自启',lambda:startup(False)),
-        pystray.MenuItem('启用登录自启',lambda:startup(True)),
-        pystray.MenuItem('退出',quit_app)))
-    worker=threading.Thread(target=run_agent,args=(binding,cfg),daemon=True)
-    worker.start()
-    try:icon.run()
-    finally:stop.set();worker.join(timeout=10)
 
 
 def main():
@@ -297,7 +280,11 @@ def main():
     parser.add_argument('--dismiss-worker',action='store_true');parser.add_argument('--self-test',action='store_true')
     parser.add_argument('--webview-smoke',action='store_true')
     parser.add_argument('--rebind',action='store_true')
+    parser.add_argument('--status-smoke',action='store_true')
     args=parser.parse_args()
+    if args.status_smoke:
+        from relay_controller import smoke
+        return smoke()
     if args.webview_smoke:
         import webview
         window=webview.create_window('Agent Remote smoke',html='<html><body>test</body></html>',hidden=True,js_api=None)
@@ -318,6 +305,9 @@ def main():
             import aiohttp,webview,win32crypt,win32security,comtypes,remote
             assert remote.VERSION=='0.27.0-dev' and remote.chats is not None
             assert (ASSETS/'remote.html').is_file()
+            import relay_controller,relay_updates,relay_instance
+            assert (ASSETS/'desktop_status.html').is_file()
+            assert relay_updates.metadata()['build']>=1
             return 0
         except Exception:return 1
     if args.serve:
@@ -328,31 +318,19 @@ def main():
         sys.argv=[sys.argv[0],'--worker']
         codex_question_dismiss.worker()
         return 0
-    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
-    kernel.CreateMutexW.argtypes=[ctypes.c_void_p,ctypes.c_bool,ctypes.c_wchar_p];kernel.CreateMutexW.restype=ctypes.c_void_p
-    kernel.CloseHandle.argtypes=[ctypes.c_void_p]
-    handle=kernel.CreateMutexW(None,True,'Local\\AgentRemote027-'+str(os.getlogin()))
-    if not handle:return 1
-    if ctypes.get_last_error()==183:kernel.CloseHandle(handle);return 0
+    from relay_instance import Instance
+    instance=Instance()
+    if not instance.primary:
+        if instance.legacy:ctypes.windll.user32.MessageBoxW(None,'旧版 Agent Remote 仍在运行。请从旧版托盘退出后再打开新版。','Agent Remote',0x40)
+        instance.close();return 0
     try:
-        from relay_vault import load,save
-        cfg=initialize()
-        binding=load()
-        if not binding or args.rebind:
-            binding={'origin':ORIGIN,'key':secrets.token_urlsafe(32)};save(binding)
-        if not binding.get('device') and not bind_window(binding):return 0
-        cfg=complete_migration(cfg)
-        startup(True)
-        tray(binding,cfg)
+        from relay_controller import DesktopController
+        DesktopController(instance,start_hidden=args.tray,rebind=args.rebind).run()
     except Exception as exc:
-        message=str(exc) if isinstance(exc,ValueError) else '连接或安装未完成，请检查服务和运行环境。'
+        message=str(exc) if isinstance(exc,ValueError) else '启动未完成，请检查运行环境。'
         ctypes.windll.user32.MessageBoxW(None,message,'Agent Remote',0x10)
         return 1
-    finally:
-        kernel.CloseHandle(handle)
-        if rebind_requested:
-            subprocess.Popen(command('--rebind'),cwd=DATA,stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+    finally:instance.close()
     return 0
 
 

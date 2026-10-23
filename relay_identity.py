@@ -19,6 +19,12 @@ class Limited(ValueError):
         super().__init__(f'请在 {self.seconds} 秒后重试')
 
 
+class BindingError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 class Identity(Accounts):
     def __init__(self, path, account_limit=20, device_limit=3):
         super().__init__(path)
@@ -197,7 +203,7 @@ class Identity(Accounts):
         else:super().reset(code,password)
 
     def start_authorization(self, key, label):
-        if not re.fullmatch(r'[A-Za-z0-9_-]{43}',key): raise ValueError('无效设备凭据')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{43}',key): raise BindingError('invalid_device_credential','无效设备凭据')
         if not isinstance(label,str) or not 1<=len(label.strip())<=80: raise ValueError('请输入电脑名称')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -213,9 +219,10 @@ class Identity(Accounts):
     def authorization(self, ident, key=None):
         with self.connect() as db:
             row=db.execute('SELECT * FROM device_authorizations WHERE id=?',(ident,)).fetchone()
-            if not row or (not row['approved'] and row['expires']<=time.time()):
-                raise ValueError('绑定请求已过期，请重新登录')
-            if key is not None and row['key_hash'] != digest(key): raise ValueError('无效设备凭据')
+            if not row: raise BindingError('binding_not_found','绑定请求不存在，请重新申请')
+            if not row['approved'] and row['expires']<=time.time():
+                raise BindingError('binding_expired','绑定请求已过期，请重新申请')
+            if key is not None and row['key_hash'] != digest(key): raise BindingError('invalid_device_credential','无效设备凭据')
             return dict(row)
 
     def approve(self, token, ident, existing=''):
@@ -223,13 +230,14 @@ class Identity(Accounts):
         if not owner: raise ValueError('请先登录')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            row=db.execute('SELECT * FROM device_authorizations WHERE id=? AND expires>?',
-                           (ident,time.time())).fetchone()
-            if not row: raise ValueError('绑定请求已过期')
+            row=db.execute('SELECT * FROM device_authorizations WHERE id=?',
+                           (ident,)).fetchone()
+            if not row: raise BindingError('binding_not_found','绑定请求不存在，请重新申请')
             if row['approved']:
                 owned=db.execute('SELECT id FROM devices WHERE id=? AND owner=? AND revoked=0',(row['device'],owner)).fetchone()
-                if not owned: raise ValueError('绑定请求不可用')
+                if not owned: raise BindingError('binding_unavailable','绑定请求不可用，请重新绑定')
                 return owned['id']
+            if row['expires']<=time.time(): raise BindingError('binding_expired','绑定请求已过期，请重新申请')
             if existing:
                 if not db.execute('SELECT 1 FROM devices WHERE id=? AND owner=? AND revoked=0',(existing,owner)).fetchone():
                     raise ValueError('电脑不可用')
