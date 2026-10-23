@@ -3,7 +3,7 @@
   "short_name": "Remote",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#1e3a8a",
+  "background_color": "#ffffff",
   "theme_color": "#2563eb",
   "icons": [
     {

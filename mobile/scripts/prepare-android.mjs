@@ -53,6 +53,13 @@ public class MainActivity extends BridgeActivity {
     }
 }
 `);
+// The launcher icon is the Agent Remote mark (written by brand/make_icons.py), not Capacitor's; launching shows plain white.
+const res = 'android/app/src/main/res';
+for (const name of ['drawable/agent_remote_mark.xml', 'drawable/agent_remote_tile.xml',
+  'mipmap-anydpi-v26/ic_launcher.xml', 'mipmap-anydpi-v26/ic_launcher_round.xml'])
+  await copyFile(`resources/android/${name}`, `${res}/${name}`);
+await replace(`${res}/values/styles.xml`, '<item name="android:background">@drawable/splash</item>',
+  '<item name="android:background">@android:color/white</item>');
 // Use the smaller distribution without sources; Gradle itself remains pinned.
 await replace('android/gradle/wrapper/gradle-wrapper.properties',
   'gradle-8.14.3-all.zip', 'gradle-8.14.3-bin.zip');

@@ -278,7 +278,7 @@ class DesktopController:
 
     def run(self):
         import webview,pystray
-        from PIL import Image,ImageDraw
+        from PIL import Image
         webview.settings['ALLOW_FILE_URLS']=False;webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER']=False
         self.window=webview.create_window('Agent Remote',html=(ASSETS/'desktop_status.html').read_text(encoding='utf-8'),width=440,height=640,min_size=(380,520),hidden=self.hidden,js_api=None,background_color='#ffffff')
         def configure():
@@ -288,9 +288,12 @@ class DesktopController:
         self.window.events.before_show+=configure
         self.window.events.loaded+=lambda:(self.ui_ready.set(),self.ui_actions.set())
         self.window.events.closing+=self.close_window
-        image=Image.new('RGBA',(64,64),(0,0,0,0));draw=ImageDraw.Draw(image);draw.rounded_rectangle((6,8,58,48),radius=8,fill='#171717');draw.line((23,56,41,56),fill='#171717',width=5)
+        def picture(name):
+            with Image.open(ASSETS/'static'/name) as image:return image.convert('RGBA')
+        # The tray shows the mark; its dot is the connection light, dimmed while this computer is not connected
+        lit,dim=picture('app.ico'),picture('tray-offline.png')
         def action(name):return lambda icon,item:threading.Thread(target=self.dispatch,args=(name,),daemon=True).start()
-        self.icon=pystray.Icon('AgentRemote',image,'Agent Remote',menu=pystray.Menu(
+        self.icon=pystray.Icon('AgentRemote',dim,'Agent Remote',menu=pystray.Menu(
             pystray.MenuItem('打开主窗口',lambda icon,item:self.show(),default=True),
             pystray.MenuItem('账号与电脑',action('account')),
             pystray.MenuItem('检查更新',action('check-update')),
@@ -303,12 +306,16 @@ class DesktopController:
             if self.binding.get('device'):self.start_agent()
             else:self.begin_auth()
             threading.Thread(target=self.instance.listen,args=(self.stop,self.show),daemon=True).start()
-            previous=None
+            previous=None;tray=None
             while not self.stop.wait(.4):
                 if self.shell:self.shell.sync()
                 view=self.view()
                 if view!=previous:
                     try:self.window.evaluate_js('window.render('+json.dumps(view,ensure_ascii=True)+')');previous=view
+                    except Exception:pass
+                if (view['online'],view['state'])!=tray:
+                    tray=(view['online'],view['state'])
+                    try:self.icon.icon=lit if view['online'] else dim;self.icon.title='Agent Remote · '+view['state']
                     except Exception:pass
         try:webview.start(loop,gui='edgechromium',private_mode=True,debug=False)
         finally:self.stop.set();self.agent_stop.set();self.auth_stop.set();self.cancel_download.set();self.icon.stop()

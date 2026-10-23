@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch,Mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -73,3 +74,34 @@ class Controller(unittest.TestCase):
                 self.assertEqual(d.select_legacy(old)['port'],8765)
                 self.assertTrue((data/'pending-migration.json').exists())
                 self.assertFalse((data/'remote_config.json').exists())
+
+    def test_tray_dot_is_lit_only_while_connected(self):
+        from relay_controller import DesktopController
+        seen=[];views=[(False,'连接中'),(True,'已连接'),(True,'已连接'),(False,'断线重连')]
+        dot=lambda image:image.getpixel((128,154))[:3]  # the middle of the dot in the 256 px tray picture
+        class Hook(list):
+            def __iadd__(self,handler):self.append(handler);return self
+        class Icon:
+            def __init__(self,name,image,title,menu=None):seen.append(('start',dot(image),title))
+            icon=property(None,lambda self,image:seen.append(('dot',dot(image))))
+            title=property(None,lambda self,text:seen.append(('title',text)))
+            def run(self):pass
+            def stop(self):pass
+        def start(loop,**options):
+            worker=threading.Thread(target=loop,daemon=True);worker.start();worker.join(30)
+        window=types.SimpleNamespace(events=types.SimpleNamespace(before_show=Hook(),loaded=Hook(),closing=Hook()),evaluate_js=lambda script:None)
+        webview=types.SimpleNamespace(settings={},create_window=lambda *args,**kw:window,start=start)
+        pystray=types.SimpleNamespace(Icon=Icon,Menu=lambda *items:items,MenuItem=lambda *args,**kw:args)
+        c=DesktopController.__new__(DesktopController)
+        for name in ('stop','ui_ready','ui_actions','agent_stop','auth_stop','cancel_download'):setattr(c,name,threading.Event())
+        c.ui_ready.set();c.hidden=False;c.binding={};c.instance=types.SimpleNamespace(listen=lambda stop,show:None)
+        c.harden_local=c.close_window=c.begin_auth=c.start_agent=lambda *args:None;c.shell=None
+        def view():
+            online,state=views.pop(0)
+            if not views:c.stop.set()
+            return {'online':online,'state':state}
+        c.view=view
+        with patch.dict(sys.modules,{'webview':webview,'pystray':pystray}):c.run()
+        lit,dim=(255,255,255),(92,92,99)
+        self.assertEqual(seen,[('start',dim,'Agent Remote'),('dot',dim),('title','Agent Remote · 连接中'),('dot',lit),
+            ('title','Agent Remote · 已连接'),('dot',dim),('title','Agent Remote · 断线重连')])

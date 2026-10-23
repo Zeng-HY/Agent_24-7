@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Written by brand/make_icons.py -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/agent_remote_tile"/>
+    <foreground android:drawable="@drawable/agent_remote_mark"/>
+    <monochrome android:drawable="@drawable/agent_remote_mark"/>
+</adaptive-icon>

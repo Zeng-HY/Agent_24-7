@@ -13,7 +13,7 @@ npm run android:build
 pwsh -NoProfile -File scripts/build-android.ps1 -JavaHome C:\path\jdk-21 -AndroidSdk C:\path\android-sdk
 ```
 
-脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-0.4.0-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
+脚本执行锁定依赖安装、测试、现有 iOS CI 配置检查、Web 构建、Android 同步及 `assembleDebug`，然后校验 APK 签名。产物为 `build/PocketAgentDesk-0.4.0-debug.apk`。Android 工程目录不提交；`prepare-android.mjs` 可重复应用原生配置，固定 Gradle 8.14.3，禁用明文 HTTP 和系统备份，并换上 Agent Remote 图标（`resources/`，由 `brand/make_icons.py` 生成）。没有 `server.url`、TLS 忽略或认证信息注入。可直接复制 APK 到手机安装；仅给实际用于打开该文件的应用授予安装来源权限，不需要关闭系统安全防护。
 
 这是 Android 自动生成的 **debug 测试签名包**，不是正式发行签名。测试签名通常保存在用户私有目录 `~/.android/debug.keystore`，不上传仓库。换电脑或重建该密钥后，旧测试包可能需要卸载后才能安装（会丢失应用本地状态）。长期正式更新需另行生成稳定 release keystore，私有保存并离线备份；本任务不生成正式签名或公开 Release。
 
@@ -40,7 +40,7 @@ npm run dev
 
 预览地址为 http://127.0.0.1:4173。预览只验证地址、保存设置，不访问真实服务，不发送任务。修改 HTML/CSS 后重新运行预览；JS 自动重建。
 
-首次生成 iOS 工程：`npm run ios:add`。后续：`npm run build`、`npm run ios:sync`、`node scripts/prepare-ios.mjs`。本机可生成/同步工程，不能进行 Xcode 编译。生成目录 ios/ 不提交，云端从锁定依赖重新生成。不要把手工原生修改放在该目录；需要保留的修改写进 prepare-ios.mjs。
+首次生成 iOS 工程：`npm run ios:add`。后续：`npm run build`、`npm run ios:sync`、`node scripts/prepare-ios.mjs`。本机可生成/同步工程，不能进行 Xcode 编译。生成目录 ios/ 不提交，云端从锁定依赖重新生成。不要把手工原生修改放在该目录；需要保留的修改写进 prepare-ios.mjs（App 图标和纯白启动画面也由它从 `resources/ios/` 写入）。
 
 ## 接入方式
 

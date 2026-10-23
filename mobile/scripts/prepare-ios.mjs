@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, copyFile } from 'node:fs/promises';
 // cap sync regenerates this manifest: pin the native runtime after every sync.
 const manifest = 'ios/App/CapApp-SPM/Package.swift';
 let swift = await readFile(manifest, 'utf8');
@@ -19,4 +19,14 @@ for (const [key, value] of Object.entries(descriptions)) {
 }
 if (/NSAllowsArbitraryLoads/.test(xml)) throw Error('Unexpected ATS exception');
 await writeFile(plist, xml);
-console.log('Native runtime pinned; media usage descriptions applied; ATS unchanged.');
+// The home-screen icon is the Agent Remote mark (written by brand/make_icons.py), not Capacitor's; launching shows plain white.
+const assets = 'ios/App/App/Assets.xcassets';
+for (const [set, source, names] of [['AppIcon.appiconset', 'resources/ios/AppIcon-512@2x.png', ['AppIcon-512@2x.png']],
+  ['Splash.imageset', 'resources/ios/splash.png', ['splash-2732x2732.png', 'splash-2732x2732-1.png', 'splash-2732x2732-2.png']]]) {
+  const contents = await readFile(`${assets}/${set}/Contents.json`, 'utf8');
+  for (const name of names) {
+    if (!contents.includes(`"${name}"`)) throw Error(`Unexpected ${set}; review before building.`);
+    await copyFile(source, `${assets}/${set}/${name}`);
+  }
+}
+console.log('Native runtime pinned; media usage descriptions, app icon and plain launch screen applied; ATS unchanged.');
