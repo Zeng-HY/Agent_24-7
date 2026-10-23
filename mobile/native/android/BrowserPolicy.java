@@ -14,6 +14,9 @@ public final class BrowserPolicy {
         return u != null && ("/".equals(u.getPath()) || "/account".equals(u.getPath()))
             && u.getQuery() == null && u.getFragment() == null;
     }
+    public static boolean externalLink(String entry, String url) {
+        return secure(url) != null && !sameOrigin(entry, url);
+    }
     public static boolean sameOrigin(String entry, String candidate) {
         URI a = secure(entry), b = secure(candidate);
         return a != null && b != null && a.getHost().equalsIgnoreCase(b.getHost())

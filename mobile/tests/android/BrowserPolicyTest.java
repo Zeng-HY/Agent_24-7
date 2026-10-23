@@ -3,6 +3,12 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class BrowserPolicyTest {
+    @Test public void externalLinksAreHttpsWithoutCredentials() {
+        String origin="https://relay.example/";
+        assertTrue(BrowserPolicy.externalLink(origin,"https://news.example/article?q=1"));
+        for(String url:new String[]{"https://relay.example/account","javascript:alert(1)","intent://news.example","file:///private","http://news.example/","https://user:pass@news.example/"})
+            assertFalse(url,BrowserPolicy.externalLink(origin,url));
+    }
     @Test public void entryMustBeHttpsWithoutCredentialsOrTokens() {
         assertTrue(BrowserPolicy.validEntry("https://8.166.15.235/"));
         assertTrue(BrowserPolicy.validEntry("https://example.com:8443/account"));

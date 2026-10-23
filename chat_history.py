@@ -220,7 +220,7 @@ class History:
                     fid=hmac.new(self.secret,json.dumps(identity).encode(),hashlib.sha256).hexdigest()[:32]
                     suffix=p.suffix.lower();kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html') and st.st_size<=1<<20 else 'download'
                     self.files[(app,tid,fid)]={'path':p,'size':st.st_size,'mtime':st.st_mtime_ns,'roots':roots,'kind':kind}
-                    out.append({'id':fid,'name':p.name,'size':st.st_size,'modified':st.st_mtime_ns//1000000,'kind':kind,'message_id':m['id']})
+                    out.append({'id':fid,'name':p.name,'path':str(p),'size':st.st_size,'modified':st.st_mtime_ns//1000000,'kind':kind,'message_id':m['id']})
                 if len(out)>=100:break
         if len(self.files)>1000:
             for key in list(self.files)[:len(self.files)-1000]:self.files.pop(key,None)

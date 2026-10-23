@@ -20,6 +20,35 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public class FirstLoginTest {
+    private android.webkit.WebResourceRequest request(String url, boolean gesture) {
+        return new android.webkit.WebResourceRequest() {
+            public android.net.Uri getUrl(){return android.net.Uri.parse(url);}
+            public boolean isForMainFrame(){return true;}
+            public boolean isRedirect(){return false;}
+            public boolean hasGesture(){return gesture;}
+            public String getMethod(){return "GET";}
+            public java.util.Map<String,String> getRequestHeaders(){return java.util.Collections.emptyMap();}
+        };
+    }
+    @Test public void httpsTapOpensSystemBrowserWithoutHeadersAndPopupRequiresGesture() {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),RemoteBrowserActivity.class).putExtra("url","https://relay.example/account");
+        try(var controller=Robolectric.buildActivity(RemoteBrowserActivity.class,intent).setup()) {
+            RemoteBrowserActivity activity=controller.get();WebView web=ReflectionHelpers.getField(activity,"web");
+            assertTrue(web.getWebViewClient().shouldOverrideUrlLoading(web,request("https://news.example/article",true)));
+            Intent external=shadowOf(activity).getNextStartedActivity();assertNotNull(external);
+            assertEquals(Intent.ACTION_VIEW,external.getAction());assertEquals("https://news.example/article",external.getDataString());assertNull(external.getExtras());
+            web.getWebViewClient().shouldOverrideUrlLoading(web,request("https://news.example/redirect",false));
+            web.getWebViewClient().shouldOverrideUrlLoading(web,request("intent://danger",true));
+            assertNull(shadowOf(activity).getNextStartedActivity());
+            assertFalse(web.getWebChromeClient().onCreateWindow(web,false,false,null));
+            android.os.Message result=android.os.Message.obtain(new android.os.Handler(android.os.Looper.getMainLooper()));
+            WebView.WebViewTransport transport=ReflectionHelpers.callConstructor(WebView.WebViewTransport.class);result.obj=transport;
+            assertTrue(web.getWebChromeClient().onCreateWindow(web,false,true,result));
+            WebView popup=transport.getWebView();assertFalse(popup.getSettings().getJavaScriptEnabled());
+            popup.getWebViewClient().shouldOverrideUrlLoading(popup,request("https://news.example/popup",false));
+            assertEquals("https://news.example/popup",shadowOf(activity).getNextStartedActivity().getDataString());
+        }
+    }
     @Before public void skipNetworkUpdateCheck() {
         RuntimeEnvironment.getApplication().getSharedPreferences("app-updates",0)
             .edit().putLong("checked",System.currentTimeMillis()).commit();

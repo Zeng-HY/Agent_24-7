@@ -283,6 +283,19 @@
     async function search(append=false){const q=input.value.trim();if(!q)return;const v=++version;go.disabled=true;try{const j=await api('/api/chat/search?app='+target.app+'&id='+encodeURIComponent(target.id)+'&query='+encodeURIComponent(q)+(append&&next?'&cursor='+encodeURIComponent(next):''));if(v!==version)return;if(!append)results.innerHTML='';for(const hit of j.items){const b=el('button','search-hit',hit.snippet);b.append(el('small','',(hit.origin==='other_chat'?'来自其他对话':hit.role==='user'?'你':'助手')+' · '+stamp(hit.time)));b.onclick=()=>{dismissOverlays();jump(hit.id).catch(e=>toast(e.message,true));};results.append(b);}if(!j.items.length&&!append)results.append(el('div','hint','没有找到匹配消息'));next=j.next_cursor;more.hidden=!j.has_more;}catch(e){toast(e.message,true);}finally{go.disabled=false;}}
     go.onclick=()=>search();more.onclick=()=>search(true);input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)search();};searchBody.append(input,go,results,more);openSheet('historySearch');}
   function fileUrl(target,file,extra=''){return '/api/file?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id+extra;}
+  document.addEventListener('click',async e=>{
+    const link=e.target.closest?.('a[data-result-path]');if(!link)return;
+    e.preventDefault();if(!cur)return;
+    const target={...cur};
+    const normalized=value=>{try{return decodeURIComponent(value).replace(/:\d+(?:-\d+)?$/,'').replace(/\\/g,'/').toLowerCase();}catch{return '';}};
+    try{
+      const result=await api('/api/chat/files?app='+target.app+'&id='+encodeURIComponent(target.id));
+      const file=result.items.find(f=>f.path&&normalized(f.path)===normalized(link.dataset.resultPath));
+      if(!file)throw Error('这个文件不在当前对话的允许范围内，或已移动、删除。');
+      if(cur?.app!==target.app||cur?.id!==target.id)return;
+      if(file.kind==='download')await download(target,file);else await preview(target,file);
+    }catch(error){toast(error.message,true);}
+  });
   async function checkFile(target,file){return api('/api/file/meta?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);}
   async function download(target,file){try{await checkFile(target,file);workspaceUI?.saveScene();location.assign((window.RELAY_BASE||'')+fileUrl(target,file,'&download=1'));}catch(e){toast(e.message,true);}}
   async function preview(target,file){try{await checkFile(target,file);previewBody.innerHTML='';previewBody.append(el('div','hint',file.name));

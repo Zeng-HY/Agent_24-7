@@ -34,6 +34,11 @@ public class RemoteBrowserActivity extends AppCompatActivity {
     private int authAttempts;
     private static final int FILE = 41, MEDIA = 42;
     private String accountUrl() { Uri u = Uri.parse(entry); return u.getScheme() + "://" + u.getAuthority() + "/account"; }
+    private void openExternal(String url) {
+        if (!BrowserPolicy.externalLink(entry, url)) return;
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)); }
+        catch (android.content.ActivityNotFoundException e) { Toast.makeText(this, "没有可用的浏览器", Toast.LENGTH_SHORT).show(); }
+    }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         entry = getIntent().getStringExtra("url");
@@ -79,11 +84,13 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setSupportMultipleWindows(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (BrowserPolicy.sameOrigin(entry, request.getUrl().toString())) return false;
+                if (request.isForMainFrame() && request.hasGesture()) openExternal(request.getUrl().toString());
                 status.setText("已阻止打开其他地址");
                 return true;
             }
@@ -120,6 +127,27 @@ public class RemoteBrowserActivity extends AppCompatActivity {
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onCreateWindow(WebView view, boolean dialog, boolean gesture, android.os.Message result) {
+                if (!gesture) return false;
+                // A target=_blank tap gets a URL-only temporary view, never a bridge or copied credentials.
+                WebView popup = new WebView(RemoteBrowserActivity.this);
+                popup.getSettings().setAllowFileAccess(false);
+                popup.getSettings().setAllowContentAccess(false);
+                popup.setWebViewClient(new WebViewClient() {
+                    @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
+                        String url = request.getUrl().toString();
+                        if (request.isForMainFrame()) {
+                            if (BrowserPolicy.sameOrigin(entry, url)) web.loadUrl(url);
+                            else openExternal(url);
+                        }
+                        v.post(v::destroy);
+                        return true;
+                    }
+                });
+                ((WebView.WebViewTransport) result.obj).setWebView(popup);
+                result.sendToTarget();
+                return true;
+            }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (fileResult != null) fileResult.onReceiveValue(null);
                 fileResult = callback;

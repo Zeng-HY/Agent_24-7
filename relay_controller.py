@@ -43,7 +43,7 @@ class DesktopController:
         self.auth_active=False
         self.state='未绑定';self.detail='';self.online=False;self.worker=None;self.icon=None;self.window=None
         self.update=None;self.update_title='';self.update_notes='';self.downloading=False;self.checking=False;self.percent=0;self.installer=None
-        self.version=updates.metadata()['version'];self.shell=None;self.settings_open=False
+        self.version=updates.metadata()['version'];self.shell=None;self.settings_open=False;self.nav_history=[]
         self.migration='';self.migration_flash_until=0;self.ui_ready=threading.Event();self.ui_actions=threading.Event();self.exiting=False
         if (DATA/'migration-result.json').exists():self.migration='配置和附件已迁移；旧目录仍保留。实机验证后再处理旧版。'
 
@@ -80,10 +80,14 @@ class DesktopController:
         import pythoncom
         pythoncom.CoInitialize()
         try:
+            if action in ('account','check-update','migration-info'):
+                if not hasattr(self,'nav_history'):self.nav_history=[]
+                self.nav_history.append((bool(self.shell.remote_showing),self.settings_open,self.update_title,self.update_notes))
             if action=='bind':
                 if self.state=='需要重新绑定':self.rebind()
                 else:self.begin_auth()
             elif action=='account':
+                self.settings_open=False
                 if not self.binding.get('device'):self.begin_auth()
                 else:self.shell.load_account(self.binding['origin']+'/account')
             elif action=='startup':
@@ -94,9 +98,14 @@ class DesktopController:
             elif action=='rebind':self.rebind()
             elif action=='quit':self.quit()
             elif action=='back':
-                if self.settings_open:self.shell.back()
-                elif self.binding.get('device'):self.shell.local_view()
-                self.settings_open=False
+                if getattr(self,'nav_history',None):
+                    remote,self.settings_open,self.update_title,self.update_notes=self.nav_history.pop()
+                    if remote:self.shell.show_account()
+                    else:self.shell.local_view()
+                else:
+                    if self.settings_open:self.shell.back()
+                    elif self.binding.get('device'):self.shell.local_view()
+                    self.settings_open=False
                 if not self.binding.get('device') and not self.auth_active:self.begin_auth()
             elif action=='migration-info':
                 self.settings_open=True;self.update_title='迁移详情';self.update_notes=self.migration;self.shell.local_view(returnable=True)
@@ -384,6 +393,8 @@ def smoke():
             assert c.shell.remote_ready.wait(15);trace('remote ready')
             assert c.window.native.Invoke(Func[Boolean](lambda:Application.OpenForms.Count==1))
             assert c.window.native.Invoke(Func[Boolean](lambda:abs((c.shell.gear.Top+c.shell.gear.Height/2)-(c.shell.title.Top+c.shell.title.Height/2))<=1))
+            assert c.window.native.Invoke(Func[Boolean](lambda:c.shell.back_button.Left<c.shell.title.Left<c.shell.gear.Left))
+            assert c.window.native.Invoke(Func[Boolean](lambda:not c.shell.remote.CreationProperties.IsInPrivateModeEnabled))
             def menu_check():
                 from System.Drawing import Point
                 c.shell.open_menu();menu=c.shell.menu;guard=c.shell.menu_dismissal
@@ -402,6 +413,7 @@ def smoke():
                     from System.Drawing.Imaging import ImageFormat
                     folder=Path(render_dir);folder.mkdir(parents=True,exist_ok=True)
                     top=c.shell.root.GetControlFromPosition(0,0)
+                    c.shell.back_button.Visible=True
                     graphics=top.CreateGraphics();print('Chrome render:',c.shell.title.Font.Name,c.shell.menu.Font.Name,graphics.DpiX,top.DeviceDpi);graphics.Dispose()
                     bitmap=Bitmap(top.Width,top.Height);top.DrawToBitmap(bitmap,Rectangle(0,0,top.Width,top.Height));bitmap.Save(str(folder/'header.png'),ImageFormat.Png);bitmap.Dispose()
                     menu=c.shell.menu;menu.CreateControl();menu.PerformLayout();menu.Size=menu.PreferredSize
@@ -425,6 +437,9 @@ def smoke():
                     time.sleep(.02)
                 return json.loads(str(task.Result))
             assert remote_js('getComputedStyle(document.body).paddingTop')=='24px'
+            if os.environ.get('AR_SMOKE_COOKIE')=='read':
+                assert remote_js('document.cookie.includes("ar_fixture=persisted")'), 'Account profile did not survive restart'
+            remote_js('document.cookie="ar_fixture=persisted; Max-Age=3600; SameSite=Strict; Path=/"')
             remote_js('document.getElementById("email").value="fixture@example.test"')
             trace('form filled');c.shell.local_view(returnable=True);c.shell.back()
             assert remote_js('document.getElementById("email").value')=='fixture@example.test'

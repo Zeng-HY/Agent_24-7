@@ -28,8 +28,8 @@ class Shell:
         top.Controls.Add(self.back_button);self.back_button.BringToFront()
         def align(sender=None,args=None):
             height=top.ClientSize.Height
-            self.gear.Location=Point(D(12),(height-self.gear.Height)//2)
-            self.back_button.Location=Point(top.ClientSize.Width-D(52),(height-self.back_button.Height)//2)
+            self.gear.Location=Point(top.ClientSize.Width-D(52),(height-self.gear.Height)//2)
+            self.back_button.Location=Point(D(12),(height-self.back_button.Height)//2)
             title.SetBounds(D(64),0,max(1,top.ClientSize.Width-D(128)),height)
         top.SizeChanged+=align
         for control,name in [(self.gear,'gear'),(self.back_button,'back')]:
@@ -42,7 +42,13 @@ class Shell:
         self.center=Panel();self.center.Dock=DockStyle.Fill;self.center.BackColor=Color.White
         self.local.Parent.Controls.Remove(self.local);self.local.Dock=DockStyle.Fill;self.center.Controls.Add(self.local)
         self.remote=WebView2();self.remote.Dock=DockStyle.Fill;self.remote.Visible=False
-        self.remote.CreationProperties=self.local.CreationProperties
+        # Keep account cookies in this application's own persistent profile. The
+        # bundled status view remains private and never shares a host bridge.
+        from app_paths import DATA
+        props=CoreWebView2CreationProperties()
+        props.UserDataFolder=str(DATA/'account-webview')
+        props.set_IsInPrivateModeEnabled(False)
+        self.remote.CreationProperties=props
         self.center.Controls.Add(self.remote)
         for panel in (root,top,bottom,self.center):panel.Margin=Padding(0);panel.Padding=Padding(0)
         root.Controls.Add(top,0,0);root.Controls.Add(self.center,0,1);root.Controls.Add(bottom,0,2)
@@ -71,7 +77,7 @@ class Shell:
         if self.menu.Visible:self.menu.Close();return
         self.items['legacy'].Enabled=not self.c.binding.get('device')
         self.items['migration-info'].Enabled=bool(self.c.migration)
-        self.menu.Show(self.gear,Point(0,self.gear.Height+6))
+        self.menu.Show(self.gear,Point(self.gear.Width-self.menu.PreferredSize.Width,self.gear.Height+6))
 
     def toggle_startup(self,sender,args):
         if self.synchronizing:return
@@ -130,6 +136,7 @@ class Shell:
     def back(self):
         if self.last_remote:
             self.invoke(lambda:(setattr(self.local,'Visible',False),setattr(self.remote,'Visible',True),self.remote.BringToFront(),self.remote.Focus(),setattr(self,'remote_showing',True)))
+            self.last_remote=False
 
     def clear_account(self):
         self.pending_url=None
