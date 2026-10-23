@@ -31,11 +31,9 @@
   const stop=el('button','stop-turn','停止这一轮');stop.id='deepseekStop';stop.type='button';stop.hidden=true;stop.setAttribute('aria-label','停止这一轮');
   document.querySelector('.cv-top .cv-title').after(stop);window.navigationUI?.tapTick?.(stop);
   // above the box while a turn runs: the queue, then what ↑ does and 排队稍后发送
-  const tray=el('div','queue-strip'),runBar=el('div','run-bar'),runHint=el('span','run-hint','发送会立即补充给这一轮');
-  const later=el('button','run-queue','排队稍后发送'),check=el('button','run-queue','核对待发送消息');
-  tray.id='deepseekQueue';runBar.id='deepseekRun';later.id='deepseekQueueSend';later.type=check.type='button';tray.hidden=runBar.hidden=true;
-  runBar.append(runHint,check,later);$('runtimeBar').before(tray,runBar);
-  later.onclick=()=>send('queue');check.onclick=()=>checkPending(cur,true);
+  const tray=el('div','queue-strip'),runBar=el('div','run-bar'),check=el('button','run-queue','核对待发送消息');
+  tray.id='deepseekQueue';runBar.id='deepseekRun';check.type='button';tray.hidden=runBar.hidden=true;
+  runBar.append(check);document.querySelector('.cv-row').before(tray,runBar);check.onclick=()=>checkPending(cur,true);
   // Subagents: the strip names how many a conversation opened; the cards in the transcript mark where.
   const subBar=el('button','run-queue');subBar.id='deepseekSubBar';subBar.type='button';subBar.hidden=true;$('runtimeBar').before(subBar);
   let subs=[];
@@ -101,21 +99,20 @@
   function paintRun(me){
     // pending: a send whose outcome is not known; not while one is going out (it is noted just before), the bubble says so
     const on=!!me&&active(me),running=on&&!!state?.running,pending=on&&!sending&&!!localStorage.getItem(pendingKey(me));
-    runBar.hidden=!(running||pending);runHint.hidden=later.hidden=!running;check.hidden=!pending;
-    later.disabled=busy||sending||!state?.available||!!window.referencesUI?.pendingCount(me)||!($('cvText').value.trim()||codexUI.imageSnapshot(me).length||window.referencesUI?.fileCount(me));
-    if(on)$('cvBtn').setAttribute('aria-label',running?'立即补充当前任务':'发送');
-    const rows=on?state?.queued||[]:[];const sig=JSON.stringify([on&&me.id,rows,running]);
+    runBar.hidden=!pending;check.hidden=!pending;
+    if(on)$('cvBtn').setAttribute('aria-label',running?'发送并排队':'发送');
+    const native=on?state?.queued||[]:[],local=on?(window.workspaceUI?.pendingQueue(me)||[]).filter(q=>q.status!=='queued'):[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];const sig=JSON.stringify([on&&me.id,rows,running]);
     if(tray.dataset.sig===sig)return;tray.dataset.sig=sig;  // rebuilt only when it changes: a tap on a row is not lost
-    tray.replaceChildren();tray.hidden=!rows.length;if(rows.length)tray.append(el('div','queue-head','排队中 · 这一轮做完后依次发出'));
+    tray.replaceChildren();tray.hidden=!rows.length;
     for(const q of rows){const row=el('div','queue-row');row.append(el('p','',q.text));
-      const now=el('button','','立即补充'),x=el('button','queue-x','×');now.type=x.type='button';
-      now.disabled=!running;now.setAttribute('aria-label','把这条消息立即补充给这一轮');x.setAttribute('aria-label','取消排队');
-      now.onclick=()=>queueAction(me,q,'steer');x.onclick=()=>queueAction(me,q,'remove');
+      const now=el('button','','立即补充'),x=el('button','queue-x','⋯');now.type=x.type='button';
+      now.disabled=q.local||!running;x.disabled=!!q.local;now.setAttribute('aria-label','把这条消息立即补充给这一轮');x.setAttribute('aria-label','待发送消息操作');
+      now.onclick=()=>queueAction(me,q,'steer');x.onclick=()=>workspaceUI.queueMenu(me,q,()=>queueAction(me,q,'remove'));
       row.append(now,x);window.navigationUI?.tapTick?.(now);window.navigationUI?.tapTick?.(x);tray.append(row);}
   }
   async function queueAction(me,q,action){
     if(!active(me))return;for(const n of tray.querySelectorAll('button'))n.disabled=true;
-    try{const r=await api('/api/deepseek/queue',{id:me.id,item_id:q.id,action});toast(r.text||'已处理');}catch(e){toast('结果待核对：'+e.message,true);}
+    try{const r=await api('/api/deepseek/queue',{id:me.id,item_id:q.id,action});toast(r.text||'已处理');return true;}catch(e){toast('结果待核对：'+e.message,true);return false;}
     finally{tray.dataset.sig='';await refresh(me);}
   }
   function controls(){
@@ -196,8 +193,8 @@
     part.append(submit);return part;
   }
   $('cvText').addEventListener('input',()=>{if(cur?.app==='deepseek')paintRun(cur);});
-  async function send(intent='steer'){
-    const me=cur;if(!me||!active(me)||busy||sending||window.workspaceUI?.composing)return;
+  async function send(intent='auto'){
+    const me=cur;if(!me||!active(me)||busy||sending||window.workspaceUI?.composing)return;if(intent==='auto')intent=state?.running?'queue':'steer';
     if(window.referencesUI?.pendingCount(me)){showNote('文件还在传到电脑，传完再发；没传上的点「重试」或去掉','warn');return;}
     if(codexUI.blocked())return;
     const text=$('cvText').value,images=codexUI.imageSnapshot(me);if(!text.trim()&&!images.length&&!window.referencesUI?.fileCount(me))return;  // files alone are a message

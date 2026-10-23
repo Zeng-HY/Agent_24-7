@@ -497,7 +497,7 @@ class Bridge:
         except (OSError, ValueError, AttributeError):
             raise ControlError("无法核对桌面队列，内容已保留") from None
 
-    def _steer(self, tid, rid, text, owner, turn_id, client_id=None):
+    def _steer(self, tid, rid, text, owner, turn_id, client_id=None, attached=None, skills=None, restore_message=None):
         client_id = client_id or rid
         # Recheck immediately before dispatch; never carry a correction across turns.
         _, current_owner, state = self.snapshot(tid, True)
@@ -507,10 +507,16 @@ class Bridge:
                       "text": "当前轮次已变化，未提交；请恢复草稿后重新发送"}
             self._finish(rid, result)
             return result
+        attached, skills = attached or [], skills or []
+        inputs = ([{"type": "text", "text": text, "text_elements": []}] if text else [])
+        inputs += [{"type": "localImage", "path": v["path"]} for v in attached]
+        inputs += skills
+        restore = copy.deepcopy(restore_message) if restore_message else {
+            "id": client_id, "text": text, "context": {"prompt": text, "addedFiles": [], "fileAttachments": [],
+            "imageAttachments": [{"src": v["path"], "localPath": v["path"], "filename": v["label"]} for v in attached]}}
         self._pipe().call("thread-follower-steer-turn", {
-            "conversationId": tid, "input": [{"type": "text", "text": text, "text_elements": []}],
-            "restoreMessage": {"id": client_id, "text": text, "context": {"prompt": text, "addedFiles": [], "fileAttachments": [], "imageAttachments": []}},
-            "attachments": [], "clientUserMessageId": client_id}, owner, 30)
+            "conversationId": tid, "input": inputs, "restoreMessage": restore,
+            "attachments": attached, "clientUserMessageId": client_id}, owner, 30)
         result = {"ok": True, "accepted": True, "delivery_state": "accepted", "request_id": rid,
                   "client_id": client_id, "intent": "steer", "turn_id": turn_id,
                   "evidence": {"source": "desktop_steer_ack"}, "text": "已交给 Codex"}
@@ -570,14 +576,24 @@ class Bridge:
             if action == "promote":
                 if not turn or body.get("expected_turn") != turn:
                     raise ControlError("运行轮次已变化，消息仍保留在队列")
-                if message.get("context", {}).get("imageAttachments") or message.get("context", {}).get("skills"):
-                    raise ControlError("带图片或引用的队列消息不能立即补充")
+                context = message.get("context") or {}
+                attached = []
+                for image in context.get("imageAttachments") or []:
+                    path = image.get("localPath") or image.get("src")
+                    if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_file():
+                        raise ControlError("队列图片的本地文件不可用，消息仍保留在队列")
+                    attached.append({"label": image.get("filename") or Path(path).name, "path": path, "fsPath": path, "isImageAttachment": True})
+                skills = context.get("skills") or []
+                if any(not isinstance(v, dict) or v.get("type") != "skill" or not v.get("name") or not v.get("path") for v in skills):
+                    raise ControlError("队列引用格式不完整，消息仍保留在队列")
+                if any(context.get(k) for k in ("addedFiles", "fileAttachments", "chatGptConversationContexts", "appshotContexts", "pastedTextAttachments", "commentAttachments", "mcpAppModelContextAttachments", "selectedTextAttachments", "threadReferences", "responseTextAnnotations", "pullRequestChecks")):
+                    raise ControlError("这条桌面队列包含尚未支持的上下文，请在电脑上补充；消息仍保留在队列")
                 with self._db() as con:
                     source = con.execute("SELECT data FROM deliveries WHERE thread=? AND id=?", (tid, mid)).fetchone()
                 if source:
                     original = json.loads(source[0])
-                    if original.get("references") or original.get("settings") and normalize_settings(original["settings"]) != selected_settings(state):
-                        raise ControlError("包含引用或新设置的消息请保留排队")
+                    if original.get("settings") and normalize_settings(original["settings"]) != selected_settings(state):
+                        raise ControlError("此消息修改了模型设置，请保留排队")
             self._begin(rid, tid, body)
             removed = self._pipe().call("thread-follower-remove-queued-message", {"conversationId": tid, "messageId": mid}, owner, 20)["result"].get("removed")
             if not removed or removed.get("canRestore") is False:
@@ -592,7 +608,7 @@ class Bridge:
                 result = {**cancelled, "request_id": rid, "queue_message_id": mid}
                 self._finish(rid, result)
                 return result
-            result = self._steer(tid, rid, message["text"], owner, turn, client_id=mid)
+            result = self._steer(tid, rid, message["text"], owner, turn, client_id=mid, attached=attached, skills=skills, restore_message=message)
             if result.get("accepted"):
                 self._finish(mid, {**result, "request_id": mid})
             return result
@@ -838,10 +854,8 @@ class Bridge:
             if intent == "steer" and (not turn_id or not body.get("expected_turn")):
                 raise ControlError("立即补充需要核对当前运行轮次")
             if running and intent != "queue":
-                if ids or body.get("references") or (body.get("settings") and normalize_settings(body["settings"]) != selected_settings(state)):
-                    raise ControlError("图片、引用和新设置请明确选择排队；内容已保留")
-                self._begin(rid, tid, body)
-                return self._steer(tid, rid, text, owner, turn_id)
+                if body.get("settings") and normalize_settings(body["settings"]) != selected_settings(state):
+                    raise ControlError("新模型设置需要排队；内容已保留")
             expected = body.get("expected_settings")
             if expected and normalize_settings(expected) != selected_settings(state):
                 raise ControlError("电脑端设置已变化，请重新打开模型面板确认后再发送")
@@ -873,6 +887,8 @@ class Bridge:
             for v in images:
                 v["used"] = True
                 self._write_meta(v)
+            if running and intent != "queue":
+                return self._steer(tid, rid, text, owner, turn_id, attached=attached, skills=skill_inputs)
             if intent == "queue" and running:
                 return self._enqueue(tid, rid, text, desired, attached, skill_inputs, owner, state)
             try:

@@ -58,6 +58,34 @@ class DeliveryTests(unittest.TestCase):
         with self.assertRaises(cc.ControlError): self.bridge.send({**self.body, "attachments": ["image"]})
         self.pipe.call.assert_not_called()
 
+    def test_running_image_steer_preserves_input_and_restore(self):
+        image=Path(self.tmp.name)/'test.png';image.write_bytes(b'test fixture')
+        self.bridge.attachment=Mock(return_value={'name':'test.png','path':str(image),'original_size':12})
+        self.bridge._write_meta=Mock()
+        result=self.bridge.send({**self.body,'attachments':['image']})
+        payload=self.pipe.call.call_args.args[1]
+        self.assertEqual(result['delivery_state'],'accepted')
+        self.assertIn({'type':'localImage','path':str(image)},payload['input'])
+        self.assertEqual(payload['attachments'][0]['path'],str(image))
+        self.assertEqual(payload['restoreMessage']['context']['imageAttachments'][0]['localPath'],str(image))
+
+    def test_promote_image_queue_preserves_images_and_skills(self):
+        image=Path(self.tmp.name)/'test.png';image.write_bytes(b'test fixture')
+        message={'id':'queued-image','text':'with image','context':{'imageAttachments':[{'localPath':str(image),'filename':'test.png'}],'skills':[{'type':'skill','name':'demo','path':'C:/skills/demo/SKILL.md'}]},'submission':{'status':'queued'}}
+        self.bridge._local_queue=Mock(return_value=[message])
+        self.pipe.call.side_effect=[{'result':{'removed':{'canRestore':True,'message':message}}},{'result':{}}]
+        self.bridge.queue_action({'id':'test-thread','request_id':'queue-promote-img','message_id':'queued-image','action':'promote','expected_turn':'turn-one'})
+        payload=self.pipe.call.call_args.args[1]
+        self.assertEqual(payload['restoreMessage'],message)
+        self.assertEqual(payload['input'][1],{'type':'localImage','path':str(image)})
+        self.assertEqual(payload['input'][2]['type'],'skill')
+        self.assertEqual(payload['clientUserMessageId'],'queued-image')
+
+    def test_missing_queue_image_does_not_remove_message(self):
+        self.bridge._local_queue=Mock(return_value=[{'id':'queued-image','text':'image','context':{'imageAttachments':[{'localPath':str(Path(self.tmp.name)/'gone.png')}]}}])
+        with self.assertRaises(cc.ControlError):self.bridge.queue_action({'id':'test-thread','request_id':'queue-promote-gone','message_id':'queued-image','action':'promote','expected_turn':'turn-one'})
+        self.pipe.call.assert_not_called()
+
     def test_idle_auto_starts(self):
         self.state["turns"][0]["status"] = "completed"
         self.bridge.send({**self.body, "expected_turn": None})

@@ -23,10 +23,10 @@
   }
   const css=document.createElement('style');
   css.textContent=`
-    .cv-row{flex-direction:column;align-items:stretch}.composer-tools{position:absolute;left:8px;bottom:8px;right:58px;display:flex;gap:4px;align-items:center;height:40px}
-    .composer-tools .icon-btn{width:40px;height:40px;min-height:40px;padding:8px;font-size:25px;font-weight:400}
-    .composer-chip{border:0;background:transparent;border-radius:999px;padding:8px;min-height:44px;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
-    .composer-chip::after{content:'⌄';margin-left:5px;color:var(--muted)}#modeChoice{flex-shrink:0}#modelChoice{min-width:0;flex-shrink:1}
+    .cv-row{flex-direction:column;align-items:stretch}.composer-tools{position:absolute;left:8px;bottom:6px;right:58px;display:flex;gap:4px;align-items:center;height:44px}
+    .composer-tools .icon-btn{display:flex;align-items:center;justify-content:center;flex:none;width:44px;height:44px;min-height:44px;padding:10px;line-height:1}
+    .composer-chip{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:44px;line-height:20px;border:0;background:transparent;border-radius:999px;padding:0 8px;min-height:44px;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+    .composer-label{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.composer-chip::after{content:'';flex:none;width:5px;height:5px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:translateY(-2px) rotate(45deg)}#modeChoice{flex-shrink:0}#modelChoice{min-width:0;flex-shrink:1}
     .composer-chip.is-plan{color:var(--blue);background:#eef2ff}.attachment-previews{display:flex;gap:12px;overflow-x:auto;padding:8px 4px;min-height:88px}
     .attachment-tile{position:relative;flex:none;width:76px;min-height:84px}.attachment-tile img{width:72px;height:64px;object-fit:cover;border-radius:12px;background:#fff;border:1px solid var(--line)}
     .attachment-tile .remove-image{position:absolute;top:-6px;right:-6px;min-width:44px;min-height:44px;border:0;background:transparent;padding:8px;color:var(--text)}
@@ -74,31 +74,27 @@
   function filesDB(){return dbPromise ||= new Promise((resolve,reject)=>{const req=indexedDB.open('agent-remote-image-drafts',1);req.onupgradeneeded=()=>req.result.createObjectStore('files');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
   async function fileStore(op,key,value){const db=await filesDB();return new Promise((resolve,reject)=>{const tx=db.transaction('files',op==='get'?'readonly':'readwrite');const req=op==='put'?tx.objectStore('files').put(value,key):tx.objectStore('files')[op](key);let result;req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error);});}
   function previewImage(meta){$('fullImage').src=meta.url;$('imagePreviewSheet').querySelector('b').textContent=meta.name||'查看图片';openSheet('imagePreviewSheet');}
-  // While a turn runs: the queued messages in one grey tray (no frames of their own; 10-14 the user found the framed rows and
-  // the framed 排队稍后发送 doubling the box's line), then a frameless line saying what ↑ does, with 排队稍后发送 beside it.
-  const codexQueue=el('div','queue-strip'),runBar=el('div','run-bar'),sendIntent=el('button','run-queue','排队稍后发送');codexQueue.id='codexQueue';sendIntent.id='codexQueueSend';sendIntent.type='button';
-  codexQueue.hidden=runBar.hidden=true;runBar.append(el('span','run-hint','发送会立即补充给这一轮'),sendIntent);
-  $('runtimeBar').before(codexQueue,runBar);sendIntent.onclick=()=>send(null,'queue');
-  const fileRefs=me=>window.referencesUI?.fileCount(me)||0,filesGoingUp=me=>window.referencesUI?.pendingCount(me)||0;  // files-ui.js
-  function queueReady(){const me=current(),s=states.get(me?.id);sendIntent.disabled=sending||!s?.available||s?.queue_available===false||!!(me&&filesGoingUp(me))||!($('cvText').value.trim()||(me&&(draft(me.id).images.length||fileRefs(me))));}
-  $('cvText').addEventListener('input',queueReady);
+  // The queue is visible only after sending; the ordinary send button queues during a running turn.
+  const codexQueue=el('div','queue-strip');codexQueue.id='codexQueue';codexQueue.hidden=true;
+  document.querySelector('.cv-row').before(codexQueue);
+  const fileRefs=me=>window.referencesUI?.fileCount(me)||0,filesGoingUp=me=>window.referencesUI?.pendingCount(me)||0;
   async function queueAction(message,action){
-    const me=current(),s=states.get(me?.id);if(me?.app!=='codex')return;
+    const me=current(),s=states.get(me?.id);if(me?.app!=='codex')return false;
     const key='lbr_queue_action_'+me.id+':'+message.id+':'+action;
     let body=localGet(key,null)||{id:me.id,message_id:message.id,action,expected_turn:s?.active_turn_id,request_id:uid()};
-    try{localStorage.setItem(key,JSON.stringify(body));const result=await api('/api/codex/queue-action',body);toast(result.text||'已处理');await refresh(me,true);await workspaceUI.pollReceipts();}
-    catch(e){toast('结果待核对：'+e.message,true);await refresh(me,true);}
+    try{localStorage.setItem(key,JSON.stringify(body));const result=await api('/api/codex/queue-action',body);toast(result.text||'已处理');await refresh(me,true);await workspaceUI.pollReceipts();return true;}
+    catch(e){toast('结果待核对：'+e.message,true);await refresh(me,true);return false;}
   }
   function paintQueue(me,s){
-    const codex=me?.app==='codex',rows=codex?s?.queued||[]:[];runBar.hidden=sendIntent.hidden=!codex||!s?.running;queueReady();
-    if(codex)$('cvBtn').setAttribute('aria-label',s?.running?'立即补充当前任务':'发送');
+    const codex=me?.app==='codex',native=codex?s?.queued||[]:[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
+    if(codex)$('cvBtn').setAttribute('aria-label',s?.running?'发送并排队':'发送');
     // rebuilt only when it changes (this runs on every refresh): a tap on a button in it is not lost
-    const sig=JSON.stringify([rows.map(q=>[q.id,q.text,q.status]),!!s?.running]);if(codexQueue.dataset.sig===sig)return;codexQueue.dataset.sig=sig;
-    codexQueue.replaceChildren();codexQueue.hidden=!rows.length;if(rows.length)codexQueue.append(el('div','queue-head','排队中 · 这一轮做完后依次发出'));
+    const sig=JSON.stringify([rows.map(q=>[q.id,q.text,q.status,!!q.local]),!!s?.running]);if(codexQueue.dataset.sig===sig)return;codexQueue.dataset.sig=sig;
+    codexQueue.replaceChildren();codexQueue.hidden=!rows.length;
     for(const q of rows){const row=el('div','queue-row'+(q.status==='queued'?'':' waiting'));row.append(el('p','',q.text));
-      const now=el('button','','立即补充'),x=el('button','queue-x','×');now.type=x.type='button';
-      now.disabled=q.status!=='queued'||!s.running;now.setAttribute('aria-label','把这条消息立即补充给这一轮');now.onclick=()=>queueAction(q,'promote');
-      x.disabled=q.status!=='queued';x.setAttribute('aria-label','取消排队');x.onclick=()=>queueAction(q,'cancel');
+      const now=el('button','','立即补充'),x=el('button','queue-x','⋯');now.type=x.type='button';
+      now.disabled=q.local||q.status!=='queued'||!s?.running;now.setAttribute('aria-label','把这条消息立即补充给这一轮');now.onclick=()=>queueAction(q,'promote');
+      x.disabled=q.local||q.status!=='queued';x.setAttribute('aria-label','待发送消息操作');x.onclick=()=>workspaceUI.queueMenu(me,q,()=>queueAction(q,'cancel'));
       row.append(now,x);window.navigationUI?.tapTick?.(now);window.navigationUI?.tapTick?.(x);codexQueue.append(row);}
   }
   function paintComposer(){
@@ -107,9 +103,9 @@
     const d=draft(me.id),s=states.get(me.id),settings=d.settings||s?.settings;
     const away=me.app==='codex' && !!s && !s.available;
     const modelName=s?.catalog?.models?.find(m=>m.id===settings?.model)?.name || modelLabel(settings?.model);
-    $('modelChoice').textContent=away ? '电脑上打开' : settings ? modelName + ' · '+(EFFORT[settings.effort]||settings.effort||'默认') : '模型';
+    $('modelChoice').querySelector('.composer-label').textContent=away ? '电脑上打开' : settings ? modelName + ' · '+(EFFORT[settings.effort]||settings.effort||'默认') : '模型';
     $('modelChoice').classList.toggle('is-away',away);$('modeChoice').hidden=away;
-    $('modeChoice').textContent=settings?.mode==='plan'?'计划模式':'普通执行';$('modeChoice').classList.toggle('is-plan',settings?.mode==='plan');
+    $('modeChoice').querySelector('.composer-label').textContent=settings?.mode==='plan'?'计划模式':'普通执行';$('modeChoice').classList.toggle('is-plan',settings?.mode==='plan');
     $('modelChoice').disabled=sending || (!away && !s?.available);$('modeChoice').disabled=sending || !s?.available;$('addImageBtn').disabled=sending;
     $('cvText').placeholder=settings?.mode==='plan'?'说明需要规划或调整的内容…':'输入消息…';
     const box=$('attachmentPreviews');box.innerHTML='';box.hidden=!d.images.length;
@@ -192,12 +188,12 @@
   function hasChanges(me){const d=draft(me.id),s=states.get(me.id);return d.images.length>0||!!d.settings||!!window.referencesUI?.count();}
   function settleReceipt(me,ticket,result){
     ticket.state='delivered';ticket.note='已确认送达';persistPending();workspaceUI?.update(me,ticket);
-    if(active(me))showNote(ticket.note,'ok');
+    if(active(me)){if(ticket.state==='queued')hideNote();else showNote(ticket.note,'ok');}
   }
   async function send(planId=null,intent='auto'){
     const me=current();if(!me||sending||window.workspaceUI?.composing)return;const d=draft(me.id);
-    const s=states.get(me.id);if(!s?.available){showNote(s?.reason||'Codex 控制连接不可用','bad');return;}
-    if(s.running&&intent!=='queue'&&hasChanges(me)){showNote('图片、引用和新设置请点“排队稍后发送”；草稿已保留','warn');return;}
+    const s=states.get(me.id);if(intent==='auto'&&s?.running&&!planId)intent='queue';if(!s?.available){showNote(s?.reason||'Codex 控制连接不可用','bad');return;}
+    if(s.running&&intent!=='queue'&&d.settings){showNote('新模型设置需要排队；草稿已保留','warn');return;}
     if(d.images.some(v=>v.status!=='ready')){showNote('请先完成图片上传','warn');return;}
     if(!planId&&filesGoingUp(me)){showNote('文件还在传到电脑，传完再发；没传上的点「重试」或去掉','warn');return;}
     const originalText=$('cvText').value,text=planId?'请执行这份计划。':originalText.trim();if(!text&&!d.images.length&&!(!planId&&fileRefs(me)))return;saveDraft();
@@ -210,16 +206,16 @@
     const references=planId?[]:window.referencesUI?.snapshot(me)||[];if(references.length)body.references=references;
     ticket.submission={text,attachments:imageIds,settings,plan_id:planId,references};
     try{workspaceUI.capture(me,ticket,{transport:'codex',body,images:sentImages,settings,base,originalText,plan:!!planId,references});}catch(e){toast(e.message,true);return;}
-    d.images=[];d.settings=null;d.base=null;save(me.id);pendingSends.set(chatKey(me),ticket);persistPending();sending=true;paintComposer();showNote(ticket.note);renderMsgs(currentMessages);
+    d.images=[];d.settings=null;d.base=null;save(me.id);pendingSends.set(chatKey(me),ticket);persistPending();sending=true;paintComposer();if(intent!=='queue')showNote(ticket.note);else hideNote();renderMsgs(currentMessages);
     try{
       const result=await api('/api/codex/send',body);if(!result.accepted)throw Error(result.text||'Codex 尚未确认接收');
       ticket.state=result.delivery_state==='queued'?'queued':'delivered';ticket.note=result.text||'已交给 Codex';
       // Preserve the live composer. The accepted send is independent of its new draft.
-      if(active(me))showNote(ticket.note,'ok');
+      if(active(me)){if(ticket.state==='queued')hideNote();else showNote(ticket.note,'ok');}
     }catch(e){
       let receipt=null;try{receipt=await api('/api/codex/receipt?id='+encodeURIComponent(me.id)+'&request_id='+rid);}catch(ignore){}
       if(['accepted','queued','cancelled'].includes(receipt?.state)){
-        ticket.state=receipt.state==='accepted'?'delivered':receipt.state;ticket.note=receipt.result?.text||'已交给 Codex';if(active(me))showNote(ticket.note,'ok');
+        ticket.state=receipt.state==='accepted'?'delivered':receipt.state;ticket.note=receipt.result?.text||'已交给 Codex';if(active(me)){if(ticket.state==='queued')hideNote();else showNote(ticket.note,'ok');}
       }else{ticket.state=e.notSubmitted||['unknown','rejected'].includes(receipt?.state)?'rejected':'unconfirmed';ticket.note=ticket.state==='rejected'?'未发送：'+e.message:'尚未确认送达；会继续按请求编号核对，不会自动重发。';if(active(me))showNote(ticket.note,ticket.state==='rejected'?'bad':'warn');}
     }finally{persistPending();window.workspaceUI?.update(me,ticket);sending=false;updateSendButton();if(active(me)){paintComposer();await loadConv(true);await refresh(me,true);schedulePoll();}}
   }

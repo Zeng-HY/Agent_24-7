@@ -123,6 +123,7 @@
       // confirmed, its copy not here yet: Claude's is in its record already (it was checked there) and comes with the next
       // read; Codex's and DeepSeek's may wait for the running turn's next step
       if(item.state==='delivered'&&!(Date.now()-item.receivedAt<(item.transport==='legacy'?12000:600000)))continue;
+      if(item.body?.intent==='queue'&&['sending','queued','unconfirmed','cancelled'].includes(item.state))continue;
       rows.push({key:'outbox:'+item.rid,workspace:{...item,body:undefined,line:line(item)},created:item.started/1000});
     }
     if(changed)try{saveOutbox();}catch(e){}
@@ -147,6 +148,27 @@
     const back=el('button','','恢复草稿');back.onclick=()=>{const latest=outbox.get(item.rid);if(latest)restore(latest);};
     const remove=el('button','','移除');remove.onclick=()=>dismiss(outbox.get(item.rid));
     actions.append(back,remove);node.append(state,actions);
+  }
+  function pendingQueue(me){return [...outbox.values()].filter(v=>v.app===me?.app&&v.id===me?.id&&v.body?.intent==='queue'&&['sending','queued','unconfirmed'].includes(v.state)).map(v=>({id:v.rid,text:v.originalText||v.text||'',status:v.state,local:true}));}
+  function editableQueue(me,id){const item=outbox.get(id);return !!item&&item.app===me?.app&&item.id===me?.id&&!!item.body;}
+  function draftOccupied(){return composing||!!input.value.trim()||!!window.codexUI?.attachmentCount()||!!window.referencesUI?.count();}
+  async function editQueued(me,id,cancel){
+    const item=outbox.get(id);if(!editableQueue(me,id)){toast('这条消息没有完整的手机草稿，请在电脑端编辑',true);return;}
+    if(draftOccupied()){toast('输入框已有草稿，请先处理；排队消息未改变',true);return;}
+    const version=editVersion;
+    if(!await cancel())return;
+    item.state='cancelled';item.note='已移出队列';
+    if(!cur||chatKey(cur)!==chatKey(me)||editVersion!==version||draftOccupied()){
+      item.state='rejected';item.note='已移出队列；输入框有新内容，原稿保留在此，可恢复草稿';
+    }else{await restore(item);}
+    try{saveOutbox();}catch(e){}if(cur&&chatKey(cur)===chatKey(me))renderMsgs(currentMessages);
+  }
+  function queueMenu(me,q,cancel){
+    let panel=$('queueActionsSheet');if(!panel){panel=el('div','sheet dialog-sheet');panel.id='queueActionsSheet';panel.innerHTML='<div class="box"><div class="sh-head"><b>待发送消息</b><button class="icon-btn" aria-label="关闭">×</button></div><div class="sh-body"></div></div>';panel.querySelector('button').onclick=()=>closeSheet(panel.id);document.body.append(panel);}
+    const body=panel.querySelector('.sh-body');body.replaceChildren();
+    const edit=el('button','menu-row','编辑草稿'),remove=el('button','menu-row danger','删除');edit.type=remove.type='button';
+    edit.disabled=!editableQueue(me,q.id);if(edit.disabled)edit.title='这条消息没有完整的手机草稿，请在电脑端编辑';
+    edit.onclick=()=>{closeSheet(panel.id);editQueued(me,q.id,cancel);};remove.onclick=()=>{closeSheet(panel.id);cancel();};body.append(edit,remove);openSheet(panel.id);
   }
   function queued(me){return [...outbox.values()].filter(v=>v.app===me?.app&&v.id===me?.id&&v.state==='queued').map(v=>({rid:v.rid,text:v.originalText||v.text||''}));}
   async function pollReceipts(onlyRid=null){
@@ -176,7 +198,7 @@
       if(cur?.id!==c.id)return;const node=[...$('cvMsgs').children].find(n=>n.dataset.key===saved.anchor);if(node)$('cvMsgs').scrollTop+=node.getBoundingClientRect().top-$('cvMsgs').getBoundingClientRect().top-(saved.anchorOffset||0);
       if(saved.selection)input.setSelectionRange(Math.min(saved.selection[0],input.value.length),Math.min(saved.selection[1],input.value.length));
     }catch(e){}finally{restoring=false;}}
-  window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,decorateRows,renderOutbox,paintReceipt,pollReceipts,saveScene,diagnostics,queued,dismissRid(rid){return dismiss(outbox.get(rid));},
+  window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,decorateRows,renderOutbox,paintReceipt,pollReceipts,saveScene,diagnostics,queued,pendingQueue,queueMenu,editQueued,editableQueue,dismissRid(rid){return dismiss(outbox.get(rid));},
     has(rid){return outbox.has(rid)||dismissed.has(rid);},  // a send this page keeps (deepseek-ui.js: its draft has left the box)
     canPoll(){return !document.hidden&&!composing&&testMode!=='pause';},get paused(){return testMode==='pause';}};
   // Migrate the previous single pending entry without inventing delivery success.

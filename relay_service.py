@@ -81,6 +81,10 @@ class Service:
         except (ClientError,TimeoutError,ConnectionError):
             return web.json_response({'error':'电脑连接中断，请重试'},status=502,headers={'Cache-Control':'no-store'})
         except web.HTTPException as exc:
+            # A document navigation must recover to login, never strand a phone on an API JSON error.
+            document = request.headers.get('Sec-Fetch-Mode') == 'navigate' or 'text/html' in request.headers.get('Accept','')
+            if exc.status == 401 and request.method == 'GET' and document and request.path.startswith('/d/'):
+                return web.HTTPSeeOther(location='/account?choose=1',headers={'Cache-Control':'no-store'})
             headers={k:v for k,v in exc.headers.items() if k.lower() not in ('content-type','content-length')}
             headers['Cache-Control']='no-store'
             # aiohttp's own text is "503: Service Unavailable"; the page shows this to people

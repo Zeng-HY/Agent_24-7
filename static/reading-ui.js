@@ -299,13 +299,33 @@
     }catch(error){toast(error.message,true);}
   });
   async function checkFile(target,file){return api('/api/file/meta?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);}
-  async function download(target,file){try{await checkFile(target,file);workspaceUI?.saveScene();location.assign((window.RELAY_BASE||'')+fileUrl(target,file,'&download=1'));}catch(e){toast(e.message,true);}}
-  async function preview(target,file){try{await checkFile(target,file);previewBody.innerHTML='';previewBody.append(el('div','hint',file.name));
-      if(file.kind==='text'){const data=await api('/api/file/text?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);previewBody.append(el('pre','text-preview',data.text));}
-      else if(file.kind==='image'){const img=el('img');img.src=fileUrl(target,file);img.alt=file.name;img.style.maxWidth='100%';previewBody.append(img);}
-      else{const iframe=el('iframe','file-preview');iframe.title=file.name;iframe.src=fileUrl(target,file);previewBody.append(iframe);}
-      const b=el('button','','下载原文件');b.onclick=()=>download(target,file);previewBody.append(b);openSheet('resultPreview');
-    }catch(e){toast(e.message,true);}}
+  let fileBlob=null,filePreviewGeneration=0,fileAbort=null;
+  function releaseFile(){fileAbort?.abort();fileAbort=null;if(fileBlob){URL.revokeObjectURL(fileBlob);fileBlob=null;}}
+  addEventListener('pagehide',releaseFile);
+  async function fileBytes(target,file){
+    const controller=new AbortController();fileAbort=controller;const timer=setTimeout(()=>controller.abort(),60000);
+    try{const response=await fetch(fileUrl(target,file,'&download=1'),{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+    if(!response.ok){if(response.status===401)showSessionExpired(true);let data;try{data=await response.json();}catch{}
+      throw Error(data?.error||(response.status===401?'登录已失效，请重新登录':'文件下载失败（'+response.status+'）'));}
+    return await response.blob();}catch(error){if(controller.signal.aborted)throw Error('下载已停止或超时，可以重试');throw error;}finally{clearTimeout(timer);if(fileAbort===controller)fileAbort=null;}
+  }
+  async function prepareFile(target,file,previewing){
+    const generation=++filePreviewGeneration;releaseFile();previewBody.replaceChildren(el('div','hint','正在读取 '+file.name+'…'));openSheet('resultPreview');
+    try{
+      const blob=await fileBytes(target,file);if(generation!==filePreviewGeneration)return;
+      fileBlob=URL.createObjectURL(blob);previewBody.replaceChildren(el('div','hint',file.name));
+      if(previewing){
+        if(file.kind==='text'){const content=await blob.text();if(generation!==filePreviewGeneration)return;previewBody.append(el('pre','text-preview',content));}
+        else if(file.kind==='image'){const image=el('img');image.src=fileBlob;image.alt=file.name;image.style.maxWidth='100%';previewBody.append(image);}
+        else{const frame=el('iframe','file-preview');frame.title=file.name;frame.src=fileBlob;previewBody.append(frame);}
+      }
+      const save=el('a','file-save','保存文件');save.href=fileBlob;save.download=file.name;save.target='_blank';save.rel='noopener';previewBody.append(save);
+      previewBody.append(el('div','hint','点“保存文件”下载；PDF 也可在打开后通过分享菜单存储到“文件”。'));
+    }catch(error){if(generation!==filePreviewGeneration)return;previewBody.replaceChildren(el('p','hint',error.message));
+      const retry=el('button','','重试');retry.onclick=()=>prepareFile(target,file,previewing);previewBody.append(retry);}
+  }
+  async function download(target,file){workspaceUI?.saveScene();return prepareFile(target,file,false);}
+  async function preview(target,file){return prepareFile(target,file,true);}
   async function openFiles(){if(!cur)return;const target={...cur};fileBody.textContent='正在读取文件…';openSheet('conversationFiles');try{const j=await api('/api/chat/files?app='+target.app+'&id='+encodeURIComponent(target.id));fileBody.innerHTML='';for(const f of j.items){const row=el('div','file-row',f.name);row.append(el('div','hint',Math.ceil(f.size/1024)+' KB · '+stamp(f.modified)));const actions=el('div','file-actions');if(f.kind!=='download'){const b=el('button','','预览');b.onclick=()=>preview(target,f);actions.append(b);}const d=el('button','','下载');d.onclick=()=>download(target,f);actions.append(d);row.append(actions);fileBody.append(row);}if(!j.items.length)fileBody.append(el('div','hint','尚未找到允许目录内的本地文件链接。'));fileBody.append(el('div','hint',j.scope));}catch(e){fileBody.textContent='读取失败：'+e.message;}}
   function openTemplates(){const target=cur?{...cur}:null;let entries=[];try{entries=JSON.parse(localStorage.getItem('lbr_prompt_library')||'[]');}catch(e){}
     function save(){localStorage.setItem('lbr_prompt_library',JSON.stringify(entries));}

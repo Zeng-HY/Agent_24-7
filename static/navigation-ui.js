@@ -17,6 +17,34 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
 @media (max-width:699.98px){${SHEET}{opacity:1;background-color:rgba(29,35,48,0);transition:background-color .28s ease}${SHEET}.is-open{background-color:rgba(29,35,48,.22);transition-duration:.36s}${SHEET} .box{transform:translate3d(0,100%,0);transition:transform .28s ${EASE}}${SHEET}.is-open .box{transform:none;transition-duration:.42s}}`;
   document.head.append(style);
 
+  // Cloud-injected account actions belong above the persistent status/footer.
+  const footerCSS=el('style');footerCSS.textContent=`
+#navSheet .sh-head{order:0}
+#navSheet .nav-links{order:1;flex:1 1 0;min-height:0;overflow-y:auto}
+#navSheet .relay-menu{order:2;flex:none;padding:8px 16px 0}
+#navSheet .relay-menu .menu-row{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:12px;border-radius:12px;box-sizing:border-box}
+#navSheet .nav-links>button{width:100%;gap:12px}
+#navSheet .nav-links>button .icon,#navSheet .nav-action-icon{display:block;flex:none;width:24px;height:24px}
+#navSheet .nav-action-icon svg{display:block;width:24px;height:24px}
+#navSheet .tree-row{gap:12px}
+#navSheet .nav-foot{order:3;flex:none;min-height:60px;padding:8px 16px 8px 28px;gap:12px}
+#navSheet #serviceDot{margin:0 6px}
+#navSheet .relay-menu .menu-row:active{background:var(--line)}
+`;document.head.append(footerCSS);
+  function prepareFooter(){
+    const paths={'账号与电脑':'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0M17 8h5v9h-5',
+      '刷新':'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-1.7L20 8M4 16l2.4 2.7A7 7 0 0 0 18 17',
+      '连接设置':'M10 13a5 5 0 0 0 7 .1l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7-.1l-3 3a5 5 0 0 0 7 7l2-2'};
+    drawer.querySelectorAll('.relay-menu button').forEach(button=>{
+      if(!button.dataset.footerReady){
+        const title=button.textContent.trim(),path=paths[title];button.dataset.footerReady='1';button.type='button';
+        if(path){const icon=el('span','nav-action-icon');icon.setAttribute('aria-hidden','true');
+          icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="'+path+'"/></svg>';
+          button.replaceChildren(icon,el('span','nav-action-label',title));}
+      }
+      tapTick(button);
+    });
+  }
   // A light haptic tick where the phone allows one from a web page. Android: navigator.vibrate(10).
   // iPhone Safari has no navigator.vibrate; its switch control (<input type=checkbox switch>) ticks when it
   // toggles, and code once used that by clicking a hidden switch. Tested 10-11 on the user's iPhone (iOS 26):
@@ -24,7 +52,7 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
   // its label or directly, even the very switch that ticks under the finger). So on the iPhone this is a no-op,
   // and swipes (drawer, back drag) cannot tick there at all. Call it inside the touch or click handler.
   function haptic(){try{if(typeof navigator.vibrate==='function')navigator.vibrate(10);}catch(e){}}
-  document.addEventListener('click',e=>{if(e.target.closest?.('#cvBtn,#newBtn'))haptic();},true); // a disabled send button fires no click
+  document.addEventListener('click',e=>{if(e.target.closest?.('#cvBtn,#newBtn,#navSheet .relay-menu button'))haptic();},true); // a disabled send button fires no click
   // The one way left for taps on the iPhone (row 6 of the 10-11 test ticked): a see-through switch laid over the
   // button, so the finger really lands on a switch; its click then bubbles to the button, which does its job.
   // A disabled button lets taps through its switch. If the button's content is replaced (icons), the switch
@@ -49,6 +77,7 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
   // could not be scrolled and each swipe became a tap (the user's iPhone, 10-11). Rows tick another way (tapLabel below);
   // panels whose content scrolls set their switches aside (tickRoom).
   function attachTicks(){
+    prepareFooter();
     for(const sel of ['#cvBtn','#newBtn','header button[aria-label="打开导航"]','#navSheet .sh-head button','#settingsBtn','.mic-btn','.cv-top .back','.stop-turn','.composer-tools button','.composer-chip','#newAdd'])document.querySelectorAll(sel).forEach(tapTick);
     const list=$('convList');if(list){const rows=()=>list.querySelectorAll('.conv').forEach(tapLabel);rows();new MutationObserver(rows).observe(list,{childList:true});} // the list is rebuilt on every refresh
   }
@@ -321,7 +350,7 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
     const topSheet=overlays.length?$(overlays.at(-1).id):null;recede(!!topSheet&&isPhoneSheet(topSheet));
     document.documentElement.style.setProperty('--chat-top',view.style.top||'0px');document.documentElement.style.setProperty('--chat-height',view.style.height||'100dvh');
     for(const n of pageNodes())bindPage(n);
-    const open=overlays.some(o=>o.id===drawer.id);if(open!==nav.open){nav.open=open;navToggled(open);}
+    const open=overlays.some(o=>o.id===drawer.id);if(open)prepareFooter();if(open!==nav.open){nav.open=open;navToggled(open);}
     if(drawer.style.display==='block')navLock(); // syncInert has just set body overflow back to hidden
     const top=overlays.at(-1)?.id||null;if(top!==lastTop){lastTop=top;const node=top&&$(top);if(node&&node!==drawer)bindTicks(node);if(node?.matches?.(SHEET)){clearTimeout(node._sheetClear);sheetClear(node);bindSheet(node);}}
   }

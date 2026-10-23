@@ -80,8 +80,8 @@ def main():
         rr, result = held.pop(); rr.fulfill(status=200, content_type="application/json", body=json.dumps(result))
         page.wait_for_function("!sending")
         assert page.locator("#cvText").input_value() == "new draft"
-        assert sent[-1]["intent"] == "auto" and sent[-1]["expected_turn"] == "test-turn"
-        print("PASS steering intent and newer draft preservation")
+        assert sent[-1]["intent"] == "queue" and sent[-1]["expected_turn"] == "test-turn"
+        print("PASS default queue and newer draft preservation")
         mode.update(hold=False, lose=True)
         page.evaluate("void codexUI.send()")
         page.wait_for_function("!sending")
@@ -89,10 +89,13 @@ def main():
         print("PASS lost response reconciles without resend")
         mode["lose"] = False
         page.locator("#cvText").fill("queued")
-        page.locator("#codexQueueSend").click()
+        page.locator("#cvBtn").click()
         page.wait_for_function("!sending")
         assert sent[-1]["intent"] == "queue"
-        page.locator("#codexQueue").get_by_role("button", name="取消排队").click()
+        for row in list(state['queued']):
+            page.locator('#codexQueue .queue-row').filter(has_text=row['text']).get_by_role('button',name='待发送消息操作').click()
+            page.locator('#queueActionsSheet').get_by_role('button',name='删除',exact=True).click()
+            page.wait_for_timeout(200)
         page.wait_for_function("!document.querySelector('#codexQueue .queue-row')")
         print("PASS explicit queue and cancel")
         assert not errors, errors

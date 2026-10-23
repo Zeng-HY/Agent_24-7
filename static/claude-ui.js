@@ -64,7 +64,7 @@ function initializeclaudeUI(){
     const desk=(currentData?.queued||[]).map(q=>({text:q.text,q})),mine=window.workspaceUI?.queued?.(me)||[];
     const rows=[...desk,...mine.filter(m=>!desk.some(d=>sameText(d.text,m.text))).map(m=>({text:m.text,rid:m.rid}))];
     const sig=JSON.stringify(rows.map(r=>[r.text,r.q?.token||'',r.rid||'']));if(sig===queue.dataset.sig)return;queue.dataset.sig=sig;
-    queue.replaceChildren();queue.hidden=!rows.length;if(rows.length)queue.append(el('div','queue-head','排队中 · 这一轮做完后依次发出'));
+    queue.replaceChildren();queue.hidden=!rows.length;
     for(const r of rows){const row=el('div','queue-row'+(r.q?'':' waiting'));row.append(el('p','',r.text));
       if(r.q){const now=el('button','','立即补充');now.setAttribute('aria-label','把这条消息立即交给正在进行的任务');now.onclick=()=>choose(me,r.q,now);window.navigationUI?.tapTick?.(now);row.append(now);}
       else if(r.rid){const x=el('button','queue-x','×');x.setAttribute('aria-label','移除这条记录');x.onclick=()=>window.workspaceUI?.dismissRid(r.rid);row.append(x);}

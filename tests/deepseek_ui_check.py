@@ -58,7 +58,7 @@ def main():
         assert page.locator('#deepseekComposerTools').is_visible() and page.locator('#deepseekPermission').inner_text()=='工作区内修改'
         assert page.locator('#deepseekStop').is_visible() and not page.locator('#deepseekBar').count(), 'the old row of bare words is gone'
         # while the turn runs: what ↑ does, 排队稍后发送, and the queue tray
-        assert page.locator('#deepseekRun .run-hint').inner_text()=='发送会立即补充给这一轮'
+        assert not page.locator('#deepseekRun').is_visible()
         assert '做完后整理成表格' in page.locator('#deepseekQueue').inner_text()
         # a question and an approval: one strip, then the sheet
         pill=page.locator('#cvOpts .ask-pill');pill.wait_for();assert '共 2 项' in pill.inner_text(),pill.inner_text()
@@ -78,8 +78,8 @@ def main():
         page.locator('#deepseekQueue button',has_text='立即补充').click();page.wait_for_function("document.getElementById('deepseekQueue').hidden")
         assert posts[-1]==('/api/deepseek/queue',{'id':'d1','item_id':'q1','action':'steer'})
         page.locator('#cvText').fill('hello');page.locator('#cvBtn').click();page.wait_for_function("document.querySelector('#cvText').value===''")
-        assert posts[-1][0]=='/api/deepseek/send' and posts[-1][1]['intent']=='steer'
-        page.locator('#cvText').fill('later');page.locator('#deepseekQueueSend').click();page.wait_for_function("document.querySelector('#cvText').value===''")
+        assert posts[-1][0]=='/api/deepseek/send' and posts[-1][1]['intent']=='queue'
+        page.locator('#cvText').fill('later');page.locator('#cvBtn').click();page.wait_for_function("document.querySelector('#cvText').value===''")
         assert posts[-1][1]['intent']=='queue'
         page.locator('#deepseekModel').click();page.get_by_role('radio',name='最高',exact=True).click();page.wait_for_function("!overlays.some(x=>x.id==='deepseekModels')")
         assert posts[-1][1]['settings']=={'provider':'deepseek-account','model':'deepseek-flash','reasoningEffort':'max'}

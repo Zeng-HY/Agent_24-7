@@ -298,6 +298,7 @@ document.addEventListener('keydown',event=>{if(event.key==='Tab')document.docume
   @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
 
 html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:focus,html[data-input="pointer"] dialog:focus{outline:none!important}html[data-input="pointer"] .tree-row:focus,html[data-input="pointer"] .tree-add:focus{box-shadow:none!important}
+.file-save{display:flex;align-items:center;justify-content:center;min-height:48px;padding:10px 16px;border-radius:14px;background:var(--blue);color:var(--card);font-weight:600;text-decoration:none}.menu-row{width:100%}
 </style>
 <link rel="stylesheet" href="/theme.css?v=__TELEPLY_VERSION__">
 </head>
@@ -346,9 +347,9 @@ html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:fo
       <div id="attachmentPreviews" class="attachment-previews" hidden></div>
       <textarea id="cvText" rows="1" enterkeyhint="enter" aria-label="消息" placeholder="输入消息…"></textarea>
       <div id="codexComposerTools" class="composer-tools" hidden>
-        <button class="icon-btn" id="addImageBtn" aria-label="添加图片" onclick="codexUI.openAttachments(this)">＋</button>
-        <button class="composer-chip" id="modelChoice" onclick="codexUI.openModels()" aria-label="选择模型与推理强度">模型</button>
-        <button class="composer-chip" id="modeChoice" onclick="codexUI.openModes()" aria-label="选择模式">普通执行</button>
+        <button class="icon-btn" id="addImageBtn" aria-label="添加图片" onclick="codexUI.openAttachments(this)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg></button>
+        <button class="composer-chip" id="modelChoice" onclick="codexUI.openModels()" aria-label="选择模型与推理强度"><span class="composer-label">模型</span></button>
+        <button class="composer-chip" id="modeChoice" onclick="codexUI.openModes()" aria-label="选择模式"><span class="composer-label">普通执行</span></button>
       </div>
       <button id="cvBtn" class="icon-btn big" aria-label="发送消息" onclick="sendConv()" data-icon="send"></button>
     </div>
@@ -405,13 +406,24 @@ function phoneSystem() {
 
 // timeout (ms), for reads repeated on a timer: one answer that never comes (a request caught in a service restart) must
 // not stop every later read, which wait for it (claude-ui.js, 10-12)
+let sessionExpiredSuppressed=false;
+function showSessionExpired(force=false){
+  if(!window.RELAY_BASE||sessionExpiredSuppressed&&!force)return;
+  let panel=$('sessionExpiredSheet');
+  if(!panel){panel=el('div','sheet dialog-sheet');panel.id='sessionExpiredSheet';panel.innerHTML='<div class="box"><div class="sh-head"><b>登录已失效</b></div><div class="sh-body"><p>重新登录后可继续访问文件，当前草稿会保留。</p><button class="menu-row" id="sessionLogin">重新登录</button><button class="menu-row" id="sessionStay">留在此页</button></div></div>';document.body.append(panel);
+    $('sessionLogin').onclick=()=>{try{saveDraft();window.workspaceUI?.saveScene();}catch(e){}location.assign('/account?choose=1');};
+    $('sessionStay').onclick=()=>{sessionExpiredSuppressed=true;closeSheet(panel.id);};
+  }
+  if(!overlays.some(o=>o.id===panel.id))openSheet(panel.id);
+}
 async function api(path, body, timeout) {
   const stop = timeout ? new AbortController() : null, timer = stop && setTimeout(() => stop.abort(), timeout);
   let r; try { r = await fetch(path, {...(body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {}), ...(stop ? {signal: stop.signal} : {})}); }
   catch (e) { if (stop?.signal.aborted) throw new Error('电脑 ' + Math.round(timeout / 1000) + ' 秒没回应'); throw e; }
   finally { if (timer) clearTimeout(timer); }
   let j = null; try { j = await r.json(); } catch (e) {}
-  if (!r.ok) {const error=new Error((j && (j.error || j.text)) || ('HTTP ' + r.status));error.notSubmitted=j?.not_submitted===true;error.code=j?.code;error.draft=j?.draft||null;throw error;}
+  if(r.ok)sessionExpiredSuppressed=false;
+  if (!r.ok) {if(r.status===401)showSessionExpired();const error=new Error((j && (j.error || j.text)) || ('HTTP ' + r.status));error.notSubmitted=j?.not_submitted===true;error.code=j?.code;error.draft=j?.draft||null;throw error;}
   return j;
 }
 
@@ -924,7 +936,7 @@ function sendReplacing(me, draft) { replaceDraftNext = {key: chatKey(me), draft}
 async function sendConv(deliveryMode=null) {
   if(window.newChatUI?.isPreview(cur))return;
   if (!cur || sending || window.workspaceUI?.composing) return;
-  if (cur.app==='deepseek') return window.deepseekUI?.send(deliveryMode||'steer');
+  if (cur.app==='deepseek') return window.deepseekUI?.send(deliveryMode||'auto');
   if (window.codexUI?.shouldSendEnhanced()) return codexUI.send();
   const replaceDraft = replaceDraftNext?.key === chatKey(cur) && cur.app === 'claude' ? replaceDraftNext.draft : null; replaceDraftNext = null;
   const images=cur.app==='claude'?(window.codexUI?.imageSnapshot(cur)||[]):[];

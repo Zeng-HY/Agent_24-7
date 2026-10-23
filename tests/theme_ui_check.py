@@ -26,7 +26,7 @@ with sync_playwright() as p:
         assert page.locator('html').get_attribute('data-theme')=='dark'
         assert page.locator('link[rel=icon]').count()==1
         assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(0, 0, 0)'
-        page.evaluate("openSheet('settingsSheet')")
+        page.evaluate("openSheet('settingsSheet')");page.wait_for_timeout(450)
         page.locator('[data-theme-choice=system]').focus();page.keyboard.press('ArrowRight')
         assert page.locator('html').get_attribute('data-theme')=='light'
         page.emulate_media(color_scheme='dark');assert page.locator('html').get_attribute('data-theme')=='light'

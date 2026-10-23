@@ -352,17 +352,17 @@ def run(shots_dir=None, reduced=False, check=None):
             page.evaluate("closeSheet('newPicker'); closeSheet('newSheet')"); wait(600)
             back = page.evaluate("""[...document.querySelectorAll('body>header, #navSheet .box')].map(n => [n.classList.contains('lbr-receded'), getComputedStyle(n).scale])""")
             ok("and they come forward again when it goes", back == [[False, "none"], [False, "none"]], back)
-            # -- a project opens by growing, its folder lifting its front; the icons have depth and colour
-            looks = page.evaluate("""({marks: [...document.querySelectorAll('#navSheet .tree-app .mark')].length, folders: [...document.querySelectorAll('#navSheet .tree-proj .fd:not(.loose) .face')].map(f => getComputedStyle(f).fill),
+            # -- project rows animate while the current flat folder icons remain steady
+            looks = page.evaluate("""({marks: [...document.querySelectorAll('#navSheet .tree-app .mark')].length, folders: [...document.querySelectorAll('#navSheet .tree-proj .fd:not(.loose)')].map(f => getComputedStyle(f).stroke),
               loose: document.querySelectorAll('#navSheet .tree-proj .fd.loose').length})""")
-            ok("each app has its mark, each project a grey layered folder (all the same grey), 其他对话 its bubbles",
+            ok("each app has its mark, each project a grey outline folder (all the same grey), 其他对话 its bubbles",
                looks["marks"] == 2 and len(looks["folders"]) == 3 and len(set(looks["folders"])) == 1 and looks["loose"] == 2, looks)
             kids = "document.querySelectorAll('#navSheet .tree-proj')[1].parentElement.querySelector(':scope>.tree-kids').offsetHeight"
             finger.tap(*center(page, "#navSheet .tree-proj >> nth=1"))
             mid = page.evaluate("new Promise(r => setTimeout(() => r(" + kids + "), 100))"); wait(700); end = page.evaluate(kids)
-            lid = page.evaluate("getComputedStyle(document.querySelectorAll('#navSheet .tree-proj')[1].querySelector('.fd .front')).transform")
+            lid = page.evaluate("getComputedStyle(document.querySelectorAll('#navSheet .tree-proj')[1].querySelector('.fd')).transform")
             ok("a project opens by growing, not in one jump", 0 < mid < end, (mid, end))
-            ok("and its folder lifts its front", lid not in ("none", ""), lid)
+            ok("and its flat folder stays steady", lid in ("none", ""), lid)
             finger.tap(*center(page, "#navSheet .tree-proj >> nth=1")); wait(600)
             page.evaluate("document.querySelector('#navSheet .nav-links').scrollTop = 0"); wait(200)
             page.evaluate("document.querySelectorAll('#navSheet .tree-item')[1].scrollIntoView({block: 'center'})"); wait(200)
@@ -683,9 +683,9 @@ def run_fixes(check):
         page.goto(ORIGIN + "/")
         page.wait_for_function("window.claudeUI && window.referencesUI && window.voiceUI && document.querySelectorAll('.conv').length >= 10", timeout=20000)
         page.wait_for_timeout(500)
-        ok("a page file that failed to load: the page reloads once and then has every part", seen["page"] == 2 and seen["claude_ui"] == 2, (seen["page"], seen["claude_ui"]))
+        ok("a failed page module retries without reloading the conversation", seen["page"] == 1 and seen["claude_ui"] == 2, (seen["page"], seen["claude_ui"]))
         report = [e for d in seen["debug"] for e in d.get("events", []) if e.get("e") == "parts-missing"]
-        ok("after that reload the PC is told what was missing", bool(report) and "claude-ui" in report[0]["before"] and report[0]["now"] == "", report)
+        ok("module recovery does not send obsolete reload diagnostics", not report, report)
 
         cdp = ctx.new_cdp_session(page)
         finger = Finger(page, cdp)
@@ -791,8 +791,8 @@ def run_fixes(check):
         page2 = ctx.new_page()
         page2.goto(ORIGIN + "/")
         page2.wait_for_timeout(4000)
-        note = page2.evaluate("document.querySelector('.parts-missing')?.textContent || ''")
-        ok("a part that keeps failing: one reload, then a note asks to reload (no loop)", seen["page"] == 2 and "claude-ui" in note, (seen["page"], note))
+        note = page2.evaluate("document.querySelector('#partsNotice:not([hidden])')?.textContent || ''")
+        ok("a persistently failing module shows retry controls without reloading", seen["page"] == 1 and "部分功能暂不可用" in note, (seen["page"], note))
 
         mine = [e for e in errors if "claude-ui" in e or "remote" in e or "keyboard" in e]
         ok("no page errors from these fixes", not mine, mine[:3])
@@ -835,7 +835,7 @@ def run_computers(check):
             title: document.title, chips: getComputedStyle(document.querySelector('.conversation-home .chips')).display,
             mic: !!document.querySelector('.mic-btn'), gear: getComputedStyle(document.getElementById('settingsBtn')).display,
             missing: !!document.querySelector('.parts-missing'), status: document.getElementById('serviceStatus').textContent})""")
-        ok("the page names its computer under the title, and the name can be tapped", top["sub"] == "公司电脑" and top["can"] and "公司电脑" in top["title"], top)
+        ok("the page names its computer under the title, and the name can be tapped", top["sub"] == "公司电脑" and top["can"] and top["title"] == "Teleply", top)
         ok("only Codex here: no 全部 / Codex / Claude chips", top["chips"] == "none", top["chips"])
         settings = page.evaluate("[...document.querySelectorAll('#settingsBody .setting-title')].map(n => n.textContent)")
         ok("no voice here: no microphone, the gear has 对话 (已归档对话), 手机通知 and 诊断测速 last, and no part reported missing",

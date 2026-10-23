@@ -32,6 +32,13 @@ class V2Tests(unittest.IsolatedAsyncioTestCase):
         self.runners.append(runner)
         return site._server.sockets[0].getsockname()[1]
 
+    async def test_expired_document_download_returns_to_login_but_api_stays_401(self):
+        url=self.origin+'/d/'+('a'*32)+'/api/file?file=test'
+        async with self.client.get(url,headers={'Accept':'text/html','Sec-Fetch-Mode':'navigate'},allow_redirects=False) as response:
+            self.assertEqual(response.status,303);self.assertEqual(response.headers['Location'],'/account?choose=1')
+        async with self.client.get(url,headers={'Accept':'application/json'},allow_redirects=False) as response:
+            self.assertEqual(response.status,401);self.assertIn('error',await response.json())
+
     async def test_public_theme_assets_and_version_are_available_without_login(self):
         async with self.client.get(self.origin+'/account') as response:
             self.assertEqual(response.status,200)
