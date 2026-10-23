@@ -379,11 +379,12 @@ def smoke():
             notes={'settingsVisible':True,'updateTitle':'发现新版本 test','updateSummary':'修复菜单关闭。','updateDetails':'完整说明\n'+('内容'*400)+'<img src=x>'}
             c.window.evaluate_js('window.render('+json.dumps(notes)+')')
             assert c.window.evaluate_js('document.getElementById("updateDetails").open') is False
-            assert c.window.evaluate_js('document.getElementById("updateNotes").textContent')=='修复菜单关闭。'
+            assert c.window.evaluate_js('document.getElementById("highlightList").textContent')=='修复菜单关闭。'
             c.window.evaluate_js('document.getElementById("updateDetails").open=true')
             c.window.evaluate_js('window.render('+json.dumps(notes)+')')
             assert c.window.evaluate_js('document.getElementById("updateDetails").open') is True
-            assert c.window.evaluate_js('document.getElementById("updateFullNotes").textContent')==notes['updateDetails']
+            full=c.window.evaluate_js('document.getElementById("updateFullNotes").innerText')
+            assert full.startswith('完整说明') and ('内容'*400)+'<img src=x>' in full
             assert c.window.evaluate_js('document.querySelector("#updateFullNotes img")===null') is True
             notes['updateTitle']='另一个版本';c.window.evaluate_js('window.render('+json.dumps(notes)+')')
             assert c.window.evaluate_js('document.getElementById("updateDetails").open') is False
