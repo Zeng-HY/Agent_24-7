@@ -20,10 +20,11 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35)
 public class FirstLoginTest {
-    private android.webkit.WebResourceRequest request(String url, boolean gesture) {
+    private android.webkit.WebResourceRequest request(String url, boolean gesture) {return request(url,gesture,true);}
+    private android.webkit.WebResourceRequest request(String url, boolean gesture, boolean main) {
         return new android.webkit.WebResourceRequest() {
             public android.net.Uri getUrl(){return android.net.Uri.parse(url);}
-            public boolean isForMainFrame(){return true;}
+            public boolean isForMainFrame(){return main;}
             public boolean isRedirect(){return false;}
             public boolean hasGesture(){return gesture;}
             public String getMethod(){return "GET";}
@@ -124,6 +125,34 @@ public class FirstLoginTest {
             ThemePolicy.save(activity,"dark");
             web.getWebViewClient().onPageFinished(web,"https://example.com/account");
             assertEquals(first,shadowOf(web).getLastEvaluatedJavascript());
+        }
+    }
+    @Test public void aboutIsAccessibleFromRemoteSettingsOnlyByTrustedGesture() {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),RemoteBrowserActivity.class).putExtra("url","https://example.com/account");
+        try(var controller=Robolectric.buildActivity(RemoteBrowserActivity.class,intent).setup()){
+            RemoteBrowserActivity activity=controller.get();WebView web=ReflectionHelpers.getField(activity,"web");
+            web.getWebViewClient().onPageFinished(web,"https://example.com/account");
+            assertTrue(shadowOf(web).getLastEvaluatedJavascript().contains("TeleplyAbout.mount"));
+            String token=ReflectionHelpers.getField(activity,"documentToken"),url="teleply-app://about?document="+token;
+            assertTrue(activity.handleAppAction(request(url,true,false)));assertNull(ReflectionHelpers.getField(activity,"aboutDialog"));
+            assertTrue(activity.handleAppAction(request(url,false)));assertNull(ReflectionHelpers.getField(activity,"aboutDialog"));
+            assertTrue(activity.handleAppAction(request("teleply-app://about?document=stale",true)));assertNull(ReflectionHelpers.getField(activity,"aboutDialog"));
+            assertTrue(activity.handleAppAction(request(url,true)));
+            AlertDialog dialog=ReflectionHelpers.getField(activity,"aboutDialog");assertTrue(dialog.isShowing());
+            assertEquals("检查更新",dialog.getButton(AlertDialog.BUTTON_POSITIVE).getText().toString());
+            assertTrue(((android.widget.TextView)dialog.findViewById(android.R.id.message)).getText().toString().contains("当前版本："));
+        }
+    }
+    @Test public void offlineErrorStillHasSettingsAndAboutWithoutLogin() {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),RemoteBrowserActivity.class).putExtra("url","https://example.com/account");
+        try(var controller=Robolectric.buildActivity(RemoteBrowserActivity.class,intent).setup()){
+            RemoteBrowserActivity activity=controller.get();ReflectionHelpers.callInstanceMethod(activity,"fail",ReflectionHelpers.ClassParameter.from(String.class,"Offline"));
+            LinearLayout panel=ReflectionHelpers.getField(activity,"failurePanel");android.widget.Button settings=null;
+            for(int i=0;i<panel.getChildCount();i++){android.view.View view=panel.getChildAt(i);if(view instanceof android.widget.Button&&"设置".contentEquals(((android.widget.Button)view).getText()))settings=(android.widget.Button)view;}
+            assertNotNull(settings);settings.performClick();
+            AlertDialog menu=ReflectionHelpers.getField(activity,"appSettingsDialog");assertTrue(menu.isShowing());
+            menu.getListView().performItemClick(menu.getListView().getAdapter().getView(0,null,menu.getListView()),0,0);
+            AlertDialog about=ReflectionHelpers.getField(activity,"aboutDialog");assertTrue(about.isShowing());assertTrue(about.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled());
         }
     }
     @Test public void freshBrowserShowsNativeCredentialsAndCanCancelWithoutLogin() {

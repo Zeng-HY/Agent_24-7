@@ -31,6 +31,15 @@ final class AppUpdater {
     private static void message(Activity a,String text) {
         if(alive(a)) Toast.makeText(a,text,Toast.LENGTH_LONG).show();
     }
+    static AlertDialog showAbout(Activity activity) {
+        String version;
+        try { PackageInfo info=activity.getPackageManager().getPackageInfo(activity.getPackageName(),0);
+            version=info.versionName+" / code "+version(info);
+        } catch(PackageManager.NameNotFoundException impossible) {version="无法读取版本";}
+        AlertDialog dialog=ThemePolicy.dialog(activity).setTitle("关于遥应").setMessage("当前版本："+version)
+            .setPositiveButton("检查更新",(d,w)->check(activity,true)).setNegativeButton("关闭",null).create();
+        dialog.show();return dialog;
+    }
     static void check(Activity a,boolean manual) {
         var prefs=a.getSharedPreferences("app-updates",0);
         long now=System.currentTimeMillis();
@@ -66,6 +75,7 @@ final class AppUpdater {
         for(int hop=0;hop<5;hop++) {
             if(!UpdatePolicy.allowedUrl(url)) throw new IOException("Untrusted update URL");
             HttpsURLConnection c=(HttpsURLConnection)new URL(url).openConnection();
+            c.setUseCaches(false);c.setRequestProperty("Cache-Control","no-cache");
             c.setInstanceFollowRedirects(false); c.setConnectTimeout(15000); c.setReadTimeout(20000);
             c.setRequestProperty("User-Agent","AgentRemote-Android-Updater");
             c.setRequestProperty("Accept","application/vnd.github+json, application/octet-stream");

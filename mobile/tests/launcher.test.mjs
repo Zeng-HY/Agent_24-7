@@ -8,11 +8,11 @@ async function launch(platform, saved = {}) {
   const nodes = new Map(); const calls = [];
   const browser = { openInWebView: async x => calls.push(['webview', x]), openInSystemBrowser: async x => calls.push(['system', x]) };
   const context = vm.createContext({
-    window: {}, addEventListener() {},
+    window: {TeleplyAbout:{mount(fn){nodes.set('aboutAction',fn);}}}, addEventListener() {},
     document: { addEventListener() {}, querySelector:()=>({textContent:""}), getElementById(id) { if (!nodes.has(id)) nodes.set(id, {}); return nodes.get(id); } },
     localStorage: { getItem: () => JSON.stringify(saved), setItem() {}, removeItem() {} },
     Capacitor: { getPlatform: () => platform, isNativePlatform: () => platform !== 'web' },
-    registerPlugin: () => ({getTheme:async()=>({mode:"system"}),setTheme:async()=>{}, open: async x => calls.push(['native', x]), checkUpdate: async () => calls.push(['update']) }),
+    registerPlugin: () => ({getTheme:async()=>({mode:"system"}),setTheme:async()=>{}, open: async x => calls.push(['native', x]), checkUpdate: async () => calls.push(['update']),showAbout:async()=>calls.push(['about']) }),
     InAppBrowser: browser, DefaultWebViewOptions: {}, DefaultSystemBrowserOptions: {},
     DEFAULT_ORIGIN, normalizeOrigin, entryUrl
   });
@@ -45,11 +45,11 @@ test('web preview and rejected URLs never open a remote browser', async () => {
   await app.submit('open'); assert.equal(app.calls.length, 0);
   assert.equal(app.nodes.get('open').disabled, false);
 });
-test('only Android exposes the native update action', async () => {
+test('only Android mounts About in settings', async () => {
   const app=await launch('android');
-  assert.equal(app.nodes.get('update').hidden,false);
-  await app.nodes.get('update').onclick();
-  assert.deepEqual(app.calls,[['update']]);
-  assert.equal((await launch('ios')).nodes.get('update').hidden,true);
-  assert.equal((await launch('web')).nodes.get('update').hidden,true);
+  assert.equal(typeof app.nodes.get('aboutAction'),'function');
+  await app.nodes.get('aboutAction')();
+  assert.deepEqual(app.calls,[['about']]);
+  assert.equal((await launch('ios')).nodes.has('aboutAction'),false);
+  assert.equal((await launch('web')).nodes.has('aboutAction'),false);
 });

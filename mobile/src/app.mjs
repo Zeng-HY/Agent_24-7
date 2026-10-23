@@ -20,11 +20,7 @@ try { $('origin').value = normalizeOrigin(saved.origin || DEFAULT_ORIGIN); }
 catch { $('origin').value = DEFAULT_ORIGIN; }
 $('entry').value = android ? (saved.flowVersion === 3 && saved.entry === 'home' ? 'home' : 'account') : saved.entry === 'home' ? 'home' : 'account';
 $('compat').hidden = !android;
-$('update').hidden = !android;
-$('update').onclick = async () => {
-  try { await RemoteBrowser.checkUpdate(); }
-  catch { $('status').textContent = '无法检查更新，请稍后重试'; }
-};
+if(android)window.TeleplyAbout?.mount(()=>RemoteBrowser.showAbout());
 $('forget').onclick = () => {
   localStorage.removeItem(key);
   $('origin').value = DEFAULT_ORIGIN;

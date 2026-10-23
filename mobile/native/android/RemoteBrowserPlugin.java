@@ -20,6 +20,10 @@ public class RemoteBrowserPlugin extends Plugin {
         getActivity().runOnUiThread(()->{ThemePolicy.apply(getActivity(),getBridge().getWebView());call.resolve();});
     }
     @PluginMethod
+    public void showAbout(PluginCall call) {
+        getActivity().runOnUiThread(()->{AppUpdater.showAbout(getActivity());call.resolve();});
+    }
+    @PluginMethod
     public void checkUpdate(PluginCall call) {
         getActivity().runOnUiThread(() -> { AppUpdater.check(getActivity(), true); call.resolve(); });
     }

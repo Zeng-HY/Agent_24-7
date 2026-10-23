@@ -81,10 +81,29 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         if(web==null||!BrowserPolicy.sameOrigin(entry,web.getUrl())||documentToken.equals(seededToken))return;
         final String url=web.getUrl(),mode=ThemePolicy.get(this),token=documentToken;
         seededToken=token;themeReady=true;
-        web.evaluateJavascript("(()=>{window.__teleplyAppearanceDocument='"+token+"';try{localStorage.setItem('teleply.theme.v1','"+mode+"')}catch(e){};if(window.TeleplyTheme)window.TeleplyTheme.set('"+mode+"');return true})()",result->{
+        web.evaluateJavascript(aboutUi()+";if(window.TeleplyAbout)window.TeleplyAbout.mount(\"teleply-app://about?document="+token+"\");"+"(()=>{window.__teleplyAppearanceDocument='"+token+"';try{localStorage.setItem('teleply.theme.v1','"+mode+"')}catch(e){};if(window.TeleplyTheme)window.TeleplyTheme.set('"+mode+"');return true})()",result->{
             if(!token.equals(documentToken)||!url.equals(web.getUrl()))return;
             syncTheme();web.postVisualStateCallback(0,new WebView.VisualStateCallback(){public void onComplete(long id){if(!isFinishing()&&token.equals(documentToken))web.setAlpha(1f);}});
         });
+    }
+    private String nativeAboutUi=null;
+    private AlertDialog aboutDialog,appSettingsDialog;
+    private String aboutUi(){
+        if(nativeAboutUi!=null)return nativeAboutUi;
+        try(java.io.InputStream input=getAssets().open("public/native-about.js");java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream()){
+            byte[] block=new byte[4096];int count;while((count=input.read(block))!=-1)output.write(block,0,count);
+            nativeAboutUi=output.toString("UTF-8");
+        }catch(java.io.IOException unavailable){nativeAboutUi="";}
+        return nativeAboutUi;
+    }
+    private void showAbout(){if(aboutDialog==null||!aboutDialog.isShowing())aboutDialog=AppUpdater.showAbout(this);}
+    private void showAppSettings(){appSettingsDialog=ThemePolicy.dialog(this).setTitle("设置").setItems(new String[]{"关于遥应"},(d,w)->showAbout()).setNegativeButton("关闭",null).show();}
+    boolean handleAppAction(WebResourceRequest request){
+        Uri uri=request.getUrl();if(!"teleply-app".equals(uri.getScheme()))return false;
+        if(request.isForMainFrame()&&request.hasGesture()&&themeReady&&!loadFailed&&BrowserPolicy.sameOrigin(entry,web.getUrl())&&
+            "about".equals(uri.getHost())&&uri.getUserInfo()==null&&uri.getPort()==-1&&(uri.getPath()==null||uri.getPath().isEmpty())&&uri.getFragment()==null&&
+            ("document="+documentToken).equals(uri.getEncodedQuery()))showAbout();
+        return true;
     }
     private TextView status;
     private LinearLayout failurePanel;
@@ -123,10 +142,11 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         status = new TextView(this); status.setTextColor(0xff333333); status.setTextSize(16);
         status.setGravity(android.view.Gravity.CENTER); status.setPadding(0, 0, 0, 20);
         failurePanel.addView(status);
-        for (String action : new String[]{"重试", "账号", "连接设置"}) {
+        for (String action : new String[]{"重试", "账号", "设置", "连接设置"}) {
             Button button = new Button(this); button.setText(action); button.setMinHeight(48);
             button.setOnClickListener(v -> {
-                if (action.equals("连接设置")) finish();
+                if(action.equals("设置"))showAppSettings();
+                else if (action.equals("连接设置")) finish();
                 else if (action.equals("账号")) web.loadUrl(accountUrl());
                 else { authAttempts = 0; web.reload(); }
             });
@@ -153,6 +173,7 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         installAppearanceChannel();applyTheme();
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                if(handleAppAction(request))return true;
                 if (BrowserPolicy.sameOrigin(entry, request.getUrl().toString())) return false;
                 if (request.isForMainFrame() && request.hasGesture()) openExternal(request.getUrl().toString());
                 status.setText("已阻止打开其他地址");
@@ -332,6 +353,8 @@ public class RemoteBrowserActivity extends AppCompatActivity {
         themeHandler.removeCallbacks(themePoll);
         if (authHandler != null) { authHandler.cancel(); authHandler = null; }
         if (authDialog != null) authDialog.dismiss();
+        if(aboutDialog!=null)aboutDialog.dismiss();
+        if(appSettingsDialog!=null)appSettingsDialog.dismiss();
         if (fileResult != null) fileResult.onReceiveValue(null);
         if (mediaRequest != null) mediaRequest.deny();
         if (web != null) { if(themeMessaging)WebViewCompat.removeWebMessageListener(web,"TeleplyAppearance");web.stopLoading(); web.destroy(); }

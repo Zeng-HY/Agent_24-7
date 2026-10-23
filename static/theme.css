@@ -2,14 +2,17 @@
 :root{--page-bg:#fff;--panel-bg:#fff;--sidebar-bg:#f4f5f7;--chat-bg:#fff;background:var(--page-bg);--theme-panel:#f4f4f6;--theme-edge:#d6d6dc;--theme-focus:#2563eb;--theme-text:#171719;color-scheme:light}
 :root[data-theme=dark]{--page-bg:#000;--panel-bg:#141414;--sidebar-bg:#141414;--chat-bg:#000;color-scheme:dark;--bg:#000;--card:#141414;--line:#333;--text:#eee;--ink:#eee;--muted:#a8a8a8;--soft:#1e1e1e;--blue:#8ab4ff;--green:#66d997;--red:#ff9a9a;--danger:#ff9a9a;--amber:#efbd6a;--theme-panel:#1e1e1e;--theme-edge:#767676;--theme-focus:#8ab4ff;--theme-text:#eee;--shadow:0 8px 32px #0008;background:#000;color:#eee}
 .theme-title{font-size:13px;font-weight:500;color:var(--muted,#6b7280);margin:6px 0 10px}
-.theme-choices{display:flex;gap:6px;flex:none;padding:5px;border:1px solid var(--theme-edge);border-radius:16px;background:var(--theme-panel)}
-.theme-choices button{flex:1;min-height:44px;padding:8px 10px;border:1px solid transparent;border-radius:11px;background:transparent;color:var(--theme-text);font-family:inherit;font-size:14px;font-weight:500;line-height:1.4;cursor:pointer;white-space:nowrap}
-.theme-choices button[aria-checked=true]{border-color:var(--theme-focus);color:var(--theme-focus);background:var(--card,#fff)}
+.theme-choices{display:flex;gap:4px;flex:none;padding:4px;border:0;border-radius:999px;background:var(--theme-panel)}
+.theme-choices button{flex:1;min-width:0;min-height:44px;padding:8px 10px;border:0;border-radius:999px;background:transparent;color:var(--muted,#6b7280);font-family:inherit;font-size:14px;font-weight:500;line-height:1.4;cursor:pointer;white-space:nowrap}
+.theme-choices button[aria-checked=true]{color:var(--theme-text);background:var(--card,#fff);box-shadow:0 1px 5px #1d233014}
 .theme-choices button:focus-visible,.theme-settings>summary:focus-visible{outline:2px solid var(--theme-focus);outline-offset:3px}
-.theme-settings{position:fixed;top:max(12px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));display:flex;justify-content:flex-end;margin:0;z-index:8}
-.theme-settings>summary{margin:0 0 0 auto;width:max-content;min-height:44px;padding:12px;cursor:pointer;list-style:none;font-size:14px;color:var(--theme-text)}
+.app-settings-header{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:44px;margin-bottom:40px;position:relative}
+.app-settings-header>.brand{min-width:0;margin:0;justify-content:flex-start}
+.app-settings-header:has(>.theme-settings:only-child){justify-content:flex-end}
+.theme-settings{position:relative;display:block;flex:none;margin:0;z-index:8}
+.theme-settings>summary{display:flex;align-items:center;justify-content:center;margin:0;min-width:44px;min-height:44px;padding:0 10px;cursor:pointer;list-style:none;font-size:14px;color:var(--theme-text)}
 .theme-settings>summary::-webkit-details-marker{display:none}
-.theme-settings-panel{position:absolute;right:0;top:48px;width:min(320px,calc(100vw - 40px));padding:16px;border:1px solid var(--theme-edge);border-radius:20px;background:var(--card,#fff);box-shadow:0 12px 40px #0002}
+.theme-settings-panel{position:absolute;right:0;top:calc(100% + 8px);width:min(320px,calc(100vw - 40px));padding:16px;border:1px solid var(--line,#e4e4e7);border-radius:20px;background:var(--card,#fff);box-shadow:0 12px 40px #0002}
 :root[data-theme=dark] body,:root[data-theme=dark] body[data-current-mode=chat],:root[data-theme=dark] #convView,:root[data-theme=dark] .conversation-home,:root[data-theme=dark] .cv-top,:root[data-theme=dark] .cv-bottom,:root[data-theme=dark] header{background:#000;color:#eee}
 :root[data-theme=dark] :is(input,textarea,select){color:#eee;background:#1e1e1e;border-color:#767676;caret-color:#8ab4ff}
 :root[data-theme=dark] :is(input,textarea,select):focus{background:#1e1e1e;outline:2px solid #8ab4ff;outline-offset:2px;box-shadow:none}
@@ -34,7 +37,8 @@
 :root[data-theme=dark] #cvText{border:0}
 :root[data-theme=dark] .bub.note.thinking.long::after{background:linear-gradient(to right,transparent,#000 2.5em)}
 :root[data-theme=dark] .brand,:root[data-theme=dark] .brand .mark{color:#fff}
-:root[data-theme=dark] .theme-choices button[aria-checked=true]{background:#17253b;color:#b1cdff;border-color:#8ab4ff}
+:root[data-theme=dark] .theme-choices button{background:transparent;color:var(--muted)}
+:root[data-theme=dark] .theme-choices button[aria-checked=true]{background:#38383a;color:#fff;box-shadow:0 1px 5px #0004}
 :root[data-theme=dark] :is(.conv:active,.menu button:hover,.device-options button:hover,.text-button:hover,.tree-row:active,.msg-menu button:active){background:#292929}
 :root[data-theme=dark] dialog::backdrop{background:#000a}
 :root[data-theme=dark] .toast{background:#eee;color:#111}

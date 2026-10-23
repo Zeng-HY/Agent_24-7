@@ -28,7 +28,7 @@ button:disabled{opacity:.45;cursor:default}.primary.busy:disabled{opacity:1}:foc
 /* Device selection is a home screen, not a vertically centred login form. */
 body:has(#signed:not([hidden])){display:block;padding: max(28px,env(safe-area-inset-top)) max(24px,env(safe-area-inset-right)) max(32px,env(safe-area-inset-bottom)) max(24px,env(safe-area-inset-left))}
 body:has(#signed:not([hidden])) main{margin:0 auto;max-width:440px}
-body:has(#signed:not([hidden])) .brand{justify-content:flex-start;font-size:26px;line-height:1.2;font-weight:650;letter-spacing:-.7px;gap:12px;margin:0 0 40px}
+body:has(#signed:not([hidden])) .brand{justify-content:flex-start;font-size:26px;line-height:1.2;font-weight:650;letter-spacing:-.7px;gap:12px;margin:0}
 body:has(#signed:not([hidden])) .mark{width:36px;height:36px}
 #signed .section-head{margin-bottom:20px}
 #signed .section-head h1{font-size:24px;letter-spacing:-.5px}

@@ -46,7 +46,9 @@
       const details=document.createElement('details');details.className='theme-settings';
       const summary=document.createElement('summary');summary.textContent='设置';details.append(summary);
       const panel=document.createElement('div');panel.className='theme-settings-panel';choices(panel);details.append(panel);
-      const main=document.querySelector('main') || document.body;main.prepend(details);
+      const main=document.querySelector('main') || document.body,brand=main.querySelector('.brand');
+      const header=document.createElement('div');header.className='app-settings-header';
+      if(brand){brand.before(header);header.append(brand,details);}else{header.append(details);main.prepend(header);}
     }
     apply();
   });
