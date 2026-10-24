@@ -149,3 +149,41 @@ iPhone发布门槛已获用户确认。Windows dev.13/build13已构建并公开�
 本版不改变Android客户端代码及版本，保留APK0.7.4/code11，未构建或安装新的手机包。Android真机未验收。网页模拟及用户验收不扩写为对真实工作会话的发送测试。另一项附件静态预览候选未并入本版。
 
 发布页：https://github.com/Zeng-HY/Agent_24-7/releases/tag/windows-v0.27.0-dev.13
+
+
+## 附件静态预览候选（2026-10-24）
+
+状态：用户已于2026-10-24在本附件任务明确确认真机验收完毕，授权继续推进。正在准备发布；尚未替换正式服务或安装包。模块位于本次任务 outputs/artifact-candidate，接入补丁只包含本任务改动，不能把候选目录中来自另一任务的基线变更混合提交。
+
+### 格式与操作
+
+- HTML/HTM：默认“查看页面”，可切换“查看源码”、复制解码后的原文、下载原始字节。预览副本经过清理，原文件不变；UTF-8（含 BOM）与 UTF-16 BOM 可读，编码失败明确提示下载。
+- Markdown：阅读视图与源码；原始 HTML 按文字显示。TXT、JSON、CSV、代码等只作安全文本显示。
+- PNG/JPEG/WebP：检查文件头、尺寸后以图片显示；不根据 MIME 声明直接执行内容。PDF：尝试浏览器内嵌查看，始终保留下载；损坏或移动浏览器不支持时不宣称预览成功。
+- Office、ZIP、SVG、无后缀及其他未支持格式：文件图标、完整名称、大小、下载。无在线 Office 编辑承诺。
+- 当前文件重新打开或下载时重新读取，已更新状态来自登记接口；不生成历史快照，也不把当前内容当历史 diff。
+
+### 隔离与资源边界
+
+HTML 只进入 sandbox 为空的 srcdoc iframe，无 allow-scripts、allow-same-origin、allow-forms、弹窗、顶层导航或下载权限。DOMPurify 白名单清理后移除导航链接、脚本、事件属性、meta refresh、base、iframe/object、表单、SVG 等主动内容；CSP default-src 'none'，仅允许内联样式与经过尺寸检查的 data 栅格图片。附件不能读取父页面 DOM、cookie 或 localStorage。外部资源不自动加载。
+
+相对图片、直接 link stylesheet 只匹配同一会话附件清单中已登记的具体文件 ID，再通过既有认证接口读取并重写。未登记依赖显示“部分资源未提供”。CSS 中含 URL、import、字体加载、转义等复杂资源语法的样式保守省略；不扩大目录权限，不声称下载单个 HTML 包含全部依赖。第一版不运行交互型 JS 应用。
+
+解析、登记和鉴权复用 message_files.py / History 与现有设备会话路由。代码块、行内代码、纯文件名不生成附件授权。扩展普通格式下载仅取消后缀筛选，仍要求源消息中的绝对本地单文件引用，并保留跨会话/伪造 ID/路径重定向检查；拒绝 NTFS 附加数据流。客户端不发送文件路径访问请求。
+
+### 上限、状态与交互
+
+文本/HTML 1 MiB；图片/PDF 16 MiB；栅格图片单边 8192px、总像素 1600 万；HTML 最多 2 万节点；相对资源最多 16 项、合计 4 MiB、单项 1 MiB。读取同时检查声明长度和实际流长度，60 秒超时。普通下载最多 64 MiB 在内存准备；更大文件先验证引用与登录，再交浏览器原生下载，不把文件装入 DOM。原生下载是否完成由浏览器报告，界面不宣称已保存成功。
+
+手机全屏、桌面右侧详情；圆形返回、居中省略标题、胶囊操作与分段选择。完整名称在“文件详情”中可展开；点击区至少 44px，保留焦点、加载、禁用、错误和重试。文件读取失败、离线、登录失效、删除与更新在界面内提示。退出不重建聊天或发送队列，恢复焦点并保持草稿与滚动。切换/关闭取消请求，旧请求不能覆盖新文件，ObjectURL 在关闭/替换时释放。
+
+### 验证与复现
+
+使用临时文件与脱敏 fixture；附件测试覆盖原始下载哈希、中文名称、UTF-16、恶意 HTML、未登记资源、越权引用、删除/更新/路径替换、损坏内容、大小上限、断网/401、下载重试与关闭/切换竞态。Chrome/WebKit 的 390×844、844×390、1280×800 及深浅色检查与截图分开保留，不能代替 iPhone 真机确认。
+
+候选目录中运行：
+- `python tests/artifact_preview_check.py`：独立浏览器附件测试。
+- `python -m unittest discover -s tests -p test_artifact_files.py`：登记与下载测试。
+- `python tests/serve_artifact_preview.py --host 127.0.0.1 --port 8770`：仅脱敏样例预览；不读取生产配置或真实会话。手机局域网预览可将 host 明确设置为 0.0.0.0。
+
+隔离依据：[WHATWG iframe sandbox](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#attr-iframe-sandbox)、[MDN srcdoc 安全说明](https://developer.mozilla.org/en-US/docs/Web/API/HTMLIFrameElement/srcdoc)。安全结论来自白名单、CSP、权限隔离和浏览器测试组合，不能仅凭存在 iframe 得出。

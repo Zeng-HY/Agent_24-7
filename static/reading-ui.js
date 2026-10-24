@@ -298,30 +298,9 @@
   const images=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;const link=entry.target;images.unobserve(link);if(!cur)continue;const target={...cur};referencedFile(target,link).then(file=>{if(!link.isConnected||cur?.id!==target.id)return;const img=link.querySelector('img');img.onload=()=>{link.querySelector('span').textContent=file.state==='updated'?'文件已更新':'当前文件';};img.onerror=()=>{link.querySelector('span').textContent='图片读取失败，点击重试或下载';};img.src=fileUrl(target,file);}).catch(error=>{link.querySelector('span').textContent=error.message+'，点击重试';});}}, {root:$('cvMsgs'),rootMargin:'200px'});
   new MutationObserver(()=>{for(const link of $('cvMsgs').querySelectorAll('.local-image:not([data-observed])')){link.dataset.observed='true';images.observe(link);}}).observe($('cvMsgs'),{childList:true,subtree:true});
   async function checkFile(target,file){return api('/api/file/meta?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);}
-  let fileBlob=null,filePreviewGeneration=0,fileAbort=null;
-  function releaseFile(){fileAbort?.abort();fileAbort=null;if(fileBlob){URL.revokeObjectURL(fileBlob);fileBlob=null;}}
-  addEventListener('pagehide',releaseFile);
-  async function fileBytes(target,file){
-    const controller=new AbortController();fileAbort=controller;const timer=setTimeout(()=>controller.abort(),60000);
-    try{const response=await fetch(fileUrl(target,file,'&download=1'),{credentials:'same-origin',cache:'no-store',signal:controller.signal});
-    if(!response.ok){if(response.status===401)showSessionExpired(true);let data;try{data=await response.json();}catch{}
-      throw Error(data?.error||(response.status===401?'登录已失效，请重新登录':'文件下载失败（'+response.status+'）'));}
-    return await response.blob();}catch(error){if(controller.signal.aborted)throw Error('下载已停止或超时，可以重试');throw error;}finally{clearTimeout(timer);if(fileAbort===controller)fileAbort=null;}
-  }
   async function prepareFile(target,file,previewing){
-    const generation=++filePreviewGeneration;releaseFile();previewBody.replaceChildren(el('div','hint','正在读取 '+file.name+'…'));openSheet('resultPreview');
-    try{
-      file={...file,...await checkFile(target,file)};const blob=await fileBytes(target,file);if(generation!==filePreviewGeneration)return;
-      fileBlob=URL.createObjectURL(blob);previewBody.replaceChildren(el('div','hint',file.name+' · '+(file.state==='updated'?'文件已更新':'当前文件')));
-      if(previewing){
-        if(file.kind==='text'){const content=await blob.text();if(generation!==filePreviewGeneration)return;previewBody.append(el('pre','text-preview',content));}
-        else if(file.kind==='image'){const image=el('img');image.src=fileBlob;image.alt=file.name;image.style.maxWidth='100%';previewBody.append(image);}
-        else{const frame=el('iframe','file-preview');frame.title=file.name;frame.src=fileBlob;previewBody.append(frame);}
-      }
-      const save=el('a','file-save','保存文件');save.href=fileBlob;save.download=file.name;save.target='_blank';save.rel='noopener';previewBody.append(save);
-      previewBody.append(el('div','hint','点“保存文件”下载；PDF 也可在打开后通过分享菜单存储到“文件”。'));
-    }catch(error){if(generation!==filePreviewGeneration)return;previewBody.replaceChildren(el('p','hint',error.message));
-      const retry=el('button','','重试');retry.onclick=()=>prepareFile(target,file,previewing);previewBody.append(retry);}
+    if(!window.artifactPreview){toast('附件预览组件未加载，请刷新后重试',true);return;}
+    return artifactPreview.open(target,file,{downloadOnly:!previewing});
   }
   async function download(target,file){workspaceUI?.saveScene();return prepareFile(target,file,false);}
   async function preview(target,file){return prepareFile(target,file,true);}

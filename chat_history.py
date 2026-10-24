@@ -223,7 +223,6 @@ class History:
     def list_files(self,app,tid,message_id=None):
         from message_files import references
         item,entry=self.transcript(app,tid)
-        allowed={'.pdf','.doc','.docx','.xls','.xlsx','.csv','.tsv','.txt','.md','.png','.jpg','.jpeg','.webp','.json','.py','.js','.html','.zip','.pptx','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql'}
         out=[]
         with entry.lock:
             messages=[m for m in entry.messages if (m['role']=='assistant' or (m.get('current_file') and m.get('tool_status')=='completed')) and (not message_id or m['id']==message_id)]
@@ -231,7 +230,8 @@ class History:
                 paths=references(m['text']) if m['role']=='assistant' else [m['current_file']]
                 for index,raw in enumerate(paths):
                     p=Path(raw)
-                    if not p.is_absolute() or p.suffix.lower() not in allowed:continue
+                    # Only an explicit source reference authorizes this exact regular local file.
+                    if not p.is_absolute() or not re.match(r'^[A-Za-z]:[\\/]',raw) or ':' in raw[2:] or '\x00' in raw:continue
                     identity=[app,tid,m['id'],index,str(p)]
                     fid=hmac.new(self.secret,json.dumps(identity).encode(),hashlib.sha256).hexdigest()[:32]
                     old=self.files.get((app,tid,fid))
@@ -242,7 +242,7 @@ class History:
                         st=p.stat() if p.is_file() else None
                     except (OSError,ValueError):st=None
                     suffix=p.suffix.lower();size=st.st_size if st else 0
-                    kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and size<=1<<20 else 'download'
+                    kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.htm','.markdown','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and size<=1<<20 else 'download'
                     updated=bool(old and st and old['mtime'] is not None and (old['mtime']!=st.st_mtime_ns or old['size']!=size))
                     self.files[(app,tid,fid)]={'path':p,'resolved':resolved,'size':size,'mtime':st.st_mtime_ns if st else None,'kind':kind,'message_id':m['id'],'index':index,'updated':updated or bool(old and old.get('updated'))}
                     out.append({'id':fid,'name':p.name,'path':str(p),'size':size,'modified':st.st_mtime_ns//1000000 if st else None,'kind':kind,'message_id':m['id'],'index':index,'state':'missing' if not st else 'updated' if self.files[(app,tid,fid)]['updated'] else 'current'})

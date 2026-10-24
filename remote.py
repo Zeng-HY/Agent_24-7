@@ -100,7 +100,9 @@ DEFAULT_CONFIG = {
 # Settings of the browser and desktop-window pages, removed 10-12; dropped from remote_config.json on start.
 RETIRED_KEYS = ("browser", "profile", "userscripts", "window", "download_dir", "inbox", "urls", "dialog_wait_seconds",
                 "chooser_wait_seconds", "question_wait_seconds", "page_pins", "win_presets")
-STATIC_FILES = {  # served without the token: home-screen icons and the web app manifest
+STATIC_FILES = {
+    '/artifact-preview.js': ('artifact-preview.js','application/javascript; charset=utf-8'),
+    '/artifact-preview.css': ('artifact-preview.css','text/css; charset=utf-8'),  # served without the token: home-screen icons and the web app manifest
     '/markdown-it.min.js': ('markdown-it.min.js','application/javascript; charset=utf-8'),
     '/purify.min.js': ('purify.min.js','application/javascript; charset=utf-8'),
     '/markdown-ui.js': ('markdown-ui.js','application/javascript; charset=utf-8'),
@@ -703,10 +705,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/chat/diff':self._json(self.history.diff(app,tid,q.get('ref',''),q.get('offset',0)))
             else:
                 meta=self.history.file(app,tid,q.get('file',''))
-                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current'})
+                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime')})
                 elif path=='/api/file/text':
                     if meta['kind']!='text':raise chat_history.HistoryError('这个文件不提供文本预览')
-                    raw=meta['path'].read_bytes()
+                    with meta['path'].open('rb') as source:raw=source.read((1<<20)+1)
+                    if len(raw)>1<<20:raise chat_history.HistoryError('文件超过文本预览上限，请下载原文件')
                     try:text=raw.decode('utf-16' if raw.startswith((b'\xff\xfe',b'\xfe\xff')) else 'utf-8-sig')
                     except UnicodeError:raise chat_history.HistoryError('无法按 UTF-8 或 UTF-16 预览，请下载原文件') from None
                     self._json({'text':text,'name':meta['path'].name})
