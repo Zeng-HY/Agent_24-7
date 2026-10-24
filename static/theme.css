@@ -30,7 +30,7 @@
 :root[data-theme=dark] body,:root[data-theme=dark] body[data-current-mode=chat],:root[data-theme=dark] #convView,:root[data-theme=dark] .conversation-home,:root[data-theme=dark] .cv-top,:root[data-theme=dark] .cv-bottom,:root[data-theme=dark] header{background:#000;color:#eee}
 :root[data-theme=dark] :is(input,textarea,select){color:#eee;background:#1e1e1e;border-color:#767676;caret-color:#8ab4ff}
 :root[data-theme=dark] :is(input,textarea,select):focus{background:#1e1e1e;outline:2px solid #8ab4ff;outline-offset:2px;box-shadow:none}
-:root[data-theme=dark] :is(button,.chip,.sub-card,.code-wrap,.reference-chip,.voice-pill,.msg-menu,.new-composer,.codex-card,.option-card){color:#eee;background-color:#1e1e1e;border-color:#767676}
+:root[data-theme=dark] :is(button,.chip,.sub-card,.reference-chip,.voice-pill,.msg-menu,.new-composer,.codex-card,.option-card){color:#eee;background-color:#1e1e1e;border-color:#767676}
 :root[data-theme=dark] :is(.icon-btn,.menu-row,.nav-links button,.text-button,.reveal,.tree-add,.ctx-ring,.runtime-bar){background:transparent;color:inherit}
 :root[data-theme=dark] :is(.sheet .box,dialog,.menu,.device-options,.action-menu,.theme-settings-panel){background:#1e1e1e;color:#eee;border-color:#767676}
 :root[data-theme=dark] :is(.primary,.device-connect,button.big,[id="cvBtn"],.chip.on){background:#8ab4ff;color:#101010;border-color:#8ab4ff;box-shadow:none}
@@ -39,8 +39,6 @@
 :root[data-theme=dark] :is(.bub.user){background:#1e1e1e;color:#eee;border:1px solid #333}
 :root[data-theme=dark] :is(.bub.assistant,.bub.note){background:transparent}
 :root[data-theme=dark] :is(.bub pre,.bub code,.inline-copy,#readerSheet .reader-text pre,#readerSheet .reader-text code){background:#141414;color:#eee;border-color:#333}
-:root[data-theme=dark] .code-wrap{background:#141414;border:1px solid #333}
-:root[data-theme=dark] .code-wrap pre{background:transparent}
 :root[data-theme=dark] :is(a,.thread-link){color:#8ab4ff}
 :root[data-theme=dark] :is(.thread-link,.nav-links button.selected,.sub-card.running,.option-card[aria-checked=true],.model-list-row[aria-checked=true],.effort-choices button[aria-checked=true],.new-apps button[aria-checked=true],.new-pick-row[aria-selected=true],.reference-result[aria-selected=true],.pcf-row[aria-selected=true],.pcf-places button[aria-current=true]){background:#17253b;color:#b1cdff;border-color:#8ab4ff}
 :root[data-theme=dark] :is(.connection-note,.pending-alert,.optbox,.parts-notice,.composer-chip.is-plan){background:#302513;color:#efbd6a;border-color:#927144}
@@ -79,3 +77,16 @@
 .device-actions .device-connect:disabled{transition:none}
 
 :root[data-theme=dark] .tree-app .mark.code-symbol{color:var(--text)}
+
+/* Code/output panels share a bounded body and a non-scrolling toolbar. */
+:root{--tp-code-fill:#f5f5f5;--tp-code-edge:#e3e3e3}
+:root[data-theme=dark]{--tp-code-fill:#1e1e1e;--tp-code-edge:#333333}
+.code-wrap{min-width:0;max-width:100%;box-sizing:border-box;overflow:hidden;border:1px solid var(--tp-code-edge);border-radius:12px;background:var(--tp-code-fill);color:var(--text,var(--theme-text));margin:12px 0;white-space:normal;box-shadow:none}
+.code-wrap>.code-head{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;padding:4px 12px;border-bottom:1px solid var(--tp-code-edge);color:var(--muted);font:400 13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.code-head>span{margin-right:auto;min-width:0;overflow-wrap:anywhere}
+.code-wrap>.code-head>button{min-height:44px;min-width:44px;padding:4px 8px;border:0;border-radius:999px;background:transparent;color:var(--muted);font:400 13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer;box-shadow:none}
+.code-wrap>.code-head>button:focus-visible,.code-wrap>pre:focus-visible{outline:2px solid var(--tp-focus);outline-offset:-3px}
+.code-wrap>pre,.bub .code-wrap>pre{box-sizing:border-box;margin:0;padding:12px;max-height:min(320px,45dvh);max-width:100%;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;font:400 13px/1.6 ui-monospace,Consolas,monospace;border:0;border-radius:0;background:transparent;color:inherit;tab-size:4}
+.code-wrap>pre>code,.bub .code-wrap>pre>code,.activity-progress .code-wrap>pre>code{padding:0;border:0;border-radius:0;background:transparent;color:inherit;font:inherit;white-space:inherit;overflow-wrap:inherit}
+.code-wrap.original-lines>pre{white-space:pre;overflow-wrap:normal}
+:root[data-theme=dark] .code-wrap>pre,:root[data-theme=dark] .code-wrap>pre>code{background:transparent;color:inherit}
