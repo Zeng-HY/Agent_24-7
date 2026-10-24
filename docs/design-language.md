@@ -229,3 +229,11 @@ HTML 只进入 sandbox 为空的 srcdoc iframe，无 allow-scripts、allow-same-
 ### 代码面板发布授权（2026-10-24）
 
 用户确认本轮候选“符合预期，发布吧”。本轮验收门槛满足，准备发布dev.15/build15；发布与部署结果以后续回读记录为准。
+
+### dev.15 代码面板发布与部署完成（2026-10-24）
+
+用户确认本轮候选符合预期后，`0.27.0-dev.15 / build15` 已发布到既有 GitHub Pre-release 渠道，构建提交 `f4046b4`。安装包 SHA-256：`77f956fc3447b16301f9209a4ad597ab978c50b8f983246f07d11d28482194f8`。发布页：https://github.com/Zeng-HY/Agent_24-7/releases/tag/windows-v0.27.0-dev.15 。
+
+Chrome/WebKit 面板专项检查再次通过；冻结程序和安装后自检通过。云端更新包哈希验证后通过现有回退脚本部署，回读dev.15、服务active，公网HTTPS账号页及共用theme.css与发布源码一致。本机G:/AgentRemote覆盖安装并以托盘模式重启，运行中API、主页及5项修改资源核对通过。配置与偏好重启后校验未变，未重新绑定设备。
+
+既有tests/test_activity_records.py修改和apps/目录未纳入本次发布。安卓继续使用原APK0.7.4/code11，网页功能随部署更新，无需换包；没有新增Android原生安装验收结论。
