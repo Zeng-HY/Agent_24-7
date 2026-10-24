@@ -14,12 +14,11 @@ def merge_live_messages(page,entry,state,previous=None):
         def stored(item,turn_id):
             found=entry.by_id.get(item.get('id'))
             if found is not None:return found
+            if item.get('type') not in (None,'agentMessage'):return None
             # Legacy logs use generated IDs. Limit exact-text fallback to this turn
             # and public legacy assistant messages; never compare reasoning items.
-            for m in reversed(entry.messages):
-                if m.get('turn_id')==turn_id and m.get('legacy') and m['role']=='assistant' and (m.get('phase') or '')==(item.get('phase') or '') and m['text']==item.get('text'):
-                    return m
-            return None
+            candidates=[m for m in entry.messages if m.get('turn_id')==turn_id and m.get('legacy') and not m.get('source_id') and m['role']=='assistant' and (m.get('phase') or '')==(item.get('phase') or '') and m['text']==item.get('text')]
+            return candidates[0] if len(candidates)==1 else None
         def public(m):
             from activity_records import public_message
             result=public_message(m)
@@ -35,18 +34,46 @@ def merge_live_messages(page,entry,state,previous=None):
                 if m['id'] not in ids:messages.append(public(m));ids.add(m['id'])
                 if old['id']!=m['id']:
                     messages=[{**v,'projection_aliases':[old['id']]} if v['id']==m['id'] else v for v in messages]
+            elif old.get('role')=='assistant' and old.get('phase') in (None,'','commentary','final_answer') and old['id'] not in ids:
+                # Snapshot absence is not a retraction. Keep already public text
+                # until its source record replaces it, including across turn ends.
+                messages.append({**old,'sync_pending':True});ids.add(old['id'])
         turns=ordered_turns(state) if state and state.get('id')==page['id'] else []
         turn=turns[-1] if turns else None
         if (turn and turn.get('status')=='inProgress' and entry.state.get('running') is True
                 and turn.get('turnId')==entry.state.get('current_turn_id')):
             items=turn.get('items',[])
+            positions=getattr(entry,'_live_positions',{})
+            entry._live_positions=positions
+            anchor_cache={k:v for k,v in getattr(entry,'_live_anchor_ids',{}).items() if k[0]==turn['turnId']}
+            entry._live_anchor_ids=anchor_cache
+            positions={k:v for k,v in positions.items() if k[0]==turn['turnId']}
+            entry._live_positions=positions
             for index,item in enumerate(items):
                 if item.get('type')!='agentMessage' or item.get('phase') not in (None,'commentary','final_answer') or not item.get('text') or not item.get('id'):continue
                 if stored(item,turn['turnId']) is not None:continue
                 ident=item['id'];live_ids.append(ident)
-                if ident in ids:continue
+                if ident in ids:
+                    messages=[m for m in messages if m['id']!=ident];ids.discard(ident)
+                # Position comes from adjacent source items. A snapshot's arrival
+                # must not move every live message to the new log-file tail.
+                anchors=[(i,stored(v,turn['turnId'])) for i,v in enumerate(items) if v.get('id')]
+                before=next(((i,m) for i,m in reversed(anchors) if i<index and m),None)
+                after=next(((i,m) for i,m in anchors if i>index and m),None)
+                old=(previous or {}).get(ident,{})
+                key=(turn['turnId'],ident)
+                if before and after:
+                    order=before[1]['order']+(after[1]['order']-before[1]['order'])*(index-before[0])/(after[0]-before[0])
+                elif after:order=after[1]['order']-(after[0]-index)/(len(items)+1)
+                else:
+                    base=before[1]['order'] if before else entry.offset
+                    anchor_id=before[1]['id'] if before else None
+                    order=base+(index+1)/(len(items)+1) if before and anchor_cache.get(key)!=anchor_id else positions.get(key,old.get('order',base+(index+1)/(len(items)+1)))
+                    anchor_cache[key]=anchor_id
+                positions[key]=order
                 text=item['text'];messages.append({'id':ident,'source_id':ident,'role':'assistant','phase':item.get('phase') or '',
-                    'turn_id':turn['turnId'],'order':entry.offset+(index+1)/(len(items)+1),
+                    'turn_id':turn['turnId'],'order':order,
+                    'source_sequence':index,'after_id':before[1]['id'] if before else None,'before_id':after[1]['id'] if after else None,
                     'time':datetime.fromtimestamp((turn.get('turnStartedAtMs') or 0)/1000,timezone.utc).isoformat(),
                     'text':text[:6000],'length':len(text),'truncated':len(text)>6000,'streaming':True})
                 ids.add(ident)

@@ -21,7 +21,7 @@
   };
   parser.renderer.rules.code_inline=(tokens,i,options,env)=>{
     const raw=tokens[i].content,code='<code>'+escape(raw)+'</code>';
-    return env.copyable?'<button type="button" class="inline-copy" data-copy-fragment="'+escape(JSON.stringify(raw))+'" aria-label="复制行内内容" title="复制行内内容">'+code+'</button>':code;
+    return code;
   };
   parser.renderer.rules.fence=parser.renderer.rules.code_block=(tokens,i,options,env)=>{
     const t=tokens[i],raw=t.content,language=t.info.trim().split(/\s+/)[0];

@@ -522,6 +522,18 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("_bad"):
             self._json({"error": body["_bad"]}, 400)
             return
+        if path == '/api/chat/resolve':
+            try:
+                app,tid,ids=body.get('app','codex'),body.get('id',''),body.get('request_ids')
+                if app not in ('codex','claude','deepseek') or not isinstance(tid,str) or not tid or len(tid)>200:
+                    raise chat_history.HistoryError('会话定位请求无效',400)
+                if not isinstance(ids,list) or len(ids)>100 or any(not isinstance(v,str) or not v or len(v)>200 for v in ids):
+                    raise chat_history.HistoryError('消息定位请求无效',400)
+                aliases=self.server.codex.delivery_locations(tid,ids) if app=='codex' else {}
+                self._json(self.history.resolve_requests(app,tid,ids,aliases))
+            except (chat_history.HistoryError,chats.ChatError,ValueError,OSError) as exc:
+                self._json({'error':str(exc)},getattr(exc,'status',400))
+            return
         if path == "/api/voice/tidy":  # 整理 for text already recognised on this PC
             context = {k: str(body.get(k, ""))[:200] for k in ("app", "title", "folder")}
             context["existing"] = str(body.get("existing", ""))[-400:]

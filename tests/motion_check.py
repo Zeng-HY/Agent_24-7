@@ -156,7 +156,7 @@ def handle(route, request):
         return js({})
     file = HERE / "static" / path.lstrip("/")
     if path != "/" and file.is_file():
-        ctype = {".js": "application/javascript; charset=utf-8", ".png": "image/png"}.get(file.suffix, "application/octet-stream")
+        ctype = {".js": "application/javascript; charset=utf-8", ".css":"text/css; charset=utf-8", ".png": "image/png"}.get(file.suffix, "application/octet-stream")
         return route.fulfill(status=200, content_type=ctype, body=file.read_bytes())
     return route.fulfill(status=404, body="")
 
