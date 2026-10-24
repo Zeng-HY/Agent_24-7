@@ -17,7 +17,7 @@ def merge_live_messages(page,entry,state,previous=None):
             # Legacy logs use generated IDs. Limit exact-text fallback to this turn
             # and public legacy assistant messages; never compare reasoning items.
             for m in reversed(entry.messages):
-                if m.get('turn_id')==turn_id and m.get('legacy') and m['role']=='assistant' and m['text']==item.get('text'):
+                if m.get('turn_id')==turn_id and m.get('legacy') and m['role']=='assistant' and (m.get('phase') or '')==(item.get('phase') or '') and m['text']==item.get('text'):
                     return m
             return None
         def public(m):
@@ -31,7 +31,10 @@ def merge_live_messages(page,entry,state,previous=None):
         for old in (previous or {}).values():
             if not old.get('streaming'):continue
             m=stored(old,old.get('turn_id'))
-            if m and m['id'] not in ids:messages.append(public(m));ids.add(m['id'])
+            if m:
+                if m['id'] not in ids:messages.append(public(m));ids.add(m['id'])
+                if old['id']!=m['id']:
+                    messages=[{**v,'projection_aliases':[old['id']]} if v['id']==m['id'] else v for v in messages]
         turns=ordered_turns(state) if state and state.get('id')==page['id'] else []
         turn=turns[-1] if turns else None
         if (turn and turn.get('status')=='inProgress' and entry.state.get('running') is True

@@ -86,7 +86,7 @@
     catch(e){toast('结果待核对：'+e.message,true);await refresh(me,true);return false;}
   }
   function paintQueue(me,s){
-    const codex=me?.app==='codex',native=codex?s?.queued||[]:[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
+    const codex=me?.app==='codex',native=codex?(s?.queued||[]).filter(q=>!window.workspaceUI?.delivered(q.id)):[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
     if(codex)$('cvBtn').setAttribute('aria-label',s?.running?'发送并排队':'发送');
     // rebuilt only when it changes (this runs on every refresh): a tap on a button in it is not lost
     const sig=JSON.stringify([rows.map(q=>[q.id,q.text,q.status,!!q.local]),!!s?.running]);if(codexQueue.dataset.sig===sig)return;codexQueue.dataset.sig=sig;
@@ -222,19 +222,14 @@
   const normalize = text => String(text||'').replace(/\s/g,'');
   function decorateRows(rows){
     const me=current(),s=states.get(me?.id);if(!me||!s)return;
-    function place(row,created){
-      if(!created){rows.push(row);return;}
-      row.created=created;
-      const index=rows.findIndex(r=>{const time=r.created || (r.message?.time?new Date(r.message.time).getTime()/1000:r.items?.[0]?.time?new Date(r.items[0].time).getTime()/1000:0);return time && time>created;});
-      if(index<0)rows.push(row);else rows.splice(index,0,row);
-    }
+    function place(row,created){messageProjection.observe(rows,row,chatKey(me),row.custom?.card?.after_id,row.custom?.card?.before_id);}
     for(const post of s.images||[]){
-      const matching=rows.find(r=>r.message?.role==='user'&&!r.message.pending&&normalize(r.message.text)===normalize(post.text)&&Math.abs(new Date(r.message.time).getTime()/1000-post.created)<90);
+      const matching=rows.find(r=>r.message?.role==='user'&&!r.message.pending&&messageProjection.matches(r.message,{rid:post.request_id,client_id:post.client_id,source_id:post.message_id}));
       if(matching)matching.images=post.images;
-      else if(!window.readingUI?.historyWindow) place({key:'image:'+post.request_id,custom:{type:'images',post}},post.created);
+      else if(!window.readingUI?.historyWindow&&!window.workspaceUI?.has(post.request_id)) place({key:'image:'+post.request_id,custom:{type:'images',post}},post.created);
     }
     if(window.readingUI?.historyWindow)return;
-    for(const card of s.questions||[])if(card.status==='answered')place({key:'answer:'+card.id,custom:{type:'answer',card}},card.created_at);
+    for(const card of s.questions||[])if(card.status==='answered')place({key:'answer:'+card.id,custom:{type:'answer',card}},card.answered_at||null);
     if(s.plan){for(let i=rows.length-1;i>=0;i--){const m=rows[i].message;if(m?.role==='assistant'&&normalize(m.text.replace(/<\/?proposed_plan>/g,''))===normalize(s.plan.text))rows.splice(i,1);}place({key:'plan:'+s.plan.id,custom:{type:'plan',plan:s.plan}},s.plan.ready?null:s.plan.created_at);}
     // Questions are no longer a form in the conversation: they show above the message box (renderAsk, 10-12).
   }

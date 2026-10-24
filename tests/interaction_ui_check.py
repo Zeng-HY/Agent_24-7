@@ -31,7 +31,7 @@ with sync_playwright() as p:
                 renderMsgs([{id:'u',role:'user',text:'测试'}, {id:'t',role:'tool',activity_turn:'test',text:'修改 theme.css',tool_status:'completed',changes:[{path:'theme.css',ref:'r',added:1,removed:1}]}, {id:'n',role:'assistant',phase:'commentary',activity_turn:'test',text:'检查主题'}]);
             }""")
             assert page.locator('.activity-group').count()==1
-            assert '19 秒' in page.locator('.activity-clock').inner_text() or '20 秒' in page.locator('.activity-clock').inner_text()
+            assert '19秒' in page.locator('.activity-clock').inner_text() or '20秒' in page.locator('.activity-clock').inner_text()
             page.locator('.file-change').click();page.wait_for_selector('.diff-line.add')
             assert page.locator('.diff-line.delete').inner_text().endswith('-old')
             assert page.locator('#diffSheet').evaluate('(n)=>n.getBoundingClientRect().width<=innerWidth+1')

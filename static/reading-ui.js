@@ -26,11 +26,7 @@
       const sig=JSON.stringify([convItems,Math.floor(Date.now()/60000)]);if(more||reset||sig!==listSig){listSig=sig;preserveList(renderConvs);}$('convHint').textContent=(query?'搜索结果':window.interactionUI?.sortLabel()||'按最近活动排序')+(j.total!=null?' · '+j.total+' 个对话':'');listMore.hidden=!listHasMore;
     }catch(e){$('convHint').textContent='读取失败：'+e.message;}finally{listBusy=false;listMore.disabled=false;if(key!==convApp+'|'+query+(window.interactionUI?.query()||''))loadList(false,true);}
   }
-  function merge(items,prepend=false){const map=new Map(loaded.map(m=>[m.id,m]));for(const m of items){if(m.streaming&&map.has(m.id)&&!map.get(m.id).streaming)continue;const full=expanded.get(m.id);map.set(m.id,full&&full.length>=(m.length||m.text.length)&&!m.streaming?{...m,text:full.text,truncated:false}:m);}
-    const order=loaded.map(m=>m.id),known=new Set(order);
-    if(prepend)order.unshift(...items.filter(m=>!known.has(m.id)).map(m=>m.id));
-    else{let next=null;for(let i=items.length-1;i>=0;i--){const id=items[i].id;if(!known.has(id)){const at=next===null?-1:order.indexOf(next);if(at<0)order.push(id);else order.splice(at,0,id);known.add(id);}next=id;}}
-    loaded=[...new Set(order)].map(id=>map.get(id));loaded.sort((a,b)=>Number.isFinite(a.order)&&Number.isFinite(b.order)?a.order-b.order:0);}
+  function merge(items,prepend=false){loaded=messageProjection.merge(loaded,items.map(m=>{const full=expanded.get(m.id);return full&&full.length>=(m.length||m.text.length)&&!m.streaming?{...m,text:full.text,truncated:false}:m;}),prepend);}
   function reconcileLive(ids){if(!Array.isArray(ids))return;const active=new Set(ids);loaded=loaded.filter(m=>!m.streaming||active.has(m.id));}
   function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);painted=true;older.hidden=!hasMore;latest.hidden=!historyWindow;}
   function applyMeta(j){if(!cur)return;window.interactionUI?.meta(j);chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
@@ -54,7 +50,7 @@
     }catch(e){if(generation===loadGeneration&&cur&&chatKey(cur)===chatKey(target)){chatReadError='读取对话失败：'+e.message;updateConnection();}}finally{if(generation===loadGeneration)fetching=null;}})();return fetching;
   }
   async function loadOlder(){if(!cur||!cursor||older.disabled)return;const target={...cur};older.disabled=true;try{const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&before='+encodeURIComponent(cursor));if(!cur||chatKey(cur)!==chatKey(target))return;if(j.reset){toast('记录位置已变化，请回到最新位置再试',true);return;}cursor=j.next_cursor;hasMore=!!j.has_more;merge(j.messages||[],true);render();}catch(e){toast(e.message,true);}finally{older.disabled=false;}}
-  async function jump(mid){const target={...cur};const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&around='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;loaded=j.messages;cursor=j.next_cursor;hasMore=!!j.has_more;historyWindow=!!j.has_newer;render();const n=[...$('cvMsgs').children].find(n=>n.dataset.key===mid);if(n){n.scrollIntoView({block:'center'});n.animate?.([{background:'#eef2ff'},{background:'transparent'}],{duration:900});}await expandMessage(mid);}
+  async function jump(mid){const target={...cur};const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&around='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;loaded=j.messages;cursor=j.next_cursor;hasMore=!!j.has_more;historyWindow=!!j.has_newer;render();const n=[...$('cvMsgs').querySelectorAll('[data-key],[data-message-id]')].find(n=>n.dataset.key===mid||n.dataset.messageId===mid);if(n){const group=n.closest('.activity-group');if(group?.querySelector('.activity-body').hidden)group.querySelector('.activity-heading').click();if(n.tagName==='DETAILS')n.open=true;n.scrollIntoView({block:'center'});n.animate?.([{background:'#eef2ff'},{background:'transparent'}],{duration:900});}await expandMessage(mid);}
   async function expandMessage(mid){if(!cur)return;const target={...cur},j=await api('/api/chat/message?app='+target.app+'&id='+encodeURIComponent(target.id)+'&message='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;expanded.set(mid,j);merge([j]);render();}
   function publicText(text){let fence=false;return text.split('\n').filter(line=>{if(/^\s*```/.test(line)){fence=!fence;return true;}return fence||!/^::created-thread\{/.test(line.trim());}).join('\n').replace(/<\/?proposed_plan>/g,'').trim();}
   // The clipboard is written in the tap itself, as Safari wants it: words still to be read from the computer (a long
@@ -161,7 +157,7 @@
       if(holding(f.node)){f.tick=0;continue;}  // words being picked out of it: it waits till they are let go
       const dt=f.tick?Math.max(0,Math.min(.1,(now-f.tick)/1000)):0;f.tick=now;
       const before=onScreen(f);f.shown=Math.min(f.text.length,f.shown+f.pace*dt);
-      const after=onScreen(f);if(after!==before){words.innerHTML=md(assistantMarkdown(after).markdown,true);moved=true;}
+      const after=onScreen(f);if(after!==before){window.updateMarkdown(words,assistantMarkdown(after).markdown,true);moved=true;}
       if(f.shown<f.text.length)going=true;else{f.tick=0;if(!f.streaming)ended.push(f);}
     }
     if(moved&&atEnd)box.scrollTop=box.scrollHeight;
@@ -285,19 +281,22 @@
     async function search(append=false){const q=input.value.trim();if(!q)return;const v=++version;go.disabled=true;try{const j=await api('/api/chat/search?app='+target.app+'&id='+encodeURIComponent(target.id)+'&query='+encodeURIComponent(q)+(append&&next?'&cursor='+encodeURIComponent(next):''));if(v!==version)return;if(!append)results.innerHTML='';for(const hit of j.items){const b=el('button','search-hit',hit.snippet);b.append(el('small','',(hit.origin==='other_chat'?'来自其他对话':hit.role==='user'?'你':'助手')+' · '+stamp(hit.time)));b.onclick=()=>{dismissOverlays();jump(hit.id).catch(e=>toast(e.message,true));};results.append(b);}if(!j.items.length&&!append)results.append(el('div','hint','没有找到匹配消息'));next=j.next_cursor;more.hidden=!j.has_more;}catch(e){toast(e.message,true);}finally{go.disabled=false;}}
     go.onclick=()=>search();more.onclick=()=>search(true);input.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing)search();};searchBody.append(input,go,results,more);openSheet('historySearch');}
   function fileUrl(target,file,extra=''){return '/api/file?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id+extra;}
+  function messageId(node){return node.closest('[data-message-id]')?.dataset.messageId||node.closest('#cvMsgs>[data-key]')?.dataset.key;}
+  async function referencedFile(target,link){
+    const mid=messageId(link);if(!mid)throw Error('找不到这条消息的文件引用');
+    const result=await api('/api/chat/files?app='+target.app+'&id='+encodeURIComponent(target.id)+'&message='+encodeURIComponent(mid));
+    const file=result.items.find(f=>f.index===Number(link.dataset.resultIndex||0));
+    if(!file)throw Error('文件引用无效');if(file.state==='missing')throw Error('文件已移动或删除');return file;
+  }
   document.addEventListener('click',async e=>{
-    const link=e.target.closest?.('a[data-result-path]');if(!link)return;
-    e.preventDefault();if(!cur)return;
-    const target={...cur};
-    const normalized=value=>{try{return decodeURIComponent(value).replace(/:\d+(?:-\d+)?$/,'').replace(/\\/g,'/').toLowerCase();}catch{return '';}};
-    try{
-      const result=await api('/api/chat/files?app='+target.app+'&id='+encodeURIComponent(target.id));
-      const file=result.items.find(f=>f.path&&normalized(f.path)===normalized(link.dataset.resultPath));
-      if(!file)throw Error('这个文件不在当前对话的允许范围内，或已移动、删除。');
-      if(cur?.app!==target.app||cur?.id!==target.id)return;
+    const link=e.target.closest?.('a[data-result-index],a[data-result-path]');if(!link)return;
+    e.preventDefault();if(!cur)return;const target={...cur};
+    try{const file=await referencedFile(target,link);if(cur?.app!==target.app||cur?.id!==target.id)return;
       if(file.kind==='download')await download(target,file);else await preview(target,file);
     }catch(error){toast(error.message,true);}
   });
+  const images=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;const link=entry.target;images.unobserve(link);if(!cur)continue;const target={...cur};referencedFile(target,link).then(file=>{if(!link.isConnected||cur?.id!==target.id)return;const img=link.querySelector('img');img.onload=()=>{link.querySelector('span').textContent=file.state==='updated'?'文件已更新':'当前文件';};img.onerror=()=>{link.querySelector('span').textContent='图片读取失败，点击重试或下载';};img.src=fileUrl(target,file);}).catch(error=>{link.querySelector('span').textContent=error.message+'，点击重试';});}}, {root:$('cvMsgs'),rootMargin:'200px'});
+  new MutationObserver(()=>{for(const link of $('cvMsgs').querySelectorAll('.local-image:not([data-observed])')){link.dataset.observed='true';images.observe(link);}}).observe($('cvMsgs'),{childList:true,subtree:true});
   async function checkFile(target,file){return api('/api/file/meta?app='+target.app+'&id='+encodeURIComponent(target.id)+'&file='+file.id);}
   let fileBlob=null,filePreviewGeneration=0,fileAbort=null;
   function releaseFile(){fileAbort?.abort();fileAbort=null;if(fileBlob){URL.revokeObjectURL(fileBlob);fileBlob=null;}}
@@ -312,8 +311,8 @@
   async function prepareFile(target,file,previewing){
     const generation=++filePreviewGeneration;releaseFile();previewBody.replaceChildren(el('div','hint','正在读取 '+file.name+'…'));openSheet('resultPreview');
     try{
-      const blob=await fileBytes(target,file);if(generation!==filePreviewGeneration)return;
-      fileBlob=URL.createObjectURL(blob);previewBody.replaceChildren(el('div','hint',file.name));
+      file={...file,...await checkFile(target,file)};const blob=await fileBytes(target,file);if(generation!==filePreviewGeneration)return;
+      fileBlob=URL.createObjectURL(blob);previewBody.replaceChildren(el('div','hint',file.name+' · '+(file.state==='updated'?'文件已更新':'当前文件')));
       if(previewing){
         if(file.kind==='text'){const content=await blob.text();if(generation!==filePreviewGeneration)return;previewBody.append(el('pre','text-preview',content));}
         else if(file.kind==='image'){const image=el('img');image.src=fileBlob;image.alt=file.name;image.style.maxWidth='100%';previewBody.append(image);}

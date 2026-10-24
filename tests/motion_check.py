@@ -1112,18 +1112,18 @@ def run_claude_progress(check, shots=None):
         seen = page.evaluate("""[...document.getElementById('cvMsgs').children].map(n => n.classList.contains('plan-card') ? 'plan'
             : n.tagName === 'DETAILS' ? n.querySelector('summary').textContent : n.classList.contains('thinking') ? 'thinking' : n.className.split(' ').slice(0, 2).join(' '))""")
         ok("thinking lines sit between the steps as on the desktop, and only the latest checklist shows",
-           seen == ["bub user", "已执行 2 步操作", "thinking", "已执行 2 步操作", "plan", "thinking"], seen)
+           seen == ["bub user", "activity-group", "plan", "activity-group"], seen)
         marks = page.evaluate("[...document.querySelectorAll('#cvMsgs .plan-card .plan-row')].map(r => r.className.replace('plan-row ', ''))")
         ok("the checklist shows each step's state (done, under way, to do)", marks == ["done", "doing", "todo"], marks)
-        notes = page.evaluate("""[...document.querySelectorAll('#cvMsgs .bub.thinking')].map(n => ({copy: !!n.querySelector('.message-actions'),
-            long: n.classList.contains('long'), muted: getComputedStyle(n).color}))""")
-        ok("thinking lines are grey notes without a copy button; a long one folds",
-           len(notes) == 2 and not any(n["copy"] for n in notes) and [n["long"] for n in notes] == [False, True], notes)
+        notes = page.evaluate("""[...document.querySelectorAll('#cvMsgs .activity-progress')].map(n => ({nested: !!n.closest('details'), text:n.textContent}))""")
+        ok("public progress is directly readable inside the process section",len(notes)==2 and not any(n['nested'] for n in notes),len(notes))
         if shots:
             page.evaluate("document.querySelector('#cvMsgs .plan-card').scrollIntoView({block: 'center'})"); page.wait_for_timeout(300)
             page.screenshot(path=str(Path(shots) / "claude_progress.png"))
-        page.click("#cvMsgs .bub.thinking.long"); page.wait_for_timeout(200)
-        ok("a tap opens the long one", page.evaluate("document.querySelector('#cvMsgs .bub.thinking.long').classList.contains('open')"))
+        page.locator('#cvMsgs .activity-heading').last.click();page.wait_for_timeout(200)
+        manual=page.locator('#cvMsgs .activity-body').last.is_visible()
+        page.evaluate('renderMsgs(currentMessages)')
+        ok("manual process expansion survives updates",page.locator('#cvMsgs .activity-body').last.is_visible()==manual)
         ok("no page errors around Claude's progress", not errors, errors[:3])
         browser.close()
 

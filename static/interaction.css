@@ -23,4 +23,17 @@ body :is(.app-top,.cv-top)>.icon-btn svg{width:var(--tp-icon);height:var(--tp-ic
 @media(min-width:1024px){#diffSheet .diff-box{left:auto;width:min(90vw,1200px);border-left:1px solid var(--line)}.diff-content.split .diff-unified{display:none}.diff-content.split .diff-side{display:block}}
 @media(prefers-reduced-motion:reduce){.sheet.popover.is-open.tp-entering .box,.sheet.popover.is-open.tp-entering .box>button{animation:teleply-fade 80ms both;animation-delay:0ms}.sheet.popover .box{transition:opacity 80ms}}
 @keyframes teleply-fade{from{opacity:0}to{opacity:1}}
+.activity-group{font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.activity-heading{border:0;box-shadow:none;justify-content:flex-start;width:auto;max-width:100%;flex-wrap:wrap;font:inherit}
+.activity-chevron{margin-left:4px}.activity-body{border-left:3px solid var(--line);padding-left:12px;margin-left:0}
+.activity-title{white-space:normal;overflow-wrap:anywhere;min-width:0;text-overflow:clip}
+.activity-item{margin:4px 0}.activity-progress{margin:6px 0;white-space:normal}.activity-progress p{margin:6px 0}
+.activity-detail{font-size:13px;background:transparent;padding:6px 0;border-radius:0}
+.message-region,#cvMsgs,.bub,.reply-text,.activity-body,.code-wrap{min-width:0;max-width:100%;box-sizing:border-box}
+.bub,.reply-text{overflow-wrap:anywhere}.reply-text{white-space:normal}.reply-text p{margin:0 0 12px}.reply-text p:last-child{margin-bottom:0}
+.reply-text img,.activity-progress img{max-width:100%;height:auto}.bub pre,.activity-body pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;box-sizing:border-box}
+.code-wrap.original-lines pre{white-space:pre;overflow-x:auto;overflow-wrap:normal}.table-scroll{max-width:100%;overflow-x:auto}.table-scroll table{width:max-content;min-width:100%}
+.file-change>span{min-width:0;overflow-wrap:anywhere;white-space:normal}.file-change{flex-wrap:wrap}
 @media(prefers-reduced-transparency:reduce){.sheet.popover .box{background:var(--panel-bg);backdrop-filter:none;-webkit-backdrop-filter:none}}
+
+.bub .table-scroll table{display:table;width:max-content;min-width:100%;table-layout:auto;word-break:normal;overflow-wrap:normal}.code-lines{min-height:44px;border:0;border-radius:999px;background:transparent;color:var(--muted);font:13px inherit;padding:4px 10px}.code-head{flex-wrap:wrap}.local-image span{display:block;font-size:12px;color:var(--muted)}

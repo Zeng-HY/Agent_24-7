@@ -7,40 +7,40 @@
   const turns=new Map(),activeTurns=new Map(),unreliableTimes=saved('teleply-activity-clock-unknown',{});let pendingTurn=null;
   const button=(text,action)=>{const b=el('button','tp-button',text);b.type='button';b.onclick=action;return b;};
   const iconButton=(name,label,action)=>{const b=button('',action);b.className='tp-icon-button';b.innerHTML=icon(name);b.setAttribute('aria-label',label);b.title=label;return b;};
-  function meta(data){if(!cur)return;const key=chatKey(cur);turns.set(key,{...(turns.get(key)||{}),...(data.activity_turns||{})});if(data.activity_current)activeTurns.set(key,data.activity_current);}
+  function meta(data){if(!cur)return;const key=chatKey(cur);turns.set(key,{...(turns.get(key)||{}),...(data.activity_turns||{})});if(data.activity_current)activeTurns.set(key,data.activity_current);queueMicrotask(tick);}
   function control(me,data){if(cur&&chatKey(cur)===chatKey(me)){const question=(data.questions||[]).find(q=>q.status==='pending');pendingTurn=question?(question.turn_id||data.active_turn_id):null;tick();}}
   function decorate(rows){
-    const result=[],groups=new Map();let fallback='history';
+    const result=[],groups=new Map();let fallback='history',segment='history';
     for(const row of rows){
       const m=row.message;
-      if(m?.role==='user')fallback=m.id||row.key;
+      if(m?.role==='user'||row.workspace?.state==='delivered'){fallback=row.key;segment=row.key;const previous=[...groups.values()].at(-1);if(previous&&!previous.activity.endedAt)previous.activity.endedAt=m?.time?Date.parse(m.time):null;}
       const items=row.items||((m?.role==='assistant'&&(m.thinking||m.phase==='commentary'))?[m]:[]);
-      if(!items.length){result.push(row);continue;}
+      if(!items.length){result.push(row);if(!row.workspace||row.workspace.state==='delivered')segment=row.key;continue;}
       for(const item of items){
         const id=item.activity_turn||item.turn_id||fallback;
-        let group=groups.get(id);
-        if(!group){group={key:'activity:'+id,activity:{id,items:[],last:false}};groups.set(id,group);result.push(group);}
+        const segmentId=id+':'+segment;let group=groups.get(segmentId);
+        if(!group){group={key:'activity:'+segmentId,activity:{id,segmentId,items:[],last:false}};groups.set(segmentId,group);result.push(group);}
         group.activity.items.push(item);
       }
     }
     const current=activeTurns.get(chatKey(cur));
-    if(current&&cur?.status==='running'&&!window.readingUI?.historyWindow&&!groups.has(current)){
-      const group={key:'activity:'+current,activity:{id:current,items:[],last:true}};groups.set(current,group);result.push(group);
+    if(current&&cur?.status==='running'&&!window.readingUI?.historyWindow&&![...groups.values()].some(g=>g.activity.id===current)){
+      const group={key:'activity:'+current,activity:{id:current,segmentId:current+':'+segment,items:[],last:true}};groups.set(current,group);result.push(group);
     }
     const last=[...groups.values()].at(-1);if(last)last.activity.last=true;
     rows.splice(0,rows.length,...result);
   }
   function state(group){
     const timing=turns.get(chatKey(cur))?.[group.id]||{};
-    const waiting=group.id===pendingTurn||!!timing.paused_at;
+    const waiting=group.last&&(group.id===pendingTurn||!!timing.paused_at);
     const active=activeTurns.get(chatKey(cur));
-    const running=(active?group.id===active:group.last&&!window.readingUI?.historyWindow)&&cur?.status==='running'&&timing.status!=='completed'&&timing.status!=='stopped';
-    const failed=group.items.some(m=>m.tool_status==='failed');
+    const running=group.last&&(active?group.id===active:group.last&&!window.readingUI?.historyWindow)&&cur?.status==='running'&&timing.status!=='completed'&&timing.status!=='stopped';
+    const failed=timing.status==='failed';
     const offline=group.last&&!!chatReadError;
     return {timing,waiting,running,failed,offline,label:offline?'连接中断':waiting?'需要你回答':failed?'执行遇到问题':running?'正在处理':timing.status==='stopped'?'已停止':timing.status==='completed'?'已完成':'处理过程'};
   }
   function render(node,group){
-    const storageKey=chatKey(cur)+':'+group.id,model=state(group);
+    const storageKey=chatKey(cur)+':'+(group.segmentId||group.id),model=state(group);
     node.className='activity-group';node.replaceChildren();node._activity=group;
     const head=button('',()=>{
       // Store the desired open state, independently of automatic running defaults.
@@ -48,30 +48,34 @@
       body.hidden=!expanded[storageKey];head.setAttribute('aria-expanded',String(!body.hidden));if(!body.hidden)paint(true);});
     head.className='activity-heading';head.append(el('span','activity-status'),el('span','activity-clock'),el('span','activity-chevron','›'));
     const body=el('div','activity-body');body.hidden=expanded[storageKey]===undefined?!model.running:!expanded[storageKey];head.setAttribute('aria-expanded',String(!body.hidden));
-    function paint(all=false){body.replaceChildren();const items=all||expanded[storageKey]?group.items:group.items.slice(-3);
+    function paint(all=false){body.replaceChildren();const items=group.items;
       if(items.length<group.items.length){const more=button('查看全部过程',()=>{expanded[storageKey]=true;persist('teleply-activity-expanded',expanded);paint(true);});body.append(more);}
-      for(const item of items){const detail=el('details','activity-item'),title=el('summary');
-        const toolKey=storageKey+':'+(item.id||item.source_id||item.time+':'+item.text);detail.open=toolExpanded.get(toolKey)||false;detail.addEventListener('toggle',()=>{toolExpanded.set(toolKey,detail.open);if(toolExpanded.size>1000)toolExpanded.delete(toolExpanded.keys().next().value);});
-        const mark=item.role!=='tool'?'·':item.tool_status==='failed'?'!':item.tool_status==='running'?'◌':item.tool_status==='completed'?'✓':'·';
+      for(const item of items){
+        if(item.role==='assistant'){const text=el('div','activity-progress');text.dataset.messageId=item.id||item.source_id||'';text.innerHTML=md(item.text,true);body.append(text);continue;}
+        const detail=el('details','activity-item'),title=el('summary');
+        detail.dataset.messageId=item.id||item.source_id||'';const toolKey=storageKey+':'+(item.id||item.source_id||item.time+':'+item.text);detail.open=toolExpanded.get(toolKey)||false;detail.addEventListener('toggle',()=>{toolExpanded.set(toolKey,detail.open);if(toolExpanded.size>1000)toolExpanded.delete(toolExpanded.keys().next().value);});
+        const mark=item.role!=='tool'?'·':item.tool_status==='failed'?'!':item.tool_status==='running'?'◌':item.tool_status==='no_matches'?'∅':item.tool_status==='completed'?'✓':'·';
         title.append(el('span','activity-mark',mark),el('span','activity-title',item.thinking?'思考摘要':item.role==='assistant'?'进度说明':item.activity_title||String(item.text).split('\n')[0].slice(0,140)));
         detail.append(title,el('pre','activity-detail',item.detail||item.text));if(item.result)detail.append(el('pre','activity-detail',item.result));
         body.append(detail);if(item.tool_status==='failed')body.append(el('div','activity-error','操作未完成，展开查看结果'));
         if(item.change_notice)body.append(el('div','hint',item.change_notice));
-        if(item.current_file&&item.tool_status==='completed'){const link=el('a','tp-button','查看当前文件');link.href='#';link.dataset.resultPath=item.current_file;body.append(link);}
+        if(item.current_file&&item.tool_status==='completed'){const link=el('a','tp-button','查看当前文件');link.href='#';link.dataset.resultIndex='0';link.dataset.messageId=item.id||item.source_id||'';body.append(link);}
         for(const c of item.changes||[]){const b=button('',()=>showDiff(c,group.items.flatMap(m=>m.changes||[])));b.className='file-change';b.append(el('span','',c.path.split(/[\\/]/).at(-1)),el('small','',`+${c.added} −${c.removed} · 查看差异 ›`));body.append(b);}
       }
     }
     paint();node.append(head,body);tickNode(node);
   }
   function tickNode(node){if(!cur)return;const g=node._activity,s=state(g);node.querySelector('.activity-status').textContent=(s.running&&!s.waiting&&!s.offline?'◌ ':'')+s.label;
-    const storageKey=chatKey(cur)+':'+g.id;if(expanded[storageKey]===undefined&&!s.running){node.querySelector('.activity-body').hidden=true;node.querySelector('.activity-heading').setAttribute('aria-expanded','false');}
+    const storageKey=chatKey(cur)+':'+(g.segmentId||g.id);if(expanded[storageKey]===undefined&&!s.running){node.querySelector('.activity-body').hidden=true;node.querySelector('.activity-heading').setAttribute('aria-expanded','false');}
     const clock=node.querySelector('.activity-clock'),t=s.timing;
     // Once waiting is observed, this source lacks a persisted pause ledger: omit duration rather than invent one.
     if(s.waiting&&!t.paused_at){unreliableTimes[storageKey]=true;persist('teleply-activity-clock-unknown',Object.fromEntries(Object.entries(unreliableTimes).slice(-300)));}
-    const end=t.paused_at||t.ended_at||(s.running&&!s.offline?Date.now():null);
-    clock.textContent=!unreliableTimes[storageKey]&&t.started_at&&end?' · '+Math.max(0,Math.floor((end-t.started_at-(t.paused_ms||0))/1000))+' 秒':'';
+    const end=g.endedAt||t.paused_at||t.ended_at||(s.running&&!s.offline?Date.now():null);
+    const paused=Array.isArray(t.pauses)?t.pauses.reduce((n,[start,stop])=>n+Math.max(0,Math.min(end,stop)-start),0):(g.endedAt?null:t.paused_ms||0);
+    clock.textContent=paused!==null&&!unreliableTimes[storageKey]&&t.started_at&&end?' · '+formatDuration(Math.max(0,Math.floor((end-t.started_at-paused)/1000))):'';
     const count=new Set(g.items.flatMap(m=>(m.changes||[]).map(c=>c.path))).size;if(count)clock.textContent+=' · 修改 '+count+' 个文件';
   }
+  function formatDuration(seconds){const h=Math.floor(seconds/3600),m=Math.floor(seconds%3600/60),s=seconds%60;return h?h+'小时'+String(m).padStart(2,'0')+'分'+String(s).padStart(2,'0')+'秒':m?m+'分'+String(s).padStart(2,'0')+'秒':s+'秒';}
   function tick(){if(document.hidden)return;document.querySelectorAll('.activity-group').forEach(tickNode);}
   setInterval(tick,1000);
 
@@ -125,6 +129,6 @@
   function groupName(c){return preferences.group==='project'?(c.folder||'未分组'):preferences.group==='app'?({codex:'Codex',claude:'Claude',deepseek:'DeepSeek'}[c.app]||c.app):'';}
   function opened(node){if(!node.classList.contains('popover'))return;clearTimeout(node._tpEntering);node.classList.add('tp-entering');node._tpEntering=setTimeout(()=>node.classList.remove('tp-entering'),300);node.querySelectorAll('.box button').forEach((b,i)=>b.style.setProperty('--enter-delay',Math.min(i*15,60)+'ms'));}
   const query=()=> (preferences.sort==='created'?'&sort=created':'')+(preferences.status&&preferences.status!=='all'?'&status='+encodeURIComponent(preferences.status):'');
-  window.interactionUI={meta,control,decorate,render,list,groupName,opened,query,sortLabel:()=>preferences.sort==='created'?'按创建时间排序':'按最近活动排序'};
+  window.interactionUI={formatDuration,meta,control,decorate,render,list,groupName,opened,query,sortLabel:()=>preferences.sort==='created'?'按创建时间排序':'按最近活动排序'};
   if(query())readingUI.loadList(false,true);
 })();

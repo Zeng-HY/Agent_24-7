@@ -320,13 +320,14 @@ def native_questions(state):
     pending_ids = {q["id"] for q in cards}
     history = []
     for turn in ordered_turns(state):
-        for item in turn.get("items", []):
+        for index,item in enumerate(turn.get("items", [])):
             if item.get("type") == "userInputResponse" and item.get("completed") and item.get("questions"):
                 ident = "native:" + str(turn.get("turnId")) + ":" + str(item.get("requestId"))
                 if ident not in pending_ids:
                     history.append({"id": ident, "request_id": item.get("requestId"), "kind": "native",
                                     "turn_id": turn.get("turnId"), "questions": item["questions"],
-                                    "created_at": (turn.get("turnStartedAtMs") or 0)/1000,
+                                    "after_id": next((v.get("id") for v in reversed(turn.get("items", [])[:index]) if v.get("type") in ("agentMessage","userMessage") and v.get("id")), None),
+                                    "before_id": next((v.get("id") for v in turn.get("items", [])[index+1:] if v.get("type") in ("agentMessage","userMessage") and v.get("id")), None),
                                     "answers": item.get("answers") or {}, "status": "answered"})
     return history[-4:] + cards
 

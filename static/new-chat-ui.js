@@ -28,10 +28,10 @@
   const sheet=$('newSheet'),box=sheet.querySelector('.sh-body');
   sheet.querySelector('b').textContent='新建对话';sheet.setAttribute('aria-label','新建对话');
   box.innerHTML=`<div class="new-apps" role="radiogroup" aria-label="客户端"><button id="newCodex" role="radio">Codex</button><button id="newClaude" role="radio">Claude</button><button id="newDeepseek" role="radio">DeepSeek</button></div>
-    <p class="hint new-caption" id="newCaption">第一句话就能附照片、文件，使用技能或引用其他对话。</p>
+    <p class="hint new-caption" id="newCaption" hidden></p>
     <div class="new-composer"><div id="newImages" class="attachment-previews" hidden></div><div id="newRefs" class="reference-chips" hidden></div>
-    <textarea id="newText" rows="4" placeholder="想做什么？输入 @ 找对话，$ 找技能" aria-label="首条消息"></textarea>
-    <div id="newSuggestions" class="new-suggestions" hidden></div><div class="new-composer-bar"><button id="newAdd" class="icon-btn" aria-label="添加照片、文件、技能或对话">＋</button><span class="hint">首条消息</span><button id="newBtn" class="icon-btn new-send" aria-label="创建并发送">${icon('send')}</button></div></div>
+    <textarea id="newText" rows="4" placeholder="想做什么？" aria-label="首条消息"></textarea>
+    <div id="newSuggestions" class="new-suggestions" hidden></div><div class="new-composer-bar"><button id="newAdd" class="icon-btn" aria-label="添加照片、文件、技能或对话">＋</button><button id="newBtn" class="icon-btn new-send" aria-label="创建并发送">${icon('send')}</button></div></div>
     <button id="newFolderChoice" class="new-folder"><span>${icon('folder')}</span><span><strong id="newFolderName">选择项目文件夹</strong><small id="newFolderPath">读取电脑上的项目…</small></span><span>⌄</span></button>
     <button id="newModelChoice" class="new-folder"><span>${SPARK}</span><span><strong id="newModelName">默认模型</strong><small id="newModelDetail">跟电脑当前设置走；点这里选</small></span><span>⌄</span></button>
     <button id="newPermissionChoice" class="new-folder" hidden><span>${icon('settings')}</span><span><strong id="newPermissionName">默认权限</strong><small>首条消息发送前设置并核对</small></span><span>⌄</span></button>
@@ -61,7 +61,7 @@
     #newModelSheet .model-list-row small{display:block;margin-top:2px;font-size:12px;font-weight:400;color:var(--muted)}#newModelSheet .model-list-row[aria-checked=true] small{color:inherit;opacity:.75}
     @media(max-height:520px){#newSheet .sh-body{gap:8px}.new-composer textarea{min-height:60px}.new-caption{font-size:12px}}
   `;document.head.append(css);
-  function panel(id,title,content,popover=false){const n=el('div','sheet'+(popover?' popover':''));n.id=id;n.setAttribute('aria-label',title);n.innerHTML='<div class="box"><div class="sh-head"><b>'+title+'</b><button class="icon-btn" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body">'+content+'</div></div>';n.querySelector('button').onclick=()=>closeSheet(id);n.onclick=e=>{if(e.target===n)closeSheet(id);};document.body.append(n);return n;}
+  function panel(id,title,content,popover=false){const n=el('div','sheet'+(popover?' popover':''));n.id=id;n.setAttribute('aria-label',title);n.innerHTML='<div class="box"><div class="sh-head"><b>'+title+'</b><button class="tp-icon-button" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body">'+content+'</div></div>';n.querySelector('button').onclick=()=>closeSheet(id);n.onclick=e=>{if(e.target===n)closeSheet(id);};document.body.append(n);return n;}
   panel('newAddMenu','添加','<button class="menu-row" id="newCamera">拍照</button><button class="menu-row" id="newPhoto">从相册选择</button><button class="menu-row" id="newPhoneFiles">手机上的文件</button><button class="menu-row" id="newPcFiles">电脑上的文件</button><button class="menu-row" id="newChatRef">引用对话</button><button class="menu-row" id="newSkillRef">使用技能</button>',true);
   panel('newModelSheet','模型与推理强度','<div id="newModelRows" role="radiogroup" aria-label="模型"></div><div class="setting-heading" id="newEffortHead">推理强度</div><div id="newEffortRows" class="effort-choices" role="radiogroup" aria-label="推理强度"></div><p id="newModelNote" class="settings-notice"></p><button class="big" id="newModelDone">好了</button>');
   panel('newPermissionSheet','新对话权限','<div id="newPermissionRows"></div>');
@@ -188,8 +188,8 @@
     const apps=box.querySelector('.new-apps');apps.hidden=[...apps.children].filter(b=>!b.hidden).length<2;  // one app: nothing to pick
     const skills=d.app!=='deepseek';  // DeepSeek takes conversations as references, not skills: nothing on the sheet offers them
     $('newSkillRef').style.display=skills?'':'none';
-    $('newCaption').textContent=skills?'第一句话就能附照片、文件，使用技能或引用其他对话。':'第一句话就能附照片、文件或引用其他对话。';
-    $('newText').placeholder=skills?'想做什么？输入 @ 找对话，$ 找技能':'想做什么？输入 @ 找对话';
+    $('newCaption').hidden=true;
+    $('newText').placeholder='想做什么？';
     $('newAdd').setAttribute('aria-label',skills?'添加照片、文件、技能或对话':'添加照片、文件或对话');
     const folder=folders.find(v=>v.path===d.folder);$('newFolderName').textContent=d.projectless?'无项目':d.label||folder?.name||(d.folder?d.folder.split(/[\\/]/).pop():'选择项目文件夹');$('newFolderPath').textContent=d.projectless?'不放进任何项目':d.folder||'电脑端的项目与对话目录';
     const pick=chosen();$('newModelName').textContent=pick?pick.modelLabel+(pick.effortLabel?' · '+pick.effortLabel:''):'默认模型';

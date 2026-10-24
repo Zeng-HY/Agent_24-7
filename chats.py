@@ -484,7 +484,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
     state = {"running": None, "turn_time": ""}
     saw_items = False
     for raw in lines:
-        if b"event_msg" not in raw[:160]:
+        if b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]:
             continue  # response items, token records, turn context: not shown
         try:
             rec = json.loads(raw)
@@ -493,6 +493,11 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
         payload = rec.get("payload") or {}
         kind = payload.get("type")
         ts = rec.get("timestamp") or ""
+        if rec.get('type')=='response_item':
+            if kind=='message' and payload.get('role')=='assistant' and payload.get('phase') in ('commentary','final_answer'):
+                text=_join_text(payload.get('content')).strip()
+                if text:msgs.append({'role':'assistant','text':text,'time':ts,'phase':payload['phase'],'source_id':payload.get('id'),'public_response':True})
+            continue
         if ts:
             state["latest_event_time"] = ts
         if kind == "item_completed":
@@ -505,7 +510,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
             elif t == "AgentMessage":
                 saw_items = True
                 text = _join_text(item.get("content")).strip()
-                if text:
+                if text and item.get('phase') in (None, 'commentary', 'final_answer'):
                     msgs.append({"role": "assistant", "text": text, "time": ts, "phase": item.get("phase") or "", "source_id": item.get("id")})
             elif t == "FunctionCallOutput":
                 delegated = _codex_delegation(item)
@@ -527,11 +532,16 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
             state.update(running=False, turn_time=ts)
             if payload.get('turn_id'):state['current_turn_id']=payload['turn_id']
         elif kind == "user_message":  # older Codex versions
-            msgs.append({"role": "user", "text": clean_codex_user(payload.get("message") or ""), "time": ts, "legacy": True})
+            msgs.append({"role": "user", "text": clean_codex_user(payload.get("message") or ""), "time": ts, "legacy": True,
+                         "source_id": payload.get("id"), "client_request_id": payload.get("client_id")})
         elif kind == "agent_message":
-            msgs.append({"role": "assistant", "text": payload.get("message") or "", "time": ts, "legacy": True})
+            if payload.get("phase") in (None, "commentary", "final_answer"):
+                msgs.append({"role": "assistant", "text": payload.get("message") or "", "time": ts, "legacy": True,
+                             "phase": payload.get("phase") or "", "source_id": payload.get("id")})
     if saw_items:
-        msgs = [m for m in msgs if not m.get("legacy")]
+        msgs = [m for m in msgs if not (m.get('legacy') and m.get('time') and any(
+            not v.get('legacy') and v.get('time')==m['time'] and v['role']==m['role']
+            and v.get('phase','')==m.get('phase','') and v['text']==m['text'] for v in msgs))]
     return msgs, state
 
 

@@ -2,6 +2,9 @@
 <html lang="zh-CN">
 <head>
 <script src="/theme.js"></script>
+<script src="/markdown-it.min.js"></script>
+<script src="/purify.min.js"></script>
+<script src="/markdown-ui.js"></script>
 <link rel="stylesheet" href="/interaction.css?v=__TELEPLY_VERSION__">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -601,15 +604,13 @@ function keyboardUnmoved() { // true: keyboard up and Safari left the view where
   return vv.offsetTop < 1 && vv.height < window.innerHeight - 120;
 }
 function viewportBox() {
-  pageHeight = window.innerHeight;
-  if (keyboardCut && keyboardUnmoved() === false) keyboardCut = 0;
-  return {top:0, height:keyboardCut || pageHeight};
+  return {top:0, height:keyboardUnmoved() === false ? window.innerHeight : (keyboardCut || window.innerHeight)};
 }
 function fitView() {
   const v = $('convView');
   if (v.style.display === 'none') return;
   const box = viewportBox(), h = box.height + 'px', t = box.top + 'px', m = $('cvMsgs'), fromEnd = m.scrollHeight - m.scrollTop - m.clientHeight;
-  if (v.style.height !== h) { v.style.height = h; m.scrollTop = m.scrollHeight - m.clientHeight - fromEnd; }
+  if (v.style.height !== h) { window.messageScroll?.capture();v.style.height = h;if(window.messageScroll)messageScroll.restore();else m.scrollTop = m.scrollHeight - m.clientHeight - fromEnd; }
   if (v.style.top !== t) v.style.top = t;
   window.navigationUI?.sync();
 }
@@ -617,7 +618,7 @@ function fitView() {
 function keyboardCheck() {
   const want = keyboardUnmoved(), vv = window.visualViewport;
   if (want === null) return;
-  if (!want) { clearTimeout(cutTimer); cutTimer = 0; if (keyboardCut) { keyboardCut = 0; fitView(); } return; }
+  if (!want) { clearTimeout(cutTimer); cutTimer = 0; keyboardCut = 0; fitView(); fitOverlays(); return; }
   if (keyboardCut) { if (keyboardCut !== Math.round(vv.height)) { keyboardCut = Math.round(vv.height); fitView(); } return; }
   if (!cutTimer) cutTimer = setTimeout(() => { cutTimer = 0; if (keyboardUnmoved() === true) { keyboardCut = Math.round(visualViewport.height); fitView(); } }, 90);
 }
@@ -627,7 +628,10 @@ if (window.visualViewport) {
   visualViewport.addEventListener('resize', keyboardCheck);
   visualViewport.addEventListener('scroll', keyboardCheck);
 }
-window.addEventListener('resize', fitView);
+window.addEventListener('resize', keyboardCheck);
+window.addEventListener('orientationchange',()=>{keyboardCut=0;keyboardCheck();setTimeout(keyboardCheck,180);});
+window.addEventListener('pageshow',keyboardCheck);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)keyboardCheck();});
 const pageHeader=document.querySelector('body>header');
 function measurePageHeader(){if(pageHeader)document.documentElement.style.setProperty('--app-header-height',pageHeader.getBoundingClientRect().height+'px');}
 if(pageHeader&&window.ResizeObserver)new ResizeObserver(measurePageHeader).observe(pageHeader);
@@ -717,46 +721,7 @@ function schedulePoll() {
   }, fast ? 2500 : 8000);
 }
 
-function md(s,copyable=false) {
-  const lines = String(s).split('\n'), out = [];
-  let fence=null,language='',code=[],table=null;
-  const flushTable = () => { if (table) { out.push('<table>' + table.join('') + '</table>'); table = null; } };
-  const copyButton=(text,label,inline=false)=>'<button type="button" class="'+(inline?'inline-copy':'code-copy')+'" data-copy-fragment="'+esc(JSON.stringify(text))+'" aria-label="'+label+'" title="'+label+'">'+(inline?'<code>'+esc(text)+'</code><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 8h11v11H8zM5 16V5h11"/></svg>':label)+'</button>';
-  const codeBlock=(closed=true)=>{const text=code.join('\n'),pre='<pre><code>'+esc(text)+'</code></pre>';if(!copyable)return pre;const label=!closed?'复制当前内容':/^(?:sh|bash|shell|zsh|cmd|powershell|ps1|bat)$/i.test(language)?'复制命令':/^(?:prompt|text|txt|md|markdown)$/i.test(language)?'复制文本':language?'复制代码':'复制内容';return '<div class="code-wrap"><div class="code-head"><span>'+esc(language||'文本')+'</span>'+copyButton(text,label)+'</div>'+pre+'</div>';};
-  const inline = t => {
-    // Parse links before escaping; never turn code spans or unsafe schemes into navigation.
-    const parts=/`([^`]+)`|\[([^\]]+)\]\((?:<([^>\n]+)>|([^\s)]+))\)/g;
-    const plain=v=>esc(v).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
-    let result='',last=0;
-    for(const m of t.matchAll(parts)){
-      result+=plain(t.slice(last,m.index));last=m.index+m[0].length;
-      if(m[1]!==undefined){result+=copyable?copyButton(m[1],'复制行内内容',true):'<code>'+esc(m[1])+'</code>';continue;}
-      const label=plain(m[2]),target=m[3]||m[4];
-      if(/^https:\/\//i.test(target)){
-        try{const u=new URL(target);if(u.username||u.password)throw Error();result+='<a href="'+esc(u.href)+'" target="_blank" rel="noopener noreferrer">'+label+'</a>';continue;}catch{}
-      }
-      if(/^[A-Za-z]:[\\/]/.test(target))result+='<a href="#" data-result-path="'+esc(target)+'">'+label+'</a>';
-      else result+=label;
-    }
-    return result+plain(t.slice(last));
-  };
-  for (const line of lines) {
-    const marker=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if(fence){if(marker&&marker[1][0]===fence[0]&&marker[1].length>=fence.length&&!marker[2].trim()){out.push(codeBlock());code=[];fence=null;}else code.push(line);continue;}
-    if(marker){flushTable();fence=marker[1];language=marker[2].trim().split(/\s+/)[0].slice(0,32);continue;}
-    if (/^\s*\|.*\|\s*$/.test(line)) {
-      if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) continue;
-      const cells = line.trim().replace(/^\||\|$/g, '').split('|').map(c => '<td>' + inline(c.trim()) + '</td>').join('');
-      (table = table || []).push('<tr>' + cells + '</tr>'); continue;
-    }
-    flushTable();
-    const h = line.match(/^#{1,6}\s+(.*)$/);
-    out.push(h ? '<b>' + inline(h[1]) + '</b>' : inline(line));
-  }
-  if(fence)out.push(codeBlock(false));
-  flushTable();
-  return out.join('\n').replace(/\n?(<table>|<\/table>|<pre>|<\/pre>)\n?/g, '$1').replace(/\n*(<div class="code-wrap">)/g,'$1').replace(/(<\/pre><\/div>)\n*/g,'$1');
-}
+function md(s,copyable=false) { return window.renderMarkdown(s,copyable); }
 
 // A reply's words as markdown, and the conversations it says it created (a button each under the text)
 function assistantMarkdown(text) {
@@ -766,14 +731,15 @@ function assistantMarkdown(text) {
     if(marker){if(!fence)fence=marker[1][0];else if(fence===marker[1][0])fence=null;lines.push(line);continue;}
     const directive=!fence && line.trim().match(/^::created-thread\{(threadId|clientThreadId)="([a-zA-Z0-9-]+)"\}$/);
     if(directive){links.push({kind:directive[1],id:directive[2]});continue;}
+    if(!fence&&/^<\/?proposed_plan>\s*$/.test(line.trim()))continue;
     lines.push(line);
   }
-  return {markdown:lines.join('\n').replace(/<\/?proposed_plan>/g,''),links};
+  return {markdown:lines.join('\n'),links};
 }
 // The words go in a box of their own, which the smooth run-out of a reply rewrites (reading-ui.js, 10-22)
 function renderAssistantText(node,text) {
   const {markdown,links}=assistantMarkdown(text);
-  node.innerHTML='<div class="reply-text">'+md(markdown,true)+'</div>';
+  let words=node.querySelector('.reply-text');if(!words){words=el('div','reply-text');node.replaceChildren(words);}else for(const child of [...node.children])if(child!==words)child.remove();window.updateMarkdown(words,markdown,true);
   for(const link of links){
     if(link.kind!=='threadId'){node.append(el('div','hint','新对话正在准备中'));continue;}
     const button=el('button','thread-link');button.innerHTML=icon('chat');button.append(document.createTextNode('打开新建对话'));
@@ -783,6 +749,7 @@ function renderAssistantText(node,text) {
 }
 
 function renderMsgs(list, note) {
+  list=window.messageProjection?messageProjection.merge([],list):list;
   const box = $('cvMsgs'), key = chatKey(cur);
   const initial = !box.dataset.ready;
   const atBottom = initial ? !scrollPositions.has(key) : box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -793,7 +760,7 @@ function renderMsgs(list, note) {
   const rows = []; let group = null;
   const lastPlan = list.findLast(m => m.role === 'plan');  // Claude's checklist: only where it stands now (10-15)
   for (const m of list) {
-    const id = m.id || [m.time,m.role,m.text].join(':');
+    const id = m.display_id || m.id || [m.time,m.role,m.text].join(':');
     if (m.role === 'plan' && m !== lastPlan) continue;
     if (m.role === 'tool') {
       if (!group) { group = {key:'tool:' + id, items:[]}; rows.push(group); }
@@ -846,11 +813,11 @@ function renderMsgs(list, note) {
       } else if (row.message.role === 'task') {
         renderTask(n,row.message);
       } else {
-        const m = row.message;
+        const m = row.message;n.dataset.messageId=m.id||'';
         const thoughtExpanded=n.classList.contains('open');
         n.className = m.role === 'event' ? 'evt' : 'bub ' + m.role + (m.phase === 'commentary' ? ' note' : '') + (m.pending ? ' pending' : '');
         const text = window.readingUI?.flowText?.(row.key, m, live && index > shownUpTo && !old.has(row.key), keys) ?? m.text;
-        if(m.role==='assistant')renderAssistantText(n,text);else n.innerHTML=md(text);
+        if(m.role==='assistant')renderAssistantText(n,text);else if(m.role==='user')n.textContent=text;else n.innerHTML=md(text);
         n.onclick = null;
         if (m.thinking) { n.classList.add('thinking'); if (m.text.length > 400) { n.classList.add('long'); if(thoughtExpanded)n.classList.add('open');n.onclick = () => n.classList.toggle('open'); } }
         if(m.thinking&&cur?.app==='deepseek')n.prepend(el('div','message-origin',m.streaming?'思考中…':'思考过程'));
@@ -865,7 +832,7 @@ function renderMsgs(list, note) {
     const target = box.children[retained.size - 1]; if (target !== n) box.insertBefore(n, target || null);
   }
   [...box.children].forEach(n => { if (!retained.has(n.dataset.key)) n.remove(); });
-  box.dataset.ready = '1'; currentMessages = list;
+  box.dataset.ready = '1'; currentMessages = list;box.scrollLeft=0;
   if (initial && scrollPositions.has(key)) box.scrollTop = scrollPositions.get(key);
   else if (atBottom) { box.scrollTop = box.scrollHeight; $('newMessages').hidden = true; }
   else {
@@ -873,6 +840,7 @@ function renderMsgs(list, note) {
     if (kept && anchorY !== undefined) box.scrollTop += kept.getBoundingClientRect().top - anchorY;
     if (list.at(-1)?.id !== previousTail) $('newMessages').hidden = false;
   }
+  window.messageScroll?.capture();
 }
 
 // Claude's checklist (update_plan in Claude desktop, TodoWrite in Claude Code), as the desktop draws it: a ring for each step
@@ -1334,6 +1302,8 @@ setMode('chat'); replaceUIState();
   paint();
 })();
 </script>
+<script src="/scroll-anchor.js"></script>
+<script src="/message-projection.js"></script>
 <script src="/codex-ui.js"></script>
 <script src="/navigation-ui.js"></script>
 <script src="/workspace-ui.js"></script>

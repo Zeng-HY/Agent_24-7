@@ -261,7 +261,7 @@ body.chat-motion.chat-open>header,body.chat-motion.chat-open>[data-mode]{visibil
   function bindPage(n){if(boundPage.has(n))return;boundPage.add(n);
     n.addEventListener('touchstart',e=>{swipe=null;if(e.touches.length!==1||cur||overlays.length||busy||drag||mode!=='chat'||workspaceUI?.composing)return;
       const t=e.touches[0],target=e.target;if(target.closest?.('input:not(.tap-tick),textarea,select,[contenteditable]'))return; // a row's tick switch still swipes
-      for(let p=target;p&&p!==n.parentNode;p=p.parentElement)if(p.scrollLeft>0)return; // a strip scrolled sideways keeps its swipe
+      for(let p=target;p&&p!==n.parentNode;p=p.parentElement)if(p.scrollWidth>p.clientWidth+1&&['auto','scroll'].includes(getComputedStyle(p).overflowX))return; // a strip scrolled sideways keeps its swipe
       swipe={x:t.clientX,y:t.clientY};},{passive:true});
     n.addEventListener('touchmove',e=>{
       if(drag?.page){if(e.touches.length!==1){endDrag(false);return;}if(e.cancelable)e.preventDefault();navMove(drag,e.touches[0]);return;}

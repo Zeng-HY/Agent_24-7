@@ -26,17 +26,17 @@ class Navigation(unittest.TestCase):
         self.assertEqual(c.update_title,'检查更新')
         c.dispatch('back');self.assertFalse(c.settings_open);self.assertEqual(c.nav_history,[])
 
-    def test_file_registry_rejects_outside_changed_and_other_thread(self):
+    def test_file_registry_allows_explicit_cross_project_current_file_only(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)/'allowed';root.mkdir();good=root/'some file.md';good.write_text('fixture')
             outside=Path(td)/'private.md';outside.write_text('private')
             h=History(secret='test');entry=SimpleNamespace(lock=threading.RLock(),messages=[{'id':'m','role':'assistant','text':f'[good](<{good}>) [bad]({outside})'}])
             h.transcript=lambda *a:({'cwd':str(root)},entry)
-            rows=h.list_files('codex','one')['items'];self.assertEqual(len(rows),1)
+            rows=h.list_files('codex','one')['items'];self.assertEqual(len(rows),2)
             self.assertEqual(rows[0]['path'],str(good));fid=rows[0]['id']
             with self.assertRaises(HistoryError):h.file('codex','two',fid)
             good.write_text('changed content')
-            with self.assertRaises(HistoryError):h.file('codex','one',fid)
+            self.assertTrue(h.file('codex','one',fid)['updated'])
 
 
 class PhoneLinks(unittest.TestCase):
@@ -77,7 +77,7 @@ class PhoneLinks(unittest.TestCase):
                         def out(data):r.fulfill(content_type='application/json',body=json.dumps(data))
                         if path==base+'/':return r.fulfill(content_type='text/html',body=scoped_page((ROOT/'remote.html').read_bytes(),device))
                         local=path.removeprefix(base)
-                        if local=='/api/chat/files':return out({'items':[{'id':'f'*32,'name':'some file.md','path':'D:\\demo\\some file.md','kind':'text'}]})
+                        if local=='/api/chat/files':return out({'items':[{'id':'f'*32,'name':'some file.md','path':'D:\\demo\\some file.md','kind':'text','index':0,'message_id':'m','state':'current'}]})
                         if local=='/api/file/meta':return out({'kind':'text'})
                         if local=='/api/file':return r.fulfill(content_type='text/plain',body='AUTHORIZED FIXTURE CONTENT')
                         if local.startswith('/api/'):return out({})

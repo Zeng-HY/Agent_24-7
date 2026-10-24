@@ -310,6 +310,10 @@ def main():
             import aiohttp,webview,win32crypt,win32security,comtypes,remote
             assert remote.chats is not None
             assert (ASSETS/'remote.html').is_file()
+            from message_files import references
+            assert references('[file](<D:/candidate/file (1).md>)')==['D:/candidate/file (1).md']
+            for asset in ('markdown-it.min.js','purify.min.js','markdown-ui.js','message-projection.js','scroll-anchor.js'):
+                assert (ASSETS/'static'/asset).is_file()
             import relay_controller,relay_updates,relay_instance
             assert (ASSETS/'desktop_status.html').is_file()
             assert relay_updates.metadata()['build']>=1

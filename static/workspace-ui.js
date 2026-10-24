@@ -36,6 +36,7 @@
     if(composing)throw Error('请先完成当前输入');
     const rid=ticket.request_id||ticket.rid||('legacy-'+Date.now()+'-'+Math.random().toString(36).slice(2));ticket.rid=rid;
     const item={rid,app:me.app,id:me.id,started:ticket.started,state:'sending',note:ticket.note,text:ticket.text,originalText:extra.originalText??input.value,transport:extra.transport||'legacy',body:extra.body||null,images:extra.images||[],settings:extra.settings||null,base:extra.base||null,references:extra.references||[]};
+    const tail=[...$('cvMsgs').children].filter(n=>!['empty','notice'].includes(n.dataset.key)).at(-1);item.predecessor=tail?._activity?.items.at(-1)?.id||tail?.dataset.key||currentMessages.at(-1)?.id||null;
     outbox.set(rid,item);try{saveOutbox();}catch(e){outbox.delete(rid);throw Error('无法保存发送副本，未发送。请释放浏览器存储空间后重试');}
     if(!extra.plan){input.value='';editVersion++;writeDraft(me,'');window.referencesUI?.clear(me);autoGrow();updateSendButton();}
     // The caller draws the bubble next: it springs up out of the send button's corner while the list glides up to it,
@@ -58,7 +59,7 @@
     requestAnimationFrame(step);
   }
   // receivedAt: when the PC confirmed it; the bubble stands in until the conversation's own copy of it comes
-  function received(item){if(item.state==='delivered'&&!item.receivedAt)item.receivedAt=Date.now();}
+  function received(item){if(item.state==='delivered'&&!item.receivedAt){item.receivedAt=Date.now();if(item.body?.intent==='queue')item.predecessor=currentMessages.at(-1)?.id||item.predecessor;}}
   function update(me,ticket){const rid=ticket.request_id||ticket.rid,item=outbox.get(rid);if(!item)return;Object.assign(item,{state:ticket.state,note:ticket.note,offset:ticket.offset,check_text:ticket.check_text,draft:ticket.draft||null});received(item);try{saveOutbox();}catch(e){}if(cur&&chatKey(cur)===chatKey(me)){renderMsgs(currentMessages);window.claudeUI?.renderQueue?.();}}
   // Text sitting in Claude's box on the PC turned this message away (10-12: an "e" typed there). Send it again, replacing
   // exactly that text: the card goes, the message comes back as it was (text, pictures, references) and is sent at once.
@@ -89,17 +90,8 @@
     if(['codex','claude','deepseek'].includes(item.app))await codexUI.restoreSubmission(item);
     updateSendButton();input.focus();
   }
-  // The conversation's own copy of a message sent from here, once the PC's record has it: Codex's and DeepSeek's by the
-  // request's number, Claude's by its words (the same words sent twice take one row each, in order). Words are no receipt
-  // for Codex or DeepSeek: there they only find the copy of a message the PC has confirmed by its number already, in a
-  // record that keeps no number (older Codex), so that its bubble does not stay beside it.
-  const plain=t=>String(t||'').replace(/^(\s*\[图片\])+/,'').replace(/\s+/g,'');
-  function sameMessage(m,item,words){
-    if(m.client_request_id===item.rid||m.request_id&&m.request_id===item.rid)return true;
-    if(item.transport==='legacy'?item.app==='codex':item.state!=='delivered'||m.client_request_id||m.request_id)return false;
-    const want=plain(item.check_text||item.text),after=new Date(m.time).getTime()-item.started;
-    return !!want&&words(m)===want&&after>-120000&&after<1800000;  // Claude may read it from its queue a while later
-  }
+  // Only transport/source identity maps an outbox entry to a transcript row.
+  function sameMessage(m,item){return window.messageProjection.matches(m,item);}
   // What the line under the bubble says; null: a problem, said in the bubble with what can be done about it (10-22).
   // Every message sent from here is the blue bubble at once and only this line changes. Before, it was pale on its way,
   // turned into a white box framed in red when the PC had not confirmed it within 25 s or the page had reloaded meanwhile,
@@ -115,16 +107,18 @@
   function decorateRows(rows){
     if(!cur)return;
     for(let i=rows.length-1;i>=0;i--)if(rows[i].key?.startsWith('pending:'))rows.splice(i,1);
-    const users=rows.filter(r=>r.message?.role==='user'&&!r.message.pending),said=new Map(),words=m=>{if(!said.has(m))said.set(m,plain(m.text));return said.get(m);};
+    if(window.readingUI?.historyWindow)return;
+    const users=rows.filter(r=>r.message?.role==='user'&&!r.message.pending);
     const taken=new Map();let changed=false;
     for(const item of [...outbox.values()].filter(v=>v.app===cur.app&&v.id===cur.id).sort((a,b)=>a.started-b.started)){
-      const row=users.find(r=>!taken.has(r)&&sameMessage(r.message,item,words));
-      if(row){taken.set(row,item);if(item.state!=='delivered'){item.state='delivered';item.note='已确认送达';changed=true;}if(!item.receivedAt){received(item);changed=true;}continue;}
+      if(!Object.hasOwn(item,'predecessor')){item.predecessor=rows.at(-1)?.message?.id||rows.at(-1)?.key||null;changed=true;}
+      const row=users.find(r=>!taken.has(r)&&sameMessage(r.message,item));
+      if(row){row.key='outbox:'+item.rid;row.images=row.images||item.images?.map(v=>v.meta).filter(Boolean);taken.set(row,item);if(item.state!=='delivered'){item.state='delivered';item.note='已确认送达';changed=true;}if(!item.receivedAt){received(item);changed=true;}continue;}
       // confirmed, its copy not here yet: Claude's is in its record already (it was checked there) and comes with the next
       // read; Codex's and DeepSeek's may wait for the running turn's next step
-      if(item.state==='delivered'&&!(Date.now()-item.receivedAt<(item.transport==='legacy'?12000:600000)))continue;
-      if(item.body?.intent==='queue'&&['sending','queued','unconfirmed','cancelled'].includes(item.state))continue;
-      rows.push({key:'outbox:'+item.rid,workspace:{...item,body:undefined,line:line(item)},created:item.started/1000});
+      // Keep unresolved identity stable, including after reconnect or a late receipt.
+      if(item.state==='queued'||item.body?.intent==='queue'&&['sending','queued','unconfirmed','cancelled'].includes(item.state))continue;
+      window.messageProjection.place(rows,{key:'outbox:'+item.rid,workspace:{...item,body:undefined,line:line(item)},created:item.started/1000},item);
     }
     if(changed)try{saveOutbox();}catch(e){}
     // 电脑已接收 moves onto the conversation's copy, and stays under the newest one until you say something after it
@@ -176,7 +170,7 @@
     // DeepSeek's queued ones are settled by the conversation's copy, as its receipt says accepted all the while
     let errors=0;try{for(const item of [...outbox.values()].filter(v=>v.id===me.id&&v.app===me.app&&(!onlyRid||v.rid===onlyRid)&&['unconfirmed','pressed','queued'].includes(v.state)&&!(v.transport==='deepseek'&&v.state==='queued')).slice(-8)){
       try{let delivered=false;
-        if(item.transport==='codex'){const r=await api('/api/codex/receipt?id='+encodeURIComponent(item.id)+'&request_id='+item.rid);delivered=r.state==='accepted';if(['queued','cancelled','rejected'].includes(r.state)){item.state=r.state;item.note=r.result?.text||r.state;}}
+        if(item.transport==='codex'){const r=await api('/api/codex/receipt?id='+encodeURIComponent(item.id)+'&request_id='+item.rid);delivered=r.state==='accepted';item.client_id=r.result?.client_id||item.client_id;item.source_id=r.result?.evidence?.message_id||item.source_id;if(['queued','cancelled','rejected'].includes(r.state)){item.state=r.state;item.note=r.result?.text||r.state;}}
         else if(item.transport==='deepseek'){const r=await api('/api/deepseek/receipt?request_id='+encodeURIComponent(item.rid));if(r.state==='accepted'){if(item.body?.intent!=='queue')delivered=true;else{item.state='queued';item.note='已排队';}}}
         else if(item.app!=='codex'&&item.offset!=null){const r=await api('/api/chat/check',{app:item.app,id:item.id,offset:item.offset,text:item.check_text||item.text});delivered=r.delivered;if(r.queued){item.state='queued';item.note='已进入 Claude 队列，等待读取';}}
         if(delivered){item.state='delivered';item.note=item.app==='codex'?'已交给 Codex':'已确认送达';received(item);const ticket=pendingSends.get(item.app+':'+item.id);if((ticket?.request_id||ticket?.rid)===item.rid){ticket.state='delivered';ticket.note=item.note;persistPending();}}
@@ -199,6 +193,7 @@
       if(saved.selection)input.setSelectionRange(Math.min(saved.selection[0],input.value.length),Math.min(saved.selection[1],input.value.length));
     }catch(e){}finally{restoring=false;}}
   window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,decorateRows,renderOutbox,paintReceipt,pollReceipts,saveScene,diagnostics,queued,pendingQueue,queueMenu,editQueued,editableQueue,dismissRid(rid){return dismiss(outbox.get(rid));},
+    delivered(rid){return outbox.get(rid)?.state==='delivered';},
     has(rid){return outbox.has(rid)||dismissed.has(rid);},  // a send this page keeps (deepseek-ui.js: its draft has left the box)
     canPoll(){return !document.hidden&&!composing&&testMode!=='pause';},get paused(){return testMode==='pause';}};
   // Migrate the previous single pending entry without inventing delivery success.

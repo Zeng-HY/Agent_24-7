@@ -42,10 +42,13 @@ class Transcript:
                     for k,v in state.items():
                         if v is not None and v!='':self.state[k]=v
                     for m in msgs:
-                        modern=self.app=='codex' and m['role'] in ('user','assistant') and not m.get('legacy')
-                        if modern and not self.modern:
-                            self.modern=True;self.messages=[v for v in self.messages if not v.get('legacy')];self.by_id={v['id']:v for v in self.messages}
-                        if self.modern and m.get('legacy'):continue
+                        # Dual log representations may share a source ID, or exact
+                        # timestamp/turn/phase/content evidence. Never drop all legacy rows.
+                        if self.app=='codex':
+                            peer=next((v for v in reversed(self.messages[-4:]) if v['role']==m['role'] and v.get('time')==m.get('time') and v.get('phase','')==m.get('phase','') and v['text']==m['text'] and v.get('turn_id')==self.state.get('current_turn_id') and bool(v.get('public_response'))!=bool(m.get('public_response'))),None)
+                            if peer:
+                                if m.get('source_id'):peer['source_id']=m['source_id'];self.by_id[m['source_id']]=peer
+                                continue
                         identity=json.dumps([m.get('time'),m['role'],m.get('phase'),m['text']],ensure_ascii=False)
                         digest=hashlib.sha256(identity.encode()).hexdigest()[:24]
                         self.duplicates[digest]=self.duplicates.get(digest,0)+1
@@ -217,42 +220,45 @@ class History:
                 hits.append({'id':m['id'],'role':m['role'],'origin':m.get('origin'),'time':m.get('time'),'snippet':m['text'][max(0,at-60):at+len(query)+100]})
             more=offset+limit<len(hits)
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
-    def list_files(self,app,tid):
-        item,entry=self.transcript(app,tid);roots=[Path(r).resolve() for r in self.roots if r]
-        if item.get('cwd'):roots.append(Path(item['cwd']).resolve())
+    def list_files(self,app,tid,message_id=None):
+        from message_files import references
+        item,entry=self.transcript(app,tid)
         allowed={'.pdf','.doc','.docx','.xls','.xlsx','.csv','.tsv','.txt','.md','.png','.jpg','.jpeg','.webp','.json','.py','.js','.html','.zip','.pptx','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql'}
-        seen=set();out=[]
+        out=[]
         with entry.lock:
-            messages=[m for m in entry.messages if (m['role']=='assistant' and m.get('phase')!='commentary') or (m.get('current_file') and m.get('tool_status')=='completed')]
+            messages=[m for m in entry.messages if (m['role']=='assistant' or (m.get('current_file') and m.get('tool_status')=='completed')) and (not message_id or m['id']==message_id)]
             for m in reversed(messages):
-                paths=[unquote((match[2] or match[3] or '').strip()) for match in re.finditer(r'!?\[([^\]]*)\]\((?:<([^>]+)>|([^\n)]+))\)',m['text'])] if m['role']=='assistant' else [m['current_file']]
-                for raw in paths:
-                    raw=re.sub(r':\d+(?:-\d+)?$','',raw)
-                    if not re.match(r'^[A-Za-z]:[\\/]',raw):continue
+                paths=references(m['text']) if m['role']=='assistant' else [m['current_file']]
+                for index,raw in enumerate(paths):
                     p=Path(raw)
-                    if p.suffix.lower() not in allowed:continue
-                    try:
-                        p=p.resolve()
-                        if not any(p.is_relative_to(root) for root in roots) or not p.is_file() or str(p) in seen:continue
-                        st=p.stat()
-                    except (OSError,ValueError):continue
-                    seen.add(str(p));identity=[app,tid,str(p),st.st_size,st.st_mtime_ns]
+                    if not p.is_absolute() or p.suffix.lower() not in allowed:continue
+                    identity=[app,tid,m['id'],index,str(p)]
                     fid=hmac.new(self.secret,json.dumps(identity).encode(),hashlib.sha256).hexdigest()[:32]
-                    suffix=p.suffix.lower();kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and st.st_size<=1<<20 else 'download'
-                    self.files[(app,tid,fid)]={'path':p,'size':st.st_size,'mtime':st.st_mtime_ns,'roots':roots,'kind':kind}
-                    out.append({'id':fid,'name':p.name,'path':str(p),'size':st.st_size,'modified':st.st_mtime_ns//1000000,'kind':kind,'message_id':m['id']})
-                if len(out)>=100:break
-        if len(self.files)>1000:
-            for key in list(self.files)[:len(self.files)-1000]:self.files.pop(key,None)
-        return {'items':out,'scope':'助手正式回复引用或成功文件操作记录中、且位于允许目录内的当前文件'}
+                    old=self.files.get((app,tid,fid))
+                    try:
+                        resolved=p.resolve()
+                        # A specific path grants no authority over a symlink/junction's new target.
+                        if resolved!=p.absolute():continue
+                        st=p.stat() if p.is_file() else None
+                    except (OSError,ValueError):st=None
+                    suffix=p.suffix.lower();size=st.st_size if st else 0
+                    kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and size<=1<<20 else 'download'
+                    updated=bool(old and st and old['mtime'] is not None and (old['mtime']!=st.st_mtime_ns or old['size']!=size))
+                    self.files[(app,tid,fid)]={'path':p,'resolved':resolved,'size':size,'mtime':st.st_mtime_ns if st else None,'kind':kind,'message_id':m['id'],'index':index,'updated':updated or bool(old and old.get('updated'))}
+                    out.append({'id':fid,'name':p.name,'path':str(p),'size':size,'modified':st.st_mtime_ns//1000000 if st else None,'kind':kind,'message_id':m['id'],'index':index,'state':'missing' if not st else 'updated' if self.files[(app,tid,fid)]['updated'] else 'current'})
+        return {'items':out,'scope':'当前会话明确引用的具体文件；打开当前内容，不保存历史副本'}
+
     def file(self,app,tid,fid):
         meta=self.files.get((app,tid,fid))
-        if not meta:self.list_files(app,tid);meta=self.files.get((app,tid,fid))
-        if not meta:raise HistoryError('文件引用不存在或已更新，请刷新文件列表',404)
+        # Revalidate source authorization on every access, including old references.
+        listed=self.list_files(app,tid,meta['message_id'] if meta else None)
+        if not any(f['id']==fid for f in listed['items']):raise HistoryError('文件引用无效或不属于当前对话',403)
+        meta=self.files[(app,tid,fid)]
         try:
-            p=meta['path'].resolve();st=p.stat()
-            if not any(p.is_relative_to(r) for r in meta['roots']):raise HistoryError('文件已移出允许范围',403)
-            if st.st_size!=meta['size'] or st.st_mtime_ns!=meta['mtime']:raise HistoryError('文件已更新，请刷新文件列表',409)
+            p=meta['path'].resolve()
+            if p!=meta['resolved'] or p!=meta['path'].absolute():raise HistoryError('文件真实路径已变化，引用无效',403)
+            if not p.is_file():raise HistoryError('文件已移动或删除',404)
+            st=p.stat()
         except OSError:raise HistoryError('文件已移动或删除',404) from None
         mime='application/pdf' if meta['kind']=='pdf' else (mimetypes.guess_type(p.name)[0] or 'image/png') if meta['kind']=='image' else 'text/plain; charset=utf-8' if meta['kind']=='text' else 'application/octet-stream'
-        return {**meta,'path':p,'mime':mime}
+        return {**meta,'path':p,'size':st.st_size,'mime':mime}

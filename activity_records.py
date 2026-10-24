@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import re
 from datetime import datetime
 
 
@@ -51,11 +52,12 @@ def enrich(app, raw, messages, context):
                     end = milliseconds(ts)
                     if start is not None and end is not None:
                         clock['paused_ms'] = clock.get('paused_ms', 0) + max(0, end-start)
+                        clock.setdefault('pauses', []).append([start,end])
             return messages
         if kind == 'task_started':
             context['activity_turn'] = p.get('turn_id') or 'start:' + ts
             context.setdefault('activity_turns', {})[context['activity_turn']] = {
-                'status': 'running', 'started_at': milliseconds(ts)}
+                'status': 'running', 'started_at': milliseconds(ts), 'pauses': []}
         turn = context.get('activity_turn')
         if kind in ('task_complete', 'turn_aborted') and turn:
             context['activity_turns'][turn].update(
@@ -90,6 +92,10 @@ def enrich(app, raw, messages, context):
                     m['detail'] = (command if isinstance(command, str) else json.dumps(command, ensure_ascii=False))[:16000]
                     m['result'] = str(item.get('aggregated_output') or '')[:16000]
                     m['tool_status'] = 'failed' if item.get('exit_code', item.get('exitCode', 0)) not in (0, None) else 'completed'
+                    # ripgrep's documented exit 1 means no matches only for a
+                    # single direct invocation without shell composition/output.
+                    if item.get('exit_code',item.get('exitCode'))==1 and isinstance(command,str) and re.match(r'^\s*(?:rg|ripgrep)\s',command) and not re.search(r'[;&|<>\r\n`]',command) and not m['result'].strip():
+                        m['tool_status']='no_matches';m['result']='搜索完成，没有匹配项'
     elif app == 'claude':
         blocks = (record.get('message') or {}).get('content')
         blocks = blocks if isinstance(blocks, list) else []

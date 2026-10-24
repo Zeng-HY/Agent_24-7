@@ -101,6 +101,11 @@ DEFAULT_CONFIG = {
 RETIRED_KEYS = ("browser", "profile", "userscripts", "window", "download_dir", "inbox", "urls", "dialog_wait_seconds",
                 "chooser_wait_seconds", "question_wait_seconds", "page_pins", "win_presets")
 STATIC_FILES = {  # served without the token: home-screen icons and the web app manifest
+    '/markdown-it.min.js': ('markdown-it.min.js','application/javascript; charset=utf-8'),
+    '/purify.min.js': ('purify.min.js','application/javascript; charset=utf-8'),
+    '/markdown-ui.js': ('markdown-ui.js','application/javascript; charset=utf-8'),
+    '/scroll-anchor.js': ('scroll-anchor.js','application/javascript; charset=utf-8'),
+    '/message-projection.js': ('message-projection.js','application/javascript; charset=utf-8'),
     '/interaction-ui.js': ('interaction-ui.js','application/javascript; charset=utf-8'),
     '/interaction.css': ('interaction.css','text/css; charset=utf-8'),
     '/deepseek-ui.js': ('deepseek-ui.js','application/javascript; charset=utf-8'),
@@ -694,11 +699,11 @@ class Handler(BaseHTTPRequestHandler):
                     live_events.stream(self,self.history,self.server.codex,getattr(self.server,'tasks',None),app,tid)
             elif path=='/api/chat/search':self._json(self.history.search(app,tid,q.get('query',''),q.get('cursor','')))
             elif path=='/api/chat/message':self._json(self.history.message(app,tid,q.get('message','')))
-            elif path=='/api/chat/files':self._json(self.history.list_files(app,tid))
+            elif path=='/api/chat/files':self._json(self.history.list_files(app,tid,q.get('message')))
             elif path=='/api/chat/diff':self._json(self.history.diff(app,tid,q.get('ref',''),q.get('offset',0)))
             else:
                 meta=self.history.file(app,tid,q.get('file',''))
-                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind']})
+                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current'})
                 elif path=='/api/file/text':
                     if meta['kind']!='text':raise chat_history.HistoryError('这个文件不提供文本预览')
                     raw=meta['path'].read_bytes()
