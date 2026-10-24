@@ -42,6 +42,10 @@ Get-Content "D:/示例项目/很长的路径/文件名 (1).txt"
 
 [测试文件](<D:/candidate/中文 文件 (1).md>)
 
+[HTML 静态页面](<D:/candidate/静态 页面 (1).html>)
+
+[ZIP 下载](D:/candidate/sample.zip)
+
 `[代码示例不应成为附件](D:/private.md)`
 '''
 def message(mid,role,text,order,**kw):return dict(id=mid,role=role,text=text,order=order,**kw)
@@ -110,10 +114,15 @@ def main():
             if u.path=='/api/chat':return self.respond(chat(cid,q.get('before',[''])[0]))
             if u.path=='/api/codex/state':return self.respond(control(cid))
             if u.path=='/api/codex/receipt':return self.respond({'state':'unknown'})
-            if u.path=='/api/chat/files':return self.respond({'items':[dict(id='fixture-image',index=0,message_id='markdown',name='image.png',kind='image',state='current'),dict(id='fixture-text',index=1,message_id='markdown',name='中文 文件 (1).md',kind='text',state='current')]})
-            if u.path=='/api/file/meta':return self.respond({'state':'current'})
+            if u.path=='/api/chat/files':return self.respond({'items':[dict(id='fixture-image',index=0,message_id='markdown',name='image.png',kind='image',state='current'),dict(id='fixture-text',index=1,message_id='markdown',name='中文 文件 (1).md',kind='text',state='current'),dict(id='fixture-html',index=2,message_id='markdown',name='静态 页面 (1).html',kind='text',state='current'),dict(id='fixture-zip',index=3,message_id='markdown',name='sample.zip',kind='download',state='current')]})
+            if u.path=='/api/file/meta':
+                item={'fixture-image':('image.png','image'),'fixture-text':('中文 文件 (1).md','text'),'fixture-html':('静态 页面 (1).html','text'),'fixture-zip':('sample.zip','download')}.get(q.get('file',[''])[0])
+                if not item:return self.respond({'error':'引用无效'},403)
+                return self.respond({'state':'current','name':item[0],'kind':item[1]})
             if u.path=='/api/file':
                 if q.get('file')==['fixture-image']:return self.respond(assets['/icon-192.png'][0],mime='image/png')
+                if q.get('file')==['fixture-html']:return self.respond('<!doctype html><meta charset=utf-8><style>body{font:16px system-ui;padding:24px;color:#17395d}section{padding:20px;background:#edf4ff;border-radius:16px}</style><h1>统一候选 · HTML 附件</h1><section>可以查看页面、查看源码及下载原文件。退出后应回到原聊天位置。</section><script>document.body.textContent="不应执行"</script>'.encode(),mime='application/octet-stream')
+                if q.get('file')==['fixture-zip']:return self.respond(bytes.fromhex('504b05060000000000000000000000000000000000000000'),mime='application/octet-stream')
                 if q.get('file')==['fixture-text']:return self.respond('这是隔离预览文件，不读取电脑真实文件。'.encode(),mime='text/plain; charset=utf-8')
                 return self.respond({'error':'引用无效'},403)
             if u.path=='/api/events':return self.respond({},404)
