@@ -9,7 +9,7 @@ import motion_check as fixture
 def main():
     sent, replies, receipts, held = [], [], {}, []
     card = {"id": "async:test-call", "request_id": "test-call", "kind": "async", "turn_id": "test-turn",
-            "status": "pending", "editable": True, "answer_revision": "0", "created_at": 1,
+            "status": "pending", "source_id":"question-source", "editable": True, "answer_revision": "0", "created_at": 1,
             "questions": [{"id": "0", "question": "测试金额", "options": [{"label": "10"}, {"label": "5"}], "isOther": True}]}
     state = {"available": True, "running": True, "active_turn_id": "test-turn", "questions": [card],
              "queue_available": True, "queued": [], "images": [], "plan": None,
@@ -20,6 +20,8 @@ def main():
         path = urlsplit(req.url).path
         body = json.loads(req.post_data or "{}")
         def out(v): r.fulfill(status=200, content_type="application/json", body=json.dumps(v))
+        if path == "/api/chat":
+            chat=fixture.fake_chat('codex','c4');chat['messages'].append({'id':'question-source','role':'assistant','text':'Question','order':900});return out(chat)
         if path == "/api/codex/state": return out(state)
         if path == "/api/codex/receipt":
             from urllib.parse import parse_qs
@@ -54,7 +56,8 @@ def main():
         page.on("pageerror", lambda e: errors.append(e.message))
         page.goto(fixture.ORIGIN)
         page.wait_for_function("window.codexUI && window.workspaceUI")
-        page.evaluate("c=>openConv(c)", fixture.fake_chat("codex", "c4"))
+        chat=fixture.fake_chat("codex","c4");chat['messages'].append({'id':'question-source','role':'assistant','text':'Question','order':900})
+        page.evaluate("c=>openConv(c)",chat)
         page.locator("#cvOpts .codex-ask").click()
         assert page.locator(".ask-next").is_disabled()
         page.locator(".ask-choice").first.click()
@@ -62,6 +65,7 @@ def main():
         page.locator(".ask-next").click()
         page.wait_for_function("!overlays.some(o=>o.id==='codexAskSheet')")
         assert replies[-1]["answers"] == {"0": ["10"]}
+        page.locator(".question-history summary").click()
         page.get_by_role("button", name="修改答案", exact=True).click()
         page.locator(".ask-choice").nth(1).click()
         assert len(replies) == 1

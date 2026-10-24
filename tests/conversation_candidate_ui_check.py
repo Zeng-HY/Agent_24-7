@@ -48,7 +48,7 @@ with sync_playwright() as p:
         assert page.locator('#cvMsgs details').count()==1
         assert not page.evaluate('!!window.BAD')
         assert page.evaluate(r"assistantMarkdown('```html\n<proposed_plan>\n```').markdown.includes('<proposed_plan>')")
-        assert page.evaluate(r"""()=>{const n=document.createElement('div');n.innerHTML=md('命令 `echo "a b"`',true);const b=n.querySelector('.inline-copy');return b&&JSON.parse(b.dataset.copyFragment)==='echo "a b"';}""")
+        assert page.evaluate(r"""()=>{const n=document.createElement('div');n.innerHTML=md('命令 `echo "a b"`',true);return !n.querySelector('.inline-copy')&&n.querySelector('code').textContent==='echo "a b"';}""")
         assert page.evaluate("$('cvMsgs').scrollWidth<=$('cvMsgs').clientWidth+1"),page.evaluate("[...document.querySelectorAll('#cvMsgs *')].filter(n=>n.getBoundingClientRect().right>innerWidth).map(n=>n.className)")
         page.locator('.code-lines').click();assert page.locator('.code-wrap').evaluate('(n)=>n.classList.contains("original-lines")')
         assert page.locator('.code-copy').evaluate('(n)=>JSON.parse(n.dataset.copyFragment).length')==501

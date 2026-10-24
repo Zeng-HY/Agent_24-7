@@ -512,6 +512,8 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
                 text = _join_text(item.get("content")).strip()
                 if text and item.get('phase') in (None, 'commentary', 'final_answer'):
                     msgs.append({"role": "assistant", "text": text, "time": ts, "phase": item.get("phase") or "", "source_id": item.get("id")})
+            elif t == 'Plan' and isinstance(item.get('text'),str):
+                msgs.append({'role':'assistant','phase':'final_answer','text':item['text'],'time':ts,'source_id':item.get('id'),'native_plan':True})
             elif t == "FunctionCallOutput":
                 delegated = _codex_delegation(item)
                 if delegated:

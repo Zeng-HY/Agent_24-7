@@ -9,8 +9,7 @@
   const outbox=new Map((read(outboxKey,[])||[]).filter(v=>!dismissed.has(v.rid)).map(v=>[v.rid,v]));
   for(const item of outbox.values())if(item.state==='sending'||item.state==='pressed'){item.state='unconfirmed';item.note='正在核对上次发送结果';}
   function saveOutbox(){
-    const values=[...outbox.values()],done=values.filter(v=>v.state==='delivered').sort((a,b)=>b.started-a.started).slice(0,60),open=values.filter(v=>v.state!=='delivered');
-    localStorage.setItem(outboxKey,JSON.stringify([...done,...open]));
+    localStorage.setItem(outboxKey,JSON.stringify([...outbox.values()]));
   }
   const css=el('style');css.textContent=`.bub.user.outbox{transform-origin:100% 100%}.bub.user.outbox .outbox-refs{font-size:12px;opacity:.8;margin-top:4px}.bub.user.has-receipt{position:relative;margin-bottom:38px}.bub.user .send-receipt{position:absolute;right:6px;top:100%;margin-top:5px;font-size:12px;line-height:16px;font-weight:400;color:var(--muted);white-space:nowrap;pointer-events:none;-webkit-user-select:none;user-select:none}.bub.user .send-receipt.sending{animation:sendPulse 1.4s ease-in-out infinite}.bub.user .send-receipt.done::before{content:'✓ '}@keyframes sendPulse{50%{opacity:.35}}.bub.user.outbox.problem{position:relative}.bub.user.outbox.problem::before{content:'!';position:absolute;left:-30px;top:50%;margin-top:-10px;width:20px;height:20px;border-radius:50%;background:var(--red);color:#fff;font:700 13px/20px -apple-system,sans-serif;text-align:center}.bub.user.outbox.problem button.outbox-state{display:block;border:0;background:transparent;padding:0;margin-top:6px;min-height:28px;color:inherit;font-size:13px;font-weight:600;text-align:left}.bub.user.outbox .message-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.bub.user.outbox.problem .message-actions button{border:0;border-radius:999px;background:rgba(255,255,255,.22);color:#fff;padding:6px 14px;min-height:36px;font-size:13px;font-weight:500}.bub.user.outbox.problem .message-actions button.outbox-replace{background:#fff;color:var(--blue)}.bub.user.outbox .outbox-why{flex-basis:100%;font-size:12px;line-height:1.5;opacity:.85;white-space:normal}.input-test-bar{padding:8px 12px;font-size:12px;background:#fff7ed;color:#92400e}.input-test-bar a{color:inherit}.diagnostic-events{max-height:50dvh;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}`;document.head.append(css);
   const events=[];
@@ -35,7 +34,7 @@
   function capture(me,ticket,extra={}){
     if(composing)throw Error('请先完成当前输入');
     const rid=ticket.request_id||ticket.rid||('legacy-'+Date.now()+'-'+Math.random().toString(36).slice(2));ticket.rid=rid;
-    const item={rid,app:me.app,id:me.id,started:ticket.started,state:'sending',note:ticket.note,text:ticket.text,originalText:extra.originalText??input.value,transport:extra.transport||'legacy',body:extra.body||null,images:extra.images||[],settings:extra.settings||null,base:extra.base||null,references:extra.references||[]};
+    const item={position_version:2,rid,app:me.app,id:me.id,started:ticket.started,state:'sending',note:ticket.note,text:ticket.text,originalText:extra.originalText??input.value,transport:extra.transport||'legacy',body:extra.body||null,images:extra.images||[],settings:extra.settings||null,base:extra.base||null,references:extra.references||[]};
     const tail=[...$('cvMsgs').children].filter(n=>!['empty','notice'].includes(n.dataset.key)).at(-1);item.predecessor=tail?._activity?.items.at(-1)?.id||tail?.dataset.key||currentMessages.at(-1)?.id||null;
     outbox.set(rid,item);try{saveOutbox();}catch(e){outbox.delete(rid);throw Error('无法保存发送副本，未发送。请释放浏览器存储空间后重试');}
     if(!extra.plan){input.value='';editVersion++;writeDraft(me,'');window.referencesUI?.clear(me);autoGrow();updateSendButton();}
@@ -104,27 +103,21 @@
     if(item.state==='unconfirmed'&&Date.now()-item.started<GRACE)return {k:'sending',text:'确认中…'};
     return null;
   }
-  function decorateRows(rows){
-    if(!cur)return;
-    for(let i=rows.length-1;i>=0;i--)if(rows[i].key?.startsWith('pending:'))rows.splice(i,1);
-    if(window.readingUI?.historyWindow)return;
-    const users=rows.filter(r=>r.message?.role==='user'&&!r.message.pending);
-    const taken=new Map();let changed=false;
-    for(const item of [...outbox.values()].filter(v=>v.app===cur.app&&v.id===cur.id).sort((a,b)=>a.started-b.started)){
-      if(!Object.hasOwn(item,'predecessor')){item.predecessor=rows.at(-1)?.message?.id||rows.at(-1)?.key||null;changed=true;}
-      const row=users.find(r=>!taken.has(r)&&sameMessage(r.message,item));
-      if(row){row.key='outbox:'+item.rid;row.images=row.images||item.images?.map(v=>v.meta).filter(Boolean);taken.set(row,item);if(item.state!=='delivered'){item.state='delivered';item.note='已确认送达';changed=true;}if(!item.receivedAt){received(item);changed=true;}continue;}
-      // confirmed, its copy not here yet: Claude's is in its record already (it was checked there) and comes with the next
-      // read; Codex's and DeepSeek's may wait for the running turn's next step
-      // Keep unresolved identity stable, including after reconnect or a late receipt.
-      if(item.state==='queued'||item.body?.intent==='queue'&&['sending','queued','unconfirmed','cancelled'].includes(item.state))continue;
-      window.messageProjection.place(rows,{key:'outbox:'+item.rid,workspace:{...item,body:undefined,line:line(item)},created:item.started/1000},item);
-    }
-    if(changed)try{saveOutbox();}catch(e){}
-    // 电脑已接收 moves onto the conversation's copy, and stays under the newest one until you say something after it
-    const last=rows.findLast(r=>r.workspace||r.message?.role==='user');
-    if(last&&taken.has(last))last.receipt={k:'done',text:'电脑已接收'};
+  function observations(){return [...outbox.values()].filter(v=>v.app===cur?.app&&v.id===cur?.id).sort((a,b)=>a.started-b.started).map(v=>({...v,line:line(v)}));}
+  function acceptSource(rid,message){const item=outbox.get(rid);if(!item)return;if(item.recorded&&item.source_id===message.id)return;item.recorded=true;item.source_id=message.id;item.state='delivered';received(item);try{saveOutbox();}catch{}}
+  let resolving=false,lastResolution=0;
+  async function resolveLocations(){
+    if(resolving||!cur||composing||document.hidden)return;const me={...cur};const pending=observations().filter(v=>!v.recorded&&!['rejected','cancelled'].includes(v.state));if(!pending.length)return;
+    resolving=true;try{for(let start=0;start<pending.length;start+=100){const result=await api('/api/chat/resolve',{app:me.app,id:me.id,request_ids:pending.slice(start,start+100).map(v=>v.rid)});
+      for(const match of result.items||[]){const item=outbox.get(match.request_id);if(!item||item.id!==me.id||item.app!==me.app)continue;item.resolution=match;if(match.status==='recorded'){item.recorded=true;item.source_id=match.message_id;item.state='delivered';received(item);}}
+    }saveOutbox();if(cur&&chatKey(cur)===chatKey(me))renderMsgs(currentMessages);
+    }catch{}finally{resolving=false;lastResolution=Date.now();}
   }
+  let unresolved=[];
+  const unresolvedButton=el('button','menu-row','待核对发送记录');unresolvedButton.hidden=true;
+  $('convMenu').querySelector('.sh-body').append(unresolvedButton);
+  function setUnresolved(items){unresolved=items;unresolvedButton.hidden=!items.length;unresolvedButton.textContent='待核对发送记录（'+items.length+'）';if(Date.now()-lastResolution>4000)queueMicrotask(resolveLocations);}
+  unresolvedButton.onclick=()=>{dismissOverlays();let sheet=$('unresolvedSends');if(!sheet){sheet=el('div','sheet');sheet.id='unresolvedSends';sheet.innerHTML='<div class="box"><div class="sh-head"><b>待核对发送记录</b><button class="tp-icon-button" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body"></div></div>';sheet.querySelector('button').onclick=()=>closeSheet(sheet.id);document.body.append(sheet);}const body=sheet.querySelector('.sh-body');body.replaceChildren(el('p','hint','这些记录缺少可靠的来源位置，暂不插入对话。原内容和草稿仍保留，不会自动重发。'));for(const item of unresolved){const row=el('div','unresolved-send');row.append(el('p','',item.originalText||item.text||'图片或引用消息'));const check=el('button','tp-button','重新核对');check.onclick=async()=>{await resolveLocations();if(!unresolved.some(v=>v.rid===item.rid))row.remove();};const back=el('button','tp-button','恢复草稿');back.onclick=()=>restore(outbox.get(item.rid));row.append(check,back);body.append(row);}openSheet(sheet.id);};
   function paintReceipt(node,said){node.classList.add('has-receipt');node.append(el('span','send-receipt '+said.k,said.text));}
   function renderOutbox(node,item){
     const sent=justSent.get(item.rid);justSent.delete(item.rid);if(performance.now()-sent<1500)queueMicrotask(()=>pop(node));  // drawn for the first time, just sent (and by then in the page)
@@ -192,12 +185,12 @@
       if(cur?.id!==c.id)return;const node=[...$('cvMsgs').children].find(n=>n.dataset.key===saved.anchor);if(node)$('cvMsgs').scrollTop+=node.getBoundingClientRect().top-$('cvMsgs').getBoundingClientRect().top-(saved.anchorOffset||0);
       if(saved.selection)input.setSelectionRange(Math.min(saved.selection[0],input.value.length),Math.min(saved.selection[1],input.value.length));
     }catch(e){}finally{restoring=false;}}
-  window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,decorateRows,renderOutbox,paintReceipt,pollReceipts,saveScene,diagnostics,queued,pendingQueue,queueMenu,editQueued,editableQueue,dismissRid(rid){return dismiss(outbox.get(rid));},
+  window.workspaceUI={get composing(){return composing;},get version(){return editVersion;},capture,update,observations,acceptSource,setUnresolved,resolveLocations,renderOutbox,paintReceipt,pollReceipts,saveScene,diagnostics,queued,pendingQueue,queueMenu,editQueued,editableQueue,dismissRid(rid){return dismiss(outbox.get(rid));},
     delivered(rid){return outbox.get(rid)?.state==='delivered';},
     has(rid){return outbox.has(rid)||dismissed.has(rid);},  // a send this page keeps (deepseek-ui.js: its draft has left the box)
     canPoll(){return !document.hidden&&!composing&&testMode!=='pause';},get paused(){return testMode==='pause';}};
   // Migrate the previous single pending entry without inventing delivery success.
   for(const [key,ticket] of pendingSends){const [app,...parts]=key.split(':'),id=parts.join(':'),rid=ticket.request_id||ticket.rid;if(dismissed.has(rid)){pendingSends.delete(key);continue;}if(rid&&!outbox.has(rid)&&ticket.state!=='delivered')outbox.set(rid,{...ticket,rid,app,id,transport:ticket.request_id?'codex':'legacy',images:[],body:ticket.submission||null});}persistPending();
   try{saveOutbox();}catch(e){}if(document.readyState==='complete')restoreScene();else window.addEventListener('load',restoreScene,{once:true});
-  setInterval(pollReceipts,4000);
+  setInterval(()=>{pollReceipts();resolveLocations();},4000);
 })();

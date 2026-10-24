@@ -772,8 +772,7 @@ function renderMsgs(list, note) {
   if (!list.length && !note) rows.push({key:'empty',message:{role:'event',text:'还没有消息。'}});
   const pending = pendingSends.get(key);
   if (pending && ['sending','pressed','unconfirmed'].includes(pending.state)) rows.push({key:'pending:' + pending.started,message:{role:'user',text:pending.text,pending:true}});
-  window.codexUI?.decorateRows(rows);
-  window.workspaceUI?.decorateRows(rows);
+  window.messageProjection?.decorate(rows);
   window.readingUI?.decorateRows(rows);
   window.newChatUI?.decorateRows(rows);
   window.interactionUI?.decorate(rows);

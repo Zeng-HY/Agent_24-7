@@ -41,7 +41,7 @@ class LiveHistoryTests(unittest.TestCase):
         self.turn['items']=[{'id':'private1','type':'reasoning','text':'private'}, {'id':'private2','type':'agentMessage','phase':'analysis','text':'private'}, {'id':'public','type':'agentMessage','phase':'final_answer','text':'public'}]
         messages,ids=merge_live_messages(self.page,self.entry,self.state)
         self.assertEqual(ids,['public']);self.assertFalse(any(v['text']=='private' for v in messages))
-    def test_stream_emits_retirement_when_no_other_fields_change(self):
+    def test_stream_marks_unsettled_public_text_without_retiring_it(self):
         self.turn['items'].append({'id':'live','type':'agentMessage','text':'new progress'})
         watcher=SimpleNamespace(closed=False,condition=threading.RLock(),snapshots={'thread':(0,'owner',self.state)},unwatch=Mock())
         history=SimpleNamespace(transcript=lambda *a:({},self.entry),conversation=lambda *a:copy.deepcopy(self.page))
@@ -54,7 +54,7 @@ class LiveHistoryTests(unittest.TestCase):
             else:raise RuntimeError('end test stream')
         with patch('live_events.select.select',return_value=([],[],[])),patch('live_events.time.sleep',side_effect=tick):stream(handler,history,bridge,None,'codex','thread')
         events=[json.loads(line[6:]) for line in handler.wfile.getvalue().decode().splitlines() if line.startswith('data: ')]
-        self.assertEqual(len(events),2);self.assertEqual(events[0]['streaming_ids'],['live']);self.assertEqual(events[1]['streaming_ids'],[]);self.assertEqual(events[1]['messages'],[])
+        self.assertEqual(len(events),2);self.assertEqual(events[0]['streaming_ids'],['live']);self.assertEqual(events[1]['streaming_ids'],[]);self.assertEqual(events[1]['messages'][0]['text'],'new progress');self.assertTrue(events[1]['messages'][0]['sync_pending'])
     def test_transcript_tracks_turn_and_preserves_order_across_updates(self):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/'log.jsonl'

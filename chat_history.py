@@ -42,6 +42,14 @@ class Transcript:
                     for k,v in state.items():
                         if v is not None and v!='':self.state[k]=v
                     for m in msgs:
+                        if self.app=='codex' and m.get('role')=='assistant' and m.get('phase')=='final_answer':
+                            plan_text=lambda value:re.sub(r'</?proposed_plan>','',value).strip()
+                            peers=[v for v in self.messages if v.get('turn_id')==self.state.get('current_turn_id') and v.get('role')=='assistant' and v.get('phase')=='final_answer' and bool(v.get('native_plan'))!=bool(m.get('native_plan')) and plan_text(v['text'])==plan_text(m['text'])]
+                            if len(peers)==1:
+                                peer=peers[0]
+                                if m.get('native_plan'):peer.update(native_plan=True,source_id=m.get('source_id'))
+                                if m.get('source_id'):self.by_id[m['source_id']]=peer
+                                continue
                         # Dual log representations may share a source ID, or exact
                         # timestamp/turn/phase/content evidence. Never drop all legacy rows.
                         if self.app=='codex':
@@ -174,6 +182,27 @@ class History:
         result['length']=len(m['text']);result['truncated']=not full and len(m['text'])>6000
         if result['truncated']:result['text']=m['text'][:6000]
         return result
+    def resolve_requests(self,app,tid,request_ids,aliases=None):
+        """Read-only resolution against the whole transcript, never the visible page."""
+        if not isinstance(request_ids,list) or len(request_ids)>100 or any(not isinstance(v,str) or not v or len(v)>200 for v in request_ids):
+            raise HistoryError('消息定位请求无效',400)
+        _,entry=self.transcript(app,tid);out=[];aliases=aliases or {}
+        with entry.lock:
+            candidates={}
+            for m in entry.messages:
+                if m.get('role')=='user' and m.get('client_request_id'):candidates.setdefault(m['client_request_id'],{})[m['id']]=m
+            by_request={rid:next(iter(rows.values())) for rid,rows in candidates.items() if len(rows)==1}
+            for rid in dict.fromkeys(request_ids):
+                ledger=aliases.get(rid,{})
+                m=by_request.get(rid) or by_request.get(ledger.get('client_id'))
+                if m is None and ledger.get('message_id'):
+                    candidate=entry.by_id.get(ledger['message_id'])
+                    if candidate and candidate.get('role')=='user':m=candidate
+                result={'request_id':rid,'status':'recorded' if m else 'unresolved'}
+                if m:result.update(message_id=m['id'],source_id=m.get('source_id'),order=m.get('order'),turn_id=m.get('turn_id'),evidence='source_client_id' if by_request.get(rid) is m else 'delivery_ledger_identity')
+                elif ledger:result['delivery_state']=ledger.get('state')
+                out.append(result)
+        return {'items':out}
     def conversation(self,app,tid,limit=60,before='',around=''):
         if app=='deepseek':
             import deepseek_control

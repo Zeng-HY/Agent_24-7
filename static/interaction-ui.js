@@ -39,6 +39,17 @@
     const offline=group.last&&!!chatReadError;
     return {timing,waiting,running,failed,offline,label:offline?'连接中断':waiting?'需要你回答':failed?'执行遇到问题':running?'正在处理':timing.status==='stopped'?'已停止':timing.status==='completed'?'已完成':'处理过程'};
   }
+  function toolTitle(item){
+    if(item.activity_title)return item.activity_title;
+    let command=String(item.detail||item.text||'').trim();
+    if(command.startsWith('[')){try{const args=JSON.parse(command);if(Array.isArray(args)&&args.every(v=>typeof v==='string')){const at=args.findIndex(v=>/^(?:-command|-c)$/i.test(v));command=at>=0?args[at+1]||'':args.join(' ');}}catch{}}
+    if(/^@['"]/.test(command)||command.includes('\n'))return /powershell|Get-|\|\s*python|^@['"]/i.test(command)?'执行 PowerShell 脚本':'执行脚本';
+    if(command.includes(';'))return '执行多个命令';
+    if(/^(?:python|.*python\.exe).*?(?:unittest|pytest|tests[\\/])/i.test(command))return '运行测试';
+    if(/^git\s+(status|diff)/.test(command))return '检查工作区';
+    const read=command.match(/^Get-Content\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i);if(read)return '读取 '+(read[1]||read[2]||read[3]).split(/[\\/]/).at(-1);
+    const name=command.match(/^([\w.-]+)/)?.[1];return name?'执行 '+name:'执行工具';
+  }
   function render(node,group){
     const storageKey=chatKey(cur)+':'+(group.segmentId||group.id),model=state(group);
     node.className='activity-group';node.replaceChildren();node._activity=group;
@@ -55,7 +66,7 @@
         const detail=el('details','activity-item'),title=el('summary');
         detail.dataset.messageId=item.id||item.source_id||'';const toolKey=storageKey+':'+(item.id||item.source_id||item.time+':'+item.text);detail.open=toolExpanded.get(toolKey)||false;detail.addEventListener('toggle',()=>{toolExpanded.set(toolKey,detail.open);if(toolExpanded.size>1000)toolExpanded.delete(toolExpanded.keys().next().value);});
         const mark=item.role!=='tool'?'·':item.tool_status==='failed'?'!':item.tool_status==='running'?'◌':item.tool_status==='no_matches'?'∅':item.tool_status==='completed'?'✓':'·';
-        title.append(el('span','activity-mark',mark),el('span','activity-title',item.thinking?'思考摘要':item.role==='assistant'?'进度说明':item.activity_title||String(item.text).split('\n')[0].slice(0,140)));
+        title.append(el('span','activity-mark',mark),el('span','activity-title',item.thinking?'思考摘要':item.role==='assistant'?'进度说明':toolTitle(item)));
         detail.append(title,el('pre','activity-detail',item.detail||item.text));if(item.result)detail.append(el('pre','activity-detail',item.result));
         body.append(detail);if(item.tool_status==='failed')body.append(el('div','activity-error','操作未完成，展开查看结果'));
         if(item.change_notice)body.append(el('div','hint',item.change_notice));

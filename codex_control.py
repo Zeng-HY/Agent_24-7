@@ -388,6 +388,7 @@ def _async_question_records(path):
                           (kind == 'event_msg' and payload.get('type') == 'user_message'
                            or kind == 'response_item' and payload.get('type') == 'message' and payload.get('role') == 'user')):
                     continue
+                record['_source_order']=entry['offset']
                 entry['records'].append(record)
         entry.update(size=stat.st_size, mtime=stat.st_mtime_ns)
         _async_index.pop(key, None)
@@ -399,7 +400,7 @@ def _async_question_records(path):
 
 def async_questions(path, active_turn):
     """Read only typed async question calls; never turn arbitrary prose into a form."""
-    turn_id, pending, answers = None, {}, {}
+    turn_id, pending, answers, answer_locations = None, {}, {}, {}
     for rec in _async_question_records(path):
         p = rec.get("payload") or {}
         if rec.get("type") == "turn_context":
@@ -417,6 +418,7 @@ def async_questions(path, active_turn):
                        "options": [{"label": v, "description": ""} for v in q.get("options", [])], "isOther": True}
                       for i, q in enumerate(args.get("questions", []))]
                 pending[call_id] = {"id": "async:" + call_id, "request_id": call_id, "kind": "async",
+                                    "source_id":call_id,"source_order":rec.get('_source_order'),
                                     "turn_id": turn_id, "questions": qs, "status": "pending",
                                     "created_at": datetime.fromisoformat(rec["timestamp"]).timestamp() if rec.get("timestamp") else 0}
         text = ""
@@ -429,7 +431,10 @@ def async_questions(path, active_turn):
                 for a in json.loads(match[1]):
                     ident = json.loads(a["questionItemId"])
                     if ident[0] == "request_user_input_async":
-                        answers[(ident[1], str(ident[2]))] = [a.get("answer", "")]
+                        key=(ident[1], str(ident[2]));value=[a.get("answer", "")]
+                        if answers.get(key)!=value:
+                            answer_locations[key]={'order':rec.get('_source_order'),'time':rec.get('timestamp')}
+                        answers[key] = value
             except (ValueError, KeyError, IndexError, TypeError):
                 continue
     out = []
@@ -438,10 +443,12 @@ def async_questions(path, active_turn):
             continue
         if all((call, v["id"]) in answers for v in q["questions"]):
             q.update(status="answered", answers={v["id"]: answers[(call,v["id"])] for v in q["questions"]})
+            q['answer_evidence']=[answer_locations[(call,v['id'])] for v in q['questions']]
+            q['answer_order']=max((v.get('order') or 0 for v in q['answer_evidence']),default=0)
         elif q["turn_id"] != active_turn:
             continue
         out.append(q)
-    return out[-6:]
+    return out
 
 
 class Bridge:
@@ -642,6 +649,21 @@ class Bridge:
         except (ControlError, chats.ChatError, OSError) as exc:
             return {"available": False, "reason": str(exc), "questions": [], "plan": None,
                     "catalog": catalog(), "images": self.message_images(tid)}
+
+    def delivery_locations(self,tid,request_ids):
+        """Identity evidence only. Does not refresh receipts or change the ledger."""
+        path=self.data_root/'delivery.sqlite'
+        if not path.is_file():return {}
+        out={}
+        con=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+        try:
+            for rid in request_ids:
+                row=con.execute('SELECT state,result FROM deliveries WHERE thread=? AND id=?',(tid,rid)).fetchone()
+                if row:
+                    result=json.loads(row[1] or '{}')
+                    out[rid]={'state':row[0],'client_id':result.get('client_id'),'message_id':(result.get('evidence') or {}).get('message_id')}
+        finally:con.close()
+        return out
 
     @contextmanager
     def _db(self):

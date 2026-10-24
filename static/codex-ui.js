@@ -220,30 +220,23 @@
     }finally{persistPending();window.workspaceUI?.update(me,ticket);sending=false;updateSendButton();if(active(me)){paintComposer();await loadConv(true);await refresh(me,true);schedulePoll();}}
   }
   const normalize = text => String(text||'').replace(/\s/g,'');
-  function decorateRows(rows){
-    const me=current(),s=states.get(me?.id);if(!me||!s)return;
-    function place(row,created){messageProjection.observe(rows,row,chatKey(me),row.custom?.card?.after_id,row.custom?.card?.before_id);}
-    for(const post of s.images||[]){
-      const matching=rows.find(r=>r.message?.role==='user'&&!r.message.pending&&messageProjection.matches(r.message,{rid:post.request_id,client_id:post.client_id,source_id:post.message_id}));
-      if(matching)matching.images=post.images;
-      else if(!window.readingUI?.historyWindow&&!window.workspaceUI?.has(post.request_id)) place({key:'image:'+post.request_id,custom:{type:'images',post}},post.created);
-    }
-    if(window.readingUI?.historyWindow)return;
-    for(const card of s.questions||[])if(card.status==='answered')place({key:'answer:'+card.id,custom:{type:'answer',card}},card.answered_at||null);
-    if(s.plan){for(let i=rows.length-1;i>=0;i--){const m=rows[i].message;if(m?.role==='assistant'&&normalize(m.text.replace(/<\/?proposed_plan>/g,''))===normalize(s.plan.text))rows.splice(i,1);}place({key:'plan:'+s.plan.id,custom:{type:'plan',plan:s.plan}},s.plan.ready?null:s.plan.created_at);}
-    // Questions are no longer a form in the conversation: they show above the message box (renderAsk, 10-12).
-  }
+  function observations(){return states.get(current()?.id)||{};}
   function renderImages(node,images){const box=el('div','sent-images');for(const meta of images){const b=el('button');b.setAttribute('aria-label','查看 '+meta.name);const img=el('img');img.src=meta.thumbnail;img.alt=meta.name;img.loading='lazy';b.append(img);b.onclick=()=>previewImage(meta);box.append(b);}node.append(box);}
+  const questionExpanded=new Map();
   function renderCard(node,custom){
     node.innerHTML='';node.className='codex-card';
     if(custom.type==='images'){node.className='image-history';renderImages(node,custom.post.images);node.append(el('div','hint',custom.post.status==='accepted'?'已发送图片':'图片发送结果待确认'));return;}
     if(custom.type==='answer'){
-      const card=custom.card;node.append(el('div','card-title','已答'));
+      const card=custom.card,key=chatKey(cur)+':'+card.id;const detail=el('details','question-history');detail.open=questionExpanded.get(key)||false;const questionTitle=card.questions[0]?.question||'问题';detail.append(el('summary','',(card.status==='answered'?'已答 · ':'待回答 · ')+questionTitle.slice(0,32)+(questionTitle.length>32?'…':'')));detail.addEventListener('toggle',()=>questionExpanded.set(key,detail.open));node.append(detail);node=detail;
       for(const q of card.questions){const a=card.answers?.[q.id];node.append(el('p','',q.question||''),el('b','',q.isSecret?'（已填写）':(Array.isArray(a)?a:a?.answers||[]).join('、')));}
       if(card.desktop_dismiss){const d=card.desktop_dismiss,reasons={unsubmitted_draft:'存在未提交修改',answer_not_rendered:'桌面答案尚未同步',editing:'正在编辑',window_not_visible:'窗口不可见',window_not_foreground:'目标窗口不在前台',no_matching_window:'目标对话当前不可见',disabled:'自动收起未启用',version_unverified:'桌面版本尚未验证',answer_superseded:'已有更新的答案',title_not_unique:'对话标题不唯一',unsupported_question:'此类问题不自动收起',draft_unreadable:'无法确认草稿状态',service_restarted:'服务已重启，未重复操作'};const text={pending:'桌面卡片：正在核对',closed:'桌面卡片已收起',not_present:'桌面卡片已不存在',unconfirmed:'桌面收起结果待核对'}[d.status]||'桌面卡片保留：'+(reasons[d.reason]||'未满足自动收起条件');node.append(el('div','card-note',text));}
       if(card.editable){const edit=el('button','','修改答案');edit.onclick=()=>{const me=current();if(!me)return;sentCards.delete(card.id);ask={me,card,sel:askLoad(me,card),page:0,busy:null,error:'',editing:true};for(const q of card.questions){const vals=card.answers?.[q.id]||[];ask.sel[q.id]={labels:vals,other:!vals.every(v=>(q.options||[]).some(o=>o.label===v)),text:vals.join('、')};}openAsk();};node.append(edit);}return;
     }
     if(custom.type==='plan'){
+      if(!custom.plan.ready){
+        const plan=custom.plan,key=chatKey(cur)+':plan:'+plan.id,detail=el('details','plan-history');detail.open=questionExpanded.get(key)||false;
+        detail.append(el('summary','','历史计划'));const text=el('div','reply-text');text.innerHTML=md(plan.text,true);detail.append(text);detail.addEventListener('toggle',()=>questionExpanded.set(key,detail.open));node.className='historical-plan';node.append(detail);return;
+      }
       const p=custom.plan;const title=el('div','card-title','计划');title.append(el('span','card-state',p.ready?'待确认':'历史计划'));node.append(title);
       const preview=el('div','plan-preview');preview.innerHTML=md(p.text);node.append(preview);const read=el('button','plan-read','展开完整计划');read.onclick=()=>{preview.classList.toggle('expanded');read.textContent=preview.classList.contains('expanded')?'收起计划':'展开完整计划';};node.append(read);
       const actions=el('div','card-actions'),run=el('button','big','执行计划'),edit=el('button','','继续修改');run.disabled=!p.ready||sending;edit.disabled=!p.ready||sending;
@@ -368,7 +361,7 @@
   }
   window.codexUI={onOpen,applyState,setClaudeImages(me,images){states.set(me.id,{images});},saveCurrentDraft(){if(current())save(cur.id);},
     async restoreSubmission(item){const d=draft(item.id);d.images=(item.images||[]).map(v=>({...v,status:'ready'}));d.settings=canonicalSettings(item.settings);d.base=canonicalSettings(item.base);save(item.id);if(current()?.id===item.id)await onOpen(cur);},
-    onClose(){if(current())save(cur.id);ask=null;if(askOpen())closeSheet(askSheet.id);},refresh,decorateRows,renderCard,renderImages,openModels,openModes,
+    onClose(){if(current())save(cur.id);ask=null;if(askOpen())closeSheet(askSheet.id);},refresh,observations,renderCard,renderImages,openModels,openModes,
     openAttachments(anchor){if(current())openSheet('attachmentMenu',anchor);},
     imageSnapshot(me=cur){return draft(me.id).images.map(v=>({localId:v.localId,name:v.name,size:v.size,meta:v.meta,...(v.pc?{pc:v.pc}:{})}));},
     clearImages(me){draft(me.id).images=[];save(me.id);if(active(me))paintComposer();},

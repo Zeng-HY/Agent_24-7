@@ -27,7 +27,7 @@
     }catch(e){$('convHint').textContent='读取失败：'+e.message;}finally{listBusy=false;listMore.disabled=false;if(key!==convApp+'|'+query+(window.interactionUI?.query()||''))loadList(false,true);}
   }
   function merge(items,prepend=false){loaded=messageProjection.merge(loaded,items.map(m=>{const full=expanded.get(m.id);return full&&full.length>=(m.length||m.text.length)&&!m.streaming?{...m,text:full.text,truncated:false}:m;}),prepend);}
-  function reconcileLive(ids){if(!Array.isArray(ids))return;const active=new Set(ids);loaded=loaded.filter(m=>!m.streaming||active.has(m.id));}
+  function reconcileLive(ids){loaded=messageProjection.reconcileLive(loaded,ids);}
   function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);painted=true;older.hidden=!hasMore;latest.hidden=!historyWindow;}
   function applyMeta(j){if(!cur)return;window.interactionUI?.meta(j);chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
   function onOpen(original,current){closeMenu(true);pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;flows.clear();cancelAnimationFrame(frame);frame=0;keysSeen=null;painted=false;}
@@ -52,7 +52,8 @@
   async function loadOlder(){if(!cur||!cursor||older.disabled)return;const target={...cur};older.disabled=true;try{const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&before='+encodeURIComponent(cursor));if(!cur||chatKey(cur)!==chatKey(target))return;if(j.reset){toast('记录位置已变化，请回到最新位置再试',true);return;}cursor=j.next_cursor;hasMore=!!j.has_more;merge(j.messages||[],true);render();}catch(e){toast(e.message,true);}finally{older.disabled=false;}}
   async function jump(mid){const target={...cur};const j=await api('/api/chat?app='+target.app+'&id='+encodeURIComponent(target.id)+'&n=60&around='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;loaded=j.messages;cursor=j.next_cursor;hasMore=!!j.has_more;historyWindow=!!j.has_newer;render();const n=[...$('cvMsgs').querySelectorAll('[data-key],[data-message-id]')].find(n=>n.dataset.key===mid||n.dataset.messageId===mid);if(n){const group=n.closest('.activity-group');if(group?.querySelector('.activity-body').hidden)group.querySelector('.activity-heading').click();if(n.tagName==='DETAILS')n.open=true;n.scrollIntoView({block:'center'});n.animate?.([{background:'#eef2ff'},{background:'transparent'}],{duration:900});}await expandMessage(mid);}
   async function expandMessage(mid){if(!cur)return;const target={...cur},j=await api('/api/chat/message?app='+target.app+'&id='+encodeURIComponent(target.id)+'&message='+encodeURIComponent(mid));if(!cur||chatKey(cur)!==chatKey(target))return;expanded.set(mid,j);merge([j]);render();}
-  function publicText(text){let fence=false;return text.split('\n').filter(line=>{if(/^\s*```/.test(line)){fence=!fence;return true;}return fence||!/^::created-thread\{/.test(line.trim());}).join('\n').replace(/<\/?proposed_plan>/g,'').trim();}
+  function publicText(text){return assistantMarkdown(text).markdown;}
+
   // The clipboard is written in the tap itself, as Safari wants it: words still to be read from the computer (a long
   // message shown in part) go as a promise of them, which Safari and Chrome both take. Where that fails, the words are
   // shown to pick from (选择文字), with 复制全部.
