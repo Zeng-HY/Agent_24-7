@@ -142,4 +142,10 @@ Markdown使用本地固定版本markdown-it及DOMPurify，禁止脚本、事件�
 
 用户于2026-10-24明确确认：已在iPhone真机完成交互检查并通过，可以正式发布。确认范围为问题卡列明的键盘开关、页面不横移、过程展开收起和附件打开；未逐项提供横竖屏、地址栏、字体放大等细分场景记录，不扩写验收结论。Android真机、WebView及安装验收未执行。
 
-iPhone发布门槛已获用户确认，进入Windows dev.13/build13构建与发布流程。实际构建、发布及安装状态以工具回读和本次交付为准；网页预览不等同于生产端到端验收。本版不改变Android客户端代码及版本，保留APK0.7.4/code11。
+iPhone发布门槛已获用户确认。Windows dev.13/build13已构建并公开发布（GitHub Pre-release渠道），构建提交93aedd44df9b840ef83f5018e5194496caf1307f。安装包SHA-256：01c50e17d1c4148092dce664a5401cb41918c21db773db71f486f15a9ff058eb。
+
+云端按现有更新脚本部署成功，服务active，公开HTTPS账号页返回0.27.0-dev.13；脚本保留上一版文件以便回退。本机G:/AgentRemote覆盖安装成功，冻结程序及安装后自检通过，/api/hello及主页返回dev.13，11项相关网页资源与发布源码一致。remote_config.json和desktop-preferences.json内容校验未变；设备凭据沿用既有DPAPI加载与保存流程，未执行重新绑定。
+
+本版不改变Android客户端代码及版本，保留APK0.7.4/code11，未构建或安装新的手机包。Android真机未验收。网页模拟及用户验收不扩写为对真实工作会话的发送测试。另一项附件静态预览候选未并入本版。
+
+发布页：https://github.com/Zeng-HY/Agent_24-7/releases/tag/windows-v0.27.0-dev.13
