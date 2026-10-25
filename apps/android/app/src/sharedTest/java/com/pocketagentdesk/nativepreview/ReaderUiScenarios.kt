@@ -368,13 +368,71 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("打开本地示例").performScrollTo().performClick()
         compose.waitUntil(10000) { vm.state.value.fixture && vm.state.value.screen==Screen.Login }
     }
-    protected fun fixtureList() {
+    protected fun fixtureList(computer:String="测试电脑 A") {
         openDemo()
         compose.onNodeWithText("进入示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Devices && !vm.state.value.busy }
         compose.onNodeWithText("离线电脑").assertIsDisplayed()
-        compose.onNodeWithText("测试电脑 A").performClick()
-        compose.waitUntil(10000) { vm.state.value.screen==Screen.Chats && !vm.state.value.busy }
+        compose.onNodeWithText(computer).performClick()
+        // The list and the computer's apps (0.9.1: the chips wait for those) are both in.
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Chats && !vm.state.value.busy && vm.state.value.knownApps()!=null }
+    }
+    /** The source chips by their label: a selectable chip in the row (the list's badges carry the same names). */
+    protected fun chip(label:String)=compose.onNode(hasText(label) and isSelectable() and hasAnyAncestor(hasTestTag("source-chips")))
+    @Test fun computerWithoutClaudeOffersOnlyItsSourcesEverywhere() {
+        launch();fixtureList("测试电脑 B")
+        chip("全部").assertIsSelected();chip("Codex").assertExists();chip("DeepSeek").assertExists()
+        chip("Claude").assertDoesNotExist()
+        // ⋯ 列表显示 → 来源 lists the same apps.
+        compose.onNodeWithContentDescription("列表显示选项").performClick()
+        compose.onNodeWithText("来源").performClick()
+        compose.onNodeWithText("全部应用").assertExists();compose.onNode(hasText("DeepSeek") and hasClickAction() and !hasAnyAncestor(hasTestTag("source-chips"))).assertExists()
+        compose.onAllNodes(hasText("Claude") and hasClickAction()).assertCountEquals(0)
+        compose.onNodeWithText("全部应用").performClick()
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" }
+        compose.runOnIdle { org.junit.Assert.assertEquals(listOf("codex","deepseek"),vm.state.value.knownApps()) }
+        // 新建对话: the source switch has Codex and DeepSeek only, even when Claude was the last source used.
+        compose.runOnIdle { vm.startNew("claude") }
+        compose.waitUntil(10000) { vm.workspace.state.value.pane=="new" && vm.workspace.state.value.ready }
+        compose.onNode(hasText("DeepSeek") and isSelectable()).assertExists()
+        compose.onAllNodes(hasText("Claude") and isSelectable()).assertCountEquals(0)
+        compose.runOnIdle { org.junit.Assert.assertEquals("codex",vm.workspace.state.value.key?.app) }
+    }
+    @Test fun sourceChipsScrollSidewaysAtFullWidth() {
+        // A narrow phone with large text: the chips do not fit and must not be squeezed ("Deep").
+        launch(fontScale=1.3f,windowWidth=mutableStateOf(320.dp));fixtureList()
+        compose.onNodeWithTag("source-chips").assert(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange))
+        val deepseek=chip("DeepSeek")
+        deepseek.performScrollTo().assertIsDisplayed()
+        // Its whole word is laid out on one line, nothing cut.
+        val layout=mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNode(hasText("DeepSeek") and hasAnyAncestor(hasTestTag("source-chips")),useUnmergedTree=true).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action?.invoke(layout)
+        // (Measured without a width limit, so compare with the word's own width rather than the overflow flag.)
+        layout.single().let { text ->
+            org.junit.Assert.assertTrue(text.size.width>=text.multiParagraph.maxIntrinsicWidth-1f)
+            org.junit.Assert.assertEquals(1,text.lineCount);org.junit.Assert.assertFalse(text.didOverflowHeight)
+        }
+        deepseek.performClick()
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="deepseek" }
+        deepseek.assertIsSelected().assertIsDisplayed()
+        // The ⋯ stays outside the scrolling and still opens its menu.
+        compose.onNodeWithContentDescription("列表显示选项").assertIsDisplayed().performClick()
+        compose.onNodeWithText("分组").assertExists()
+    }
+    @Test fun slowOrBrokenComputerNeverShowsAllSources() {
+        launch();openDemo()
+        compose.onNodeWithText("进入示例").performClick()
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Devices && !vm.state.value.busy }
+        compose.runOnIdle { vm.fixtureWorld!!.network=FixtureNetwork.Offline }
+        compose.onNodeWithText("测试电脑 B").performClick()
+        compose.waitUntil(10000) { vm.state.value.sources.failed!=null }
+        // Not reachable: 全部 and why, with 重试; no Claude, and not three chips pretending.
+        chip("全部").assertExists();chip("Claude").assertDoesNotExist();chip("Codex").assertDoesNotExist()
+        compose.onNodeWithText("读不到这台电脑的应用 · 重试").assertHasClickAction()
+        compose.runOnIdle { vm.fixtureWorld!!.network=FixtureNetwork.Instant }
+        compose.onNodeWithText("读不到这台电脑的应用 · 重试").performClick()
+        compose.waitUntil(10000) { vm.state.value.knownApps()==listOf("codex","deepseek") }
+        chip("Codex").assertExists();chip("DeepSeek").assertExists();chip("Claude").assertDoesNotExist()
     }
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()

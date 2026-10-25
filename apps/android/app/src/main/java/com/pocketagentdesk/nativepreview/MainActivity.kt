@@ -37,7 +37,7 @@ import kotlinx.coroutines.launch
 fun useTwoPane(width:Float,height:Float,fontScale:Float)=width>=840f*fontScale.coerceIn(1f,1.6f) && height>=480f
 
 class NativeApplication : android.app.Application() {
-    override fun onCreate() { super.onCreate(); Diagnostics.load(this) }
+    override fun onCreate() { super.onCreate(); Diagnostics.load(this); prewarmGlass() }
     val database by lazy { Room.databaseBuilder(this,ReadingDatabase::class.java,"reading.db").addMigrations(CHAT_MIGRATION,INTERACTION_MIGRATION).build() }
     val store by lazy { NativeReaderStore(SettingsStore(this),database.positions()) }
     val vault by lazy { SecureCookieVault(this) }
@@ -265,7 +265,7 @@ class MainActivity : ComponentActivity() {
     }
     if(archived) ArchivedSheet(vm) { archived=false }
     if(licences) TeleplySheet("开源组件",{ licences=false }) {
-        Text("液态玻璃移植自 Kyant0/AndroidLiquidGlass（Backdrop，Apache-2.0）；CommonMark Java 0.24.0（BSD-2-Clause）；AndroidX、Kotlin、OkHttp（Apache-2.0）；Claude、DeepSeek 图形来自 Simple Icons（CC0）。",style=MaterialTheme.typography.bodyMedium,color=LocalTeleply.current.text)
+        Text("液态玻璃移植自 Kyant0/AndroidLiquidGlass（Backdrop，Apache-2.0）；CommonMark Java 0.24.0（BSD-2-Clause）；AndroidX、Kotlin、OkHttp（Apache-2.0）；Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。",style=MaterialTheme.typography.bodyMedium,color=LocalTeleply.current.text)
     }
 }
 
@@ -286,6 +286,12 @@ class MainActivity : ComponentActivity() {
         CardSection {
             if(s.fixture) CardRow("正在使用本地示例",null,detail="固定数据，不连接真实服务")
             else CardRow("打开本地示例",vm::fixture,detail="固定数据，不连接真实服务",chevron=true)
+        }
+        // 0.9.1: how fast the demo computer answers, to see the app on a slow or broken connection.
+        if(s.fixture) vm.fixtureWorld?.let { world ->
+            var network by remember(world) { mutableStateOf(world.network) }
+            Text("示例网络",style=MaterialTheme.typography.note,color=p.muted)
+            SegmentedChoice(FixtureNetwork.entries.map { it to it.label },network,{ network=it;world.network=it })
         }
         SectionLabel("诊断测速")
         DiagnosticsSettings(vm,s)

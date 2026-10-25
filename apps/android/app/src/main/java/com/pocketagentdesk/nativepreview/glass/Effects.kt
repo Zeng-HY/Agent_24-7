@@ -19,6 +19,8 @@
    internal/RenderEffect.kt merged into this file. Changes: package renamed; Android only, so the multiplatform
    RuntimeShader wrapper is replaced by android.graphics.RuntimeShader; kyant "shapes" support removed from lens()
    (Teleply passes Compose RoundedCornerShape only). Effect math and default values are unchanged.
+   Changed again for Teleply 0.9.1: one compiled shader per key for the whole app (SharedRuntimeShaders), which can
+   be compiled ahead on a background thread, instead of a new compile for every glass node.
  */
 
 package com.pocketagentdesk.nativepreview.glass
@@ -44,6 +46,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.util.fastCoerceAtLeast
 import androidx.compose.ui.util.fastCoerceAtMost
+import java.util.concurrent.ConcurrentHashMap
 
 @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.S)
 fun isRenderEffectSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -51,19 +54,38 @@ fun isRenderEffectSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_
 @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.TIRAMISU)
 fun isRuntimeShaderSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
-/** Shaders are compiled once per key and node, then only their uniforms change. */
+/** Shaders are compiled once per key, then only their uniforms change. */
 sealed interface RuntimeShaderCache {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun obtainRuntimeShader(key: String, string: String): RuntimeShader
 }
 
-internal class RuntimeShaderCacheImpl : RuntimeShaderCache {
-    private val shaders = mutableMapOf<String, RuntimeShader>()
+/**
+ * One compiled copy of each shader for the whole app (Teleply 0.9.1). Upstream compiled the AGSL again, on the main
+ * thread, for every glass node it attached, so every sheet, menu and glass button that appeared paid for it once more.
+ * Sharing one instance is safe: each user sets every uniform right before using it, on the main thread, and a
+ * RenderEffect or a recorded paint keeps its own copy of the uniform values from that moment.
+ */
+internal object SharedRuntimeShaders {
+    private val shaders = ConcurrentHashMap<String, RuntimeShader>()
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    override fun obtainRuntimeShader(key: String, string: String): RuntimeShader = shaders.getOrPut(key) { RuntimeShader(string) }
+    fun obtain(key: String, string: String): RuntimeShader = shaders[key] ?: RuntimeShader(string).let { shaders.putIfAbsent(key, it) ?: it }
 
-    fun clear() = shaders.clear()
+    /** Compiles [sources] (key to AGSL) on a background thread, so the first glass on screen does not wait for them. */
+    fun prewarm(sources: List<Pair<String, String>>) {
+        if (!isRuntimeShaderSupported()) return
+        Thread({
+            sources.forEach { (key, string) -> runCatching { obtain(key, string) } }
+        }, "glass-shaders").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }.start()
+    }
+}
+
+internal class RuntimeShaderCacheImpl : RuntimeShaderCache {
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    override fun obtainRuntimeShader(key: String, string: String): RuntimeShader = SharedRuntimeShaders.obtain(key, string)
+
+    fun clear() = Unit
 }
 
 /** What an effects block sees: the glass size and shape, plus the render effect built so far. */

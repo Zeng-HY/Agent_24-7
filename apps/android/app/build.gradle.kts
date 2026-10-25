@@ -11,8 +11,8 @@ android {
         applicationId = "com.pocketagentdesk.remote.nativepreview"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.9.0-nativepreview"
+        versionCode = 10
+        versionName = "0.9.1-nativepreview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         manifestPlaceholders["appLabel"] = "遥应 原生预览"
@@ -39,8 +39,9 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("teleply")
         }
-        // The release build as the development copy: measures and checks what users get, beside the app.
-        create("benchmark") { initWith(getByName("release"));isDebuggable=false;applicationIdSuffix=".dev";versionNameSuffix="-perf";manifestPlaceholders["appLabel"] = "遥应 开发版";matchingFallbacks += listOf("release") }
+        // The release build, profileable (src/benchmark), as its own copy (0.9.1): measures what users get beside the app.
+        // Not the .dev copy any more: that one may be signed in to a real account, and a measured copy must never be.
+        create("benchmark") { initWith(getByName("release"));isDebuggable=false;applicationIdSuffix=".perf";versionNameSuffix="-perf";manifestPlaceholders["appLabel"] = "遥应 性能版";matchingFallbacks += listOf("release") }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

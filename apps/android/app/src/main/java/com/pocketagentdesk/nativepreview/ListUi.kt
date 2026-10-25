@@ -1,9 +1,28 @@
 package com.pocketagentdesk.nativepreview
 
 import android.content.Context
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -223,21 +242,55 @@ private fun ListTopBar(s: ReaderState, vm: ReaderViewModel, onMenu: () -> Unit) 
                     .padding(vertical = 2.dp),
             )
         }
-        TeleplyIconButton(TeleplyIcons.New, "新建对话", { vm.startNew(if (s.listSource == "all") s.app else s.listSource) }, enabled = s.device != null && !s.busy)
+        // A computer with none of the apps has nothing to start a conversation in; a list being read does not hold it.
+        val noApps = s.knownApps()?.isEmpty() == true
+        TeleplyIconButton(TeleplyIcons.New, "新建对话", { vm.startNew(if (s.listSource == "all") s.app else s.listSource) }, enabled = s.device != null && !noApps,
+            disabledReason = if (noApps) "这台电脑上没有找到可用的桌面应用" else null)
     }
 }
 
-/** 全部 / Codex / Claude / DeepSeek, and the ⋯ "列表显示" menu at the end (spec 4.1). Content layer: not glass. */
+/**
+ * 全部 and a chip for each app this computer has, then the ⋯ "列表显示" menu (spec 4.1). Only the computer's own apps
+ * (0.9.1, as the web hides the others): while they are not known yet, only 全部 (and a filter already chosen) with a
+ * short note, never all three. The chips keep their full width and scroll sideways when they do not fit; the edge they
+ * pass under fades a little while there is more that way. The ⋯ stays put outside the scrolling. Content layer: not glass.
+ */
 @Composable
 private fun SourceChips(s: ReaderState, vm: ReaderViewModel) {
     val menus = LocalMenuHost.current
     val anchor = remember { MenuAnchor() }
+    val known = s.knownApps()
+    val options = listOf("all" to "全部") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it) }
+    val scroll = rememberScrollState()
+    // Where each chip sits in the row: the chosen one is scrolled fully into view, clear of the faded edge, also when it
+    // was only partly showing. Only this row scrolls; the list around it never moves for it.
+    val spans = remember { mutableStateMapOf<String, IntRange>() }
+    val margin = with(LocalDensity.current) { 24.dp.roundToPx() }
+    LaunchedEffect(s.listSource, spans[s.listSource], scroll.viewportSize) {
+        val span = spans[s.listSource] ?: return@LaunchedEffect
+        val viewport = scroll.viewportSize
+        if (viewport <= 0) return@LaunchedEffect
+        val target = when {
+            span.first < scroll.value -> span.first - margin
+            span.last > scroll.value + viewport -> span.last + margin - viewport
+            else -> return@LaunchedEffect
+        }
+        scroll.animateScrollTo(target.coerceIn(0, scroll.maxValue))
+    }
     Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.weight(1f).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("all" to "全部", "codex" to "Codex", "claude" to "Claude", "deepseek" to "DeepSeek").forEach { (value, label) ->
-                SourceChip(label, s.listSource == value, !s.busy) { vm.listDisplay(source = value) }
+        Row(
+            Modifier.weight(1f).edgeFade(scroll).horizontalScroll(scroll).selectableGroup().testTag("source-chips"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            options.forEach { (value, label) ->
+                SourceChip(label, s.listSource == value, !s.busy, Modifier.onPlaced { spans[value] = it.positionInParent().x.toInt().let { x -> x..x + it.size.width } }) { vm.listDisplay(source = value) }
+            }
+            if (known == null && s.device != null) {
+                if (s.sources.failed != null && !s.sources.loading) SourceNote("读不到这台电脑的应用 · 重试", vm::retrySources) else SourceNote("正在读取这台电脑的应用…", null)
             }
         }
+        Spacer(Modifier.width(8.dp))
         TeleplyIconButton(
             TeleplyIcons.More,
             "列表显示选项",
@@ -250,12 +303,13 @@ private fun SourceChips(s: ReaderState, vm: ReaderViewModel) {
     }
 }
 
+/** A source chip at its full width (0.9.1: chips no longer share the row's width, which cut "DeepSeek" to "Deep"). */
 @Composable
-private fun SourceChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun SourceChip(label: String, selected: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val p = LocalTeleply.current
     val interaction = remember { MutableInteractionSource() }
     Box(
-        Modifier
+        modifier
             .minimumInteractiveComponentSize()
             .heightIn(min = 40.dp)
             .pressScale(interaction)
@@ -266,8 +320,44 @@ private fun SourceChip(label: String, selected: Boolean, enabled: Boolean, onCli
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, color = if (selected) p.onAccent else p.text, maxLines = 1)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = if (selected) p.onAccent else p.text, maxLines = 1, softWrap = false)
     }
+}
+
+/** A line beside the chips while the computer's apps are not known: reading, or why not with 重试 ([onRetry]). */
+@Composable
+private fun SourceNote(text: String, onRetry: (() -> Unit)?) {
+    val p = LocalTeleply.current
+    Text(
+        text,
+        style = MaterialTheme.typography.note,
+        color = if (onRetry != null) p.accent else p.muted,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier.clip(CircleShape)
+            .then(if (onRetry != null) Modifier.clickable(role = Role.Button, onClick = onRetry) else Modifier)
+            .heightIn(min = 40.dp).wrapContentHeight().padding(horizontal = 8.dp),
+    )
+}
+
+/**
+ * Fades the content out towards an edge it runs past, only while it can still scroll that way (0.9.1): the chips seem
+ * to go on past the edge instead of being cut. It is a mask on this box's own drawing, so it takes no touches and
+ * covers nothing beside the box.
+ */
+fun Modifier.edgeFade(scroll: ScrollState, width: Dp = 24.dp): Modifier = composed {
+    val start by animateFloatAsState(if (scroll.canScrollBackward) 1f else 0f, tween(150), label = "fade-start")
+    val end by animateFloatAsState(if (scroll.canScrollForward) 1f else 0f, tween(150), label = "fade-end")
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val w = width.toPx().coerceAtMost(size.width / 3f)
+            val left = if (rtl) end else start
+            val right = if (rtl) start else end
+            if (left > 0f) drawRect(Brush.horizontalGradient(0f to Color.Black.copy(alpha = 1f - left), 1f to Color.Black, startX = 0f, endX = w), size = Size(w, size.height), blendMode = BlendMode.DstIn)
+            if (right > 0f) drawRect(Brush.horizontalGradient(0f to Color.Black, 1f to Color.Black.copy(alpha = 1f - right), startX = size.width - w, endX = size.width), topLeft = Offset(size.width - w, 0f), size = Size(w, size.height), blendMode = BlendMode.DstIn)
+        }
 }
 
 /** 分组 / 排序 / 状态 / 来源, each with its current value; a row opens its options in the same menu (web). */
@@ -277,7 +367,9 @@ private fun MenuScope.ListDisplayMenu(s: ReaderState, vm: ReaderViewModel) {
     val groups = listOf("none" to "不分组", "project" to "按项目", "app" to "按来源应用")
     val sorts = listOf("updated" to "最近活动", "created" to "创建时间")
     val states = listOf("all" to "全部", "running" to "运行中", "waiting" to "等待处理", "done" to "已结束")
-    val sources = listOf("all" to "全部应用") + listOf("codex", "claude", "deepseek").map { it to sourceName(it) }
+    // The same apps as the chips (0.9.1): this computer's, or while not known only a filter already chosen.
+    val known = s.knownApps()
+    val sources = listOf("all" to "全部应用") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it) }
     fun label(options: List<Pair<String, String>>, value: String) = options.firstOrNull { it.first == value }?.second ?: value
     when (page) {
         null -> {
@@ -305,6 +397,7 @@ private fun MenuScope.ListDisplayMenu(s: ReaderState, vm: ReaderViewModel) {
                     }
                 }, trailing = if (value == current) MenuTrailing.Checked else MenuTrailing.None)
             }
+            if (page == "source" && known == null) MenuHint(if (s.sources.failed != null && !s.sources.loading) "读不到这台电脑上有哪些应用，可在列表上方重试" else "正在读取这台电脑上的应用…")
         }
     }
 }
@@ -488,6 +581,15 @@ private fun ChildRow(chat: Chat, enabled: Boolean, modifier: Modifier = Modifier
 private fun EmptyList(s: ReaderState, vm: ReaderViewModel, searching: Boolean, clearQuery: () -> Unit) {
     val p = LocalTeleply.current
     val filtered = searching || s.listSource != "all" || s.listStatus != "all"
+    // None of the desktop apps on this computer (web NO_APPS): say so, with 重试, instead of an empty list.
+    if (s.knownApps()?.isEmpty() == true) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("这台电脑上没有找到桌面应用", style = MaterialTheme.typography.titleMedium, color = p.text)
+            Text("没找到 Codex、Claude 或 DeepSeek 桌面版。装好后点重试；也可以在电脑的 remote_config.json 里用 \"apps\" 指定。", style = MaterialTheme.typography.note, color = p.muted)
+            PillButton("重试", vm::retrySources)
+        }
+        return
+    }
     Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(if (s.error == null) "没有找到对话" else "暂时无法读取对话", style = MaterialTheme.typography.titleMedium, color = p.text)
         val conditions = buildList {

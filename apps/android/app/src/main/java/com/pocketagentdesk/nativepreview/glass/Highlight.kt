@@ -17,7 +17,7 @@
    65ab177e90e5c1d8c62e70cf7755841982da65f6): highlight/Highlight.kt, highlight/HighlightStyle.kt,
    highlight/HighlightModifier.kt, internal/Outline.kt and the Android internal/Paint.kt merged into this file.
    Changes: package renamed; Android only (android.graphics.RuntimeShader and BlurMaskFilter used directly).
-   Default values are unchanged.
+   Default values are unchanged. Teleply 0.9.1: the rim shaders come from the app-wide SharedRuntimeShaders (Effects.kt).
  */
 
 package com.pocketagentdesk.nativepreview.glass

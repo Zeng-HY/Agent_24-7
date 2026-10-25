@@ -72,7 +72,7 @@ fun WorkspaceDrawer(s: ReaderState, vm: ReaderViewModel, onClose: () -> Unit, wi
             TeleplyIconButton(TeleplyIcons.Close, "关闭导航", onClose)
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("sidebar-tree"), contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 12.dp)) {
-            s.treeError?.let { error -> item(key = "error") { NoteBar(error, NoteTone.Error, Modifier.clip(TeleplyShape.Card), action = "重试", onAction = { vm.loadTree(true) }) } }
+            s.treeError?.let { error -> item(key = "error") { NoteBar(error, NoteTone.Error, Modifier.clip(TeleplyShape.Card), action = "重试", onAction = vm::retrySources) } }
             val apps = tree.rows("apps") { it }
             if (apps.isEmpty() && s.treeError == null) item(key = "loading") { Text(if (s.device == null) "先选择一台电脑" else "读取中…", style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.padding(12.dp)) }
             apps.forEachIndexed { n, group ->

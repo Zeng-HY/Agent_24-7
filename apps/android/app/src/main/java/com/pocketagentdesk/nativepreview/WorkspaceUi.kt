@@ -47,8 +47,6 @@ fun operationLabel(value:String)=when(value) { "pending" -> "待回答";"answere
 fun sourceName(app:String)=when(app) { "codex" -> "Codex";"claude" -> "Claude";"deepseek" -> "DeepSeek";else -> app }
 fun JSONObject.strings(name:String)=optJSONArray(name)?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
 
-private val Sources = listOf("codex","claude","deepseek")
-
 /**
  * The workspace panes, each as the sheet or page the spec gives it (spec 4.4, 4.5, 4.7): the new conversation is a
  * glass sheet that fits one screen; attachments, references, computer files and conversation files are opaque
@@ -98,10 +96,22 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
     val target=reader.pendingNew
     val k=s.key
     val app=target?.app ?: k?.app ?: reader.app
-    LaunchedEffect(Unit) { vm.loadTree() }
-    val apps=remember(reader.tree) { runCatching { JSONObject(reader.tree).rows("apps") { it.string("app") } }.getOrDefault(emptyList()).filter { it in Sources } }.ifEmpty { Sources }
+    // Only the apps this computer has (0.9.1), as read when it was entered: nothing is read here while the sheet moves,
+    // and while they are not known the sheet offers the source it opened with, not all three.
+    val known=reader.knownApps()
+    val apps=known ?: listOf(app)
+    val ready=k!=null && k.chat=="@new" && k.app==app && s.ready && s.pane=="new"
+    // A source the computer turns out not to have (chosen on another computer, or gone there): its first app instead,
+    // with the words typed so far.
+    LaunchedEffect(known,app,ready) {
+        val first=known?.firstOrNull() ?: return@LaunchedEffect
+        if(ready && app !in known) {
+            val text=runCatching { JSONObject(s.saved).string("first_message") }.getOrDefault("")
+            if(text.isNotBlank()) c.edit("first_message","")
+            vm.startNew(first,text=text,switching=true)
+        }
+    }
     TeleplySheet("新建对话",{ c.close();vm.consumeNew() },style=SheetStyle.Glass) {
-        val ready=k!=null && k.chat=="@new" && k.app==app && s.ready && s.pane=="new"
         // While another source binds, the sheet keeps its shape with the carried text and nothing to press.
         val j=remember(s.saved,ready,target) { if(ready) JSONObject(s.saved) else JSONObject().put("first_message",target?.text.orEmpty()) }
         val data=remember(s.newData,ready) { if(ready) JSONObject(s.newData) else JSONObject() }
@@ -112,6 +122,12 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
                 vm.startNew(next,text=text,switching=true)
             }
         })
+        if(known==null) {
+            val failed=reader.sources.failed!=null && !reader.sources.loading
+            Text(if(failed) "读不到这台电脑上有哪些应用，先用 ${sourceName(app)}。点这里重试" else "正在读取这台电脑上的应用，先用 ${sourceName(app)}",style=MaterialTheme.typography.note,
+                color=if(failed) LocalTeleply.current.accent else LocalTeleply.current.muted,
+                modifier=if(failed) Modifier.clip(RoundedCornerShape(8.dp)).clickable(role=Role.Button,onClick=vm::retrySources) else Modifier)
+        }
         // A first message under way no longer holds the sheet (0.8, web 10-16): it is followed on its own page.
         if(ready) { s.error?.let { Text(it,style=MaterialTheme.typography.note,color=LocalTeleply.current.error) } }
         NewChat(vm,app,data,j,s,ready,reader.fixture)

@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,6 +88,8 @@ internal class SheetEntry(val id: Long) {
     var style by mutableStateOf(SheetStyle.Opaque)
     var onDismiss by mutableStateOf<() -> Unit>({})
     var content by mutableStateOf<@Composable ColumnScope.() -> Unit>({})
+    /** Its caller still shows it. The motion follows a frame later (see [SheetLayer]); closing starts at once. */
+    var wanted by mutableStateOf(false)
     val visible = MutableTransitionState(false)
 }
 
@@ -95,7 +98,7 @@ class SheetHostState {
     internal val entries = mutableStateListOf<SheetEntry>()
     private var next = 0L
     internal fun create() = SheetEntry(next++)
-    val isOpen: Boolean get() = entries.any { it.visible.targetState }
+    val isOpen: Boolean get() = entries.any { it.wanted }
 }
 
 val LocalSheetHost = staticCompositionLocalOf<SheetHostState?> { null }
@@ -106,7 +109,7 @@ fun SheetHost(content: @Composable () -> Unit) {
     val glass = LocalGlassMode.current != GlassMode.Solid
     val record = rememberLayerBackdrop()
     val glassOpen = state.entries.any { it.style == SheetStyle.Glass }
-    val open = state.entries.any { it.visible.targetState }
+    val open = state.entries.any { it.wanted }
     CompositionLocalProvider(LocalSheetHost provides state) {
         Box(Modifier.fillMaxSize()) {
             Box(
@@ -115,7 +118,7 @@ fun SheetHost(content: @Composable () -> Unit) {
                     .graphicsLayer()
                     .then(if (open) Modifier.clearAndSetSemantics { } else Modifier),
             ) { content() }
-            val top = state.entries.lastOrNull { it.visible.targetState }
+            val top = state.entries.lastOrNull { it.wanted }
             CompositionLocalProvider(LocalGlassBackdrop provides if (glass) record else null) {
                 state.entries.toList().forEach { entry -> key(entry.id) { SheetLayer(state, entry, entry === top) } }
             }
@@ -151,8 +154,11 @@ fun TeleplySheet(
         entry.onDismiss = onDismiss
         entry.content = content
         host.entries.add(entry)
-        entry.visible.targetState = true
-        onDispose { entry.visible.targetState = false }
+        entry.wanted = true
+        onDispose {
+            entry.wanted = false
+            entry.visible.targetState = false
+        }
     }
 }
 
@@ -164,6 +170,13 @@ fun DetailPage(label: String, onDismiss: () -> Unit, content: @Composable Column
 @Composable
 private fun SheetLayer(state: SheetHostState, entry: SheetEntry, top: Boolean) {
     val p = LocalTeleply.current
+    // 0.9.1: the sheet is composed, measured and drawn in its first frame while still invisible, and the motion starts
+    // with the next one. That first frame is the heaviest (it lays the whole sheet out); inside the motion it made the
+    // opening jump ahead.
+    LaunchedEffect(entry) {
+        withFrameNanos { }
+        if (entry.wanted) entry.visible.targetState = true
+    }
     val transition = rememberTransition(entry.visible, label = "sheet")
     val animate = remember { TeleplyMotion.enabled() }
     // Web values (spec 5): 200 ms from 12dp below and 0.98; the dimmed page fades in 160 ms; closing 120 ms.
@@ -172,10 +185,10 @@ private fun SheetLayer(state: SheetHostState, entry: SheetEntry, top: Boolean) {
         label = "sheet-progress",
     ) { if (it) 1f else 0f }
     val scrim by transition.animateFloat(transitionSpec = { if (targetState) tween(160) else tween(120) }, label = "sheet-scrim") { if (it) 1f else 0f }
-    LaunchedEffect(entry.visible.currentState, entry.visible.targetState, entry.visible.isIdle) {
-        if (entry.visible.isIdle && !entry.visible.currentState && !entry.visible.targetState) state.entries.remove(entry)
+    LaunchedEffect(entry.wanted, entry.visible.currentState, entry.visible.isIdle) {
+        if (!entry.wanted && entry.visible.isIdle && !entry.visible.currentState) state.entries.remove(entry)
     }
-    val closing = !entry.visible.targetState
+    val closing = !entry.wanted
     if (top && !closing) BackHandler { entry.onDismiss() }
     val page = entry.style == SheetStyle.Page
     Box(
@@ -196,8 +209,11 @@ private fun SheetLayer(state: SheetHostState, entry: SheetEntry, top: Boolean) {
         val dragState = rememberDraggableState { delta -> scope.launch { drag.snapTo((drag.value + delta).coerceAtLeast(0f)) } }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val maxSheet = maxHeight * 0.88f
-            val panel = when (entry.style) {
-                SheetStyle.Page -> Modifier.fillMaxSize().background(p.page)
+            // Where the sheet stands stays outside the motion; what it is made of (glass, card, shadow, page colour) moves
+            // and fades with its content (0.9.1: these stood still, so an empty panel popped in before the content and
+            // stayed after it, then vanished in one frame).
+            val frame = when (entry.style) {
+                SheetStyle.Page -> Modifier.fillMaxSize()
                 SheetStyle.Glass -> Modifier
                     .align(Alignment.BottomCenter)
                     .windowInsetsPadding(WindowInsets.navigationBars)
@@ -205,13 +221,16 @@ private fun SheetLayer(state: SheetHostState, entry: SheetEntry, top: Boolean) {
                     .widthIn(max = 560.dp)
                     .fillMaxWidth()
                     .heightIn(max = maxSheet)
-                    .glass(GlassSheetShape, GlassSize.Large)
-                    .clip(GlassSheetShape)
                 SheetStyle.Opaque -> Modifier
                     .align(Alignment.BottomCenter)
                     .widthIn(max = 640.dp)
                     .fillMaxWidth()
                     .heightIn(max = maxSheet)
+            }
+            val skin = when (entry.style) {
+                SheetStyle.Page -> Modifier.background(p.page)
+                SheetStyle.Glass -> Modifier.glass(GlassSheetShape, GlassSize.Large).clip(GlassSheetShape)
+                SheetStyle.Opaque -> Modifier
                     .softShadow(TeleplyShape.SheetTop, p, TeleplyShadow.Panel)
                     .clip(TeleplyShape.SheetTop)
                     .background(p.card)
@@ -220,7 +239,7 @@ private fun SheetLayer(state: SheetHostState, entry: SheetEntry, top: Boolean) {
             Column(
                 Modifier
                     .imePadding()
-                    .then(panel)
+                    .then(frame)
                     .graphicsLayer {
                         alpha = progress
                         if (page) {
@@ -232,6 +251,7 @@ private fun SheetLayer(state: SheetHostState, entry: SheetEntry, top: Boolean) {
                             translationY = (1f - progress) * 12.dp.toPx() + drag.value
                         }
                     }
+                    .then(skin)
                     .semantics { paneTitle = entry.title },
             ) {
                 if (page) {

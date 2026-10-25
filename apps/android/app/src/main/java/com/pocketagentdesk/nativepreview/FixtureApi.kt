@@ -13,9 +13,18 @@ import org.json.JSONObject
 class FixtureApi(private val source: String = "codex", val world: FixtureWorld = FixtureWorld()) : ReadApi {
     override fun forSource(app: String): ReadApi = FixtureApi(app, world)
 
-    override suspend fun control(device: String, chat: String, fresh: Boolean): Control = world.control(source, chat, fresh)
+    /** 开发者选项 → 示例网络 (0.9.1): the demo computer answers after a while, or cannot be reached at all. */
+    private suspend fun net() {
+        val network = world.network
+        if (network == FixtureNetwork.Offline) throw java.io.IOException("连不上电脑（本地示例：网络已断开）")
+        if (network.delay > 0) kotlinx.coroutines.delay(network.delay)
+    }
 
-    override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject = when (route) {
+    override suspend fun control(device: String, chat: String, fresh: Boolean): Control { net(); return world.control(source, chat, fresh) }
+
+    override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject { net(); return reply(device, route, query, body) }
+
+    private fun reply(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject = when (route) {
         "chat/new/options" -> JSONObject("""{"models":[{"id":"fixture-model","label":"测试模型","efforts":[{"id":"medium","label":"中"}]}]}""")
         "chat/folders" -> world.folders(query["app"].orEmpty())
         "chat/new/draft" -> world.newDraft()
@@ -29,7 +38,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "file/meta" -> FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")) } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
         "file/text" -> JSONObject().put("text", if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
         "chat/diff" -> JSONObject("""{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}""")
-        "chat/projects" -> world.tree(query["more"])
+        "chat/projects" -> world.tree(query["more"], device)
         "chat/open" -> JSONObject().put("ok", true).put("text", "本地示例：没有真的打开电脑上的窗口")
         "chat/resolve" -> JSONObject().put("items", JSONArray())
         "chat/check" -> world.claudeCheck(body?.optLong("offset") ?: 0)
@@ -59,29 +68,30 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         else -> JSONObject()
     }
 
-    override suspend fun voice(device: String, route: String, query: Map<String, String?>, bytes: ByteArray?, type: String): JSONObject = world.voice(route)
+    override suspend fun voice(device: String, route: String, query: Map<String, String?>, bytes: ByteArray?, type: String): JSONObject { net(); return world.voice(route) }
 
     override suspend fun upload(device: String, chat: String, name: String, bytes: ByteArray, image: Boolean, draft: Boolean) =
-        JSONObject().put("id", java.util.UUID.randomUUID().toString()).put("kind", "file").put("app", if (image) source else "pc").put("name", name).put("path", "D:/fixture/$name").put("original_size", bytes.size).put("size", bytes.size)
+        net().let { JSONObject() }.put("id", java.util.UUID.randomUUID().toString()).put("kind", "file").put("app", if (image) source else "pc").put("name", name).put("path", "D:/fixture/$name").put("original_size", bytes.size).put("size", bytes.size)
 
-    override suspend fun download(device: String, chat: String, file: String) = if (file == "fixture-png") java.util.Base64.getDecoder().decode(FixtureWorld.PNG) else "固定测试内容".toByteArray()
+    override suspend fun download(device: String, chat: String, file: String) = net().let { if (file == "fixture-png") java.util.Base64.getDecoder().decode(FixtureWorld.PNG) else "固定测试内容".toByteArray() }
 
     override suspend fun uploadStream(device: String, chat: String, name: String, size: Long, image: Boolean, draft: Boolean, open: () -> java.io.InputStream) =
-        JSONObject().put("id", java.util.UUID.randomUUID().toString()).put("kind", "file").put("app", if (image) source else "pc").put("name", name).put("path", "D:/fixture/$name").put("original_size", size).put("size", size)
+        net().let { JSONObject() }.put("id", java.util.UUID.randomUUID().toString()).put("kind", "file").put("app", if (image) source else "pc").put("name", name).put("path", "D:/fixture/$name").put("original_size", size).put("size", size)
 
     // 诊断测速 times these where the network would: the demo's sends show its record too.
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
         val timer = if (route == "send") Diagnostics.start("消息提交") else null
-        return try { world.command(source, route, body).also { Diagnostics.finish(timer, 0, speedOutcome(it)) } }
+        return try { net(); world.command(source, route, body).also { Diagnostics.finish(timer, 0, speedOutcome(it)) } }
         catch (e: Exception) { Diagnostics.finish(timer, 0, if (e is ServiceFailure) "HTTP ${e.status}" else "网络失败"); throw e }
     }
 
-    override suspend fun receipt(device: String, chat: String, request: String) = world.receipts[request] ?: JSONObject().put("state", "unknown")
+    override suspend fun receipt(device: String, chat: String, request: String) = net().let { world.receipts[request] ?: JSONObject().put("state", "unknown") }
 
     override suspend fun config() = "fixture"
     override suspend fun accountConfig(): JSONObject = JSONObject().put("version", "fixture").put("email_enabled", false)
     override suspend fun login(name: String, password: String) { world.signedIn = true }
     override suspend fun logout() { world.signedIn = false }
+    // The account service itself answers; 示例网络 is about the computer behind it.
     override suspend fun account(): Account { if (!world.signedIn) throw ServiceFailure(401); return Account(world.devices.toList(), "fixture@example.invalid") }
     override suspend fun select(device: String) {
         if (device == "c".repeat(32)) throw ServiceFailure(409, "device_offline")
@@ -93,11 +103,13 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     override suspend fun chats(device: String, query: String, cursor: String?): Page<Chat> = chatList(device, source, query, cursor)
 
     override suspend fun chatList(device: String, app: String, query: String, cursor: String?, sort: String, status: String): Page<Chat> {
+        net()
         if (query == "performance") return Page(listOf(Chat("performance", "长会话性能示例", "固定数据", "200条消息", "idle", "codex")))
         if (query == "error") throw ServiceFailure(503)
         if (query == "expired") throw ServiceFailure(401)
         val rows = if (cursor == null) world.firstPage() else listOf(Chat("older", "更早的对话", "测试项目", "第二页", "idle", "codex", FixtureWorld.NOW - 86_400_000L * 3))
-        val shown = rows.filter { (app == "all" || it.app == app) && (query.isBlank() || it.title.contains(query) || it.folder.contains(query)) && statusMatches(it.status, status) }
+        val has = world.appsOf(device)
+        val shown = rows.filter { it.app in has && (app == "all" || it.app == app) && (query.isBlank() || it.title.contains(query) || it.folder.contains(query)) && statusMatches(it.status, status) }
         val more = cursor == null && query.isBlank()
         return Page(shown, if (more) "page2" else null, more)
     }
@@ -110,14 +122,15 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     }
 
     override suspend fun history(device: String, chat: String, before: String?, around: String?): Page<Message> {
+        net()
         if (chat == "performance") return Page((1..200).map { i -> Message("perf-$i", if (i % 4 == 0) "user" else "assistant", "## 固定消息 $i\n" + "这是用于滚动、锚点和字号检查的脱敏测试内容。".repeat(16) + "\n```kotlin\nval fixture = $i\n```", order = i.toDouble()) }, meta = world.meta(source, chat))
         if (before != null) return Page(listOf(Message("m0", "user", "更早的测试消息。")), meta = world.meta(source, chat))
         if (world.isCreated(chat)) return Page(world.messages(source, chat), meta = world.meta(source, chat))
         return Page(world.messages(source, chat), "m1", source == "codex", meta = world.meta(source, chat))
     }
 
-    override suspend fun message(device: String, chat: String, message: String) = Message(message, "assistant", FixtureWorld.EXAMPLE)
-    override suspend fun search(device: String, chat: String, query: String, cursor: String?) = Page(listOf(Message("m2", "assistant", "…原生阅读示例…")))
+    override suspend fun message(device: String, chat: String, message: String) = net().let { Message(message, "assistant", FixtureWorld.EXAMPLE) }
+    override suspend fun search(device: String, chat: String, query: String, cursor: String?) = net().let { Page(listOf(Message("m2", "assistant", "…原生阅读示例…"))) }
     override fun close() = Unit
 
     private companion object {
@@ -126,9 +139,16 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     }
 }
 
+/** 开发者选项 → 示例网络: how the demo computer answers (0.9.1), to see the app on a slow or broken connection. */
+enum class FixtureNetwork(val label: String, val delay: Long) { Instant("立即", 0), Normal("一般", 400), Slow("慢", 2_500), Offline("断开", 0) }
+
 /** Shared state of the demo across sources: answered cards, queue, receipts, archive, notifications and voice. */
 class FixtureWorld {
     val receipts = mutableMapOf<String, JSONObject>()
+    @Volatile var network = FixtureNetwork.Instant
+    /** The desktop apps each demo computer has (remote.py machine apps); 测试电脑 B has no Claude, like a tester's (0.9.1). */
+    val apps = mutableMapOf("b".repeat(32) to listOf("codex", "deepseek"))
+    fun appsOf(device: String) = apps[device] ?: listOf("codex", "claude", "deepseek")
     /** Signed in to the demo service (登录 with anything, 进入示例); its computers can be renamed or removed. */
     var signedIn = false
     val devices = mutableListOf(Computer("a".repeat(32), "测试电脑 A", true), Computer("b".repeat(32), "测试电脑 B", true), Computer("c".repeat(32), "离线电脑", false))
@@ -469,7 +489,7 @@ class FixtureWorld {
         )
     }
 
-    fun tree(more: String?): JSONObject {
+    fun tree(more: String?, device: String = "a".repeat(32)): JSONObject {
         val extra = runCatching { JSONArray(more ?: "[]") }.getOrDefault(JSONArray())
         val codexItems = JSONArray()
         firstPage().filter { it.app == "codex" }.forEach { codexItems.put(item(it)) }
@@ -484,7 +504,11 @@ class FixtureWorld {
                 .put(JSONObject().put("app", "codex").put("name", "Codex").put("count", codexItems.length()).put("projects", JSONArray().put(project("p-test", "测试项目", codexItems, codexItems.length())).put(project("p-none", "其他对话", JSONArray(), 0, true))))
                 .put(JSONObject().put("app", "claude").put("name", "Claude").put("count", only("claude").length()).put("projects", JSONArray().put(project("p-claude", "测试项目", only("claude"), only("claude").length()))))
                 .put(JSONObject().put("app", "deepseek").put("name", "DeepSeek").put("count", only("deepseek").length()).put("projects", JSONArray().put(project("p-deepseek", "固定测试项目", only("deepseek"), only("deepseek").length())))),
-        )
+        ).also { tree ->
+            // Only the apps this computer has, even with none of their conversations (remote.py filters the same way).
+            val all = tree.getJSONArray("apps"); val has = appsOf(device)
+            tree.put("apps", JSONArray((0 until all.length()).map { all.getJSONObject(it) }.filter { it.string("app") in has }))
+        }
     }
 
     private fun item(chat: Chat) = JSONObject().put("app", chat.app).put("id", chat.id).put("title", chat.title).put("folder", chat.folder).put("updated", chat.updated).put("status", chat.status)

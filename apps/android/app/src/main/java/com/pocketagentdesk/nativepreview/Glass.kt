@@ -52,6 +52,9 @@ import androidx.core.content.ContextCompat
 import com.pocketagentdesk.nativepreview.glass.Backdrop
 import com.pocketagentdesk.nativepreview.glass.BackdropEffectScope
 import com.pocketagentdesk.nativepreview.glass.BackdropShadow
+import com.pocketagentdesk.nativepreview.glass.DefaultHighlightShaderString
+import com.pocketagentdesk.nativepreview.glass.RoundedRectRefractionShaderString
+import com.pocketagentdesk.nativepreview.glass.SharedRuntimeShaders
 import com.pocketagentdesk.nativepreview.glass.Highlight
 import com.pocketagentdesk.nativepreview.glass.blur
 import com.pocketagentdesk.nativepreview.glass.colorControls
@@ -363,6 +366,19 @@ private fun BoxScope.BottomScrollEdge(body: Backdrop, height: Dp) {
 }
 
 private fun Modifier.matchParentSizeWidth(): Modifier = fillMaxWidth()
+
+/**
+ * Compiles the glass shaders ahead, on a background thread, right after the app starts (0.9.1): the first menu, sheet
+ * or glass button then does not compile them on the main thread. The keys are the ones the glass asks for.
+ */
+fun prewarmGlass() = SharedRuntimeShaders.prewarm(
+    listOf(
+        "Refraction" to RoundedRectRefractionShaderString,
+        "Default" to DefaultHighlightShaderString,
+        "ScrollEdge" to ScrollEdgeShader,
+        "BottomEdge" to BottomEdgeShader,
+    ),
+)
 
 /** Full effect down to [fade] above the bottom edge, then fades out; mixes the blurred content with the page colour. */
 private const val ScrollEdgeShader = """

@@ -1,0 +1,7 @@
+<!-- The performance copy (0.9.1): profileable from the shell, so system traces and frame timings can be taken from a
+     release-like build. Not in the release build users install. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+ <application>
+  <profileable android:shell="true" tools:targetApi="29"/>
+ </application>
+</manifest>
