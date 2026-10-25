@@ -9,8 +9,9 @@ if (!$env:ANDROID_HOME) { $env:ANDROID_HOME = Join-Path $chain "sdk" }
 if (!$env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME = Join-Path $chain "gradle" }
 $sdkProperty = $env:ANDROID_HOME.Replace("\", "/").Replace(":", "\:")
 Set-Content -LiteralPath (Join-Path $root "local.properties") -Value "sdk.dir=$sdkProperty" -Encoding ascii
-# 0.8: signed with this computer's Android debug key, as the old app (mobile/) is. It is not created here: a new key
-# would make every installed copy refuse the next update.
+# The development and measuring copies are signed with this computer's Android debug key; the app itself (1.0) with its
+# own key in ~/.android/teleply-signing, which Gradle checks. Neither is created here: a new key would make every
+# installed copy refuse the next update.
 $userHome = if ($env:ANDROID_USER_HOME) { $env:ANDROID_USER_HOME } else { Join-Path $HOME ".android" }
 if (!(Test-Path -LiteralPath (Join-Path $userHome "debug.keystore"))) { throw "No debug.keystore in $userHome. Build on the computer that signs the old app." }
 # Environment changes belong to this process only. No global JAVA_HOME / PATH changes.

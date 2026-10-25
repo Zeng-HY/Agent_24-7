@@ -6,3 +6,6 @@ local.properties
 *.jks
 *.keystore
 *.log
+*.p12
+teleply-signing/
+release.properties

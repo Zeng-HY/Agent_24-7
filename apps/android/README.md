@@ -1,4 +1,28 @@
-# Teleply Android 原生预览（0.9.1 修正来源选项、新建窗口卡顿、来源栏滑动和 Codex 图标）
+# 遥应 Teleply 安卓版（1.0.0 正式版：新包名、新签名，名字只叫遥应；含 0.9.1 的修正）
+
+## 1.0.0 正式版（2026-10-25）
+
+用户决定（10-25）：不再叫"原生预览"，当成正式安卓版；包名和签名证书都换掉，安装时只显示"遥应"；旧的套壳版归档，免得搞混。0.9.1 没有单独发布，它的修正都在 1.0.0 里（见下面 0.9.1 各节）。
+
+- **包名**：`com.pocketagentdesk.teleply`（以前是 `com.pocketagentdesk.remote.nativepreview`）；开发版 `….teleply.dev`，性能版 `….teleply.perf`。代码的包一起改成 `com.pocketagentdesk.teleply`（`app/src/*/java/com/pocketagentdesk/teleply/`，Room 结构文件的目录同步改名），Gradle 工程名 `Teleply`。没有用旧套壳版的 `com.pocketagentdesk.remote`：它还装在一些手机上，签名又不同，同名会装不上。
+- **名字和版本**：桌面和安装界面只显示"遥应"；版本 `1.0.0`（11）。麦克风权限提示里的应用名一起改了；手机里保存登录的密钥别名改成 `teleply.account.v1`（新应用本来就要重新登录）。
+- **签名**：正式版改用遥应自己的钥匙（RSA 4096，有效期到 2054-03-12），放在项目外面的 `%USERPROFILE%\.android\teleply-signing\`：`release.p12` 是钥匙，`release.properties` 存密码（构建时读取），`说明.txt` 写给人看。证书 SHA-256 `1df09ab72fd7e3e1c9f57569d2050ae1db933148d1d5fbb7517a28edb2e22946`。找不到这把钥匙时 Gradle 直接停下，不会改用调试签名（`app/build.gradle.kts`）；`scripts/release.ps1` 还会核对证书是不是这一把。开发版和性能版仍用这台电脑的 Android 调试签名。**这个文件夹要另外备份**：丢了，以后的更新就装不上去。
+- **应用内更新**：只认 `Teleply-版本-版本号.apk`。预览版的 `TeleplyNative-…` 和旧套壳版的 `PocketAgentDesk-…` 都不会被当成更新（包名、签名都不同，本来也装不上去）。反过来，手机上的预览版也不会提示装 1.0.0，要告诉测试的人手动装。
+- **手机上要做的**：新包名对手机来说是另一个应用，不能覆盖预览版或套壳版，登录也带不过来。先卸载"遥应 原生预览"和旧的"遥应"（套壳版，名字也叫遥应，留着就会有两个一样的图标），再装 1.0.0，重新登录。
+- **旧套壳版归档**：`mobile/` 的安卓部分（Capacitor，包名 `com.pocketagentdesk.remote`，最后一版 0.7.4（11））停止维护和发布，`mobile/scripts/build-android.ps1` 默认不再构建。iOS 还靠这个套壳（Codemagic + Sideloadly），照常保留。
+- 改名前没提交的 0.9.1 改动另存了一份：本机 `work\v100-identity\before-android-0.9.1-uncommitted.patch`（加上 `before-untracked.tar`）。旧的 `TeleplyNative-*.apk` 挪到了 `build/old-preview/`。
+- 开发者选项里"独立测试版，可与旧版遥应并存"这句删了，只留"新版本从 GitHub 发布页下载，核对签名后交给系统安装"。
+
+## 1.0.0 本轮结果（2026-10-25）
+
+- **版本**：`1.0.0`（11）。发布用的文件：`build/Teleply-1.0.0-11.apk`（2.2 MB，SHA-256 `3368d5d03cbdf3850e5822ad8668c736599c87a83079e0066fbc3e2306a10901`，证书 `1df09ab7…b2e22946`）。未提交、推送或发布。
+- **检查**：130 项 JVM/Compose 测试全部通过（新增 1 项：预览版和旧套壳版的安装包不会被当成更新）。lint 0 个错误、34 条提醒（写法建议和依赖可升级）。debug、release（R8）、性能版和设备测试包都构建通过；`scripts/release.ps1` 跑通。三个安装包逐个核对过：正式版 `com.pocketagentdesk.teleply`／"遥应"／1.0.0／新证书，开发版 `….dev`／"遥应 开发版"，性能版 `….perf`／"遥应 性能版"，后两个是调试证书。把钥匙目录指到空文件夹时，release 构建停在 `packageRelease` 并提示缺少正式签名。
+- **模拟器**（`Medium_Phone_API_37.0`）：1.0.0 作为新应用装上，没有碰登录着的预览版和它的开发版。系统"应用信息"里名字是"遥应"；第一次打开是登录页，没有带过来任何登录；本地示例里测试电脑 B 只有全部／Codex／DeepSeek，侧栏是新的 Codex 标志；设置里"关于遥应 1.0.0"，开发者选项里版本 1.0.0、包名 `com.pocketagentdesk.teleply`。改了文案后用同一把钥匙重新打包，直接覆盖安装成功，相当于以后的更新能装上。截图在 本机 `work\v100-identity\screens\`。0.9.1 的旧性能版（只有示例数据）已从模拟器删除。
+- **没有做的**：真手机安装；从 GitHub 实际下载更新（要先发布）；两份原生规范里签名和包名那段还写着调试签名。
+
+### 留待人工验证（1.0.0）
+
+真手机上：先卸载"遥应 原生预览"和旧的套壳版"遥应"，再装 1.0.0，登录、看列表和对话、设置里"检查更新"。发布到 GitHub 以后，再确认手机上的 1.0.0 能看到并装上下一版。以及 0.9.1 和更早留下的各项（见下）。
 
 ## 0.9.1 改动（2026-10-25）
 
@@ -28,7 +52,7 @@
 
 ## 0.9.1 本轮结果（2026-10-25）
 
-- **版本**：`0.9.1-nativepreview`（10）。发布用的文件已构建：`build/TeleplyNative-0.9.1-10.apk`（2.2 MB，SHA-256 `1f37302a859dc34010c4e89f1835d7cedd5da983b1ea8ff493f34491e04f9893`，证书 `ae834764…02b1bb13`）。未提交、推送或发布。
+- **版本**：`0.9.1-nativepreview`（10）。发布用的文件已构建：`build/TeleplyNative-0.9.1-10.apk`（2.2 MB，SHA-256 `1f37302a859dc34010c4e89f1835d7cedd5da983b1ea8ff493f34491e04f9893`，证书 `ae834764…02b1bb13`）。未提交、推送或发布；后来没有发布，改动并入 1.0.0。
 - **检查**：129 项 JVM/Compose 测试全部通过。新增 11 项：没有 Claude 的电脑只给它有的应用（新建也换到它有的）；没有会话的应用也算有；读取中和读不到时不显示三个，重试后显示；手机记着的先显示、电脑答不上时保留；换电脑不沿用上一台的；选着的来源新电脑上没有时回到"全部"且不去读那个来源；电脑上应用没了，筛选跟着回到"全部"；新建窗口打开时不等、不取消列表、不读侧栏；以及三个界面场景：测试电脑 B 的来源栏、⋯ 菜单和新建窗口都没有 Claude；320dp 宽、1.3 倍字时来源栏可以横滑、DeepSeek 整词一行、可以选中、"更多"照常打开；连不上电脑时只有"全部"和"重试"，恢复后显示两个来源。lint 0 个错误、45 条提醒（依赖可升级和写法建议）。debug、release（R8）、性能版和设备测试包都构建通过。设备测试没有重跑（仍卡在 Espresso 3.5.0 和 Android 17，见 0.8）。
 - **模拟器**：`Medium_Phone_API_37.0`（Android 17，1080×2400／420dpi，60Hz，图形由电脑显卡转译），只用性能版的本地示例，没有碰登录着的应用和开发版。看过：测试电脑 B 的顶部只有"全部／Codex／DeepSeek"（修改前有 Claude）；360dp 宽时修改前"Deep"被压缩，修改后 DeepSeek 按原宽度伸到右边、边缘淡出，横滑后完整露出并可选中；1.3 倍字、横屏、深色都正常，横屏放得下时没有淡出；侧栏三个标志的大小和对齐，浅色、深色；一般、慢、断开三种示例网络下新建窗口都立即打开、立即关闭，断开时窗口里写"这次没读到，先用手机上记着的"。截图在 本机 `work\v091-screens\`，录屏、逐帧拼图和帧数据在 `work\v091-perf\`。测完把字号、密度、方向、深色都改回去了；自动旋转设成了关闭（测之前没记下原值）。
 - **帧数据**（`dumpsys gfxinfo framestats`，性能版，speed-profile 编译，测试电脑 B，每格是修改前 → 修改后）：
@@ -108,12 +132,14 @@
 
 真实电脑上：点 Claude 的模型标签时电脑上的 Claude 不再来回打开菜单（第一次打开一个从没读过的模型时会读一次）；Claude 对话里发送、选项和菜单不再等；新建对话从打开到发出都不等电脑，电脑建好后页面自己变成对话；回答和批准直接生效。手机上：先卸载 0.7（换了签名），装 0.8；第一次发布 `TeleplyNative-*.apk` 以后，检查更新、下载、允许安装未知应用、覆盖安装后登录还在。以及 0.7、0.6、0.5 留下的各项（见下）。
 
-## 发布新版本（0.8 起）
+## 发布新版本（1.0 起）
 
-1. 改 `app/build.gradle.kts` 的 `versionName`（`0.x.y-nativepreview`），`versionCode` 加一。
-2. 在保留调试签名的这台电脑上运行 `./scripts/release.ps1`：跑 JVM 测试，构建 release，输出 `build/TeleplyNative-0.x.y-N.apk`，打印签名证书和 SHA-256。证书必须是 `ae834764…02b1bb13`。
+1. 改 `app/build.gradle.kts` 的 `versionName`（`x.y.z`，不带后缀），`versionCode` 加一。
+2. 在有 `%USERPROFILE%\.android\teleply-signing\` 的电脑上运行 `./scripts/release.ps1`：跑 JVM 测试，构建 release，输出 `build/Teleply-x.y.z-N.apk`，打印签名证书和 SHA-256。证书不是 `1df09ab7…b2e22946` 时脚本报错停下。
 3. 把这个文件附到本仓库的 GitHub Release，文件名不改（预发布也可以）。手机上的应用每天看一次，也可以在设置里点"检查更新"。
-4. `debug.keystore` 一旦丢失，原生版和旧版都发不了能覆盖安装的更新，建议另外离线备份一份；不要提交进仓库。
+4. `teleply-signing` 文件夹一旦丢失，就发不了能覆盖安装的更新，所有人得卸载重装；一旦泄露，别人能做出能覆盖安装的假遥应。另外离线备份一份，不要提交进仓库，也不要发给别人。
+
+0.8–0.9 的预览版用这台电脑的 `debug.keystore` 签名、文件名 `TeleplyNative-…`；那把调试钥匙仍用于开发版和性能版，丢了只影响这两个开发用的副本。
 
 ## 0.7 改动（2026-10-25）
 
@@ -264,15 +290,15 @@ Teleply该次TOTAL PSS为67,885kB、TOTAL RSS为182,624kB。GPU直方图大量�
 
 ## 当前实现
 
-独立 Kotlin / Jetpack Compose / Material 3 工程。实现账号登录、电脑选择、Codex / Claude / DeepSeek 来源切换与列表、历史分页/搜索、原生 Markdown、阅读恢复和外观，以及流式内容、草稿、提交快照与回执。阶段3增加独立问题/批准详情、新建表单、来源模型/模式/可用权限、系统附件选择与电脑文件引用、对话/技能引用、公开活动、当前文件预览/保存与本轮差异。阶段4增加带临时只读授权的系统分享/外部打开、显式授权的系统语音输入、默认关闭的单会话后台状态检查、通知身份核对跳转、无障碍整行选项与标题语义、字体/宽高自适应和有界Markdown渲染缓存。0.7 补齐网页已有的归档与撤销、子对话、Claude 送达确认与"下一步"／任务卡片、Codex 计划卡片、通知／语音／诊断设置和电脑语音，HTML 按网页打开。控制动作按来源协议呈现：Codex 通用批准因后端无接口继续在电脑上处理；Claude / DeepSeek 真实交互按用户选择保留待验收。未改动 `mobile/android`、Capacitor、iOS 或服务端。
+独立 Kotlin / Jetpack Compose / Material 3 工程。实现账号登录、电脑选择、Codex / Claude / DeepSeek 来源切换与列表、历史分页/搜索、原生 Markdown、阅读恢复和外观，以及流式内容、草稿、提交快照与回执。阶段3增加独立问题/批准详情、新建表单、来源模型/模式/可用权限、系统附件选择与电脑文件引用、对话/技能引用、公开活动、当前文件预览/保存与本轮差异。阶段4增加带临时只读授权的系统分享/外部打开、显式授权的系统语音输入、默认关闭的单会话后台状态检查、通知身份核对跳转、无障碍整行选项与标题语义、字体/宽高自适应和有界Markdown渲染缓存。0.7 补齐网页已有的归档与撤销、子对话、Claude 送达确认与"下一步"／任务卡片、Codex 计划卡片、通知／语音／诊断设置和电脑语音，HTML 按网页打开。控制动作按来源协议呈现：Codex 通用批准因后端无接口继续在电脑上处理；Claude / DeepSeek 真实交互按用户选择保留待验收。原生工程不改 Capacitor、iOS 或服务端；1.0 只给 `mobile/` 的安卓部分加了归档说明和构建拦截。
 
-- 包名：`com.pocketagentdesk.remote.nativepreview`；名称：遥应 原生预览；版本：`0.9.1-nativepreview`（10）。独立应用数据；0.8 起和旧版共用这台电脑的 Android 调试签名，所以 0.7 及以前（本地预览签名）要卸载一次才能装 0.8，之后保留数据更新。开发版 `com.pocketagentdesk.remote.nativepreview.dev`（遥应 开发版）是调试构建，和应用并排安装；0.9.1 起性能版 `….perf`（遥应 性能版，release 构建加可分析标记）也单独安装，专门测性能，不登录。旧包 `com.pocketagentdesk.remote` 不受安装脚本操作。
+- 包名：`com.pocketagentdesk.teleply`；名称：遥应；版本：`1.0.0`（11）。用遥应自己的正式签名（见"1.0.0 正式版"）。0.9 及以前的预览版（`com.pocketagentdesk.remote.nativepreview`，调试签名）和归档的套壳版（`com.pocketagentdesk.remote`）是另外的应用，不能被 1.0 覆盖，要手动卸载。开发版 `com.pocketagentdesk.teleply.dev`（遥应 开发版）是调试构建，和应用并排安装；性能版 `….teleply.perf`（遥应 性能版，release 构建加可分析标记）也单独安装，专门测性能，不登录。安装脚本不操作旧包。
 - 基线：AGP 8.13.0 / Gradle 8.14.3 / Kotlin 与 Compose 编译插件 2.2.20 / Compose BOM 2025.10.00 / Material 3 1.4.0；minSdk 26，compileSdk / targetSdk 36。依赖均为固定版本，未启用实验性 Expressive 控件。
 - 本地工具：默认复用仓库 `mobile/.toolchain` 的 JDK 21.0.12.1+1、SDK 和 Gradle 缓存；提供 `STUDIO_GRADLE_JDK`、`ANDROID_HOME`、`GRADLE_USER_HOME` 时优先使用指定目录。目前 Studio 启动入口将三者指向本机另一块盘上的目录，避免构建脚本将 SDK / 缓存切回 D 盘。脚本只修改当前进程环境。无需全局 Java、WSL、虚拟化或远程构建。
 
 ## 构建
 
-在本目录执行 `./scripts/build.ps1`，默认构建开发版 APK、执行 JVM 测试与 lint、编译仪器测试 APK；`./scripts/release.ps1` 构建发布用的 release APK（见"发布新版本"）。0.8 起两者都用这台电脑的 Android 调试签名（和旧版遥应相同），脚本不再生成 `.local/nativepreview.jks`；找不到 `debug.keystore` 时脚本停下，不会另建一个。签名文件不进入 Git。`local.properties` 由脚本按当前仓库路径生成。
+在本目录执行 `./scripts/build.ps1`，默认构建开发版 APK、执行 JVM 测试与 lint、编译仪器测试 APK；`./scripts/release.ps1` 构建发布用的 release APK（见"发布新版本"）。开发版用这台电脑的 Android 调试签名，找不到 `debug.keystore` 时脚本停下，不会另建一个；1.0 起正式版用 `%USERPROFILE%\.android\teleply-signing\` 里的钥匙（别处可用环境变量 `TELEPLY_SIGNING_DIR` 指定），找不到时 Gradle 停下。签名文件不进入 Git。`local.properties` 由脚本按当前仓库路径生成。
 
 开发版 APK：`app/build/outputs/apk/debug/app-debug.apk`。正式版 APK：`app/build/outputs/apk/release/app-release.apk`（R8 压缩）。仪器 APK：`app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`。Room schema 在 `app/schemas/` 跟踪。测试报告与 JVM 截图分别在 `app/build/reports/`、`app/build/ui-evidence/`。
 

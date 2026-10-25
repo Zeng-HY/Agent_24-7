@@ -1,5 +1,8 @@
-param([string]$JavaHome, [string]$AndroidSdk)
+param([string]$JavaHome, [string]$AndroidSdk, [switch]$Force)
 $ErrorActionPreference = 'Stop'
+# Archived 2026-10-25 (user decision): the Android app is apps/android (Teleply 1.0, com.pocketagentdesk.teleply). This
+# shell (com.pocketagentdesk.remote, last 0.7.4) is neither built nor released any more; the iOS shell stays in use.
+if (!$Force) { throw 'The Android shell is archived (2026-10-25): the Android app is apps/android. Pass -Force to build this old shell anyway.' }
 Set-Location (Split-Path $PSScriptRoot -Parent)
 if (!$JavaHome) {
     $localJdk = Get-ChildItem .toolchain/jdk -Directory -ErrorAction SilentlyContinue | Select-Object -First 1

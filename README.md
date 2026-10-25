@@ -2,7 +2,7 @@
 
 在手机上查看、继续电脑上 **Codex**、**Claude**、**DeepSeek Harness** 桌面版里的对话。
 
-电脑上跑一个小服务，手机可以经 [Tailscale](https://tailscale.com) 打开网页，也可以连接管理员部署的 HTTPS 中转。Tailscale 路径不需要自建公网服务器；使用中转时，云端终止 TLS，是需要信任的节点。Android 和 iOS 启动器源码也在本仓库的 `mobile/` 中。
+电脑上跑一个小服务，手机可以经 [Tailscale](https://tailscale.com) 打开网页，也可以连接管理员部署的 HTTPS 中转。Tailscale 路径不需要自建公网服务器；使用中转时，云端终止 TLS，是需要信任的节点。安卓 App「遥应」（原生）的源码在 `apps/android`；iOS 启动器在 `mobile/`，那里的安卓套壳版已归档。
 
 适合这样的时候：人不在电脑前，想看看 AI 做到哪一步了，回答它的提问，补一句话，或者新开一个任务。
 

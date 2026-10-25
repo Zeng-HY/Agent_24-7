@@ -20,14 +20,14 @@ if($LASTEXITCODE -ne 0 -or $state.Trim() -ne "device") { throw "Selected device 
 # Explicitly selected serial; only installs the development copy (0.8: .dev, beside the app, never its data) and its tests.
 & $adb -s $Serial install -r (Join-Path $root "app/build/outputs/apk/debug/app-debug.apk")
 if($LASTEXITCODE -ne 0) { throw "Preview installation failed" }
-$launch=& $adb -s $Serial shell am start -W -n com.pocketagentdesk.remote.nativepreview.dev/com.pocketagentdesk.nativepreview.MainActivity
+$launch=& $adb -s $Serial shell am start -W -n com.pocketagentdesk.teleply.dev/com.pocketagentdesk.teleply.MainActivity
 $launch
 if($LASTEXITCODE -ne 0 -or ($launch -join "`n") -notmatch "Status: ok") { throw "Preview launch was not confirmed" }
 Write-Output "Old package presence (absence is allowed):"
 & $adb -s $Serial shell pm path com.pocketagentdesk.remote
 & $adb -s $Serial install -r (Join-Path $root "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")
 if($LASTEXITCODE -ne 0) { throw "Instrumentation installation failed" }
-$instrument=& $adb -s $Serial shell am instrument -w com.pocketagentdesk.remote.nativepreview.dev.test/androidx.test.runner.AndroidJUnitRunner
+$instrument=& $adb -s $Serial shell am instrument -w com.pocketagentdesk.teleply.dev.test/androidx.test.runner.AndroidJUnitRunner
 $instrument
 if(($instrument -join "`n") -notmatch 'OK \(\d+ tests?\)') { throw "Instrumentation tests did not pass" }
 if(!$InstrumentationOnly) {

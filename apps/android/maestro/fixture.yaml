@@ -1,5 +1,5 @@
 # The development copy (0.8): clearState below must never reach the app and its login.
-appId: com.pocketagentdesk.remote.nativepreview.dev
+appId: com.pocketagentdesk.teleply.dev
 name: Native read-only fixture
 ---
 - launchApp:

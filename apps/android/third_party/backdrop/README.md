@@ -2,7 +2,7 @@
 
 来源：[Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) 的 `backdrop` 模块，commit `65ab177e90e5c1d8c62e70cf7755841982da65f6`（2026-08-26），Apache License 2.0，版权 2025 Kyant。许可证原文见同目录 `LICENSE`，APK 内另有一份 `assets/licenses/backdrop-LICENSE.txt`。
 
-移植到 `app/src/main/java/com/pocketagentdesk/nativepreview/glass/`：
+移植到 `app/src/main/java/com/pocketagentdesk/teleply/glass/`：
 
 | 本工程文件 | 上游文件 |
 |---|---|

@@ -1,8 +1,10 @@
 # Agent Remote 移动端工程
 
+> **安卓套壳版已归档（2026-10-25，用户决定）**：安卓改用原生的遥应正式版（`apps/android`，包名 `com.pocketagentdesk.teleply`）。这里的安卓套壳（包名 `com.pocketagentdesk.remote`，最后一版 0.7.4（11），GitHub 发布页上的 `PocketAgentDesk-*.apk`）不再修改、构建或发布；`scripts/build-android.ps1` 默认直接停下，加 `-Force` 才构建。下面安卓相关的内容只作历史记录。iOS 套壳照常使用，直到原生 iOS 版出来。手机上装着套壳版的，先卸载它再装遥应 1.0（两个都叫"遥应"）。
+
 本目录是独立 Capacitor 启动器。Node 24.14.0、npm 11.9.0；Capacitor core/cli/ios/android 8.5.3，InAppBrowser 4.1.0。依赖由 package-lock.json 固定。iOS 使用 Codemagic；Android 可在 Windows 局部工具链构建。
 
-## Android APK
+## Android APK（已归档）
 
 要求 Java 21、Android SDK Platform 36、Build Tools 36.0.0、Platform Tools。Android 最低 8.0（API 26），目标 API 36。工具链可放在忽略目录 `.toolchain/jdk/<JDK目录>` 和 `.toolchain/sdk`，不改变全局 Java 或其他项目环境。首次安装从 Adoptium 和 Android 官方站下载；本机使用 Temurin 21.0.12.1+1 和 commandlinetools 15859902。
 
