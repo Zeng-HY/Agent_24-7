@@ -35,6 +35,12 @@ class NewTests(unittest.TestCase):
         p.write_text('---\nname: demo\nuser-invocable: false\n---\nDisabled')
         with self.assertRaises(chats.ChatError):self.service.submit(b)
         self.assertEqual(self.service._read(b['request_id'])[0],'draft')
+    def test_new_skill_search_forwards_refresh_and_snapshot(self):
+        with patch.object(self.refs,'search',return_value={'items':[]}) as search:
+            self.service.search({'app':'codex','folder':str(self.projects[0]),'kind':'skill','fresh':'1','scan_id':'old','offset':'30'})
+        self.assertTrue(search.call_args.kwargs['force'])
+        self.assertEqual(search.call_args.kwargs['scan_id'],'old')
+        self.assertEqual(search.call_args.kwargs['cwd'],str(self.projects[0]))
     def test_duplicate_and_changed_request_never_creates_twice(self):
         body=self.body()
         with patch('new_conversations.threading.Thread') as thread:

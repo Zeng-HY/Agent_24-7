@@ -421,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path=='/api/composer/references':
             q=self._query()
-            try:self._json(self.server.references.search(q.get('app','codex'),q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0'))))
+            try:self._json(self.server.references.search(q.get('app','codex'),q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),force=q.get('fresh')=='1',scan_id=q.get('scan_id','')))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
         if path in ('/api/files/places','/api/files/list'):  # 电脑上的文件: where to start, and one folder (pc_files.py)

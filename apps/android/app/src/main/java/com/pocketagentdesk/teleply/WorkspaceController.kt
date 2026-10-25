@@ -98,7 +98,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     fun close() { read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null) } }
     fun panel(name:String) {
-        mutable.update { it.copy(pane=name,error=null,preview=null,newNote=if(name=="new") null else it.newNote) }
+        read?.cancel();generation++
+        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote) }
         if(name=="new") openNew() else refresh(name)
     }
     /**
@@ -135,7 +136,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             }
         }
     }
-    fun refresh(name:String=state.value.pane.orEmpty(),query:String="",offset:String="0") {
+    fun refresh(name:String=state.value.pane.orEmpty(),query:String="",offset:String="0",fresh:Boolean=false) {
         if(name=="new") { loadNewFolders();return }
         val k=key ?: return;val service=api ?: return;read?.cancel();val g=++generation
         update(k) { it.copy(busy=true,error=null) }
@@ -145,12 +146,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 val data=when(name) {
                     "files" -> service.detail(k.device,"chat/files",q)
                     "remote" -> if(query.isBlank()) service.detail(k.device,"files/places",q) else service.detail(k.device,"files/list",q+mapOf("path" to query,"offset" to offset))
-                    "chat","skill" -> service.detail(k.device,if(k.chat=="@new") "chat/new/references" else "composer/references",q+mapOf("kind" to name,"query" to query,"offset" to offset,"projectless" to if(saved(k).string("folder").isBlank()) "1" else "0","folder" to saved(k).string("folder")))
+                    "chat","skill" -> service.detail(k.device,if(k.chat=="@new") "chat/new/references" else "composer/references",q+mapOf("kind" to name,"query" to query,"offset" to if(fresh) "0" else offset,"fresh" to if(fresh) "1" else "0","scan_id" to if(offset!="0" && !fresh) JSONObject(state.value.data).string("scan_id") else "","projectless" to if(saved(k).string("folder").isBlank()) "1" else "0","folder" to saved(k).string("folder")))
                     else -> JSONObject()
                 }
-                if(g==generation) update(k) { it.copy(data=data.toString(),busy=false) }
+                if(g==generation && state.value.pane==name) update(k) { it.copy(data=data.toString(),busy=false) }
             } catch(e:CancellationException) { throw e }
-            catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message ?: "读取失败",busy=false) } }
+            catch(e:Exception) { if(g==generation) update(k) { it.copy(error=if(name=="skill") "技能读取失败，请重试。若仍失败，请检查电脑端连接。" else e.message ?: "读取失败",busy=false) } }
         }
     }
     /**
@@ -391,6 +392,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val k=key ?: return;if(!state.value.ready || k in active) return
         val j=saved(k)
         if(j.string("folder")==path && (j.string("projectless")=="1")==projectless) return
+        read?.cancel();generation++
+        update(k) { it.copy(data="{}",busy=false,error=null) }
         j.put("folder",path).put("projectless",if(projectless) "1" else "")
         j.put("references",JSONArray(j.rows("references") { it }.filter { it.string("kind")!="skill" }))
         launchSafe { persist(k,j) }

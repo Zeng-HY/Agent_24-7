@@ -65,7 +65,7 @@ fun JSONObject.strings(name:String)=optJSONArray(name)?.let { a -> (0 until a.le
     val back:()->Unit=if(k.chat=="@new") ({ c.panel("new") }) else c::close
     when(pane) {
         "new" -> Unit
-        "chat","skill" -> TeleplySheet(if(pane=="chat") "引用对话" else "引用技能",back) { PaneStatus(s,j,c);ReferencesPane(pane,k,data,c,s.busy) }
+        "chat","skill" -> TeleplySheet(if(pane=="chat") "引用对话" else "引用技能",back) { PaneStatus(s,j,c);ReferencesPane(pane,k,data,c,s.busy,s.error!=null) }
         "remote" -> TeleplySheet("电脑上的文件",back) { PaneStatus(s,j,c);RemotePane(k,data,c) }
         "files" -> TeleplySheet("对话文件",c::close) { PaneStatus(s,j,c);FilesPane(data,c) }
         "file" -> DetailPage(data.string("name").ifBlank { "文件" },{ c.panel("files") }) { FilePage(vm,k,data,s) }
@@ -337,18 +337,32 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
 
 // --- Attachments, references and computer files ---------------------------------------------------------------
 
-@Composable private fun ColumnScope.ReferencesPane(pane:String,k:ChatKey,data:JSONObject,c:WorkspaceController,busy:Boolean) {
+@Composable private fun ColumnScope.ReferencesPane(pane:String,k:ChatKey,data:JSONObject,c:WorkspaceController,busy:Boolean,failed:Boolean) {
     var query by remember(k,pane) { mutableStateOf("") }
     TeleplyTextField(query,{ query=it },"搜索${if(pane=="chat") "对话" else "技能"}")
     PillButton("搜索",{ c.refresh(pane,query) },enabled=!busy)
     val items=data.rows("items") { it }
+    if(pane=="skill") {
+        PillButton("重新读取",{ c.refresh(pane,query,fresh=true) },enabled=!busy,style=PillStyle.Text)
+        val status=data.string("scan_status")
+        val note=when {
+            failed && items.isNotEmpty() -> "刷新失败，以下仍是上次读取的结果。"
+            busy -> if(items.isEmpty()) "正在读取技能…" else "正在读取，以下暂为上次结果。"
+            status=="failed" -> "技能读取失败，请重试；若仍失败，请检查电脑端技能配置。"
+            status=="partial" -> if(items.isEmpty()) "已加载的技能中没有匹配项，部分来源未能读取。" else "部分技能未能读取，其余技能仍可选择。"
+            !failed && data.has("items") && items.isEmpty() -> "未找到匹配技能。"
+            else -> ""
+        }
+        if(note.isNotBlank()) Text(note,style=MaterialTheme.typography.note)
+        if(data.optBoolean("page_reset")) Text("技能列表已变化，已返回第一页。",style=MaterialTheme.typography.note)
+    }
     if(items.isNotEmpty()) CardSection {
         items.forEachIndexed { index,ref ->
             if(index>0) CardDivider()
             CardRow(ref.string("name").ifBlank { ref.string("title") },{ c.addReference(ref);if(k.chat=="@new") c.panel("new") else c.close() },detail=ref.string("description").ifBlank { null })
         }
     }
-    if(data.optBoolean("has_more")) PillButton("下一页",{ c.refresh(pane,query,data.string("next_offset")) },style=PillStyle.Text)
+    if(data.optBoolean("has_more")) PillButton("下一页",{ c.refresh(pane,query,data.string("next_offset")) },style=PillStyle.Text,enabled=!busy)
 }
 
 @Composable private fun ColumnScope.RemotePane(k:ChatKey,data:JSONObject,c:WorkspaceController) {

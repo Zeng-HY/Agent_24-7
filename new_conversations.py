@@ -157,7 +157,7 @@ class NewConversations:
             if app not in ('codex','claude'):raise chats.ChatError('DeepSeek 的新对话要选一个工作区')
             folder=''  # no project folder: personal and built-in skills only
         else:folder=self.context(app,q.get('folder',''))
-        return self.references.search(app,'',q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),cwd=folder)
+        return self.references.search(app,'',q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),cwd=folder,force=q.get('fresh')=='1',scan_id=q.get('scan_id',''))
 
     @staticmethod
     def _projectless_folder():

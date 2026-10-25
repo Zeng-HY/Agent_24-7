@@ -1,7 +1,7 @@
 """Search installed skills and exact conversations; resolve only server-discovered references.
 Files and folders on this computer are references too (10-20, pc_files.py): their paths go under the message."""
 from __future__ import annotations
-import hashlib,json,os,re,threading,time,tomllib,unicodedata
+import hashlib,json,logging,os,re,stat,threading,time,tomllib,unicodedata,uuid
 from pathlib import Path
 import chats
 import pc_files
@@ -47,26 +47,56 @@ class References:
             raw=path.read_text(encoding='utf-8-sig')
             return tomllib.loads(raw) if path.suffix=='.toml' else json.loads(raw)
         except (OSError,ValueError):return {}
-    def _roots(self,app,cwd):
+    @staticmethod
+    def _warning(warnings,scope,exc):
+        if len(warnings)>=20:return
+        code='access_denied' if isinstance(exc,PermissionError) or getattr(exc,'winerror',None)==448 else 'source_unavailable'
+        diagnostic=uuid.uuid4().hex[:12]
+        logging.getLogger(__name__).warning('Skill scan %s (%s): %s',diagnostic,scope,exc)
+        if len(warnings)<20:warnings.append({'source':scope,'code':code,'diagnostic_id':diagnostic})
+    def _skill_config(self,path):
+        try:raw=path.read_text(encoding='utf-8-sig')
+        except FileNotFoundError:return {}
+        value=tomllib.loads(raw) if path.suffix=='.toml' else json.loads(raw)
+        if not isinstance(value,dict):raise ValueError('Skill configuration must be an object')
+        return value
+    def _roots(self,app,cwd,warnings):
         roots=[];disabled=set()
+        # Configuration controls invocation permissions. An unreadable configuration must not enable skills.
         if app=='codex':
-            conf=self._config(self.home/'.codex/config.toml')
-            for row in (conf.get('skills') or {}).get('config',[]):
-                if isinstance(row,dict) and row.get('enabled') is False and row.get('path'):disabled.add(str(Path(row['path']).resolve()).casefold())
+            conf=self._skill_config(self.home/'.codex/config.toml')
+            skills=conf.get('skills',{});plugins=conf.get('plugins',{})
+            if not isinstance(skills,dict) or not isinstance(plugins,dict):raise ValueError('Invalid skill/plugin configuration')
+            rows=skills.get('config',[])
+            if not isinstance(rows,list):raise ValueError('Invalid skill configuration')
+            for row in rows:
+                if not isinstance(row,dict):raise ValueError('Invalid skill rule')
+                if row.get('enabled') is False and row.get('path'):disabled.add(str(Path(row['path']).resolve()).casefold())
             roots=[(self.home/'.codex/skills','个人技能'),(self.home/'.codex/skills/.system','内置技能'),(self.home/'.agents/skills','个人技能')]
-            for key,value in (conf.get('plugins') or {}).items():
-                if not isinstance(value,dict) or value.get('enabled') is not True or '@' not in key:continue
+            for key,value in plugins.items():
+                if not isinstance(value,dict):raise ValueError('Invalid plugin rule')
+                if value.get('enabled') is not True or '@' not in key:continue
                 plugin,market=key.rsplit('@',1);base=self.home/'.codex/plugins/cache'/market/plugin
-                if not base.is_dir():continue
-                versions=[p for p in base.iterdir() if p.is_dir() and re.fullmatch(r'\d+(?:\.\d+)*',p.name)]
-                if versions:roots.append((max(versions,key=lambda p:tuple(map(int,p.name.split('.'))))/'skills',plugin))
+                try:
+                    # Choose by name before accessing any target. Never fall back when the newest version fails.
+                    versions=[p for p in base.iterdir() if re.fullmatch(r'\d+(?:\.\d+)*',p.name)]
+                    if not versions:raise ValueError('No supported numeric plugin version')
+                    selected=max(versions,key=lambda p:tuple(map(int,p.name.split('.'))))
+                    root=selected/'skills'
+                    if not stat.S_ISDIR(selected.stat().st_mode):raise ValueError('Plugin version is not a directory')
+                    # Plugins can legitimately provide tools without skills.
+                    roots.append((root,plugin))
+                except (OSError,ValueError) as exc:self._warning(warnings,plugin,exc)
         else:
             roots=[(self.home/'.claude/skills','个人技能'),(self.home/'.claude/commands','个人命令')]
-            installed=self._config(self.home/'.claude/plugins/installed_plugins.json').get('plugins',{})
-            enabled=self._config(self.home/'.claude/settings.json').get('enabledPlugins',{})
+            installed=self._skill_config(self.home/'.claude/plugins/installed_plugins.json').get('plugins',{})
+            enabled=self._skill_config(self.home/'.claude/settings.json').get('enabledPlugins',{})
+            if not isinstance(installed,dict) or not isinstance(enabled,dict):raise ValueError('Invalid Claude plugin configuration')
             for key,entries in installed.items():
                 if enabled.get(key) is not True:continue
-                for entry in entries if isinstance(entries,list) else []:
+                if not isinstance(entries,list):raise ValueError('Invalid installed plugin entries')
+                for entry in entries:
+                    if not isinstance(entry,dict):raise ValueError('Invalid installed plugin entry')
                     if entry.get('scope')=='project' and str(entry.get('projectPath','')).casefold()!=str(cwd).casefold():continue
                     if entry.get('installPath'):roots.append((Path(entry['installPath'])/'skills',key.split('@')[0]))
         current=Path(cwd) if cwd else None
@@ -75,46 +105,80 @@ class References:
             names=('.agents/skills','.codex/skills') if app=='codex' else ('.claude/skills','.claude/commands')
             for name in names:roots.insert(0,(parent/name,'项目技能 · '+parent.name))
         return roots,disabled
-    def skills(self,app,tid,force=False,*,cwd=None):
+    def _scan(self,app,cwd):
+        warnings=[];result=[];seen=set();readable=0
+        try:roots,disabled=self._roots(app,cwd,warnings)
+        except (OSError,ValueError,TypeError) as exc:
+            self._warning(warnings,'技能配置',exc)
+            return {'rows':[],'scan_status':'failed','warnings':warnings,'scan_id':uuid.uuid4().hex}
+        for root,scope in roots:
+            try:
+                try:entries=list(root.iterdir())
+                except FileNotFoundError:continue
+                warning_count=len(warnings)
+                candidates=[]
+                commands=app=='claude' and root.name=='commands'
+                for entry in entries:
+                    try:
+                        if stat.S_ISDIR(entry.stat().st_mode):
+                            if commands:
+                                candidates.extend(p for p in entry.iterdir() if p.suffix=='.md')
+                            else:
+                                candidate=entry/'SKILL.md'
+                                try:candidate.stat()
+                                except FileNotFoundError:continue
+                                candidates.append(candidate)
+                        elif commands and entry.suffix=='.md':candidates.append(entry)
+                    except OSError as exc:self._warning(warnings,scope,exc)
+                if len(candidates)>300:self._warning(warnings,scope,ValueError('Skill scan limit exceeded'))
+                for path in candidates[:300]:
+                    try:
+                        path=path.resolve();identity=str(path).casefold()
+                        if identity in seen or identity in disabled:continue
+                        with path.open(encoding='utf-8-sig') as f:head=f.read(16384)
+                        data=metadata(head)
+                        if data.get('user-invocable') is False or data.get('allow_explicit_invocation') is False:continue
+                        name=(data.get('name') or path.parent.name) if path.name=='SKILL.md' else (data.get('name') or path.stem)
+                        if not isinstance(name,str) or not name.strip():continue
+                        desc=data.get('description') or ''
+                        info=path.stat()
+                        result.append({'kind':'skill','id':hashlib.sha256((app+'\0'+identity).encode()).hexdigest()[:24],
+                            'app':app,'name':name.strip(),'description':str(desc).strip()[:1000],'scope':scope,'path':str(path),
+                            'version':f'{info.st_size}:{info.st_mtime_ns}'})
+                        seen.add(identity)
+                    except (OSError,ValueError,TypeError) as exc:self._warning(warnings,scope,exc)
+                if len(warnings)==warning_count and warning_count<20:readable+=1
+            except (OSError,ValueError) as exc:self._warning(warnings,scope,exc)
+        status='complete' if not warnings else ('partial' if readable or result else 'failed')
+        return {'rows':result,'scan_status':status,'warnings':warnings,'scan_id':uuid.uuid4().hex}
+    def _snapshot(self,app,tid,force=False,*,cwd=None):
         item=chats.find(app,tid) if cwd is None else {'cwd':cwd};key=(app,item.get('cwd',''))
+        # Serialize cache population: an older scan cannot overwrite a later forced refresh.
         with self.lock:
             cached=self.cache.get(key)
-            if not force and cached and time.monotonic()-cached[0]<20:return list(cached[1])
-        roots,disabled=self._roots(app,key[1]);seen=set();result=[]
-        for root,scope in roots:
-            if not root.is_dir():continue
-            candidates=list(root.glob('*/SKILL.md'))
-            if app=='claude' and root.name=='commands':candidates+=list(root.glob('*.md'))+list(root.glob('*/*.md'))
-            for path in candidates[:300]:
-                try:
-                    path=path.resolve();identity=str(path).casefold()
-                    if identity in seen or identity in disabled:continue
-                    seen.add(identity)
-                    with path.open(encoding='utf-8-sig') as f:head=f.read(16384)
-                    data=metadata(head)
-                    if data.get('user-invocable') is False or data.get('allow_explicit_invocation') is False:continue
-                    name=data.get('name') or path.parent.name if path.name=='SKILL.md' else data.get('name') or path.stem
-                    if not isinstance(name,str) or not name.strip():continue
-                    desc=data.get('description') or (data.get('metadata') or {}).get('short-description') or ''
-                    result.append({'kind':'skill','id':hashlib.sha256((app+'\0'+identity).encode()).hexdigest()[:24],
-                        'app':app,'name':name.strip(),'description':str(desc).strip()[:1000],'scope':scope,'path':str(path),
-                        'version':f'{path.stat().st_size}:{path.stat().st_mtime_ns}'})
-                except (OSError,ValueError,TypeError):continue
-        with self.lock:
-            self.cache[key]=(time.monotonic(),result)
+            if not force and cached and time.monotonic()-cached[0]<20:return cached[1]
+            result=self._scan(app,key[1]);self.cache[key]=(time.monotonic(),result)
             if len(self.cache)>24:self.cache.pop(next(iter(self.cache)))
-        return list(result)
-    def search(self,app,tid,kind,query='',offset=0,*,cwd=None):
+            return result
+    def skills(self,app,tid,force=False,*,cwd=None):
+        return list(self._snapshot(app,tid,force,cwd=cwd)['rows'])
+    def search(self,app,tid,kind,query='',offset=0,*,cwd=None,force=False,scan_id=''):
         if cwd is None:chats.find(app,tid)
         if kind not in ('skill','chat') or not 0<=offset<=100000 or len(query)>200:raise chats.ChatError('搜索参数无效')
         if kind=='skill' and app=='deepseek':return {'items':[],'has_more':False,'next_offset':0,'total':0}
-        if kind=='skill':rows=self.skills(app,tid,cwd=cwd)
+        extra={}
+        if kind=='skill':
+            snapshot=self._snapshot(app,tid,force,cwd=cwd);rows=snapshot['rows']
+            extra={k:v for k,v in snapshot.items() if k!='rows'}
+            if force:offset=0
+            if offset and scan_id and scan_id!=snapshot['scan_id']:
+                offset=0;extra['page_reset']=True
         else:rows=[{'kind':'chat',**chats.public(v),'description':v.get('folder','')} for v in self.history.catalog() if (v['app'],v['id'])!=(app,tid)]
         hits=[v for v in rows if matches(query,v)]
         if kind=='skill':hits.sort(key=lambda v:(not normalize(v['name']).startswith(normalize(query)),v['name'].casefold(),v['scope']))
         page=hits[offset:offset+30]
         return {'items':[{k:v for k,v in row.items() if k not in ('path','cwd')} for row in page],
-                'has_more':offset+30<len(hits),'next_offset':offset+30,'total':len(hits)}
+                'has_more':offset+30<len(hits),'next_offset':offset+30,'total':len(hits),**extra}
     def resolve(self,app,tid,selections,*,cwd=None):
         if not isinstance(selections,list):raise chats.ChatError('引用无效，请重新选择')
         attached_refs=sum(isinstance(v,dict) and v.get('kind') in FILE_KINDS for v in selections)
@@ -129,7 +193,10 @@ class References:
             seen.add(key)
             if ref['kind']=='skill':
                 if ref['app']!=app:raise chats.ChatError('技能属于另一个客户端，请重新选择')
-                if catalog is None:catalog=self.skills(app,tid,True,cwd=cwd)
+                if catalog is None:
+                    snapshot=self._snapshot(app,tid,True,cwd=cwd)
+                    if snapshot['scan_status']=='failed':raise chats.ChatError('技能读取失败，无法验证所选技能，请重试')
+                    catalog=snapshot['rows']
                 skill=next((v for v in catalog if v['id']==ref['id']),None)
                 if not skill or skill['version']!=ref.get('version'):raise chats.ChatError('所选技能已更新、移除或停用，请重新选择')
                 if app=='codex':native.append({'type':'skill','name':skill['name'],'path':skill['path']})

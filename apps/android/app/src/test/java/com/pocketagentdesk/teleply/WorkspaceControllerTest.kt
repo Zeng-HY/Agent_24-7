@@ -37,6 +37,36 @@ private class WorkspaceApi:ReadApi by FixtureApi() {
 }
 @OptIn(ExperimentalCoroutinesApi::class)
 class WorkspaceControllerTest {
+    @Test fun skillRetryForcesBothRoutesAndKeepsDraft()=runTest {
+        for(chat in listOf("chat","@new")) {
+            val requests=mutableListOf<Pair<String,Map<String,String?>>>()
+            val api=object:ReadApi by FixtureApi() {
+                override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                    requests+=route to query
+                    return JSONObject("""{"items":[],"scan_status":"partial","scan_id":"one"}""")
+                }
+            }
+            val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key.copy(chat=chat),api,false);runCurrent()
+            c.edit("first_message","保留正文");c.addReference(JSONObject("""{"kind":"skill","id":"chosen"}"""));runCurrent()
+            c.panel("skill");runCurrent();c.refresh("skill","中文",fresh=true);runCurrent()
+            val request=requests.last();assertEquals(if(chat=="@new") "chat/new/references" else "composer/references",request.first)
+            assertEquals("1",request.second["fresh"]);assertEquals("中文",request.second["query"]);assertEquals("0",request.second["offset"])
+            assertEquals("保留正文",JSONObject(c.state.value.saved).string("first_message"))
+            assertEquals(1,c.sendExtras().getJSONArray("references").length())
+        }
+    }
+    @Test fun lateSkillResponseCannotOverwriteNewPanel()=runTest {
+        val pending=CompletableDeferred<Unit>()
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                if(query["kind"]=="skill") withContext(NonCancellable) { pending.await() }
+                return JSONObject("""{"items":[{"name":"old"}]}""")
+            }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.panel("skill");runCurrent();c.panel("new");pending.complete(Unit);runCurrent()
+        assertEquals("new",c.state.value.pane);assertEquals("{}",c.state.value.data)
+    }
     @Test fun missingSnapshotImageBlocksSendInsteadOfSilentlyOmitting()=runTest {
         val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,WorkspaceApi(),false);runCurrent()
         c.restoreSent(key,JSONObject("""{"attachments":["gone"],"references":[]}"""));runCurrent()
