@@ -1,0 +1,34 @@
+# The development copy (0.8): clearState below must never reach the app and its login.
+appId: com.pocketagentdesk.remote.nativepreview.dev
+name: Native read-only fixture
+---
+- launchApp:
+    clearState: true
+- scrollUntilVisible:
+    element: "打开本地示例"
+    direction: DOWN
+- tapOn: "打开本地示例"
+- assertVisible: "示例无需真实账号或密码。"
+- tapOn: "进入示例"
+- assertVisible: "离线电脑"
+- takeScreenshot: build/device-evidence/01-computers-fixture
+- tapOn: "测试电脑 A"
+- assertVisible: "搜索对话"
+- takeScreenshot: build/device-evidence/02-chats-fixture
+- tapOn: "加载更多对话"
+- assertVisible: "更早的对话"
+- tapOn: "原生阅读示例"
+- scrollUntilVisible:
+    element: "历史快照 · 只读，不自动更新"
+    direction: UP
+- takeScreenshot: build/device-evidence/03-reading-fixture
+- tapOn: "加载更早消息"
+- tapOn: "返回"
+- assertVisible: "搜索对话"
+- assertNotVisible: "发送"
+- tapOn: "设置"
+- assertVisible: "使用系统配色"
+- tapOn: "深色"
+- takeScreenshot: build/device-evidence/04-settings-dark-fixture
+- back
+- assertVisible: "搜索对话"
