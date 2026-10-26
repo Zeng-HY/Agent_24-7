@@ -199,18 +199,24 @@ struct ComposerCard: View {
                     .padding(.vertical, 8)
                     .accessibilityLabel(Text("输入消息"))
             }
-            if voice.active {
-                HStack(spacing: 4) {
-                    VoiceBar(voice: voice)
-                    MicButton(model: model, voice: voice, cursor: cursor)
+            // The microphone keeps its place in this row whatever the rest shows: a hold starts on it, and a view that
+            // left would take the gesture with it (the recording would never end).
+            HStack(alignment: .bottom, spacing: 4) {
+                Group {
+                    if voice.active {
+                        VoiceBar(voice: voice)
+                    } else if newPage {
+                        // A new conversation's page: words only, sent once the conversation exists.
+                        Spacer(minLength: 0)
+                    } else {
+                        controls
+                    }
                 }
-            } else if newPage {
-                HStack {
-                    Spacer()
-                    sendButton(queue: false, enabled: false)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                MicButton(model: model, voice: voice, cursor: cursor)
+                if !voice.active {
+                    sendButton(queue: queue && !newPage, enabled: canSend && !newPage)
                 }
-            } else {
-                controls(queue: queue, canSend: canSend)
             }
         }
         .padding(.horizontal, 6)
@@ -233,26 +239,18 @@ struct ComposerCard: View {
         }
     }
 
-    /// The card's bottom row: the chips, then send. At the largest text sizes the chips take their own line.
-    private func controls(queue: Bool, canSend: Bool) -> some View {
+    /// ＋ and the chips, left of the microphone and send. When they do not fit (the largest text sizes, a narrow
+    /// phone), the chips take their own line above ＋; send keeps its size.
+    private var controls: some View {
         let app = model.conversation.key?.app ?? model.app
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 4) {
                 AttachButton(model: model, app: app, enabled: model.workspace.ready)
                 chips
-                Spacer(minLength: 4)
-                MicButton(model: model, voice: voice, cursor: cursor)
-                sendButton(queue: queue, enabled: canSend)
             }
-            // At the largest text sizes the chips take their own line; send keeps its size.
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) { chips }
-                HStack {
-                    AttachButton(model: model, app: app, enabled: model.workspace.ready)
-                    Spacer()
-                    MicButton(model: model, voice: voice, cursor: cursor)
-                    sendButton(queue: queue, enabled: canSend)
-                }
+                AttachButton(model: model, app: app, enabled: model.workspace.ready)
             }
         }
     }

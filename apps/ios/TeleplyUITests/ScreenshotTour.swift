@@ -2,8 +2,9 @@ import XCTest
 
 /// Walks the app on the local demo and keeps one screenshot per page and variant (plan: 云端检查): 登录 when the
 /// service is down, the demo's 登录, 我的电脑, the list, the sidebar, a conversation with Markdown and code, 会话状态,
-/// Claude's cards, 设置 and 开发者选项. Each picture is a test attachment; with TEST_RUNNER_SHOTS_DIR on the
-/// xcodebuild line it is also written there.
+/// sending, Claude's cards; from 0.4.0 the question and approval cards, 新建对话 and its job, 对话文件, a file, 本轮差异,
+/// ＋, 左滑归档; 设置 with 已归档对话, and 开发者选项. Each picture is a test attachment; with TEST_RUNNER_SHOTS_DIR on
+/// the xcodebuild line it is also written there.
 final class ScreenshotTour: XCTestCase {
     @MainActor func testLight() throws {
         try tour(variant: "light", appearance: "light")
@@ -94,6 +95,47 @@ final class ScreenshotTour: XCTestCase {
             }
         }
 
+        // 本轮差异 and ＋ in the same conversation (0.4.0); the conversation files from its ⋯.
+        let process = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "处理过程")).firstMatch
+        if process.waitForExistence(timeout: 5) {
+            process.tap()
+            let diff = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "本轮差异")).firstMatch
+            if diff.waitForExistence(timeout: 5) {
+                diff.tap()
+                if app.navigationBars["本轮差异"].waitForExistence(timeout: 10) {
+                    sleep(1)
+                    snap(app, page: "14-diff", variant: variant)
+                }
+                back(app)
+            }
+        }
+        let plus = app.buttons["添加附件或引用"].firstMatch
+        if plus.waitForExistence(timeout: 5) {
+            plus.tap()
+            sleep(1)
+            snap(app, page: "15-plus", variant: variant)
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            sleep(1)
+        }
+        let more = app.buttons["对话菜单"].firstMatch
+        if more.waitForExistence(timeout: 5) {
+            more.tap()
+            let files = app.buttons["对话文件"].firstMatch
+            if files.waitForExistence(timeout: 5) {
+                files.tap()
+                let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "说明.md")).firstMatch
+                if note.waitForExistence(timeout: 10) {
+                    snap(app, page: "16-files", variant: variant)
+                    note.tap()
+                    if app.navigationBars["说明.md"].waitForExistence(timeout: 10) {
+                        sleep(1)
+                        snap(app, page: "17-file", variant: variant)
+                    }
+                    back(app)
+                }
+            }
+        }
+
         back(app)
         let cards = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Claude 下一步示例")).firstMatch
         if cards.waitForExistence(timeout: 10) {
@@ -105,6 +147,80 @@ final class ScreenshotTour: XCTestCase {
             back(app)
         }
 
+        // Answering in the timeline (0.4.0): a Codex question chosen, then answered and folded; DeepSeek's approval;
+        // Claude's desktop question.
+        let question = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "只读问题记录")).firstMatch
+        if question.waitForExistence(timeout: 10) {
+            question.tap()
+            let option = app.buttons["方案A，固定选项"].firstMatch
+            if option.waitForExistence(timeout: 10) {
+                option.tap()
+                app.swipeUp()
+                snap(app, page: "18-question", variant: variant)
+                let submit = app.buttons["提交回答"].firstMatch
+                if submit.waitForExistence(timeout: 5) {
+                    submit.tap()
+                    if app.buttons["修改答案"].waitForExistence(timeout: 10) {
+                        snap(app, page: "19-answered", variant: variant)
+                    }
+                }
+            }
+            back(app)
+        }
+        let approval = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "DeepSeek 批准示例")).firstMatch
+        if approval.waitForExistence(timeout: 10) {
+            approval.tap()
+            if app.buttons["仅允许本次"].waitForExistence(timeout: 10) {
+                app.swipeUp()
+                snap(app, page: "20-approval", variant: variant)
+            }
+            back(app)
+        }
+        let prompt = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Claude 选项示例")).firstMatch
+        if prompt.waitForExistence(timeout: 10) {
+            prompt.tap()
+            if app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "简洁要点")).firstMatch.waitForExistence(timeout: 10) {
+                app.swipeUp()
+                snap(app, page: "21-claude-question", variant: variant)
+            }
+            back(app)
+        }
+
+        // 新建对话 (0.4.0): the sheet, then the first message's page.
+        let pencil = app.buttons["新建对话"].firstMatch
+        if pencil.waitForExistence(timeout: 5) {
+            pencil.tap()
+            let first = field(app, "首条消息")
+            if first.waitForExistence(timeout: 10) {
+                sleep(1)
+                snap(app, page: "22-new-chat", variant: variant)
+                if focus(first) {
+                    first.typeText("写一个测试")
+                    let create = app.buttons["创建并发送"].firstMatch
+                    if create.waitForExistence(timeout: 5) {
+                        create.tap()
+                        if app.staticTexts["写一个测试"].firstMatch.waitForExistence(timeout: 10) {
+                            snap(app, page: "23-new-job", variant: variant)
+                        }
+                        back(app)
+                    }
+                }
+            }
+        }
+
+        // 左滑归档 and 撤销 (0.4.0).
+        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Codex 计划示例")).firstMatch
+        if row.waitForExistence(timeout: 10) {
+            row.swipeLeft()
+            let archive = app.buttons["归档"].firstMatch
+            if archive.waitForExistence(timeout: 5) {
+                archive.tap()
+                if app.buttons["撤销"].waitForExistence(timeout: 5) {
+                    snap(app, page: "24-undo", variant: variant)
+                }
+            }
+        }
+
         if menu.waitForExistence(timeout: 5) {
             menu.tap()
             let gear = app.buttons["设置"].firstMatch
@@ -112,6 +228,17 @@ final class ScreenshotTour: XCTestCase {
                 gear.tap()
                 if app.navigationBars["设置"].waitForExistence(timeout: 5) {
                     snap(app, page: "12-settings", variant: variant)
+                    let archived = app.buttons["已归档对话"].firstMatch
+                    if archived.waitForExistence(timeout: 5) {
+                        archived.tap()
+                        if app.navigationBars["已归档对话"].waitForExistence(timeout: 5) {
+                            sleep(1)
+                            snap(app, page: "25-archived", variant: variant)
+                        }
+                        back(app)
+                    }
+                    app.swipeUp()
+                    snap(app, page: "26-settings-more", variant: variant)
                     app.buttons["开发者选项"].firstMatch.tap()
                     if app.navigationBars["开发者选项"].waitForExistence(timeout: 5) {
                         snap(app, page: "13-developer", variant: variant)
@@ -134,7 +261,12 @@ final class ScreenshotTour: XCTestCase {
 
     /// The composer's text box: a growing text field is a text view to XCUITest.
     @MainActor private func composer(_ app: XCUIApplication) -> XCUIElement {
-        let kinds = NSPredicate(format: "label == %@ AND (elementType == %d OR elementType == %d)", "输入消息",
+        field(app, "输入消息")
+    }
+
+    /// A text box by its label, a text view or a text field.
+    @MainActor private func field(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        let kinds = NSPredicate(format: "label == %@ AND (elementType == %d OR elementType == %d)", label,
                                 XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.textField.rawValue)
         return app.descendants(matching: .any).matching(kinds).firstMatch
     }

@@ -81,7 +81,7 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
     func stream(_ request: RelayRequest) async throws -> RelayStream {
         let (bytes, response) = try await streamSession.bytes(for: Self.urlRequest(request))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        nonisolated(unsafe) let source = bytes
+        let source = bytes
         let chunks = AsyncThrowingStream<[UInt8], any Error> { continuation in
             let reader = Task {
                 var buffer: [UInt8] = []

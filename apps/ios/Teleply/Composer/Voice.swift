@@ -476,7 +476,7 @@ struct VoiceLive: View {
                     Text(voice.mode == .finishing ? "正在出字…" : "正在听…")
                         .foregroundStyle(Palette.muted)
                 } else {
-                    Text(voice.heard).foregroundStyle(Palette.ink) + Text(voice.partial).foregroundStyle(Palette.muted)
+                    Text("\(Text(voice.heard).foregroundStyle(Palette.ink))\(Text(voice.partial).foregroundStyle(Palette.muted))")
                 }
             }
             .bodyFont()
@@ -619,7 +619,8 @@ struct MicButton: View {
     /// Down starts listening; up within 0.35 s keeps listening until ✓, later up keeps the words (or drops them
     /// when slid up 70 pt). A touch on ✓ ends a recording a tap started.
     private var press: some Gesture {
-        DragGesture(minimumDistance: 0)
+        // In the window's space: the card moves when the keyboard goes, which must not read as sliding up.
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .onChanged { value in
                 if !touching {
                     touching = true

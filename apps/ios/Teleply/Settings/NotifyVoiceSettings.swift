@@ -39,8 +39,10 @@ struct NotifySection: View {
                     .disabled(busy)
                 }
             } else {
+                // Modifiers on a whole section reach every row; the read hangs on this one only.
                 Text("正在读取电脑上的通知设置…")
                     .foregroundStyle(Palette.muted)
+                    .task { await load() }
             }
         } header: {
             Text("手机通知")
@@ -59,7 +61,6 @@ struct NotifySection: View {
             }
         }
         .listRowBackground(Palette.controlFill)
-        .task(id: model.device?.id) { await load() }
     }
 
     private func load() async {
@@ -106,6 +107,7 @@ struct VoiceSection: View {
             }
             .disabled(available == false)
             .onChange(of: tidy) { VoiceSettings.tidy = tidy }
+            .task(id: model.device?.id) { available = await model.voiceAvailable() }
             NavigationLink("语音词典") { VoiceTermsView(model: model) }
                 .disabled(available == false)
         } header: {
@@ -116,7 +118,6 @@ struct VoiceSection: View {
         }
         .listRowBackground(Palette.controlFill)
         .tint(Palette.accent)
-        .task(id: model.device?.id) { available = await model.voiceAvailable() }
     }
 }
 
@@ -192,6 +193,7 @@ struct PermissionSection: View {
         let _ = tick
         Section {
             row("麦克风", microphone)
+                .onChange(of: scenePhase) { if scenePhase == .active { tick += 1 } }
             row("语音识别", speech)
             row("相机", camera)
         } header: {
@@ -200,7 +202,6 @@ struct PermissionSection: View {
             Text("录音、iPhone 自带的语音识别和拍照要用到。点一行到系统设置里遥应这一页去改。")
         }
         .listRowBackground(Palette.controlFill)
-        .onChange(of: scenePhase) { if scenePhase == .active { tick += 1 } }
     }
 
     private func row(_ name: String, _ value: String) -> some View {
