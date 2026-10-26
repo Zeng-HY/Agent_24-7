@@ -61,9 +61,10 @@ class Feed:
         self.last_seen = 0.0    # when a phone last connected, asked or went away
         self.changed = threading.Condition()
 
-    def publish(self, title: str, message: str, click: str = "", priority: int = 3) -> dict:
+    def publish(self, title: str, message: str, click: str = "", priority: int = 3, extra: dict | None = None) -> dict:
+        """A message; [extra] fields ride along (notify.py's events for the relay: kind, app, chat)."""
         msg = {"id": _new_id(), "time": int(self.clock()), "event": "message", "topic": self.topic,
-               "title": title, "message": message, "priority": priority}
+               "title": title, "message": message, "priority": priority, **(extra or {})}
         if click:
             msg["click"] = click
         with self.changed:
@@ -135,6 +136,12 @@ def serve(handler, feed: Feed, topics: str, kind: str, query: dict) -> None:
         handler._send(200, b"".join(_line(m) for m in feed.since(since)), NDJSON)
     else:
         _stream(handler, feed, since)
+
+
+def relay_stream(handler, feed: Feed, since: str) -> None:
+    """GET /api/notify/push: the relay's stream of events for 遥应's own notifications (notify.py, relay_push.py),
+    the same lines as the ntfy app's: "open", the kept events after `since`, then each new one, keepalives between."""
+    _stream(handler, feed, since)
 
 
 def _stream(handler, feed: Feed, since: str) -> None:

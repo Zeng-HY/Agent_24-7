@@ -27,8 +27,11 @@ class FeedHandler(BaseHTTPRequestHandler):
     _json = remote.Handler._json
 
     def do_GET(self):
-        match = ntfy_feed.PATH.fullmatch("/" + self.path.split("?", 1)[0].lstrip("/"))
         query = {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        if urlsplit(self.path).path == "/api/notify/push":  # as remote.py answers the relay
+            ntfy_feed.relay_stream(self, self.server.feed, query.get("since", "none"))
+            return
+        match = ntfy_feed.PATH.fullmatch("/" + self.path.split("?", 1)[0].lstrip("/"))
         ntfy_feed.serve(self, self.server.feed, match[1], match[2], query)
 
     def log_message(self, *args):
@@ -64,6 +67,11 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(set(a), {"id", "time", "event", "topic", "title", "message", "priority"})
         self.assertEqual((a["event"], a["topic"], a["priority"], len(a["id"])), ("message", "agent-remote", 3, 12))
         self.assertEqual(feed.publish("t", "m", click="https://pc/?open=codex:x")["click"], "https://pc/?open=codex:x")
+
+    def test_extra_fields_ride_along_for_the_relay(self):
+        msg = ntfy_feed.Feed(topic="teleply-push").publish("", "", extra={"kind": "done", "app": "codex", "chat": "x1"})
+        self.assertEqual({k: msg[k] for k in ("topic", "kind", "app", "chat")},
+                         {"topic": "teleply-push", "kind": "done", "app": "codex", "chat": "x1"})
 
     def test_the_websocket_handshake_key(self):  # the example in RFC 6455 1.3
         self.assertEqual(ntfy_feed.accept_key("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
@@ -117,6 +125,17 @@ class ServedTests(unittest.TestCase):
         answer.close()
         self.assertTrue(until(lambda: self.feed.listening == 0))  # the phone went away
         self.assertGreater(self.feed.last_seen, 0)
+
+    def test_the_relay_reads_the_same_lines_from_where_it_stopped(self):
+        a = self.feed.publish("", "", extra={"kind": "done", "app": "codex", "chat": "x1"})
+        b = self.feed.publish("", "", extra={"kind": "waiting", "app": "claude", "chat": "c1"})
+        answer = self.get(f"/api/notify/push?since={a['id']}")
+        self.assertEqual((answer.status, answer.getheader("Content-Type")), (200, ntfy_feed.NDJSON))
+        self.assertEqual(json.loads(answer.fp.readline())["event"], "open")
+        self.assertEqual(json.loads(answer.fp.readline()), b)
+        self.assertTrue(until(lambda: self.feed.listening == 1))
+        answer.close()
+        self.assertTrue(until(lambda: self.feed.listening == 0))
 
     def test_a_double_slash_from_a_server_address_typed_with_a_slash_at_its_end(self):
         self.assertEqual(self.status("//agent-remote/auth"), 200)
