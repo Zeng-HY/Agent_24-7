@@ -25,3 +25,39 @@ workflows:
     artifacts:
       - mobile/build/AgentRemote-simulator.zip
       - mobile/build/Package.resolved
+  # Native SwiftUI app (apps/ios). Started from apps/ios/scripts/codemagic.ps1; CHECK_MODE compile or shots.
+  ios-native-check:
+    name: Teleply iOS native check (compile or screenshots)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: 27.1
+      vars:
+        CHECK_MODE: compile
+    scripts:
+      - name: Check the native iOS app
+        script: bash apps/ios/scripts/ci-check.sh "$CHECK_MODE"
+    artifacts:
+      - apps/ios/build/shots.zip
+      - apps/ios/build/*.xcresult.zip
+  ios-native-testflight:
+    name: Teleply iOS native TestFlight (internal testing)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    integrations:
+      app_store_connect: teleply-asc
+    environment:
+      xcode: 27.1
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.pocketagentdesk.teleply
+    scripts:
+      - name: Archive with the next build number and check the IPA
+        script: bash apps/ios/scripts/ci-testflight.sh
+    artifacts:
+      - apps/ios/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false

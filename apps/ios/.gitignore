@@ -1,0 +1,6 @@
+# XcodeGen writes the Xcode project on the build machine from project.yml
+Teleply.xcodeproj/
+# SwiftPM working folders (Package.resolved stays in git)
+TeleplyCore/.build/
+TeleplyCore/.swiftpm/
+*.xcresult
