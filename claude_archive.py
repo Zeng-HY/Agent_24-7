@@ -115,6 +115,22 @@ class SessionActions:
     def _search(self, root):
         return self._one(root, 'WindowControl', 'Search')
 
+    def _entry(self, root):
+        """The button that opens the conversation search. Since Claude's dframe window (10-26) it is a row at the top of
+        the sidebar's list, named Search with the shortcut Control+k, and scrolls away with the conversations below it:
+        whenever the sidebar was scrolled down it was out of view, and archiving from the phone said there was nothing
+        to search with. Invoke presses it out of view all the same. Every Search button with that shortcut opens the same
+        search, the one in view first; without one (a Claude from before), the single Search button in view."""
+        controls = [control for control in self.desktop._find(root, 'ButtonControl', 'Search') if control.IsEnabled]
+        keyed = sorted((control for control in controls if (control.AcceleratorKey or '').lower() == 'control+k'),
+                       key=lambda control: bool(control.IsOffscreen))
+        if keyed:
+            return keyed[0]
+        shown = [control for control in controls if not control.IsOffscreen]
+        if len(shown) > 1:
+            raise chats.ChatError('Claude 控件不唯一，未操作')
+        return shown[0] if shown else None
+
     def _input(self, root):
         dialog = self._search(root)
         if dialog is None:
@@ -145,7 +161,7 @@ class SessionActions:
             raise chats.ChatError('电脑上的 Claude 搜索窗口正在使用，请先关闭它')
         if desktop._claude_document(root, item['id']) is not None:
             return hwnd, root
-        search = self._one(root, 'ButtonControl', 'Search')
+        search = self._entry(root)
         if search is None:
             raise chats.ChatError('Claude 没有可用的搜索入口，请在电脑上展开侧边栏')
         self.controller._invoke(search)

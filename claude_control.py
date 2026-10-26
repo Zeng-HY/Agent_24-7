@@ -78,13 +78,33 @@ def settings(item):
     return {'model':None,'effort':None,'mode':None,'recorded_at':None}
 
 
+def tokens(n,suffix):return round(float(n.replace(',',''))*{'':1,'k':1000,'m':1000000}[suffix.lower()])
+
+
 def usage_from_label(label):
     match=re.search(r'Context\s+([\d.]+)([kKmM]?)\s*/\s*([\d.]+)([kKmM]?)\s*\(([\d.]+)%\)',label)
     if not match:return None
-    def number(n,suffix):return round(float(n)*{'':1,'k':1000,'m':1000000}[suffix.lower()])
-    used,window=number(match[1],match[2]),number(match[3],match[4])
+    used,window=tokens(match[1],match[2]),tokens(match[3],match[4])
     if window<=0:return None
     return {'used_tokens':used,'context_window':window,'percent':float(match[5]),'context_state':'available',
+            'usage_time':datetime.now(timezone.utc).isoformat(),'source':'desktop','approximate':True}
+
+
+def usage_from_context(texts):
+    """The texts of the Context card in Claude's session panel (10-26, the dframe window): '53% used', then '526k / 1M',
+    this conversation's context and its window, then one row per part (Messages 420.9k 42.1%, MCP tools 18.5k 1.9% …)
+    that add up to the 526k. 'N tokens' stands for the pair when no window is shown. Since that window the Usage button
+    by the model names the plan's weekly use ('Usage: Weekly · all models: 48%, Resets Sat 3:00 PM'), not the context."""
+    percent=used=window=None
+    for text in texts:
+        text=(text or '').strip()
+        if percent is None and (match:=re.fullmatch(r'<?\s*(\d+(?:\.\d+)?)\s*%\s+used',text,re.I)):percent=float(match[1])
+        elif window is None and (match:=re.fullmatch(r'(\d[\d,]*(?:\.\d+)?)\s*([kKmM]?)\s*/\s*(\d[\d,]*(?:\.\d+)?)\s*([kKmM]?)',text)):
+            if tokens(match[3],match[4])>0:used,window=tokens(match[1],match[2]),tokens(match[3],match[4])
+        elif used is None and (match:=re.fullmatch(r'(\d[\d,]*(?:\.\d+)?)\s*([kKmM]?)\s+tokens',text,re.I)):used=tokens(match[1],match[2])
+    if percent is None and used is not None and window:percent=round(used/window*100,1)
+    if percent is None and used is None:return None
+    return {'used_tokens':used,'context_window':window,'percent':percent,'context_state':'available' if percent is not None else 'partial',
             'usage_time':datetime.now(timezone.utc).isoformat(),'source':'desktop','approximate':True}
 
 
@@ -184,6 +204,21 @@ class Controller:
             except Exception:continue
             if name.startswith('Dismiss suggestion '):out.append(name[len('Dismiss suggestion '):])
         return out
+    def _context(self,doc):
+        """This conversation's context from the Context card in the panel beside it (Session details, 10-26), read whether
+        scrolled into view or not; None while that panel is closed or the card folded, and on any doubt (two such cards)."""
+        try:
+            cards=[c for c in self.desktop._find(doc,'GroupControl','Context') if self._inside(c,'Session details')]
+            if len(cards)!=1:return None
+            return usage_from_context([c.Name for c in self.desktop._find(cards[0],'TextControl')])
+        except COMError:return None  # drawn anew while read: the next read, 5 s on, has it
+    @staticmethod
+    def _inside(ctrl,name,levels=5):
+        for _ in range(levels):
+            ctrl=ctrl.GetParentControl()
+            if ctrl is None:return False
+            if (ctrl.Name or '')==name:return True
+        return False
     def _queued(self,doc,buttons=None):
         # buttons: the document's buttons when the caller already walked it (a walk costs ~0.8 s in a long chat)
         out=[]
@@ -323,6 +358,10 @@ class Controller:
         try:self.desktop._claude_unminimize()
         except Exception:pass
         recorded=settings(item);path=chats.conv_path(item);runtime=chats.runtime_info('claude',path) if path else {}
+        # The model and effort the session's record names go with every read, the desktop's context only when it is read
+        # (10-26: the context was not read, and the effort the phone shows went missing with it).
+        model,effort=recorded.get('model') or runtime.get('model'),recorded.get('effort')
+        if model or effort:runtime={**runtime,'model':model,'effort':effort}
         result={'settings':recorded,'runtime':runtime,'available':False,'on_screen':False,'actions':[],
                 'observed_at':int(time.time()*1000),'mode_options':self.modes,'recorded_label':self._model_name(recorded.get('model'))}
         try:
@@ -331,7 +370,7 @@ class Controller:
             model_name=next((n for n in names if n.startswith('Model: ')),None)
             model=model_label(model_name) if model_name else None
             effort=next((n[8:] for n in names if n.startswith('Effort: ')),None) or effort_label(model_name)
-            usage=next((usage_from_label(n) for n in names if n.startswith('Usage: ')),None)
+            usage=next((u for u in (usage_from_label(n) for n in names if n.startswith('Usage: ')) if u),None) or self._context(doc)
             result.update(available=bool(model),on_screen=True,model_label=model,effort_label=effort,running='Stop' in names or chats.summary(item).get('status')=='running',
                           mode_label=next((n.removeprefix('Permissions: ') for n in names if n in MODE_BUTTONS or n.startswith('Permissions: ')),None))
             if not model:
@@ -345,7 +384,7 @@ class Controller:
                 result['queued'].append({'id':queued['id'],'text':queued['text'],'token':self._ticket(item['id'],'steer_queued',{'id':queued['id']},revision)})
             if result['running'] and anchor:
                 result['stop_revision']=signature([item['id'],anchor]);result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
-            if usage:result['runtime']={**runtime,**usage,'model':recorded.get('model') or runtime.get('model'),'effort':recorded.get('effort')}
+            if usage:result['runtime']={**runtime,**usage}
             dock=self.desktop._claude_dock(root)
             options,prompt=self._dock_read(dock) if dock else ([],None)
             # Bind execution/answer buttons to both the visible set and the latest transcript version.

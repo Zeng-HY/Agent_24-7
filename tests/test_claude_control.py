@@ -127,6 +127,56 @@ class Tests(unittest.TestCase):
         self.assertIsNone(usage_from_label('Usage: Weekly 14%'))
         line={'type':'assistant','timestamp':'now','message':{'model':'actual-model','usage':{'input_tokens':2,'cache_read_input_tokens':200,'cache_creation_input_tokens':30,'output_tokens':9999}}}
         value=chats.parse_runtime('claude',[json.dumps(line).encode()]);self.assertEqual(value['used_tokens'],232);self.assertIsNone(value['percent'])
+    def test_context_card_of_the_session_panel(self):
+        # 10-26, Claude's dframe window: the Usage button names the plan's weekly use, the context is a card of its own
+        from claude_control import usage_from_context
+        self.assertIsNone(usage_from_label('Usage: Weekly · all models: 48%, Resets Sat 3:00 PM'))
+        card=['53% used','526k / 1M','Messages','420.9k','42.1%','System tools','25.4k','2.5%','Free space','471.3k','47.1%','470k until auto-compact']
+        value=usage_from_context(card)
+        self.assertEqual((value['used_tokens'],value['context_window'],value['percent'],value['context_state'],value['source']),(526000,1000000,53,'available','desktop'))
+        value=usage_from_context(['495.7k / 1M'])  # no percentage shown: worked out
+        self.assertEqual((value['used_tokens'],value['context_window'],value['percent']),(495700,1000000,49.6))
+        value=usage_from_context(['43% used','37.4k tokens'])  # no window shown: none made up
+        self.assertEqual((value['used_tokens'],value['context_window'],value['percent'],value['context_state']),(37400,None,43,'available'))
+        value=usage_from_context(['1,234 tokens'])
+        self.assertEqual((value['used_tokens'],value['percent'],value['context_state']),(1234,None,'partial'))
+        self.assertEqual(usage_from_context(['<1% used','2.1k / 200k'])['percent'],1)
+        for texts in ([],['Messages','420.9k','42.1%'],['0 / 0'],['1 / 2 questions']):self.assertIsNone(usage_from_context(texts),texts)
+    def _reading(self,shown,card,transcript):
+        """Controller._read_once on a page whose buttons are named shown and whose session panel's Context card holds
+        card (None: the panel is closed; False: the PC shows another conversation)."""
+        import tempfile
+        c=Controller(Desktop());panel=SimpleNamespace(Name='Session details',GetParentControl=lambda:None)
+        region=SimpleNamespace(Name='Context',GetParentControl=lambda:SimpleNamespace(Name='',GetParentControl=lambda:panel))
+        def find(scope,kind,name=None):
+            if kind=='ButtonControl':return [SimpleNamespace(Name=n,IsOffscreen=False,IsEnabled=True) for n in shown]
+            if kind=='GroupControl' and name=='Context':return [] if card is None else [region]
+            if kind=='TextControl' and scope is region:return [SimpleNamespace(Name=t) for t in card]
+            return []
+        def document(item):
+            if card is False:raise chats.ChatError('电脑上显示的不是此 Claude 会话；请点击「电脑上打开」')
+            return 1,'root','doc'
+        c.desktop._find=find;c.desktop._claude_unminimize=lambda:None;c.desktop._claude_dock=lambda root:None;c._document=document
+        folder=Path(tempfile.mkdtemp());path=folder/'t.jsonl';path.write_text(json.dumps(transcript)+'\n',encoding='utf-8')
+        recorded={'model':'claude-opus-5-5','effort':'high','mode':'auto','recorded_at':1}
+        with patch('claude_control.settings',return_value=recorded),patch('claude_control.chats.conv_path',return_value=path),patch('claude_control.chats.summary',return_value={'status':'idle'}):
+            return c._read_once({'id':'s','title':'t'})
+    def test_runtime_has_the_recorded_model_and_effort_and_the_context_card(self):
+        # 10-26: the phone's 会话状态 showed 数据不全 and 暂无 for the effort once the context label went away
+        line={'type':'assistant','timestamp':'now','message':{'model':'claude-opus-5-5','usage':{'input_tokens':2,'cache_read_input_tokens':534000,'cache_creation_input_tokens':719}}}
+        shown=['Auto','Model: Opus 5.5 High','Usage: Weekly · all models: 48%, Resets Sat 3:00 PM']
+        state=self._reading(shown,['53% used','526k / 1M','Messages','420.9k','42.1%'],line)
+        runtime=state['runtime']
+        self.assertEqual((state['model_label'],state['effort_label']),('Opus 5.5','High'))
+        self.assertEqual((runtime['model'],runtime['effort'],runtime['used_tokens'],runtime['context_window'],runtime['percent'],runtime['context_state'],runtime['source']),
+                         ('claude-opus-5-5','high',526000,1000000,53,'available','desktop'))
+        for card in (None,['Context'],False):  # panel closed, card folded, another conversation on the PC
+            runtime=self._reading(shown,card,line)['runtime']
+            self.assertEqual((runtime['model'],runtime['effort'],runtime['used_tokens'],runtime['context_window'],runtime['context_state'],runtime['source']),
+                             ('claude-opus-5-5','high',534721,None,'partial','last_request'),card)
+        # a Claude from before 10-26 still names the context on its Usage button, and that is read first
+        runtime=self._reading(['Model: Opus 5.5 High','Usage: Context 610k / 1M (61%), Weekly: 14%'],['53% used','526k / 1M'],line)['runtime']
+        self.assertEqual((runtime['used_tokens'],runtime['percent'],runtime['effort']),(610000,61,'high'))
     def test_exact_session_url_even_with_same_title(self):
         doc=SimpleNamespace(Exists=lambda *a:True,GetLegacyIAccessiblePattern=lambda:SimpleNamespace(Value='https://claude.ai/epitaxy/wrong'))
         desk=Desktop();desk._claude_root=lambda:(1,SimpleNamespace(DocumentControl=lambda **kw:doc));desk._value=lambda _:''
