@@ -32,6 +32,12 @@ public enum JSONValue: Sendable, Equatable {
 
     public var isNull: Bool { self == .null }
 
+    /// An object, empty or not (org.json optJSONObject() != null).
+    public var isObject: Bool {
+        if case .object = self { return true }
+        return false
+    }
+
     /// The key is there and is not null (org.json has() && !isNull()).
     public func has(_ key: String) -> Bool { !self[key].isNull }
 
