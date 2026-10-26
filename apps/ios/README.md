@@ -34,7 +34,7 @@
 | `TeleplyCore` 编译和测试 | 通过（10-26，Swift 6.4.1 Windows，14 项） | 通过（Mac 上同样 14 项） | — |
 | 应用编译、签名、打包 | — | 通过（Codemagic #3，Release，App Store 签名） | — |
 | 上传 TestFlight | — | 成功（10-26，0.1.0（1），Delivery UUID `c363ca0a-9107-4c07-a2dc-cd341f083bf0`） | — |
-| 启动页（浅色、深色、最大字号） | — | 截图检查改好待重跑 | 用户验过构建 1 的深色和断网画面：标志、版本、“连不上服务器”都对；“重试”字色发灰、浅蓝偏浅，构建 2 修正 |
+| 启动页（浅色、深色、最大字号） | — | 看过（#6 截图，iOS 27.1） | 用户验过构建 1 的深色和断网画面：标志、版本、“连不上服务器”都对；“重试”字色发灰、浅蓝偏浅，构建 2 修正，待验 |
 | TestFlight 安装、显示服务版本 | — | — | 用户 10-26 在 iPhone 上装上构建 1 |
 
 Codemagic 构建记录（分钟数按构建开始到结束）：
@@ -44,7 +44,9 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #1 `6adec0d6…` | ios-native-testflight | 失败 | 2.4 | 签名一步成功（密钥、证书、描述文件都对）；Xcode 27.1 的编译器在 `RedirectRefusal` 的异步回调上自己崩溃（SILGen emitNativeToForeignThunk），改成传统回调写法 |
 | #2 `6adec214…` | ios-native-testflight | 失败（未上传） | 2.2 | 打出了签名安装包，检查拦下 `UIDeviceFamily` 含 iPad：XcodeGen 的应用预设在目标一级写了 `1,2`；图标检查原来找错了位置（iOS 写在 `CFBundleIcons` 里） |
 | #3 `6adec33a…` | ios-native-testflight | 成功 | 2.7 | 构建号 1；只支持 iPhone；上传 App Store Connect 无错误 |
-| #4 `6adec424…` | ios-native-check（shots） | 失败 | 约 2 | 模拟器上的调试版和截图测试都编译通过；但 iOS 27.1 模拟器不接受“iPhone 17”（Incompatible device）。改为先用构建机现有的 iPhone 模拟器，没有再从该系统支持的机型里挑 |
+| #4 `6adec424…` | ios-native-check（shots） | 失败 | 1.9 | 模拟器上的调试版和截图测试都编译通过；但 iOS 27.1 模拟器不接受“iPhone 17”（Incompatible device）。改为先用构建机现有的 iPhone 模拟器，没有再从该系统支持的机型里挑 |
+| #5 `6adec600…` | ios-native-testflight | 成功 | 2.8 | 构建号 2：“重试”按钮改色；上传无错误 |
+| #6 `6adec604…` | ios-native-check（shots） | 成功 | 6.8 | 6 张截图（浅色、深色、最大字号 × 连上、连不上），存 `F:\Android-Dev\work\ios-010-screens`。按钮颜色对了，最大字号换行不截断。模拟器挑到了折叠屏“iPhone Duo”，以后优先普通 iPhone |
 
 构建 1 真机反馈（用户，10-26）：“重试”按钮的字被外层文字的灰色盖掉，浅蓝底上看不清；深色模式的浅蓝 #8AB4FF 偏浅。改为专门的主按钮样式（`Design/PrimaryCapsuleStyle.swift`，字色由按钮自己定）：浅色照网页账号页墨色底白字，深色改 #2563EB 底白字（和网页不同，理由写进规范 2.2）。截图测试加拍“连不上服务器”画面（调试开关 `-TeleplyDemoUnreachable`）。
 

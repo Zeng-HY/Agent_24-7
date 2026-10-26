@@ -36,12 +36,19 @@ trap pack_results EXIT
 # "iPhone 17" is refused on iOS 27.1 ("Incompatible device").
 pick_device() {
   python3 - "$1" "$DEVICE" <<'PY'
-import json, subprocess, sys
+import json, re, subprocess, sys
 key, preferred = sys.argv[1], sys.argv[2]
 runtime_id = "com.apple.CoreSimulator.SimRuntime." + key
 def simctl(*args):
     return json.loads(subprocess.check_output(["xcrun", "simctl", "list", *args, "-j"]))
-phones = [d for d in simctl("devices", "available")["devices"].get(runtime_id, []) if d["name"].startswith("iPhone")]
+# An ordinary phone first, newest number first ("iPhone 18" before "iPhone 17"); a foldable such as
+# "iPhone Duo" last, since its side column narrows the safe area (build 6adec604).
+def rank(name):
+    plain = re.fullmatch(r"iPhone (\d+)", name)
+    if plain: return (0, -int(plain.group(1)))
+    return (2, 0) if re.search(r"Duo|Fold", name) else (1, 0)
+phones = sorted((d for d in simctl("devices", "available")["devices"].get(runtime_id, []) if d["name"].startswith("iPhone")), key=lambda d: rank(d["name"]))
+sys.stderr.write("iPhone simulators on %s: %s\n" % (key, ", ".join(d["name"] for d in phones)))
 if phones:
     choice = next((d for d in phones if d["name"] == preferred), phones[0])
     sys.stderr.write("Using simulator %s (%s) on %s\n" % (choice["name"], choice["udid"], key))
@@ -49,7 +56,7 @@ if phones:
     sys.exit(0)
 runtimes = simctl("runtimes")["runtimes"]
 types = next((r.get("supportedDeviceTypes", []) for r in runtimes if r["identifier"] == runtime_id), [])
-kinds = [t for t in types if t["name"].startswith("iPhone")]
+kinds = sorted((t for t in types if t["name"].startswith("iPhone")), key=lambda t: rank(t["name"]))
 if not kinds:
     sys.stderr.write("No iPhone simulator for %s. Runtimes here: %s\n" % (runtime_id, ", ".join(r["identifier"] for r in runtimes)))
     sys.exit(1)
