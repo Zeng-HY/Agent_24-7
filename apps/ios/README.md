@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI，0.2.0 已发 TestFlight，0.3.0 进行中）
+# 遥应 Teleply iOS 版（原生 SwiftUI，0.3.0 已发 TestFlight，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,7 +25,7 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.3.0：聊天核心（进行中）
+## 0.3.0：聊天核心（10-26 发 TestFlight 构建 4，待真机验）
 
 做了什么：会话页底部的玻璃输入卡片（状态行、随字数长高的输入框、⌘↩ 发送、模型和模式标签的系统菜单、发送键）；运行中发送进队列（发送键读作“发送并排队”）；队列条的“立即补充”和 ⋯ 撤回；标题栏“停止这一轮”；回执写在用户气泡下面，发送中的消息淡色显示在最后；“上一条没发出去”（Claude 电脑输入框里有别的字时可“换掉电脑上的「…」再发”）、“核对待发送消息”和“待核对发送记录”；⋯ 菜单加“电脑上打开”“常用提示语”；草稿约 0.3 秒写一次、离开或退后台立即写；点了发送马上退后台用系统给的后台时间发完；“显示操作耗时”给发送计时。
 
@@ -95,6 +95,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #12 `6adede40…` | ios-native-check（shots） | 取消 | 29 | 0.3.0 第一次：输入区编译通过；截图脚本点输入框时没拿到焦点（刚关浮层），三套都在打字那步失败，之后 Xcode 收集模拟器诊断又空等 10 分钟，手动取消 |
 | #13 `6adee582…` | ios-native-check（shots） | 成功 | 约 15 | 改用 iOS 26.5 的 iPhone 17（27.1 只有折叠屏）、不收集诊断。列表页自绘标题栏正常；发现键盘弹起后消息区空白（懒加载列表）、两个标签被拉开 |
 | #14 `6adeeb2f…` | ios-native-check（shots） | 成功 | 11 | 38 张。消息区改用普通列表后键盘弹起正常；标签贴字排；排队条、立即补充、停止、模型菜单都拍到 |
+| #15 `6adeee02…` | ios-native-testflight | 成功 | 4.2 | 0.3.0（4）上传，Delivery UUID `f3e949bd-1fbe-434d-add2-00a315dfc624`；截图存 `F:\Android-Dev\work\ios-030-screens` |
 
 构建 1 真机反馈（用户，10-26）：“重试”按钮的字被外层文字的灰色盖掉，浅蓝底上看不清；深色模式的浅蓝 #8AB4FF 偏浅。改为专门的主按钮样式（`Design/PrimaryCapsuleStyle.swift`，字色由按钮自己定）：浅色照网页账号页墨色底白字，深色改 #2563EB 底白字（和网页不同，理由写进规范 2.2）。截图测试加拍“连不上服务器”画面（调试开关 `-TeleplyDemoUnreachable`）。
 
