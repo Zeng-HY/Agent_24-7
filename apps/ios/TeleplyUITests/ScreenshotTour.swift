@@ -190,7 +190,7 @@ final class ScreenshotTour: XCTestCase {
         let pencil = app.buttons["新建对话"].firstMatch
         if pencil.waitForExistence(timeout: 5) {
             pencil.tap()
-            let first = field(app, "首条消息")
+            let first = textBox(app, "首条消息")
             if first.waitForExistence(timeout: 10) {
                 sleep(1)
                 snap(app, page: "22-new-chat", variant: variant)
@@ -261,11 +261,11 @@ final class ScreenshotTour: XCTestCase {
 
     /// The composer's text box: a growing text field is a text view to XCUITest.
     @MainActor private func composer(_ app: XCUIApplication) -> XCUIElement {
-        field(app, "输入消息")
+        textBox(app, "输入消息")
     }
 
     /// A text box by its label, a text view or a text field.
-    @MainActor private func field(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+    @MainActor private func textBox(_ app: XCUIApplication, _ label: String) -> XCUIElement {
         let kinds = NSPredicate(format: "label == %@ AND (elementType == %d OR elementType == %d)", label,
                                 XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.textField.rawValue)
         return app.descendants(matching: .any).matching(kinds).firstMatch
