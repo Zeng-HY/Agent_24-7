@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI，0.5.0 待发 TestFlight）
+# 遥应 Teleply iOS 版（原生 SwiftUI，0.5.0 已发 TestFlight 构建 6，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,7 +25,9 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.5.0：遥应通知（10-26，连同 0.4.2 的改动一起发；从分支 `ios-native-push` 构建）
+## 0.5.0：遥应通知（10-26 发 TestFlight 构建 6，连同 0.4.2 的改动；从分支 `ios-native-push` 构建，待真机验）
+
+Codemagic #6adf5a61（排队约 24 分钟，构建约 5 分钟），Delivery UUID 41dbb843-6e98-4d8f-9df1-89ee5151da0a。上传前的检查都过了，包括新加的推送权限：签好的应用和描述文件里 `aps-environment` 都是 production。
 
 用户 10-26 选了 Obsidian 产品设计目录里《Teleply - iOS 原生推送方案》的路线 C：手机通知由遥应自己收，经中转和苹果推送，不必再装 Bark。
 
