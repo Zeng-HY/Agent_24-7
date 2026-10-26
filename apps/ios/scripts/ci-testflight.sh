@@ -25,7 +25,11 @@ check_ipa() {
   [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "$BUNDLE_ID" ] || fail "bundle ID"
   [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "$build" ] || fail "build number"
   [ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$plist")" = "false" ] || fail "encryption declaration"
-  /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$plist" >/dev/null || fail "app icon (CFBundleIconName)"
+  # iOS keeps the icon name inside CFBundleIcons (App Store Connect's ITMS-90713 checks it there).
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$plist")" = "AppIcon" ] || fail "app icon (CFBundleIcons)"
+  # iPhone only: once an App Store build supports iPad, later builds cannot drop it.
+  { [ "$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$plist")" = "1" ] &&
+    ! /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$plist" >/dev/null 2>&1; } || fail "iPhone only (UIDeviceFamily)"
   [ -f "$app/PrivacyInfo.xcprivacy" ] || fail "privacy manifest"
   [ -d "$app/zh-Hans.lproj" ] || fail "Simplified Chinese localization"
   echo "IPA checks passed for build $build"
