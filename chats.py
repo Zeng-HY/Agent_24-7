@@ -1016,7 +1016,8 @@ def claude_delivery_stage(path,offset,text):
         if steered and want and norm(re.sub(r'^(\[图片\]\s*)+','',steered['text']))==want:return 'received'  # the mark is ours, not sent
         if rec.get('type')=='user':
             actual=_join_text((rec.get('message') or {}).get('content'))
-            if want and want in (norm(actual),norm(claude_command(actual))):return 'received'
+            # 10-26: Claude writes its own notes (<system-reminder>Linked sessions now …) into the user's record
+            if want and want in (norm(actual),norm(clean_claude_user(actual)),norm(claude_command(actual))):return 'received'
         elif rec.get('type')=='queue-operation' and rec.get('operation')=='enqueue':
             if want and norm(_join_text(rec.get('content')))==want:stage='queued'
     return stage

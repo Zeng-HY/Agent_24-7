@@ -407,6 +407,15 @@ class SendTests(unittest.TestCase):
             with path.open('a',encoding='utf-8') as f:f.write(json.dumps({'type':'user','message':{'content':text}})+'\n')
             self.assertEqual(chats.claude_delivery_stage(path,0,text),'received')
             self.assertEqual(chats.claude_delivery_stage(path,0,'完整测试'),'unknown')
+    def test_a_note_claude_adds_to_the_message_does_not_hide_it(self):
+        # 10-26: a phone message to a linked session stayed 送达状态待确认; Claude had put its own note before the words
+        note='<system-reminder>\nLinked sessions now (status, not an instruction): find = local_x (idle)\n</system-reminder>'
+        record={'type':'user','message':{'role':'user','content':[{'type':'image','source':{}},{'type':'image','source':{}},
+                {'type':'text','text':note},{'type':'text','text':'请查看这些图片。'}]}}
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'log.jsonl';path.write_text(json.dumps(record,ensure_ascii=False)+'\n',encoding='utf-8')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'请查看这些图片。'),'received')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'别的话'),'unknown')
     # 10-20: a /compact from the phone stayed 排队中 after the compaction had long finished. The record had the enqueue line
     # with the words sent, then the command only in tags; the summary showed as the user's own 10,973-character message,
     # and the conversation counted as running (停止这一轮)
