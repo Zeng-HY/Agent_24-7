@@ -13,12 +13,18 @@ struct DrawerHost<Content: View>: View {
 
     @Environment(Chrome.self) private var chrome
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Where the drawer's left edge is while a finger moves it: from -width (shut) to 0 (open).
-    @State private var drag: CGFloat?
+    /// Where the drawer's left edge is while a finger moves it: from -width (shut) to 0 (open). The system puts it
+    /// back to nil when the drag ends or is taken away (a screenshot, Control Center, a call), so a lost drag never
+    /// leaves the drawer half out with the dim catching every touch (0.3.0 on a phone, user 10-26: a strip on the
+    /// left, taps did nothing, the list would not scroll).
+    @GestureState private var pull: CGFloat?
+    /// Where the drawer goes once a drag ends, animated; nil when it rests.
+    @State private var settle: CGFloat?
 
     var body: some View {
         GeometryReader { geometry in
             let width = min(320, geometry.size.width * 0.88)
+            let drag = pull ?? settle
             ZStack(alignment: .leading) {
                 content()
                     .accessibilityHidden(chrome.drawer)
@@ -37,7 +43,9 @@ struct DrawerHost<Content: View>: View {
                         .accessibilityAddTraits(.isModal)
                         .transition(reduceMotion ? .opacity : .offset(x: -24).combined(with: .opacity))
                 }
-                if enabled && !chrome.drawer && drag == nil {
+                // The edge stays while its own drag runs: a view that leaves takes its gesture with it, and the drag
+                // would then never end (what left the drawer stuck in 0.3.0).
+                if enabled && !chrome.drawer {
                     Color.clear
                         .frame(width: 16)
                         .frame(maxHeight: .infinity)
@@ -50,43 +58,41 @@ struct DrawerHost<Content: View>: View {
         }
     }
 
+    /// A tap on the dim always ends it, whatever a drag left behind.
     private func close() {
+        settle = nil
         chrome.closeDrawer()
     }
 
     /// From the list's left edge: the drawer follows the finger; past half way (or flung) it stays open.
     private func openingDrag(_ width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                drag = min(0, max(-width, value.translation.width - width))
+            .updating($pull) { value, pull, _ in
+                pull = min(0, max(-width, value.translation.width - width))
             }
             .onEnded { value in
                 let open = value.predictedEndTranslation.width > width / 2
-                if open {
-                    chrome.openDrawer()
-                    withAnimation(.drawer()) { drag = 0 } completion: { drag = nil }
-                } else {
-                    withAnimation(.drawer()) { drag = -width } completion: { drag = nil }
-                }
+                settle = min(0, max(-width, value.translation.width - width))
+                if open { chrome.openDrawer() }
+                withAnimation(.drawer()) { settle = open ? 0 : -width } completion: { settle = nil }
             }
     }
 
     /// On the open drawer: a swipe left takes it away with the finger; a short one springs back.
     private func closingDrag(_ width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                guard chrome.drawer else { return }
-                drag = min(0, value.translation.width)
+            .updating($pull) { value, pull, _ in
+                pull = min(0, value.translation.width)
             }
             .onEnded { value in
-                guard chrome.drawer else { return }
+                settle = min(0, value.translation.width)
                 if value.predictedEndTranslation.width < -width / 3 {
-                    withAnimation(.drawer()) { drag = -width } completion: {
+                    withAnimation(.drawer()) { settle = -width } completion: {
                         chrome.closeDrawer()
-                        drag = nil
+                        settle = nil
                     }
                 } else {
-                    withAnimation(.drawer()) { drag = 0 } completion: { drag = nil }
+                    withAnimation(.drawer()) { settle = 0 } completion: { settle = nil }
                 }
             }
     }
