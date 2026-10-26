@@ -27,6 +27,7 @@ public struct DemoTransport: RelayFileTransport {
         if unreachable { throw Unreachable() }
         let path = request.url.path
         let query = Self.query(request.url)
+        // Voice posts audio, not JSON: its body reads as nothing here.
         let body = request.body.flatMap { try? JSONValue.parse($0) } ?? [:]
         if path.hasPrefix("/account/") { return account(request.method, path, body) }
         guard path.hasPrefix("/d/"), path.count > 35 else { return Self.notFound }
@@ -166,6 +167,12 @@ public struct DemoTransport: RelayFileTransport {
             return Self.json(["items": [["kind": .string(kind), "id": "fixture-reference", "app": .string(app), "name": "固定引用", "title": "固定引用"]]])
         case "/api/chat/archived":
             return Self.json(world.archivedList())
+        case "/api/notify":
+            return Self.json(world.notifyState())
+        case "/api/voice/status":
+            return Self.json(["local": ["ready": true], "cloud": ["ready": true]])
+        case "/api/voice/terms":
+            return Self.json(world.voiceTerms(nil))
         case "/api/chat/files":
             return Self.json(["items": .array(DemoData.files)])
         case "/api/file/meta":
@@ -236,6 +243,16 @@ public struct DemoTransport: RelayFileTransport {
             reply = (200, world.createNew(body))
         case "/api/chat/new/retry":
             reply = (200, world.retryNew(body["request_id"].string()))
+        case "/api/notify":
+            reply = (200, world.setBark(body["address"].string()))
+        case "/api/notify/test":
+            reply = (200, world.notifyTest())
+        case "/api/voice/terms":
+            reply = (200, world.voiceTerms(body))
+        case "/api/voice/tidy":
+            reply = (200, ["text": .string(DemoData.tidied)])
+        case "/api/voice", "/api/voice/stream/start", "/api/voice/stream/chunk", "/api/voice/stream/end", "/api/voice/stream/cancel", "/api/voice/stream/cloud":
+            reply = (200, world.voice(String(route.dropFirst("/api/".count))))
         case "/api/chat/archive":
             reply = world.archive(app: body["app"].string(), id: body["id"].string())
         case "/api/chat/unarchive":

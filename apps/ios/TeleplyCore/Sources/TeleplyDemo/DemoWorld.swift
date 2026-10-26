@@ -70,6 +70,11 @@ public final class DemoWorld: Sendable {
         // Archived and deleted conversations, as "app:id".
         var archived: [String] = []
         var deleted: Set<String> = []
+        // Notifications (Bark) and voice.
+        var bark = ""
+        var recent: [JSONValue] = []
+        var terms = "遥应\nTeleply\nCodex"
+        var voicePieces = 0
     }
 
     let state = Mutex(State())
@@ -300,6 +305,66 @@ public final class DemoWorld: Sendable {
                 let key = row["app"].string() + ":" + row["id"].string()
                 return !state.archived.contains(key) && !state.deleted.contains(key)
             }
+        }
+    }
+
+    // MARK: Notifications and voice (Android FixtureWorld, Bark instead of ntfy)
+
+    func notifyState() -> JSONValue {
+        state.withLock { state in
+            ["configured": .bool(!state.bark.isEmpty), "server": .string(state.bark.isEmpty ? "" : "api.day.app"), "recent": .array(state.recent)]
+        }
+    }
+
+    /// A Bark address saved (and one pushed to try it), or cleared with an empty one.
+    func setBark(_ address: String) -> JSONValue {
+        state.withLock { state in
+            state.bark = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            if state.bark.isEmpty { return ["ok": true, "text": "本地示例：已关掉"] }
+            Self.remember(&state, "本地示例：试推了一条")
+            return ["ok": true, "text": "本地示例：已保存，刚推了一条"]
+        }
+    }
+
+    func notifyTest() -> JSONValue {
+        state.withLock { state in
+            Self.remember(&state, "本地示例：试推了一条")
+            return ["ok": true, "text": "本地示例：刚推了一条，看看手机"]
+        }
+    }
+
+    private static func remember(_ state: inout State, _ text: String) {
+        state.recent.insert(["time": "12:00", "text": .string(text)], at: 0)
+        state.recent = Array(state.recent.prefix(5))
+    }
+
+    /// The computer's recogniser, played: the words come a few at a time, then the whole sentence.
+    func voice(_ route: String) -> JSONValue {
+        state.withLock { state in
+            switch route {
+            case "voice/stream/start":
+                state.voicePieces = 0
+                return ["sid": "fixture-voice", "rate": .number(Double(voiceRate))]
+            case "voice/stream/chunk":
+                state.voicePieces += 1
+                let words = Array(DemoData.heard)
+                let count = min(state.voicePieces * 2, words.count)
+                return ["final": .string(String(words[..<count])), "partial": .string(String(words[count..<min(count + 2, words.count)]))]
+            case "voice/stream/end":
+                return ["text": .string(DemoData.heard)]
+            case "voice", "voice/stream/cloud":
+                return ["text": .string(DemoData.heard), "raw": .string(DemoData.heard), "tidied": false]
+            default:
+                return ["ok": true]
+            }
+        }
+    }
+
+    func voiceTerms(_ body: JSONValue?) -> JSONValue {
+        state.withLock { state in
+            if let body { state.terms = body["text"].string() }
+            let count = state.terms.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+            return body == nil ? ["text": .string(state.terms), "count": .number(Double(count))] : ["ok": true, "count": .number(Double(count))]
         }
     }
 
@@ -686,6 +751,9 @@ enum DemoData {
     static let markdownFile = "# 说明\n\n这是一个 **Markdown** 文件，默认用阅读视图显示。\n\n- 第一条\n- 第二条\n\n> 也可以切到「查看源码」看原文。"
 
     static let png = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAoCAIAAACO8WhuAAABlUlEQVR42u3QhzICAAAGYM9CyB4hMyF7JDOrsreydyIzhczISNll772P4zjHcRzHOY7jOOcNPIe7/3uETys+6Tcu+Sc25ZuT+sVJ+2Snf7Ay3lmZbzFZr9Hcl2jec1T2U2TOY2TuQ0TePTP/jllwG154E1Z0HVZ8FVpyGVJ6EVx2Hlx+FsQ/ZVScMATHgZVH9KpDuvAgoHrPv2bXv3bbr27Tt37Dt2HNR7Tq3bjsLV7ykix4Ns17NM96tMy4S6dorRpam9qtfdy1Y8y1c8Sla5gqU1G7lc49Coq8n9Lb59Qnd+zvcRyQOSi67Ac77JTtdqpW2yEpebiZPCKxGRVbj4msxxusJupI6lqSptpyUmgxVWkxLTCf4ZvNlpnNlZrOF5ssFBkvFhgv5Rst5xqu5Biu8gzWuMT1TOJGuv5mmt5Wit52su5OImE3gbAXp7Mfq33A1j5kaSEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEIQhCCEIQgBCEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEI+m9BfzQ+a2t+SvdoAAAAAElFTkSuQmCC"
+
+    static let heard = "好的帮我把发布说明里的升级步骤补上"
+    static let tidied = "好的，帮我把发布说明里的升级步骤补上。"
 
     static let claudeSecond = parse(#"{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3"},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"#)
 

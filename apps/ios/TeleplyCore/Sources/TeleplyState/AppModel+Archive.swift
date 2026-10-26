@@ -89,6 +89,29 @@ extension AppModel {
         if screen == .chats { searchChats(query) }
     }
 
+    /// The computer's voice service (web voice-ui.js): audio up, words back.
+    public func voiceCall(_ route: String, query: [(String, String?)] = [], audio: Data = Data(), type: String = "application/octet-stream") async throws -> JSONValue {
+        guard let device else { throw ReadFailure("先选择一台电脑") }
+        return try await client.voice(device: device.id, route: route, query: query, audio: audio, type: type)
+    }
+
+    /// Whether this computer has its voice service on (web window.MACHINE.voice); asked once per computer. Only a
+    /// 404 means off; another failure is not taken as an answer.
+    public func voiceAvailable() async -> Bool {
+        guard let id = device?.id else { return false }
+        if let known = voiceOn[id] { return known }
+        do {
+            _ = try await deviceCall("voice/status")
+            voiceOn[id] = true
+            return true
+        } catch let failure as ServiceFailure where failure.status == 404 {
+            voiceOn[id] = false
+            return false
+        } catch {
+            return true
+        }
+    }
+
     /// A request to the computer in use from a settings page: archived conversations, notifications, voice.
     public func deviceCall(_ route: String, query: [(String, String?)] = [], body: JSONValue? = nil) async throws -> JSONValue {
         guard let device else { throw ReadFailure("先选择一台电脑") }

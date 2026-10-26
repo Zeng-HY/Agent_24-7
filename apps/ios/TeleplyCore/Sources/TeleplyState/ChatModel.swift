@@ -348,6 +348,23 @@ public final class ChatModel {
         await store?.setDraft(from, "")
     }
 
+    /// Voice's words where the cursor was (web voice-ui.js insert), into the conversation they were said for only.
+    public func insertVoice(_ expected: ChatKey, _ text: String, start: Int, end: Int? = nil) -> VoicePlacement? {
+        guard key == expected, ready, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let placed = placeDictation(draft, text, start: start, end: end)
+        edit(placed.draft)
+        draftReset += 1
+        return placed
+    }
+
+    /// Swaps voice's words for others (整理, or its 撤销), only while they are still there as they were.
+    public func swapVoice(_ expected: ChatKey, _ placed: VoicePlacement, with text: String) -> VoicePlacement? {
+        guard key == expected, ready, let next = swapDictation(draft, placed, with: text) else { return nil }
+        edit(next.draft)
+        draftReset += 1
+        return next
+    }
+
     /// Puts the cursor in the box with [hint] showing (继续修改 a Codex plan).
     public func focusInput(hint: String) {
         focus += 1

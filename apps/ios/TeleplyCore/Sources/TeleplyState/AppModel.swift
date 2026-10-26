@@ -158,6 +158,8 @@ public final class AppModel {
     /// Clears the page just left once its slide-out is over.
     @ObservationIgnored var leaving: Task<Void, Never>?
     @ObservationIgnored var undoSerial = 0
+    /// Whether each computer has its voice service on, as asked once.
+    @ObservationIgnored var voiceOn: [String: Bool] = [:]
     /// Archives under way by row; 撤销 waits for its own to finish first.
     @ObservationIgnored var archiving: [String: Task<Bool, Never>] = [:]
 

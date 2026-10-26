@@ -163,6 +163,9 @@ private struct RejectedBar: View {
 struct ComposerCard: View {
     let model: AppModel
     @State private var text = ""
+    /// Where the cursor is, so voice's words go there.
+    @State private var selection: TextSelection?
+    @State private var voice = VoiceInput()
     @State private var confirming: JSONValue?
     @FocusState private var focused: Bool
     /// The card's width: under 370 pt the chips use 11 pt (web .composer-chip).
@@ -179,19 +182,29 @@ struct ComposerCard: View {
         let newPage = isNewPage(chat.key?.chat)
         let prompt = newPage ? "可以先写下一条，创建完成后发送" : chat.hint.isEmpty ? "输入消息…" : chat.hint
         VStack(alignment: .leading, spacing: 0) {
-            StatusLine(model: model)
-            if !newPage { AttachmentTiles(workspace: model.workspace, saved: saved) }
-            TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Palette.muted), axis: .vertical)
-                .bodyFont()
-                .foregroundStyle(Palette.ink)
-                .tint(Palette.accent)
-                .lineLimit(1...8)
-                .focused($focused)
-                .disabled(!chat.ready)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .accessibilityLabel(Text("输入消息"))
-            if newPage {
+            StatusLine(model: model, voice: voice)
+            // While recording, the card shows what is heard in place of the box (web: the box becomes the recorder).
+            if voice.active {
+                VoiceLive(voice: voice)
+            } else {
+                if !newPage { AttachmentTiles(workspace: model.workspace, saved: saved) }
+                TextField("", text: $text, selection: $selection, prompt: Text(prompt).foregroundStyle(Palette.muted), axis: .vertical)
+                    .bodyFont()
+                    .foregroundStyle(Palette.ink)
+                    .tint(Palette.accent)
+                    .lineLimit(1...8)
+                    .focused($focused)
+                    .disabled(!chat.ready)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .accessibilityLabel(Text("输入消息"))
+            }
+            if voice.active {
+                HStack(spacing: 4) {
+                    VoiceBar(voice: voice)
+                    MicButton(model: model, voice: voice, cursor: cursor)
+                }
+            } else if newPage {
                 HStack {
                     Spacer()
                     sendButton(queue: false, enabled: false)
@@ -228,6 +241,7 @@ struct ComposerCard: View {
                 AttachButton(model: model, app: app, enabled: model.workspace.ready)
                 chips
                 Spacer(minLength: 4)
+                MicButton(model: model, voice: voice, cursor: cursor)
                 sendButton(queue: queue, enabled: canSend)
             }
             // At the largest text sizes the chips take their own line; send keeps its size.
@@ -236,10 +250,20 @@ struct ComposerCard: View {
                 HStack {
                     AttachButton(model: model, app: app, enabled: model.workspace.ready)
                     Spacer()
+                    MicButton(model: model, voice: voice, cursor: cursor)
                     sendButton(queue: queue, enabled: canSend)
                 }
             }
         }
+    }
+
+    /// The cursor or selection in the box, in characters; the end of the draft when it cannot be told.
+    private func cursor() -> (Int, Int) {
+        let draft = text
+        guard let selection, case .selection(let range) = selection.indices,
+              let lower = String.Index(range.lowerBound, within: draft), let upper = String.Index(range.upperBound, within: draft),
+              lower <= upper, upper <= draft.endIndex else { return (draft.count, draft.count) }
+        return (draft.distance(from: draft.startIndex, to: lower), draft.distance(from: draft.startIndex, to: upper))
     }
 
     private var chips: some View {
@@ -307,8 +331,39 @@ struct ComposerCard: View {
 /// Takes no room when there is nothing to say. An action whose result is unknown offers 核对上次操作.
 private struct StatusLine: View {
     let model: AppModel
+    var voice: VoiceInput?
 
     var body: some View {
+        if let voice, let pill = voice.pill {
+            // Voice says what it is doing, with the one thing that can be done about it (web .voice-pill).
+            HStack(spacing: 4) {
+                Text(pill.text)
+                    .noteFont()
+                    .foregroundStyle(pill.error ? Palette.danger : Palette.muted)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                if let action = pill.action {
+                    Button(action) { voice.runPill() }
+                        .buttonStyle(PillStyle(kind: .text, minHeight: 32))
+                }
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 2)
+            .padding(.top, 2)
+            .task(id: pill.serial) {
+                AccessibilityNotification.Announcement(pill.text).post()
+                guard pill.hideAfter > .zero else { return }
+                try? await Task.sleep(for: pill.hideAfter)
+                if !Task.isCancelled, voice.pill?.serial == pill.serial { voice.pill = nil }
+            }
+        } else {
+            lines
+        }
+    }
+
+    @ViewBuilder
+    private var lines: some View {
         let chat = model.conversation
         let workspace = model.workspace
         let receipt = chat.submissions.first { $0.label != removedLabel }?.label

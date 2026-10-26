@@ -30,6 +30,11 @@ struct SettingsView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
                 }
+                if model.device != nil {
+                    NotifySection(model: model)
+                    VoiceSection(model: model)
+                }
+                PermissionSection()
                 if model.account != nil {
                     Section("账号") {
                         Button("我的电脑") {
