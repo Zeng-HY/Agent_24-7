@@ -164,6 +164,8 @@ public struct DemoTransport: RelayFileTransport {
         case "/api/composer/references", "/api/chat/new/references":
             let kind = query["kind"] ?? "chat"
             return Self.json(["items": [["kind": .string(kind), "id": "fixture-reference", "app": .string(app), "name": "固定引用", "title": "固定引用"]]])
+        case "/api/chat/archived":
+            return Self.json(world.archivedList())
         case "/api/chat/files":
             return Self.json(["items": .array(DemoData.files)])
         case "/api/file/meta":
@@ -234,6 +236,12 @@ public struct DemoTransport: RelayFileTransport {
             reply = (200, world.createNew(body))
         case "/api/chat/new/retry":
             reply = (200, world.retryNew(body["request_id"].string()))
+        case "/api/chat/archive":
+            reply = world.archive(app: body["app"].string(), id: body["id"].string())
+        case "/api/chat/unarchive":
+            reply = (200, world.unarchive(app: body["app"].string(), id: body["id"].string()))
+        case "/api/chat/delete":
+            reply = world.delete(body)
         default:
             return nil
         }

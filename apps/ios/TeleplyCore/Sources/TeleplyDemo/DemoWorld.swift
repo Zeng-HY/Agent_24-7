@@ -67,6 +67,9 @@ public final class DemoWorld: Sendable {
         var newRequests: [String: JSONValue] = [:]
         var drafts = 0
         var created: [(row: JSONValue, text: String)] = []
+        // Archived and deleted conversations, as "app:id".
+        var archived: [String] = []
+        var deleted: Set<String> = []
     }
 
     let state = Mutex(State())
@@ -269,7 +272,7 @@ public final class DemoWorld: Sendable {
     /// state answering changed saying so (Android FixtureWorld.firstPage).
     func firstPage() -> [JSONValue] {
         state.withLock { state in
-            Array(state.created.map(\.row).reversed()) + DemoData.firstPage.map { row in
+            (Array(state.created.map(\.row).reversed()) + DemoData.firstPage.map { row in
                 var fields = row.object
                 switch row["id"].string() {
                 case "demo":
@@ -293,8 +296,54 @@ public final class DemoWorld: Sendable {
                     break
                 }
                 return .object(fields)
+            }).filter { row in
+                let key = row["app"].string() + ":" + row["id"].string()
+                return !state.archived.contains(key) && !state.deleted.contains(key)
             }
         }
+    }
+
+    // MARK: Archiving (Android FixtureWorld)
+
+    func archive(app: String, id: String) -> (status: Int, reply: JSONValue) {
+        guard let row = firstPage().first(where: { $0["app"].string() == app && $0["id"].string() == id }) else { return (404, [:]) }
+        if row["status"].string() == "running" { return (400, ["error": "这个对话正在运行，先停止这一轮再归档"]) }
+        state.withLock { $0.archived.append(app + ":" + id) }
+        return (200, ["ok": true, "app": .string(app), "id": .string(id), "archived": true])
+    }
+
+    func unarchive(app: String, id: String) -> JSONValue {
+        state.withLock { $0.archived.removeAll { $0 == app + ":" + id } }
+        return ["ok": true, "app": .string(app), "id": .string(id), "archived": false]
+    }
+
+    func archivedList() -> JSONValue {
+        let (archived, deleted) = state.withLock { ($0.archived, $0.deleted) }
+        let order = ["codex", "deepseek", "claude"]
+        let all = Array(state.withLock { $0.created.map(\.row) }) + DemoData.firstPage
+        let rows = all.filter { archived.contains($0["app"].string() + ":" + $0["id"].string()) && !deleted.contains($0["app"].string() + ":" + $0["id"].string()) }
+            .sorted { (order.firstIndex(of: $0["app"].string()) ?? 3) < (order.firstIndex(of: $1["app"].string()) ?? 3) }
+        return ["items": .array(rows.map { row in
+            ["app": row["app"], "id": row["id"], "title": row["title"], "folder": row["folder"], "archived_at": .number(Double(DemoData.now / 1000 - 120)),
+             "can_delete": .bool(row["app"].string() == "codex")]
+        }), "problems": [], "apps": ["codex", "deepseek", "claude"], "deletable": ["codex"]]
+    }
+
+    func delete(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        guard body["confirmed"].bool() else { return (400, ["error": "删除要先在手机上确认"]) }
+        let results: [JSONValue] = state.withLock { state in
+            body["items"].array.map { item in
+                let key = item["app"].string() + ":" + item["id"].string()
+                if item["app"].string() == "codex" && state.archived.contains(key) {
+                    state.deleted.insert(key)
+                    state.archived.removeAll { $0 == key }
+                    return ["app": item["app"], "id": item["id"], "ok": true]
+                }
+                return ["app": item["app"], "id": item["id"], "ok": false, "error": "这种对话还不能删除"]
+            }
+        }
+        let done = results.filter { $0["ok"].bool() }.count
+        return (200, ["ok": .bool(done == results.count), "results": .array(results), "deleted": .number(Double(done))])
     }
 
     /// The next-step button pressed so far ("" before), which the conversation then shows as sent.

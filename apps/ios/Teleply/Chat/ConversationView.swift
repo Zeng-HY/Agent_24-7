@@ -26,7 +26,7 @@ struct ConversationView: View {
     var body: some View {
         let control = model.conversation.control
         let roles = timelineRoles(model.messages, app: model.app, raw: control.raw, running: control.running, asking: control.questions)
-        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, busy: model.busy)
+        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, diff: { model.workspace.diff($0) }, busy: model.busy)
         let submissions = model.conversation.submissions
         let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
         // Sends still on their way that the record does not show yet (Android outbox).
@@ -121,6 +121,9 @@ struct ConversationView: View {
         .sheet(item: $selecting) { message in SelectTextSheet(text: message.text) }
         .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
         .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
+        .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } })) {
+            FilesSheet(model: model)
+        }
         .sheet(isPresented: Binding(get: { model.workspace.picker != nil && model.workspace.key?.chat != "@new" },
                                     set: { if !$0 { model.workspace.closePicker() } })) {
             PickerSheet(model: model)
@@ -176,6 +179,7 @@ struct ConversationView: View {
                         }
                     }
                     Button("查找消息", systemImage: "magnifyingglass") { searchShown = true }
+                    Button("对话文件", systemImage: "doc.on.doc") { model.workspace.panel("files") }
                     Button("常用提示语", systemImage: "text.quote") { promptsShown = true }
                     let unconfirmed = model.conversation.submissions.filter { ["提交中", "送达状态待确认"].contains($0.label) }.count
                     if unconfirmed > 0 {

@@ -98,6 +98,8 @@ public final class AppModel {
     public internal(set) var listCursor: String?
     public internal(set) var listMore = false
     public internal(set) var hidden: Set<String> = []
+    /// The bar under the list after a swipe: 对话已归档 with 撤销 (AppModel+Archive).
+    public internal(set) var undo: ArchiveUndo?
     public internal(set) var moreKids: [String: [Chat]] = [:]
     public internal(set) var sources = SourceInfo()
     public internal(set) var tree: JSONValue = [:]
@@ -155,6 +157,9 @@ public final class AppModel {
     @ObservationIgnored var demoPositions: [ChatKey: ChatRecord.Position] = [:]
     /// Clears the page just left once its slide-out is over.
     @ObservationIgnored var leaving: Task<Void, Never>?
+    @ObservationIgnored var undoSerial = 0
+    /// Archives under way by row; 撤销 waits for its own to finish first.
+    @ObservationIgnored var archiving: [String: Task<Bool, Never>] = [:]
 
     public init(services: AppServices) {
         self.services = services
@@ -257,6 +262,7 @@ public final class AppModel {
         treeAt = nil
         pendingNew = nil
         jobSheet = nil
+        undo = nil
         clearReading()
     }
 

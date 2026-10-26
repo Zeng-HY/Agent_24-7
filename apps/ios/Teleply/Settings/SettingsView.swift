@@ -3,9 +3,9 @@ import TeleplyDemo
 import TeleplyModel
 import TeleplyState
 
-/// 设置 (spec 4.6; Android SettingsScreen): a full sheet with deeper pages in it. Only what users set: 外观, 账号 and
-/// 关于遥应 in 0.2.0 (对话, 手机通知 and 语音输入 arrive with the features they set); 开发者选项 at the bottom holds the
-/// service address, the local demo and diagnostics.
+/// 设置 (spec 4.6; Android SettingsScreen): a full sheet with deeper pages in it. Only what users set, top to bottom:
+/// 对话 (已归档对话), 外观, 手机通知, 语音输入, the system permissions, 账号, 关于遥应; 开发者选项 at the bottom holds the
+/// service address, the local demo and diagnostics. Without a computer there is no 对话, 手机通知 or 语音输入.
 struct SettingsView: View {
     let model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -13,6 +13,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if model.device != nil {
+                    Section("对话") {
+                        NavigationLink("已归档对话") { ArchivedView(model: model) }
+                    }
+                    .listRowBackground(Palette.controlFill)
+                }
                 Section("外观") {
                     Picker("外观", selection: Binding(get: { model.theme }, set: { model.setAppearance($0) })) {
                         Text("跟随系统").tag("system")

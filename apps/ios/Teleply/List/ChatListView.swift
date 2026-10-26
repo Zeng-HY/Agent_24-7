@@ -39,8 +39,12 @@ struct ChatListView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            NoticeToast(text: model.notice) { model.notice = nil }
-                .padding(.bottom, 16)
+            VStack(spacing: 8) {
+                UndoBar(model: model)
+                NoticeToast(text: model.notice) { model.notice = nil }
+            }
+            .padding(.bottom, 16)
+            .animation(.easeOut(duration: 0.25), value: model.undo)
         }
         .toolbar(.hidden, for: .navigationBar)
         .task(id: query) {
@@ -138,6 +142,18 @@ struct ChatListView: View {
             }
             .buttonStyle(RowPressStyle())
             .disabled(model.busy)
+            // 左滑归档 (spec 4.1, web archive-ui.js): a short slide uncovers 归档, a long one archives at once; 撤销
+            // stays under the list for six seconds. VoiceOver finds it among the row's actions.
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                if !chat.group && chat.kind.isEmpty && sourceOrder.contains(chat.app) {
+                    Button {
+                        model.archive(chat)
+                    } label: {
+                        Label("归档", systemImage: "archivebox")
+                    }
+                    .tint(Color(red: 0x63 / 255, green: 0x66 / 255, blue: 0xF1 / 255))
+                }
+            }
         case .fold(let chat):
             let key = rowKey(chat)
             FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning) {
@@ -482,6 +498,50 @@ private struct SearchLine: View {
             if scheme == .dark { Capsule().stroke(Palette.controlBorder, lineWidth: 1) }
         }
         .padding(.bottom, 8)
+    }
+}
+
+/// The bar under the list after an archive (web .undo-bar): 对话已归档 and the title, 撤销 for six seconds; while
+/// Claude still reads the archive back, 正在归档… and no 撤销 yet.
+private struct UndoBar: View {
+    let model: AppModel
+
+    var body: some View {
+        if let undo = model.undo {
+            HStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(undo.waiting ? "正在归档…" : "对话已归档")
+                        .smallBodyFont()
+                        .foregroundStyle(.white)
+                    Text(undo.chat.title)
+                        .captionFont()
+                        .foregroundStyle(Color(red: 0xAA / 255, green: 0xB3 / 255, blue: 0xC5 / 255))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("撤销") { model.undoArchive() }
+                    .scaledFont(15, .bold, relativeTo: .callout)
+                    .foregroundStyle(Color(red: 0x9F / 255, green: 0xB8 / 255, blue: 0xFF / 255).opacity(undo.waiting ? 0.4 : 1))
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                    .disabled(undo.waiting)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 6)
+            .padding(.vertical, 6)
+            .background(Color(red: 0x1F / 255, green: 0x24 / 255, blue: 0x30 / 255), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .frame(maxWidth: 520)
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .contain)
+            .task(id: "\(undo.serial)|\(undo.waiting)") {
+                AccessibilityNotification.Announcement(undo.waiting ? "正在归档" : "对话已归档").post()
+                guard !undo.waiting else { return }
+                try? await Task.sleep(for: .seconds(6))
+                if !Task.isCancelled { model.dropUndo(undo.serial) }
+            }
+        }
     }
 }
 

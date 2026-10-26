@@ -69,8 +69,11 @@ private struct WorkspaceView: View {
         DrawerHost(model: model, enabled: model.screen == .chats) {
             NavigationStack(path: path) {
                 ChatListView(model: model)
-                    .navigationDestination(for: ReadingRoute.self) { _ in
-                        ConversationView(model: model)
+                    .navigationDestination(for: WorkspaceRoute.self) { route in
+                        switch route {
+                        case .reading: ConversationView(model: model)
+                        case .detail: DetailPage(model: model)
+                        }
                     }
             }
         }
@@ -78,9 +81,18 @@ private struct WorkspaceView: View {
         .sheet(item: jobSheet) { route in NewJobSheet(model: model, request: route.id) }
     }
 
-    private var path: Binding<[ReadingRoute]> {
-        Binding(get: { model.screen == .reading ? [ReadingRoute()] : [] },
-                set: { routes in if routes.isEmpty, model.screen == .reading { model.back() } })
+    /// A file's page and 本轮差异 are pushed over the conversation (spec 4.5): the system back leaves them.
+    private var path: Binding<[WorkspaceRoute]> {
+        Binding(get: {
+            guard model.screen == .reading else { return [] }
+            return ["file", "diff"].contains(model.workspace.pane ?? "") ? [.reading, .detail] : [.reading]
+        }, set: { routes in
+            if routes.isEmpty, model.screen == .reading {
+                model.back()
+            } else if routes.count == 1, ["file", "diff"].contains(model.workspace.pane ?? "") {
+                model.workspace.close()
+            }
+        })
     }
 
     /// Up while the workspace holds the sheet open, and while a source switch inside it binds another source.
@@ -98,7 +110,23 @@ private struct WorkspaceView: View {
     }
 }
 
-private struct ReadingRoute: Hashable {}
+private enum WorkspaceRoute: Hashable {
+    case reading
+    case detail
+}
+
+/// The page pushed over the conversation: a file or 本轮差异, whichever the workspace holds.
+private struct DetailPage: View {
+    let model: AppModel
+
+    var body: some View {
+        if model.workspace.pane == "diff" {
+            DiffPage(model: model)
+        } else {
+            FilePage(model: model)
+        }
+    }
+}
 
 private struct JobSheetRoute: Identifiable {
     let id: String
