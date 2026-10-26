@@ -6,15 +6,11 @@ set -euo pipefail
 source "$(dirname "$0")/ci-common.sh"
 
 BUNDLE_ID=com.pocketagentdesk.teleply
+APPLE_APP_ID=6826968427  # App Store Connect → 遥应 → App 信息 → Apple ID
 
+# The integration in codemagic.yaml gives app-store-connect its credentials. No build yet reads as 0.
 latest_build_number() {
-  local app_id
-  app_id=$(app-store-connect apps list --json 2>/dev/null | python3 -c '
-import json, sys
-apps = json.load(sys.stdin)
-print(next((a["id"] for a in apps if a.get("attributes", {}).get("bundleId") == "com.pocketagentdesk.teleply"), ""))' || true)
-  if [ -z "$app_id" ]; then echo 0; return; fi
-  app-store-connect get-latest-testflight-build-number "$app_id" 2>/dev/null | tail -n 1 || echo 0
+  app-store-connect get-latest-testflight-build-number "$APPLE_APP_ID" 2>/dev/null | tail -n 1 || echo 0
 }
 
 fail() { echo "IPA check failed: $1" >&2; exit 1; }
