@@ -50,6 +50,25 @@ class SendTests(unittest.TestCase):
                                Control=SimpleNamespace(CreateControlFromElement=lambda e:'control '+e))
         self.assertEqual(d._find(SimpleNamespace(Element=Element()),'ButtonControl','Send'),['control e0','control e1'])
         self.assertEqual(asked,[(4,('and',('type',50000),('name','Send')))])
+    def test_find_leaves_out_an_element_gone_before_it_is_read(self):
+        # 10-26: one in 444 reads of the sidebar's buttons failed whole: Claude drew one anew between Windows' answer and
+        # its reading. In a send, that would end it before any row is pressed or the link tried.
+        failing={}
+        class Found:
+            Length=3
+            def GetElement(self,i):return f'e{i}'
+        def create(e):
+            if e in failing:raise failing[e]
+            return 'control '+e
+        d=object.__new__(chats.Desktop);d.uia=SimpleNamespace(CreatePropertyCondition=lambda prop,value:(prop,value),CreateAndCondition=lambda a,b:('and',a,b))
+        d.auto=SimpleNamespace(PropertyId=SimpleNamespace(ControlTypeProperty='type',NameProperty='name'),ControlType=SimpleNamespace(ButtonControl=50000),
+                               Control=SimpleNamespace(CreateControlFromElement=create))
+        scope=SimpleNamespace(Element=SimpleNamespace(FindAll=Mock(return_value=Found())))
+        failing['e1']=chats.COMError(chats.ELEMENT_GONE,'事件无法调用任何订户',(None,None,None,0,None))
+        self.assertEqual(d._find(scope,'ButtonControl'),['control e0','control e2'])
+        scope.Element.FindAll.assert_called_once()  # still one question to Windows
+        failing['e1']=chats.COMError(-2146233083,'',(None,None,None,0,None))  # UIA_E_TIMEOUT: Claude not answering, not a gone element
+        with self.assertRaises(chats.COMError):d._find(scope,'ButtonControl')
 
     def test_clipboard_cards_count_even_when_remove_is_hover_only(self):
         node=SimpleNamespace()

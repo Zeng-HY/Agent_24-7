@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote, urlsplit
+from _ctypes import COMError  # what UI Automation raises through comtypes
 
 import win32con
 import win32gui
@@ -61,6 +62,9 @@ CLAUDE_SWITCH_WAIT = 25
 CLAUDE_PROMPT_WAIT = 8         # after the switch, until the session's message box is there
 # Keyboard or mouse used this recently: someone is at the PC, and gets the keyboard back after a send (_give_back_keyboard)
 KEYBOARD_IN_USE = 120
+# UIA_E_ELEMENTNOTAVAILABLE: an element Windows found a moment ago is gone by the time it is read, because Claude drew that
+# part of its window anew. Windows names the same number 事件无法调用任何订户.
+ELEMENT_GONE = -2147220991
 # After a sidebar click Claude logs the switch at once, but a very long session can take half a minute to draw: 37 s
 # for one with a 42 MB record (10-12). The whole send has to fit in the 60 s the service gives it.
 CLAUDE_SWITCH_TAKEN_WAIT = 45
@@ -1226,12 +1230,21 @@ class Desktop:
         """Everything under scope of this kind ('EditControl', 'ButtonControl'), with exactly this name if one is given:
         one question that Windows answers itself. On 10-12 it found Claude's message box in 0.02 s, where walking the
         page element by element took 0.7 s (1 200 elements); one send walked it six times or more, so sending took
-        3.5-10 s."""
+        3.5-10 s.
+        An element in that answer that is gone by the time it is read (Claude drew that part anew) is left out: it is no
+        longer on the page. On 10-26 one in 444 reads of the sidebar's buttons, taken while sessions ran, failed whole so;
+        in a send, that would end the send before any row is pressed or the link tried (_claude_open catches only
+        ChatError). Any other COM error still goes to the caller, and so does a scope that is itself gone."""
         uia,auto=self.uia,self.auto
         condition=uia.CreatePropertyCondition(auto.PropertyId.ControlTypeProperty,getattr(auto.ControlType,kind))
         if name is not None:condition=uia.CreateAndCondition(condition,uia.CreatePropertyCondition(auto.PropertyId.NameProperty,name))
         found=scope.Element.FindAll(4,condition)  # 4: TreeScope_Descendants
-        return [auto.Control.CreateControlFromElement(found.GetElement(i)) for i in range(found.Length)]
+        controls=[]
+        for i in range(found.Length):
+            try:controls.append(auto.Control.CreateControlFromElement(found.GetElement(i)))
+            except COMError as exc:
+                if exc.hresult!=ELEMENT_GONE:raise
+        return controls
 
     def _find_class(self,scope,part):
         """Everything under scope whose class holds part (Chromium gives an element all its classes in one string), from
