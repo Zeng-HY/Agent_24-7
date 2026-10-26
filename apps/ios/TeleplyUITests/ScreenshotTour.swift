@@ -63,8 +63,9 @@ final class ScreenshotTour: XCTestCase {
             XCTAssertTrue(app.staticTexts["电脑遥控"].waitForNonExistence(timeout: 5), "a swipe left did not close the sidebar")
             if app.staticTexts["电脑遥控"].exists { app.buttons["关闭导航"].firstMatch.tap() }
         }
-        // The swipe started on this row and must not have opened it (0.4.1 tour); a tap a moment later does.
-        XCTAssertFalse(app.staticTexts["原生阅读示例"].exists, "a swipe on a row opened its conversation")
+        // The swipe started on this row and must not have opened it (0.4.1 tour): no message box. The row's own title
+        // reads as static text too, so the title is no sign of the conversation.
+        XCTAssertFalse(composer(app).exists, "a swipe on a row opened its conversation")
         sleep(1)
 
         first.tap()
