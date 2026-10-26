@@ -132,9 +132,11 @@ struct ModelMenu: View {
                 }
             }
             let efforts = catalog["effort"].array
-            // JSONValue takes nil as .null, so the optional is spelled out.
-            let range: JSONValue? = efforts.count == 1 && efforts[0]["range"]["step"].double() > 0 ? efforts[0]["range"] : nil
-            if let range {
+            // One slider with steps, or none. A bare `nil` in `c ? v : nil` is JSONValue.null, which `if let` binds:
+            // every list of named efforts then strode by 0 and the app quit (0.5.0, 10-27 crash log). The optional's
+            // own none is spelled out, and the step is checked again right before striding.
+            let range: JSONValue? = efforts.count == 1 && efforts[0]["range"]["step"].double() > 0 ? efforts[0]["range"] : JSONValue?.none
+            if let range, range["step"].double() > 0 {
                 // The desktop shows effort as one slider with steps.
                 let steps = stride(from: range["min"].double(), through: range["max"].double(), by: range["step"].double()).prefix(20).map { $0 }
                 Section("推理强度") {

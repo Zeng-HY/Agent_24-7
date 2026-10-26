@@ -478,7 +478,15 @@ public final class ChatModel {
         submitting = true
         error = nil
         if planned { hint = "" }
-        let sent: JSONValue? = clearDraft ? extra : planned ? ["settings": [:]] : nil
+        // Spelled out: in `c ? v : nil` the nil is JSONValue.null, a value.
+        let sent: JSONValue?
+        if clearDraft {
+            sent = extra
+        } else if planned {
+            sent = ["settings": [:]]
+        } else {
+            sent = nil
+        }
         let synthetic = synthetic
         let give = backgroundTime { [weak self] in self?.sends[rid]?.cancel() }
         sends[rid] = Task { [weak self] in
