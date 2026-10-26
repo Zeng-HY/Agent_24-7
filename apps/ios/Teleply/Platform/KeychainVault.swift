@@ -60,7 +60,7 @@ nonisolated final class KeychainVault: CookieVault {
 
 /// Where this phone's records live: Application Support/Teleply, kept out of iCloud backups (Android disables
 /// backup too).
-enum StoreFolder {
+nonisolated enum StoreFolder {
     static func url() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         var folder = base.appendingPathComponent("Teleply", isDirectory: true)

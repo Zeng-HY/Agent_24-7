@@ -28,4 +28,51 @@ enum Palette {
     /// dark, where the web's #8AB4FF looked too pale on a real iPhone (user, 2026-10-26; spec 2.2).
     static let primaryFill = Color("PrimaryFill")
     static let onPrimary = Color("OnPrimary")
+
+    // Android Theme.kt values the spec table leaves out.
+    /// 等待你处理 in the list and the question bar's 去选择 ›.
+    static let askGo = Color("AskGo")
+    static let noteFill = Color("NoteFill")
+    static let noteInk = Color("NoteInk")
+    /// The user's bubble: accent with white text on light; #1E1E1E with a #333 edge on dark (web .bub.user).
+    static let bubble = Color("Bubble")
+    static let onBubble = Color("OnBubble")
+    static let bubbleEdge = Color("BubbleEdge")
+    static let codeFill = Color("CodeFill")
+    static let codeEdge = Color("CodeEdge")
+    /// Behind the sidebar.
+    static let scrim = Color("Scrim")
+    static let groupPressed = Color("GroupPressed")
+    static let codexBadge = Color("CodexBadge")
+
+    /// The source marks (web sidebar .mark; Android Brand.kt).
+    static func tint(_ app: String) -> Color {
+        switch app {
+        case "claude": return Color("ClaudeTint")
+        case "deepseek": return Color("DeepSeekTint")
+        default: return Color("CodexTint")
+        }
+    }
+
+    /// The list badges (web remote.html .badge).
+    static func badge(_ app: String) -> Color {
+        switch app {
+        case "claude": return Color("ClaudeTint")
+        case "deepseek": return Color("DeepSeekTint")
+        default: return codexBadge
+        }
+    }
+}
+
+/// The account pages' own colours (relay_account.css; Android AccountColors). Their filled button is
+/// [Palette.primaryFill], as everywhere on iOS.
+enum AccountPalette {
+    static let page = Palette.page
+    static let ink = Color("AccountInk")
+    static let soft = Color("AccountSoft")
+    static let muted = Color("AccountMuted")
+    static let danger = Color("AccountDanger")
+    static let edge = Color("AccountEdge")
+    static let online = Color("AccountOnline")
+    static let hint = Color("AccountHint")
 }

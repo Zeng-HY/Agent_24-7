@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Observation
 import TeleplyModel
 
@@ -129,6 +132,8 @@ public final class AppModel {
     @ObservationIgnored var treeMore: [String: Int] = [:]
     @ObservationIgnored var treeAt: Date?
     @ObservationIgnored var demoPositions: [ChatKey: ChatRecord.Position] = [:]
+    /// Clears the page just left once its slide-out is over.
+    @ObservationIgnored var leaving: Task<Void, Never>?
 
     public init(services: AppServices) {
         self.services = services
@@ -180,6 +185,7 @@ public final class AppModel {
             if work == running { break }
         }
         await treeTask?.value
+        await leaving?.value
     }
 
     func cancelWork() {
@@ -541,10 +547,18 @@ public final class AppModel {
         case .login where fixture:
             relaunch()
         case .reading:
+            // The navigation stack pops at once, so the screen changes now; the page keeps what it showed until its
+            // slide-out is over, unless it is opened again meanwhile.
+            screen = .chats
+            live()
+            leaving?.cancel()
+            leaving = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard let self, !Task.isCancelled, self.screen != .reading else { return }
+                self.clearReading()
+            }
             operation { [weak self] g in
                 guard let self else { return }
-                self.screen = .chats
-                self.clearReading()
                 await self.persistSelection(scope: self.scope, device: self.device?.id ?? "")
                 // Back in the list it is read again (web closeConv → loadConvs): a conversation made meanwhile shows.
                 if self.chats.isEmpty { try await self.loadChats(g) } else { try? await self.mergeFirstPage(g) }
@@ -555,6 +569,21 @@ public final class AppModel {
             live()
         default:
             break
+        }
+    }
+
+    /// 测一下连接 (开发者选项 → 诊断测速): one status read of the computer in use, as the web words the outcome.
+    public func checkStatus() async -> String {
+        guard let device else { return "没有选择电脑" }
+        do {
+            _ = try await client.json(client.get(RelayClient.devicePath(device.id, "/api/status"), deadline: 10))
+            return "成功"
+        } catch let failure as ServiceFailure {
+            return "HTTP \(failure.status)"
+        } catch let failure as URLError where failure.code == .timedOut {
+            return "超过10秒"
+        } catch {
+            return "网络失败"
         }
     }
 
