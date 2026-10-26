@@ -31,9 +31,13 @@
 
 | 项目 | 本机测过 | 模拟器截图看过 | 真机验过 |
 |---|---|---|---|
-| `TeleplyCore` 编译和测试 | 待测 | — | — |
+| `TeleplyCore` 编译和测试 | 通过（10-26，Swift 6.4.1 Windows，14 项） | — | — |
 | 云端编译 | — | 待测 | — |
 | 启动页（浅色、深色、最大字号） | — | 待测 | 待测 |
 | TestFlight 安装、显示服务版本 | — | — | 待测 |
+
+- 本机工具链（10-26 装）：Swift 6.4.1 在 `%LOCALAPPDATA%\Programs\Swift`；Visual Studio 2022 生成工具在 `F:\Dev\VS2022BuildTools`，Windows SDK 10.0.22621 在 `F:\Windows Kits\10`。Swift 安装时跳过了它自带的 Python 3.10 依赖，`python` 仍是原来的 3.11。新开的终端才认得 `swift`。
+- Windows 上编译时会出一串 `WinSDK` / `wchar_t` 的提醒，是工具链自己的，不影响结果；`.build\debug` 建不了快捷方式的提醒也一样（Windows 默认不让普通用户建符号链接）。
+- 第一天的检查（计划“工程结构”一节）：`TeleplyState` 的 Observation 和“默认主线程”、Swift Testing、swift-markdown 都能在 Windows 上编译，三块都留在 `TeleplyCore`。
 
 构建分钟数：还没有构建。

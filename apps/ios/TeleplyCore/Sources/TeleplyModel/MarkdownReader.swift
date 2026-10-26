@@ -36,9 +36,10 @@ public enum MarkdownReader {
         case let list as OrderedList:
             return .list(ordered: true, items: list.listItems.map { $0.children.compactMap(block) })
         case let table as Table:
-            let header = table.head.cells.map { $0.plainText }
-            let rows = table.body.rows.map { row in row.cells.map { $0.plainText } }
-            return .table(header: Array(header), rows: Array(rows))
+            // The types pick the eager map: cells and rows are lazy sequences in swift-markdown.
+            let header: [String] = table.head.cells.map { $0.plainText }
+            let rows: [[String]] = table.body.rows.map { row in row.cells.map { $0.plainText } }
+            return .table(header: header, rows: rows)
         case is ThematicBreak:
             return .rule
         case let html as HTMLBlock:
