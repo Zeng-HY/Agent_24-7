@@ -5,6 +5,12 @@ import TeleplyModel
 extension AppModel {
     /// Opens a row: the list and the sidebar mix sources, so opening another source's row switches source.
     public func open(_ chat: Chat) {
+        // Opened from the list: a job that made it is done with (web route).
+        if let made = jobs.jobs.first(where: { job in
+            job.accepted && job.createdID == chat.id && (job.pending["app"].string().isEmpty ? job.app : job.pending["app"].string()) == chat.app
+        }) {
+            jobs.drop(made)
+        }
         operation { [weak self] g in
             guard let self else { return }
             await self.useSource(chat.app)
@@ -25,6 +31,7 @@ extension AppModel {
         let same = self.chat?.id == chat.id
         screen = .reading
         self.chat = chat
+        if let handoff, handoff.id != chat.id || handoff.app != app { self.handoff = nil }
         if !same {
             messages = []
             cursor = nil

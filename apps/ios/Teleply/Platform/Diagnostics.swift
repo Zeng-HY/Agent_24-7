@@ -65,7 +65,7 @@ nonisolated struct DiagnosticsExport: Transferable {
 }
 
 /// The phone's own requests, timed into 诊断记录. Only the real service is logged; the demo is not.
-nonisolated struct LoggedTransport: RelayStreamingTransport {
+nonisolated struct LoggedTransport: RelayStreamingTransport, RelayFileTransport {
     let base: any RelayStreamingTransport
     let log: DiagnosticsLog
 
@@ -75,6 +75,19 @@ nonisolated struct LoggedTransport: RelayStreamingTransport {
             let response = try await base.send(request)
             log.request(request, status: response.status, seconds: Self.seconds(since: start), error: nil)
             return response
+        } catch {
+            log.request(request, status: nil, seconds: Self.seconds(since: start), error: describe(error))
+            throw error
+        }
+    }
+
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
+        guard let files = base as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
+        let start = ContinuousClock.now
+        do {
+            let answer = try await files.download(request, limit: limit, progress: progress)
+            log.request(request, status: answer.status, seconds: Self.seconds(since: start), error: nil)
+            return answer
         } catch {
             log.request(request, status: nil, seconds: Self.seconds(since: start), error: describe(error))
             throw error

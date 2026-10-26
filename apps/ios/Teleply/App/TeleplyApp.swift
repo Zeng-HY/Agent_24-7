@@ -4,6 +4,8 @@ import TeleplyState
 
 @main
 struct TeleplyApp: App {
+    /// iOS's push token and the notifications tapped (Platform/Push.swift).
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model: AppModel
 
     init() {
@@ -16,7 +18,15 @@ struct TeleplyApp: App {
             store: LocalStore(folder: StoreFolder.url()),
             vault: vault,
             transport: LaunchOptions.transport(),
-            demo: { DemoHolder.shared.fresh() }))
+            demo: { DemoHolder.shared.fresh() },
+            push: SystemPush()))
+        PushBridge.shared.attach(model)
+        model.conversation.backgroundTime = BackgroundTime.begin
+        // 诊断测速 times what carries a message or a file (web: the same requests).
+        let timed: (String, Duration, String) -> Void = { label, elapsed, outcome in SpeedLog.shared.add(label, elapsed: elapsed, result: outcome, notify: true) }
+        model.conversation.timed = timed
+        model.workspace.timed = timed
+        model.jobs.timed = timed
         if LaunchOptions.usesDemo {
             model.openDemo()
         } else {

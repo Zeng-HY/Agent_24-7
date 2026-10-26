@@ -1,5 +1,6 @@
 import SwiftUI
 import TeleplyModel
+import TeleplyState
 
 /// A run of process steps that folds under its first step's header (design language §8; Android TimelineItem).
 struct ProcessGroup: Equatable {
@@ -72,14 +73,21 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
 struct MessageActions {
     var select: (Message) -> Void
     var expand: (Message) -> Void
+    /// 本轮差异 of a step that changed files: the diff page by its reference.
+    var diff: (String) -> Void = { _ in }
+    /// 查看成果文件 under a DeepSeek deliverables message: 对话文件 for that message, by its id.
+    var files: (String) -> Void = { _ in }
     var busy: Bool
 }
 
 /// One message in the timeline (spec 4.3; Android TimelineItem).
 struct TimelineItem: View {
+    let model: AppModel
     let message: Message
     let role: TimelineRole
     let raw: JSONValue
+    /// The label of the send from this phone that became this message (已送达…), shown under the bubble.
+    var receipt: String?
     @Binding var folds: [String: Bool]
     let actions: MessageActions
 
@@ -89,20 +97,20 @@ struct TimelineItem: View {
             VStack(alignment: .trailing, spacing: 0) {
                 OriginLabel(message: message)
                     .padding(.trailing, 4)
-                UserBubble(message: message, actions: actions)
+                UserBubble(message: message, actions: actions, receipt: receipt)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.top, 20)
         case .checklist:
             ChecklistCard(message: message)
         case .next:
-            NextStepCard(message: message)
+            NextStepCard(message: message, model: model)
         case .task:
-            TaskCard(message: message, raw: raw)
+            TaskCard(message: message, raw: raw, model: model)
         case .subagent:
             SubagentCard(message: message)
         case .codexPlan(let plan):
-            CodexPlanCard(plan: plan)
+            CodexPlanCard(plan: plan, model: model)
         case .process(let group, let first):
             let open = folds[group.key] ?? group.live
             VStack(alignment: .leading, spacing: 0) {
@@ -115,7 +123,7 @@ struct TimelineItem: View {
                     HStack(spacing: 0) {
                         Rectangle().fill(Palette.line).frame(width: 3)
                             .padding(.leading, 7)
-                        ProcessStep(message: message)
+                        ProcessStep(message: message, diff: actions.diff)
                             .padding(.leading, 12)
                             .padding(.vertical, 4)
                     }
@@ -176,6 +184,7 @@ private struct ProcessHeader: View {
 /// files it changed; commentary and thinking as grey text.
 private struct ProcessStep: View {
     let message: Message
+    let diff: (String) -> Void
 
     var body: some View {
         if message.role == "tool" {
@@ -193,13 +202,22 @@ private struct ProcessStep: View {
                             .foregroundStyle(Palette.danger)
                     }
                 }
-                // 本轮差异 opens the diff page from 0.4.0 (plan phase 3).
+                // 本轮差异 opens the diff page; a change without a reference has no record to show (B12).
                 ForEach(Array(message.details["changes"].array.enumerated()), id: \.offset) { _, change in
-                    Text("本轮差异：" + change["path"].string())
-                        .processFont()
-                        .foregroundStyle(Palette.muted)
-                        .padding(.top, 4)
-                        .padding(.vertical, 4)
+                    let ref = change["ref"].string()
+                    Button {
+                        diff(ref)
+                    } label: {
+                        Text("本轮差异：" + change["path"].string())
+                            .processFont()
+                            .foregroundStyle(ref.isEmpty ? Palette.muted : Palette.accent)
+                            .multilineTextAlignment(.leading)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(ref.isEmpty)
+                    .padding(.top, 4)
                 }
             }
         } else {
@@ -225,11 +243,28 @@ private struct ProcessStep: View {
 struct UserBubble: View {
     let message: Message
     let actions: MessageActions
+    var receipt: String?
+    /// Still being sent: shown lighter (Android sending).
+    var sending = false
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            bubble
+                .opacity(sending ? 0.6 : 1)
+            if let receipt, receipt != removedLabel {
+                Text(receipt)
+                    .captionFont()
+                    .foregroundStyle(receipt == "送达状态待确认" ? Palette.warning : Palette.muted)
+                    .padding(.trailing, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var bubble: some View {
         let dark = scheme == .dark
-        TrailingFraction(fraction: 0.88) {
+        return TrailingFraction(fraction: 0.88) {
             MarkdownView(source: message.text,
                          look: MarkdownLook(link: dark ? Palette.accent : .white, code: dark ? Palette.codeFill : .white.opacity(0.18)),
                          fill: false)
@@ -266,6 +301,11 @@ private struct AnswerBlock: View {
                         .clipped()
                         .background(Palette.page)
                 }
+            // The files DeepSeek presented as the turn's result (Android 1.0.2), to open or save.
+            if message.kind == "deliverables" {
+                Button("查看成果文件", systemImage: "doc.on.doc") { actions.files(message.id) }
+                    .buttonStyle(PillStyle(kind: .text))
+            }
             if message.truncated {
                 Button("展开完整消息") { actions.expand(message) }
                     .buttonStyle(PillStyle(kind: .text))

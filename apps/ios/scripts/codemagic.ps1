@@ -9,7 +9,9 @@
 .EXAMPLE
   ./codemagic.ps1 -ListApps
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots
+  ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots -Only "testLight testLargestText"
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-testflight
+  ./codemagic.ps1 -BuildId <id>        # follow a build already started, then download as above
 #>
 param(
     [ValidateSet('ios-native-check', 'ios-native-testflight')]
@@ -17,9 +19,12 @@ param(
     [ValidateSet('compile', 'shots')]
     [string]$Mode = 'compile',
     [string]$Runtimes = '',
+    # Some of the tour's variants only (testLight, testDark, testLargestText), space-separated.
+    [string]$Only = '',
     [string]$Branch = 'ios-native',
     [string]$AppId = $env:TELEPLY_CODEMAGIC_APP,
     [string]$OutDir = (Join-Path $PSScriptRoot '..\build\codemagic'),
+    [string]$BuildId = '',
     [switch]$ListApps
 )
 $ErrorActionPreference = 'Stop'
@@ -34,22 +39,38 @@ if ($ListApps) {
         Format-Table -AutoSize
     return
 }
-if (-not $AppId) { throw 'Pass -AppId (see -ListApps) or set TELEPLY_CODEMAGIC_APP' }
-
-$variables = @{ CHECK_MODE = $Mode }
-if ($Runtimes) { $variables.SHOT_RUNTIMES = $Runtimes }
-$body = @{ appId = $AppId; workflowId = $Workflow; branch = $Branch; environment = @{ variables = $variables } } |
-    ConvertTo-Json -Depth 5
-$buildId = (Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/json' -Body $body "$api/builds").buildId
-Write-Host "Started $Workflow ($Mode) on ${Branch}: build $buildId"
+if ($BuildId) {
+    $buildId = $BuildId
+    Write-Host "Following build $buildId"
+} else {
+    if (-not $AppId) { throw 'Pass -AppId (see -ListApps) or set TELEPLY_CODEMAGIC_APP' }
+    $variables = @{ CHECK_MODE = $Mode }
+    if ($Runtimes) { $variables.SHOT_RUNTIMES = $Runtimes }
+    if ($Only) { $variables.SHOT_ONLY = $Only }
+    $body = @{ appId = $AppId; workflowId = $Workflow; branch = $Branch; environment = @{ variables = $variables } } |
+        ConvertTo-Json -Depth 5
+    $buildId = (Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/json' -Body $body "$api/builds").buildId
+    Write-Host "Started $Workflow ($Mode) on ${Branch}: build $buildId"
+}
 
 $finished = 'finished', 'failed', 'canceled', 'timeout', 'skipped', 'warning'
 $started = Get-Date
+$misses = 0
+$build = $null
 do {
     Start-Sleep -Seconds 30
-    $build = (Invoke-RestMethod -Headers $headers "$api/builds/$buildId").build
+    # A dropped connection now and then is no reason to stop following the build (10-26: EOF from the API).
+    try {
+        $build = (Invoke-RestMethod -Headers $headers "$api/builds/$buildId").build
+        $misses = 0
+    } catch {
+        $misses++
+        Write-Host ('{0:mm\:ss}  (no answer from Codemagic, try {1}: {2})' -f ((Get-Date) - $started), $misses, $_.Exception.Message)
+        if ($misses -ge 10) { throw }
+        continue
+    }
     Write-Host ('{0:mm\:ss}  {1}' -f ((Get-Date) - $started), $build.status)
-} while ($build.status -notin $finished)
+} while (-not $build -or $build.status -notin $finished)
 
 $target = Join-Path $OutDir $buildId
 New-Item -ItemType Directory -Force $target | Out-Null

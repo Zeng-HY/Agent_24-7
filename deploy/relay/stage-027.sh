@@ -14,7 +14,7 @@ with sqlite3.connect('/var/lib/agent-relay/accounts.sqlite3') as source, sqlite3
     source.backup(target)
 PY
 install -d -o root -g root -m 755 /opt/agent-relay-027
-for file in windows-version.json relay_service.py relay_identity.py relay_accounts.py relay_mail.py relay_transport.py relay_pages.py relay_routing.js relay_account.html relay_account.css relay_account.js requirements-relay.txt; do
+for file in windows-version.json relay_service.py relay_identity.py relay_accounts.py relay_mail.py relay_transport.py relay_pages.py relay_push.py relay_routing.js relay_account.html relay_account.css relay_account.js requirements-relay.txt; do
     install -o root -g root -m 644 "$file" "/opt/agent-relay-027/$file"
 done
 install -d -o root -g root -m 755 /opt/agent-relay-027/static

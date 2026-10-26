@@ -14,13 +14,17 @@ public struct RelayRequest: Sendable, Equatable {
     public var body: Data?
     /// Seconds the whole call may take (Android callTimeout: 40 s, longer for the slow routes).
     public var deadline: TimeInterval
+    /// A file whose bytes are the body, sent with its length and never in chunks (the computer cannot read
+    /// chunked bodies); the file stays where it is.
+    public var upload: URL?
 
-    public init(method: HTTPMethod, url: URL, headers: [String: String], body: Data? = nil, deadline: TimeInterval) {
+    public init(method: HTTPMethod, url: URL, headers: [String: String], body: Data? = nil, deadline: TimeInterval, upload: URL? = nil) {
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
         self.deadline = deadline
+        self.upload = upload
     }
 }
 
@@ -58,6 +62,26 @@ public struct RelayStream: Sendable {
 
 public protocol RelayStreamingTransport: RelayTransport {
     func stream(_ request: RelayRequest) async throws -> RelayStream
+}
+
+/// A response written to a file instead of memory (GET /api/file). [file] is set for a 2xx answer and then
+/// belongs to the caller; any other answer keeps its (short) body to say why.
+public struct RelayDownload: Sendable {
+    public var status: Int
+    public var file: URL?
+    public var body: Data
+
+    public init(status: Int, file: URL? = nil, body: Data = Data()) {
+        self.status = status
+        self.file = file
+        self.body = body
+    }
+}
+
+/// Downloads to a file, at most [limit] bytes; a bigger file is refused rather than cut short, and one that came
+/// short of its stated length too. [progress] hears the bytes so far and the whole (-1 when the answer does not say).
+public protocol RelayFileTransport: RelayTransport {
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload
 }
 
 /// Builds requests the way the relay's guard wants them (relay_service.py): every call asks for JSON, a GET
@@ -229,6 +253,125 @@ public struct RelayClient: Sendable {
             state = .object(fields)
         }
         return parseControl(state)
+    }
+
+    // MARK: Acting on a computer
+
+    /// The computer routes the phone calls besides reading (Android RelayApi DetailRoutes).
+    public static let detailRoutes: Set<String> = [
+        "chat/new/options", "chat/folders", "chat/new/draft", "chat/new", "chat/new/state", "chat/new/retry", "chat/new/references",
+        "composer/references", "files/places", "files/list", "files/image", "files/remove", "codex/remove-attachment", "codex/attachments",
+        "chat/files", "chat/diff", "file/text", "file/meta", "deepseek/models", "deepseek/permissions", "deepseek/model", "deepseek/permission",
+        "deepseek/answer", "deepseek/approval", "claude/catalog", "claude/setting", "claude/choose", "claude/menu", "claude/close-menu",
+        "chat/projects", "chat/open", "chat/resolve", "claude/next", "claude/task", "chat/check", "chat/archive", "chat/unarchive",
+        "chat/delete", "chat/archived", "chats/children", "notify", "notify/ntfy", "notify/test", "voice/status", "voice/terms",
+        "voice/tidy", "status",
+    ]
+
+    /// A computer route outside the read set (Android detail): a GET with [query] when there is no [body], a POST
+    /// otherwise. Slow routes get their own deadline.
+    public func detail(device: String, route: String, query: [(String, String?)] = [], body: JSONValue? = nil) async throws -> JSONValue {
+        guard Self.detailRoutes.contains(route) else { throw ReadFailure("当前服务不支持此功能") }
+        let path = try Self.devicePath(device, "/api/" + route)
+        let deadline = Self.slowRoutes[route] ?? Self.defaultDeadline
+        if let body { return try await json(post(path, json: body, query: query, deadline: deadline)) }
+        return try await json(get(path, query: query, deadline: deadline))
+    }
+
+    /// A send, stop, queue action or answer, the way each source takes it (Android RelayApi.command): DeepSeek
+    /// names its routes and fields its own way; Claude sends through chat/send and does the rest with desktop
+    /// tokens; Codex takes them as they are. Posted once; never again by itself.
+    public func command(device: String, app: String, route: String, body: JSONValue) async throws -> JSONValue {
+        guard ["send", "stop", "queue-action", "answer"].contains(route) else { throw ReadFailure("当前来源不支持操作") }
+        switch app {
+        case "deepseek":
+            var outgoing = body.object
+            let actual: String
+            switch route {
+            case "send":
+                if body["intent"].string() == "auto" { outgoing["intent"] = "steer" }
+                actual = "send"
+            case "stop":
+                outgoing["expected_turn"] = .string(body["turn_id"].string())
+                actual = "stop"
+            case "queue-action":
+                // 立即补充 is "steer" for DeepSeek, 撤回 is "remove".
+                outgoing["item_id"] = .string(body["message_id"].string())
+                outgoing["action"] = .string(body["action"].string() == "promote" ? "steer" : "remove")
+                actual = "queue"
+            default:
+                actual = route
+            }
+            let result = try await json(post(Self.devicePath(device, "/api/deepseek/" + actual), json: .object(outgoing)))
+            guard route == "send", result["accepted"].bool(), case .object(var fields) = result else { return result }
+            fields["delivery_state"] = .string(outgoing["intent"]?.string() == "queue" ? "queued" : "accepted")
+            return .object(fields)
+        case "claude":
+            guard route == "send" else { throw ReadFailure("Claude 的停止与队列动作需使用当前桌面令牌") }
+            var outgoing = body.object
+            outgoing["app"] = "claude"
+            return try await json(post(Self.devicePath(device, "/api/chat/send"), json: .object(outgoing)))
+        default:
+            return try await json(post(Self.devicePath(device, "/api/codex/" + route), json: body))
+        }
+    }
+
+    /// A send's receipt by its request id (Codex, DeepSeek); Claude keeps none, its record is checked instead.
+    public func receipt(device: String, app: String, chat: String, request: String) async throws -> JSONValue {
+        guard app != "claude" else { return ["state": "unknown"] }
+        let response = try await json(get(Self.devicePath(device, "/api/\(app)/receipt"), query: [("id", chat), ("request_id", request)]))
+        guard app == "deepseek", response["state"].string() != "unknown", case .object(var fields) = response else { return response }
+        guard response["id"].string() == chat else { throw ReadFailure("回执会话身份不匹配") }
+        fields["request_id"] = .string(request)
+        return .object(fields)
+    }
+
+    // MARK: Files and voice
+
+    /// Pictures go up to 20 MB (the computer's limit), other files to 64 MiB: the relay takes no request bigger
+    /// (relay_transport.py), so a bigger one is refused here with why instead of failing halfway.
+    public static let imageLimit: Int64 = 20 * 1024 * 1024
+    public static let fileLimit: Int64 = 64 * 1024 * 1024
+    public static let downloadLimit: Int64 = 100 * 1024 * 1024
+
+    /// A picture (codex/upload) or another file (files/upload) for [app]'s conversation [chat], or for a new
+    /// conversation's draft by its request id ([draft]), sent from [file] with its length (Android uploadStream).
+    public func upload(device: String, app: String, chat: String, draft: Bool, name: String, file: URL, size: Int64, image: Bool) async throws -> JSONValue {
+        guard size > 0 else { throw ReadFailure("文件是空的，没有上传") }
+        guard size <= (image ? Self.imageLimit : Self.fileLimit) else {
+            throw ReadFailure(image ? "图片超过 20MB，传不上去" : "文件超过 64MB，中转一次最多传 64MB")
+        }
+        let path = try Self.devicePath(device, image ? "/api/codex/upload" : "/api/files/upload")
+        let request = RelayRequest(method: .post, url: origin.url(path, query: [("app", app), (draft ? "draft" : "id", chat), ("name", name)]),
+                                   headers: try signed(["Accept": "application/json", "Content-Type": "application/octet-stream", "Origin": origin.header]),
+                                   deadline: 300, upload: file)
+        return try await json(request)
+    }
+
+    /// One of a conversation's files (GET /api/file), or a computer file by its ticket (pc.…), to a file on this
+    /// phone, at most 100 MB; the caller owns it. [progress] hears the bytes so far and the whole.
+    public func download(device: String, app: String, chat: String, file: String,
+                         progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> URL {
+        guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
+        var request = try get(Self.devicePath(device, "/api/file"), query: [("app", app), ("id", chat), ("file", file)], deadline: 300)
+        request.headers["Accept"] = "*/*"
+        let answer = try await files.download(request, limit: Self.downloadLimit, progress: progress)
+        if answer.status == 401 { try? vault?.write(origin.key, nil) }
+        guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
+        return saved
+    }
+
+    /// The computer's voice service (web voice-ui.js): raw audio up, recognised text back. A whole recording, or the
+    /// end of one, waits for recognition (and 整理) on the computer.
+    public static let voiceRoutes: Set<String> = ["voice", "voice/stream/start", "voice/stream/chunk", "voice/stream/end", "voice/stream/cancel", "voice/stream/cloud"]
+
+    public func voice(device: String, route: String, query: [(String, String?)] = [], audio: Data = Data(), type: String = "application/octet-stream") async throws -> JSONValue {
+        guard Self.voiceRoutes.contains(route) else { throw ReadFailure("当前服务不支持此功能") }
+        let slow = route == "voice" || route == "voice/stream/end" || route == "voice/stream/cloud"
+        let request = RelayRequest(method: .post, url: origin.url(try Self.devicePath(device, "/api/" + route), query: query),
+                                   headers: try signed(["Accept": "application/json", "Content-Type": type, "Origin": origin.header]),
+                                   body: audio, deadline: slow ? 125 : 35)
+        return try await json(request)
     }
 
     /// The sidebar tree (GET /api/chat/projects): apps → projects → conversations. Only the apps this computer

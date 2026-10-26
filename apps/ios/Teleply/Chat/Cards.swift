@@ -1,11 +1,12 @@
 import SwiftUI
 import TeleplyModel
+import TeleplyState
 
 /*
  * Cards of the timeline that are not plain messages, as the web draws them (remote.html renderPlan, renderNext,
  * renderTask, renderSubagent; codex-ui.js plan; Android CardsUi.kt): Claude's checklist, its next-step box and
- * proposed tasks, a DeepSeek subagent, and a plan Codex made in plan mode. Opaque, like the question cards. In
- * 0.2.0 they only show; their buttons work from 0.4.0 (plan phase 3).
+ * proposed tasks, a DeepSeek subagent, and a plan Codex made in plan mode. Opaque, like the question cards. A button
+ * presses the same one on the computer, one at a time; the computer refuses a press that comes too late.
  */
 
 /// The web's .plan-card / .next-card / .task-card: 16 pt corners, a thin edge, the card colour.
@@ -96,14 +97,18 @@ private struct StepMark: View {
 }
 
 /// Claude's next-step box (its wrap_up, web renderNext): the recap, and while it waits on you its question and
-/// buttons, the first the main one. An answered box keeps its recap only.
+/// buttons, the first the main one. A button presses the same one on the computer; done, the buttons give way to
+/// what was done. An answered box keeps its recap only.
 struct NextStepCard: View {
     let message: Message
+    let model: AppModel
 
     var body: some View {
         let details = message.details
         let recap = details["recap"].string()
         let ask = details["ask"].string()
+        let toolID = details["tool_id"].string()
+        let status = model.workspace.cards["next:" + toolID] ?? ""
         if !details["open"].bool() {
             if !recap.isEmpty {
                 Text(recap)
@@ -127,21 +132,29 @@ struct NextStepCard: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 let actions = details["actions"].array
-                if !actions.isEmpty {
-                    CardButtons(labels: actions.map { $0["label"].string() })
+                if status.hasPrefix("done:") {
+                    CardNote(text: String(status.dropFirst(5)), color: Palette.accent)
+                } else if !actions.isEmpty {
+                    CardButtons(labels: actions.map { $0["label"].string() }, status: status, pressing: model.workspace.pressing) { index, label in
+                        model.workspace.claudeButton(card: "next:" + toolID, route: "claude/next",
+                                                     body: ["tool_id": .string(toolID), "index": .number(Double(index)), "label": .string(label)], label: label)
+                    }
+                    if status.hasPrefix("error:") { CardNote(text: String(status.dropFirst(6)), color: Palette.danger) }
                 }
             }
         }
     }
 }
 
-/// A task Claude proposes in a card of its own (web renderTask): its title and brief (a tap shows all of it), and
-/// 开始, 在这里做 and 不要了; an offer asks on the computer only. Once the computer shows the conversation without
-/// the card, it has been dealt with there.
+/// A task Claude proposes in a card of its own (web renderTask): its title and brief (a tap shows all of it); 开始,
+/// 在这里做 and 不要了 press the card's buttons on the computer (不要了 asks first). An offer asks on the computer only.
+/// Once the computer shows the conversation without the card, it has been dealt with there and the buttons go.
 struct TaskCard: View {
     let message: Message
     let raw: JSONValue
+    let model: AppModel
     @State private var full = false
+    @State private var dismissing = false
 
     var body: some View {
         let details = message.details
@@ -150,6 +163,7 @@ struct TaskCard: View {
         let offer = details["offer"].bool()
         let tasks = raw["tasks"]
         let settled = raw["on_screen"].bool() && !tasks.isNull && !tasks.array.contains { $0.string() == title }
+        let status = model.workspace.cards["task:" + title] ?? ""
         TimelineCard {
             Text(offer ? "Claude 问要不要新开一个对话" : "Claude 提议新开一个任务")
                 .captionFont()
@@ -176,18 +190,40 @@ struct TaskCard: View {
             }
             if offer {
                 CardNote(text: "要在电脑上选「New session」或「Do it here」。", color: Palette.muted)
+            } else if status.hasPrefix("done:") {
+                // What this phone just did there says more than that it was dealt with (开始 adds where it goes).
+                CardNote(text: String(status.dropFirst(5)), color: Palette.accent)
             } else if settled {
                 CardNote(text: "电脑上已经处理过了：开始了、在这里做了，或者关掉了。", color: Palette.muted)
             } else {
-                CardButtons(labels: ["开始", "在这里做", "不要了"])
+                let kinds = ["start", "here", "dismiss"]
+                CardButtons(labels: ["开始", "在这里做", "不要了"], status: status, pressing: model.workspace.pressing) { index, label in
+                    if kinds[index] == "dismiss" {
+                        dismissing = true
+                    } else {
+                        model.workspace.claudeButton(card: "task:" + title, route: "claude/task", body: ["title": .string(title), "button": .string(kinds[index])], label: label)
+                    }
+                }
+                if status.hasPrefix("error:") { CardNote(text: String(status.dropFirst(6)), color: Palette.danger) }
             }
+        }
+        .alert("不要这个任务了？", isPresented: $dismissing) {
+            Button("留着", role: .cancel) {}
+            Button("不要了", role: .destructive) {
+                model.workspace.claudeButton(card: "task:" + title, route: "claude/task", body: ["title": .string(title), "button": "dismiss"], label: "不要了")
+            }
+        } message: {
+            Text("电脑上的这张卡片也会关掉，任务不会开始。")
         }
     }
 }
 
-/// A card's buttons as they will be, the first the main one; they work from 0.4.0 (plan phase 3).
+/// A card's buttons, the first the main one; the one being pressed says so (开始…). One press at a time.
 private struct CardButtons: View {
     let labels: [String]
+    let status: String
+    let pressing: Bool
+    let press: (Int, String) -> Void
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -195,14 +231,14 @@ private struct CardButtons: View {
             VStack(alignment: .leading, spacing: 8) { buttons }
         }
         .padding(.top, 12)
-        .disabled(true)
-        .accessibilityHint(Text("在手机上操作要等 0.4.0，现在请在电脑上处理"))
+        .disabled(pressing)
     }
 
     private var buttons: some View {
         ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-            Button(label) {}
+            Button(status == "pressing:" + label ? label + "…" : label) { press(index, label) }
                 .buttonStyle(PillStyle(kind: index == 0 ? .primary : .secondary, minHeight: 40))
+                .accessibilityLabel(Text("在电脑上点「\(label)」"))
         }
     }
 }
@@ -216,6 +252,7 @@ private struct CardNote: View {
             .noteFont()
             .foregroundStyle(color)
             .padding(.top, 10)
+            .task(id: text) { AccessibilityNotification.Announcement(text).post() }
     }
 }
 
@@ -278,13 +315,14 @@ func codexPlan(_ raw: JSONValue, for message: Message) -> JSONValue? {
     return message.id == id || message.details["source_id"].string() == id ? plan : nil
 }
 
-/// A plan Codex made in plan mode (web codex-ui.js renderCard plan): 计划 · 待确认 with a preview, 展开完整计划,
-/// then 执行计划 and 继续修改. An older plan folds into 历史计划.
+/// A plan Codex made in plan mode (web codex-ui.js renderCard plan): 计划 · 待确认 with a preview, 展开完整计划;
+/// 执行计划 carries it out in normal mode, 继续修改 keeps plan mode and puts the cursor in the box. An older plan
+/// folds into 历史计划.
 struct CodexPlanCard: View {
     let plan: JSONValue
+    let model: AppModel
     @State private var open = false
     @State private var full = false
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         if !plan["ready"].bool() {
@@ -312,7 +350,8 @@ struct CodexPlanCard: View {
             }
             .padding(.top, 16)
         } else {
-            VStack(alignment: .leading, spacing: 10) {
+            let chat = model.conversation
+            QuestionCard {
                 HStack(spacing: 8) {
                     Text("计划")
                         .headingFont()
@@ -331,20 +370,21 @@ struct CodexPlanCard: View {
                 Button(full ? "收起计划" : "展开完整计划") { full.toggle() }
                     .buttonStyle(PillStyle(kind: .text, minHeight: 36))
                 HStack(spacing: 8) {
-                    Button("执行计划") {}
-                        .buttonStyle(PillStyle(kind: .primary))
-                        .frame(maxWidth: .infinity)
-                    Button("继续修改") {}
-                        .buttonStyle(PillStyle())
-                        .frame(maxWidth: .infinity)
+                    Button("执行计划") { chat.executePlan(plan["id"].string()) }
+                        .buttonStyle(PillStyle(kind: .primary, wide: true))
+                        .disabled(chat.submitting || !chat.control.available || chat.control.running)
+                    Button("继续修改") {
+                        let current = chat.control.raw["settings"].isObject ? chat.control.raw["settings"] : [:]
+                        let bound = model.workspace.saved["settings"]
+                        var settings = (bound.isObject ? bound : current).object
+                        settings["mode"] = "plan"
+                        model.workspace.selectSettings(.object(settings), expected: current)
+                        chat.focusInput(hint: "写下需要调整的地方…")
+                    }
+                    .buttonStyle(PillStyle(wide: true))
+                    .disabled(chat.submitting)
                 }
-                .disabled(true)
-                .accessibilityHint(Text("在手机上操作要等 0.4.0，现在请在电脑上处理"))
             }
-            .padding(16)
-            .background(Palette.sheet, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(scheme == .dark ? Palette.controlBorder : Palette.line, lineWidth: 1))
-            .shadow(color: Palette.ink.opacity(scheme == .dark ? 0 : 0.025), radius: 6, y: 2)
             .padding(.top, 16)
         }
     }

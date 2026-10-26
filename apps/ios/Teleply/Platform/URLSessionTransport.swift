@@ -4,14 +4,17 @@ import TeleplyModel
 /// URLSession set up like the Android OkHttp client (RelayApi.kt): no cookie jar, no cache, no stored
 /// credentials, redirects handed back instead of followed, nothing retried. The sign-in is added by RelayClient
 /// from the keychain. The live stream has its own session: 25 s without a byte counts as dropped (the computer
-/// sends a heartbeat every 8 s), and it may stay open for a day.
-nonisolated final class URLSessionTransport: RelayStreamingTransport {
+/// sends a heartbeat every 8 s), and it may stay open for a day. Files go up and down on a third: up to 15
+/// minutes in all, a minute of silence. An upload goes from its file with its length, never in chunks.
+nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileTransport {
     private let session: URLSession
     private let streamSession: URLSession
+    private let fileSession: URLSession
 
     init() {
         session = URLSession(configuration: Self.configuration(idle: 30, total: 130), delegate: RedirectRefusal(), delegateQueue: nil)
         streamSession = URLSession(configuration: Self.configuration(idle: 25, total: 86_400), delegate: RedirectRefusal(), delegateQueue: nil)
+        fileSession = URLSession(configuration: Self.configuration(idle: 60, total: 900), delegate: RedirectRefusal(), delegateQueue: nil)
     }
 
     static func configuration(idle: TimeInterval, total: TimeInterval) -> URLSessionConfiguration {
@@ -31,11 +34,17 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport {
     func send(_ request: RelayRequest) async throws -> RelayResponse {
         let urlRequest = Self.urlRequest(request)
         // The whole call has a deadline (Android callTimeout); the session's own timeout only covers silence.
-        let session = session
+        let upload = request.upload
+        let session = upload == nil ? session : fileSession
         return try await withThrowingTaskGroup(of: RelayResponse?.self) { group in
             group.addTask {
-                let (data, response) = try await session.data(for: urlRequest)
-                return Self.response(data, response)
+                let answer: (Data, URLResponse)
+                if let upload {
+                    answer = try await session.upload(for: urlRequest, fromFile: upload)
+                } else {
+                    answer = try await session.data(for: urlRequest)
+                }
+                return Self.response(answer.0, answer.1)
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(request.deadline))
@@ -47,10 +56,71 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport {
         }
     }
 
+    /// Downloads to a file of our own (the system deletes its own when the task ends); one bigger than [limit] is
+    /// refused rather than kept cut short, and one shorter than its Content-Length too (Android 1.0.2). [progress]
+    /// hears the bytes so far four times a second. Cancelling the caller cancels the download.
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-file-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let kept = folder.appendingPathComponent("download")
+        let running = RunningDownload()
+        let reporter = progress.map { report in
+            Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if let counts = running.counts, counts.got > 0 { report(counts.got, counts.total) }
+                }
+            }
+        }
+        defer { reporter?.cancel() }
+        let answer: (status: Int, expected: Int64)
+        do {
+            let urlRequest = Self.urlRequest(request)
+            let session = fileSession
+            answer = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(status: Int, expected: Int64), any Error>) in
+                    let task = session.downloadTask(with: urlRequest) { temporary, response, error in
+                        // The system's file goes when this returns, so it is moved now.
+                        do {
+                            if let error { throw error }
+                            guard let temporary, let response else { throw URLError(.badServerResponse) }
+                            try FileManager.default.moveItem(at: temporary, to: kept)
+                            continuation.resume(returning: (status: (response as? HTTPURLResponse)?.statusCode ?? 0, expected: response.expectedContentLength))
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                    running.start(task)
+                }
+            } onCancel: {
+                running.cancel()
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
+        let status = answer.status
+        guard (200..<300).contains(status) else {
+            let body = (try? Data(contentsOf: kept)).map { Data($0.prefix(65_536)) } ?? Data()
+            try? FileManager.default.removeItem(at: folder)
+            return RelayDownload(status: status, body: body)
+        }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: kept.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        guard size <= limit else {
+            try? FileManager.default.removeItem(at: folder)
+            throw ReadFailure("文件超过100MB，请在电脑上打开")
+        }
+        guard answer.expected < 0 || answer.expected == size else {
+            try? FileManager.default.removeItem(at: folder)
+            throw ReadFailure("文件接收不完整，请重试")
+        }
+        return RelayDownload(status: status, file: kept)
+    }
+
     func stream(_ request: RelayRequest) async throws -> RelayStream {
         let (bytes, response) = try await streamSession.bytes(for: Self.urlRequest(request))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        nonisolated(unsafe) let source = bytes
+        let source = bytes
         let chunks = AsyncThrowingStream<[UInt8], any Error> { continuation in
             let reader = Task {
                 var buffer: [UInt8] = []
@@ -92,6 +162,36 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport {
             if let name = name as? String, let value = value as? String { headers[name.lowercased()] = value }
         }
         return RelayResponse(status: http.statusCode, headers: headers, body: data)
+    }
+}
+
+/// A download under way: started once, cancelled from the waiting task (even before it started), its bytes read
+/// for progress.
+nonisolated final class RunningDownload: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDownloadTask?
+    private var cancelled = false
+
+    func start(_ task: URLSessionDownloadTask) {
+        let cancelled = lock.withLock {
+            self.task = task
+            return self.cancelled
+        }
+        task.resume()
+        if cancelled { task.cancel() }
+    }
+
+    func cancel() {
+        let task = lock.withLock {
+            cancelled = true
+            return self.task
+        }
+        task?.cancel()
+    }
+
+    /// The bytes received so far and the whole (-1 when the answer does not say).
+    var counts: (got: Int64, total: Int64)? {
+        lock.withLock { task.map { (got: $0.countOfBytesReceived, total: $0.countOfBytesExpectedToReceive) } }
     }
 }
 

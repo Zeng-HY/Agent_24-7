@@ -5,6 +5,10 @@ import TeleplyState
 /// The conversation list (spec 4.1; Android ChatListScreen): ☰, "对话" and the computer in the title bar, ✎ on
 /// the right; under it the source chips with ⋯ 列表显示, the search capsule and the rows. Read again every 10 s
 /// while shown (the model does that); rows merge in without moving what was read.
+///
+/// The title bar is drawn by the page (spec 4.1 allows it when the system bar cannot lay it out): in the system
+/// bar's leading slot the title got one character's width on a real iPhone (0.2.0, user 10-26), "对话" stacked
+/// and the computer cut to its first letter. It sits in the top safe-area bar, so rows still fade under it.
 struct ChatListView: View {
     let model: AppModel
     @Environment(Chrome.self) private var chrome
@@ -17,6 +21,10 @@ struct ChatListView: View {
                 .plainRow()
             SearchLine(query: $query) { model.searchChats(query) }
                 .plainRow()
+            if !model.dockJobs.isEmpty {
+                NewJobDock(model: model)
+                    .plainRow()
+            }
             rows
         }
         .listStyle(.plain)
@@ -24,13 +32,21 @@ struct ChatListView: View {
         .environment(\.defaultMinListRowHeight, 0)
         .background(Palette.page)
         .scrollDismissesKeyboard(.immediately)
-        .safeAreaBar(edge: .top) { notes }
-        .overlay(alignment: .bottom) {
-            NoticeToast(text: model.notice) { model.notice = nil }
-                .padding(.bottom, 16)
+        .safeAreaBar(edge: .top) {
+            VStack(spacing: 0) {
+                header
+                notes
+            }
         }
-        .toolbar { toolbar }
-        .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 8) {
+                UndoBar(model: model)
+                NoticeToast(text: model.notice) { model.notice = nil }
+            }
+            .padding(.bottom, 16)
+            .animation(.easeOut(duration: 0.25), value: model.undo)
+        }
+        .toolbar(.hidden, for: .navigationBar)
         .task(id: query) {
             guard query != model.query else { return }
             try? await Task.sleep(for: .milliseconds(450))
@@ -42,29 +58,20 @@ struct ChatListView: View {
 
     // MARK: Title bar
 
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button {
-                chrome.openDrawer()
-            } label: {
-                Image(systemName: "line.3.horizontal")
-            }
-            .accessibilityLabel(Text("打开导航"))
-        }
-        ToolbarItem(placement: .topBarLeading) {
+    /// ☰, then "对话" with the computer under it taking the room left, then ✎ (Android ListTopBar: 16 pt sides,
+    /// 12 pt between).
+    private var header: some View {
+        HStack(spacing: 12) {
+            GlassIconButton(symbol: "line.3.horizontal", label: "打开导航") { chrome.openDrawer() }
             ListTitle(model: model)
-        }
-        .sharedBackgroundVisibility(.hidden)
-        ToolbarItem(placement: .topBarTrailing) {
-            // 新建对话 arrives in 0.4.0 (plan phase 3); until then the button shows where it will be.
-            Button {} label: {
-                Image(systemName: "square.and.pencil")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            GlassIconButton(symbol: "square.and.pencil", label: "新建对话") {
+                model.startNew(app: model.listSource == "all" ? model.app : model.listSource)
             }
-            .disabled(true)
-            .accessibilityLabel(Text("新建对话"))
-            .accessibilityHint(Text("新建对话在 0.4.0 提供"))
+            .disabled(model.device == nil || model.knownApps?.isEmpty == true)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -123,6 +130,8 @@ struct ChatListView: View {
         case .chat(let chat, let first):
             let key = rowKey(chat)
             Button {
+                // The lift that ends a sidebar swipe started on this row is the swipe's.
+                guard chrome.tapsAllowed else { return }
                 if chat.group {
                     withAnimation(.easeOut(duration: 0.2)) { folds.toggle(key) }
                 } else if !chat.kind.isEmpty {
@@ -131,17 +140,31 @@ struct ChatListView: View {
                     model.open(chat)
                 }
             } label: {
-                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil)
+                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil, draft: model.drafts[key])
             }
             .buttonStyle(RowPressStyle())
             .disabled(model.busy)
+            // 左滑归档 (spec 4.1, web archive-ui.js): a slide uncovers 归档 and stops there; a tap on it archives. No full
+            // swipe: the system's takes a flick as one too, and a conversation went at a brush (user 10-26). 撤销 stays
+            // under the list for six seconds. VoiceOver finds it among the row's actions.
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if !chat.group && chat.kind.isEmpty && sourceOrder.contains(chat.app) {
+                    Button {
+                        model.archive(chat)
+                    } label: {
+                        Label("归档", systemImage: "archivebox")
+                    }
+                    .tint(Color(red: 0x63 / 255, green: 0x66 / 255, blue: 0xF1 / 255))
+                }
+            }
         case .fold(let chat):
             let key = rowKey(chat)
-            FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning) {
+            FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning, toggle: chrome.tap {
                 withAnimation(.easeOut(duration: 0.2)) { folds.toggle(key) }
-            }
+            })
         case .child(let parent, let child):
             Button {
+                guard chrome.tapsAllowed else { return }
                 model.openChild(child, parent: parent)
             } label: {
                 ChildRow(chat: child)
@@ -266,6 +289,8 @@ private struct ListTitle: View {
                         .foregroundStyle(Palette.muted)
                         .lineLimit(1)
                 }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
                 .accessibilityLabel(Text("切换电脑，当前是\(model.device?.label ?? "未选择")"))
             } else {
                 Text(label)
@@ -291,7 +316,9 @@ private struct ListTitle: View {
 /// width and scroll sideways; the edge they pass under fades while there is more that way. ⋯ stays put.
 private struct SourceChips: View {
     let model: AppModel
+    @Environment(Chrome.self) private var chrome
     @State private var room = EdgeRoom()
+    @State private var frame = CGRect.null
 
     var body: some View {
         let known = model.knownApps
@@ -334,6 +361,10 @@ private struct SourceChips: View {
                     withAnimation(.easeOut(duration: 0.15)) { room = now }
                 }
                 .mask(fade)
+                // While they scroll, a swipe on them is theirs; the sidebar does not come out over it.
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0; claim() }
+                .onChange(of: room) { claim() }
+                .onDisappear { chrome.noPull = .null }
                 .onAppear { proxy.scrollTo(model.listSource) }
                 .onChange(of: model.listSource) { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(model.listSource) } }
             }
@@ -341,6 +372,10 @@ private struct SourceChips: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+
+    private func claim() {
+        chrome.noPull = room.back || room.forward ? frame : .null
     }
 
     private var fade: some View {
@@ -480,6 +515,50 @@ private struct SearchLine: View {
     }
 }
 
+/// The bar under the list after an archive (web .undo-bar): 对话已归档 and the title, 撤销 for six seconds; while
+/// Claude still reads the archive back, 正在归档… and no 撤销 yet.
+private struct UndoBar: View {
+    let model: AppModel
+
+    var body: some View {
+        if let undo = model.undo {
+            HStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(undo.waiting ? "正在归档…" : "对话已归档")
+                        .smallBodyFont()
+                        .foregroundStyle(.white)
+                    Text(undo.chat.title)
+                        .captionFont()
+                        .foregroundStyle(Color(red: 0xAA / 255, green: 0xB3 / 255, blue: 0xC5 / 255))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("撤销") { model.undoArchive() }
+                    .scaledFont(15, .bold, relativeTo: .callout)
+                    .foregroundStyle(Color(red: 0x9F / 255, green: 0xB8 / 255, blue: 0xFF / 255).opacity(undo.waiting ? 0.4 : 1))
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                    .disabled(undo.waiting)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 6)
+            .padding(.vertical, 6)
+            .background(Color(red: 0x1F / 255, green: 0x24 / 255, blue: 0x30 / 255), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .frame(maxWidth: 520)
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .accessibilityElement(children: .contain)
+            .task(id: "\(undo.serial)|\(undo.waiting)") {
+                AccessibilityNotification.Announcement(undo.waiting ? "正在归档" : "对话已归档").post()
+                guard !undo.waiting else { return }
+                try? await Task.sleep(for: .seconds(6))
+                if !Task.isCancelled { model.dropUndo(undo.serial) }
+            }
+        }
+    }
+}
+
 /// No rows (spec 8.2; Android EmptyList): which filters apply, with 清除筛选; a computer without any of the apps
 /// says so with 重试 instead.
 private struct EmptyList: View {
@@ -509,9 +588,15 @@ private struct EmptyList: View {
                         .foregroundStyle(Palette.muted)
                         .multilineTextAlignment(.center)
                 }
-                if searching || model.listSource != "all" || model.listStatus != "all" {
-                    Button("清除筛选", action: clear)
-                        .buttonStyle(PillStyle())
+                HStack(spacing: 8) {
+                    if model.device != nil {
+                        Button("新建对话") { model.startNew(app: model.listSource == "all" ? model.app : model.listSource) }
+                            .buttonStyle(PillStyle(kind: .primary))
+                    }
+                    if searching || model.listSource != "all" || model.listStatus != "all" {
+                        Button("清除筛选", action: clear)
+                            .buttonStyle(PillStyle())
+                    }
                 }
             }
         }

@@ -12,6 +12,53 @@ public struct Place: Codable, Sendable, Equatable {
     public var app = "codex"
 
     public init() {}
+
+    /// Fields missing from an older file take their defaults instead of making the file unreadable.
+    public init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        origin = try fields.decodeIfPresent(String.self, forKey: .origin) ?? ""
+        theme = try fields.decodeIfPresent(String.self, forKey: .theme) ?? "system"
+        scope = try fields.decodeIfPresent(String.self, forKey: .scope) ?? ""
+        device = try fields.decodeIfPresent(String.self, forKey: .device) ?? ""
+        chat = try fields.decodeIfPresent(String.self, forKey: .chat) ?? ""
+        title = try fields.decodeIfPresent(String.self, forKey: .title) ?? ""
+        app = try fields.decodeIfPresent(String.self, forKey: .app) ?? "codex"
+    }
+}
+
+/// A send's local copy (Android chat_submission): kept before the request goes out, then changed only by what
+/// receipts and the source's record show; never posted again by itself (spec B03, B04). [body] is the request as
+/// JSON text, with the phone's own notes (_claude_offset …) that never go out. [created] is milliseconds.
+public struct Submission: Codable, Sendable, Equatable, Identifiable {
+    public var request: String
+    public var scope: String
+    public var device: String
+    public var app: String
+    public var chat: String
+    public var text: String
+    public var action: String
+    public var turn: String
+    public var body: String
+    public var label: String
+    public var created: Int64
+
+    public var id: String { request }
+    public var key: ChatKey { ChatKey(scope: scope, device: device, app: app, chat: chat) }
+
+    public init(request: String, key: ChatKey, text: String, action: String, turn: String, body: String,
+                label: String = "提交中", created: Int64) {
+        self.request = request
+        scope = key.scope
+        device = key.device
+        app = key.app
+        chat = key.chat
+        self.text = text
+        self.action = action
+        self.turn = turn
+        self.body = body
+        self.label = label
+        self.created = created
+    }
 }
 
 /// One conversation's records (Android Room tables chat_draft, reading_position, interaction_draft), keyed by
@@ -32,8 +79,22 @@ public struct ChatRecord: Codable, Sendable, Equatable {
     public var position: Position?
     /// JSON values by kind (Android interaction_draft): sources, new_jobs, claude_catalog, workspace…
     public var details: [String: String] = [:]
+    /// Sends of this conversation, newest first; the oldest go once there are more than [submissionLimit].
+    public var submissions: [Submission] = []
+
+    public static let submissionLimit = 100
 
     public init() {}
+
+    /// Fields missing from an older file take their defaults instead of making the file unreadable.
+    public init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        version = try fields.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        draft = try fields.decodeIfPresent(String.self, forKey: .draft) ?? ""
+        position = try fields.decodeIfPresent(Position.self, forKey: .position)
+        details = try fields.decodeIfPresent([String: String].self, forKey: .details) ?? [:]
+        submissions = try fields.decodeIfPresent([Submission].self, forKey: .submissions) ?? []
+    }
 }
 
 /// What this phone keeps, as small JSON files in one folder the app keeps out of backups (Android disables
@@ -118,10 +179,72 @@ public actor LocalStore {
         update(scope: scope, device: device, app: app, chat: chat) { $0.details[kind] = value }
     }
 
+    // MARK: Drafts and sends (spec B01, B03, B10)
+
+    public func draft(_ key: ChatKey) -> String {
+        record(scope: key.scope, device: key.device, app: key.app, chat: key.chat).draft
+    }
+
+    public func setDraft(_ key: ChatKey, _ text: String) {
+        update(scope: key.scope, device: key.device, app: key.app, chat: key.chat) { $0.draft = text }
+    }
+
+    /// The unsent words of every conversation of one sign-in and computer (the list's 草稿). Records not open
+    /// already are read without being kept in memory.
+    public func drafts(scope: String, device: String) -> [ChatKey: String] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: url("chats").path) else { return [:] }
+        var found: [ChatKey: String] = [:]
+        for name in names where name.hasSuffix(".json") {
+            let stem = String(name.dropLast(5))
+            // A record moved aside as unreadable carries a second extension.
+            guard !stem.contains("."), let parts = Self.recordParts(stem), parts.count == 4, parts[0] == scope, parts[1] == device else { continue }
+            let draft = (cache[stem] ?? read(ChatRecord.self, at: url("chats/\(name)")))?.draft ?? ""
+            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                found[ChatKey(scope: scope, device: device, app: parts[2], chat: parts[3])] = draft
+            }
+        }
+        return found
+    }
+
+    public func submissions(_ key: ChatKey) -> [Submission] {
+        record(scope: key.scope, device: key.device, app: key.app, chat: key.chat).submissions
+    }
+
+    /// The local copy of a send that is about to go out, and the draft it came from cleared, in one write
+    /// (Android ReadingDao.begin).
+    public func begin(_ submission: Submission) {
+        update(scope: submission.scope, device: submission.device, app: submission.app, chat: submission.chat) { record in
+            Self.put(submission, into: &record)
+            if submission.action == "send" { record.draft = "" }
+        }
+    }
+
+    /// A send's new label (or notes), in place of its earlier copy.
+    public func saveSubmission(_ submission: Submission) {
+        update(scope: submission.scope, device: submission.device, app: submission.app, chat: submission.chat) { record in
+            Self.put(submission, into: &record)
+        }
+    }
+
+    private static func put(_ submission: Submission, into record: inout ChatRecord) {
+        var rows = record.submissions.filter { $0.request != submission.request }
+        rows.append(submission)
+        rows.sort { $0.created > $1.created }
+        record.submissions = Array(rows.prefix(ChatRecord.submissionLimit))
+    }
+
     /// File names from the key (ids like "new:…" carry colons and slashes): base64url of the four parts.
     static func recordName(scope: String, device: String, app: String, chat: String) -> String {
         Data([scope, device, app, chat].joined(separator: "\n").utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    /// The four parts back from a record's file name; nil for a name that is not one.
+    static func recordParts(_ name: String) -> [String]? {
+        var text = name.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        text += String(repeating: "=", count: (4 - text.count % 4) % 4)
+        guard let data = Data(base64Encoded: text), let joined = String(data: data, encoding: .utf8) else { return nil }
+        return joined.components(separatedBy: "\n")
     }
 
     // MARK: Files

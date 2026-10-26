@@ -36,10 +36,19 @@ public struct AppServices: Sendable {
     /// Teleply's own service (spec 4.8): used until another address is set under 开发者选项.
     public var defaultOrigin: ServiceOrigin
     public var newScope: @Sendable () -> String
+    /// A send's request id (Android UUID.randomUUID()).
+    public var newID: @Sendable () -> String
+    /// Milliseconds, for when a send was made.
+    public var now: @Sendable () -> Int64
+    /// The system's notification switch and push token (遥应通知, AppModel+Push).
+    public var push: any PushPlatform
 
     public init(store: LocalStore, vault: any CookieVault, transport: any RelayTransport, demo: @escaping @Sendable () -> any RelayTransport,
                 pacer: any Pacer = RealPacer(), defaultOrigin: ServiceOrigin = .default,
-                newScope: @escaping @Sendable () -> String = { UUID().uuidString }) {
+                newScope: @escaping @Sendable () -> String = { UUID().uuidString },
+                newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
+                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+                push: any PushPlatform = NoPush()) {
         self.store = store
         self.vault = vault
         self.transport = transport
@@ -47,6 +56,9 @@ public struct AppServices: Sendable {
         self.pacer = pacer
         self.defaultOrigin = defaultOrigin
         self.newScope = newScope
+        self.newID = newID
+        self.now = now
+        self.push = push
     }
 }
 
@@ -90,6 +102,11 @@ public final class AppModel {
     public internal(set) var listCursor: String?
     public internal(set) var listMore = false
     public internal(set) var hidden: Set<String> = []
+    /// Words typed on this phone and not sent, by row, as the list shows them after a red [草稿] (WeChat; user
+    /// 10-26): read from this phone once per computer, then following each conversation's box as it is left.
+    public internal(set) var drafts: [String: String] = [:]
+    /// The bar under the list after a swipe: 对话已归档 with 撤销 (AppModel+Archive).
+    public internal(set) var undo: ArchiveUndo?
     public internal(set) var moreKids: [String: [Chat]] = [:]
     public internal(set) var sources = SourceInfo()
     public internal(set) var tree: JSONValue = [:]
@@ -114,8 +131,23 @@ public final class AppModel {
     public internal(set) var searched = false
     public internal(set) var searchQuery = ""
 
-    /// The open conversation's live connection and, from phase 2, its composer.
+    // New conversations (AppModel+New)
+    /// A new conversation waiting for its sheet.
+    public internal(set) var pendingNew: NewTarget?
+    /// The job whose 新建对话的结果 sheet is open, by request id.
+    public internal(set) var jobSheet: String?
+    /// A conversation just made from its job: its first message shows until the record has it.
+    public internal(set) var handoff: NewHandoff?
+
+    /// The open conversation's live connection and its composer.
     public let conversation: ChatModel
+    /// What goes with the open conversation's next message (or the new conversation's first), the source's own
+    /// menus and actions, and the panes.
+    public let workspace: WorkspaceModel
+    /// The first messages of the computer in use under way.
+    public let jobs: NewChatJobs
+    /// 遥应通知 on this phone (AppModel+Push).
+    public let push = PushModel()
 
     @ObservationIgnored let services: AppServices
     @ObservationIgnored var client: RelayClient
@@ -134,12 +166,42 @@ public final class AppModel {
     @ObservationIgnored var demoPositions: [ChatKey: ChatRecord.Position] = [:]
     /// Clears the page just left once its slide-out is over.
     @ObservationIgnored var leaving: Task<Void, Never>?
+    @ObservationIgnored var undoSerial = 0
+    /// Whether each computer has its voice service on, as asked once.
+    @ObservationIgnored var voiceOn: [String: Bool] = [:]
+    /// Archives under way by row; 撤销 waits for its own to finish first.
+    @ObservationIgnored var archiving: [String: Task<Bool, Never>] = [:]
+    /// The new conversation's sheet being filled and opened (tests wait for it).
+    @ObservationIgnored var applying: Task<Void, Never>?
+    /// The restore 撤销 started (tests wait for it).
+    @ObservationIgnored var restoring: Task<Void, Never>?
+    /// The sign-in and computer [drafts] were read for, and the rows changed since that read began.
+    @ObservationIgnored var draftsFor: String?
+    @ObservationIgnored var draftsTouched: Set<String> = []
 
     public init(services: AppServices) {
         self.services = services
         origin = services.defaultOrigin
         client = RelayClient(origin: services.defaultOrigin, transport: services.transport, vault: services.vault)
-        conversation = ChatModel(pacer: services.pacer)
+        let conversation = ChatModel(pacer: services.pacer, store: services.store, newID: services.newID, now: services.now)
+        let workspace = WorkspaceModel(store: services.store, newID: services.newID, now: services.now)
+        conversation.extras = { try workspace.sendExtras() }
+        conversation.boundSettings = { workspace.boundSettings() }
+        conversation.sentExtras = { key, extras in workspace.clearSent(key, extras) }
+        conversation.restoreExtras = { key, body in try workspace.restoreSent(key, body) }
+        // A tap waiting on the computer holds the state polls (web claude-ui.js `choosing`).
+        conversation.pollPaused = { workspace.busy || workspace.pressing || conversation.submitting }
+        workspace.changed = { conversation.refreshControl() }
+        workspace.stateRead = { key, raw in conversation.applyState(key, raw) }
+        self.conversation = conversation
+        self.workspace = workspace
+        jobs = NewChatJobs(pacer: services.pacer, store: services.store, now: services.now)
+        workspace.created = { [weak self] job in self?.jobCreated(job) }
+        conversation.draftLeft = { [weak self] key, words in self?.noteDraft(key, words) }
+        jobs.settle = { [weak self] job in
+            guard let self, self.screen == .reading, self.chat?.id == job.preview else { return }
+            self.finishJob(job)
+        }
     }
 
     // MARK: Operations
@@ -210,6 +272,8 @@ public final class AppModel {
         listCursor = nil
         listMore = false
         hidden = []
+        drafts = [:]
+        draftsFor = nil
         moreKids = [:]
         sources = SourceInfo()
         tree = [:]
@@ -217,6 +281,9 @@ public final class AppModel {
         treeTask?.cancel()
         treeMore = [:]
         treeAt = nil
+        pendingNew = nil
+        jobSheet = nil
+        undo = nil
         clearReading()
     }
 
@@ -233,6 +300,7 @@ public final class AppModel {
         hitMore = false
         searched = false
         searchQuery = ""
+        handoff = nil
     }
 
     func persistSelection(scope: String, device: String, chat: String = "", title: String = "") async {
@@ -367,10 +435,12 @@ public final class AppModel {
                                chat: sameOwner ? previousChat?.id ?? "" : "", title: sameOwner ? previousChat?.title ?? "" : "")
     }
 
-    /// 退出登录 (web account menu): the service forgets the sign-in, this phone its cookie and where it was.
+    /// 退出登录 (web account menu): the service forgets the sign-in and this phone's 遥应通知, this phone its cookie
+    /// and where it was.
     public func logout() {
         operation { [weak self] g in
             guard let self else { return }
+            await self.pushSignOut()
             try? await self.client.logout()
             await self.persistSelection(scope: self.scope, device: "")
             guard self.current(g) else { return }
@@ -485,19 +555,28 @@ public final class AppModel {
     /// The app came to the front or went to the background (not a brief pull of Control Center).
     public func setForeground(_ active: Bool) {
         foreground = active
+        if !active { Task { await conversation.flushDraft() } }
         live()
     }
 
     /// Binds what should be running to what is shown: the open conversation's live connection, the list's 10 s
-    /// read and 我的电脑's 15 s read, all only in the foreground.
+    /// read and 我的电脑's 15 s read, the new conversations' looks, all only in the foreground. Off a conversation,
+    /// the workspace holds the new conversation's draft ("@new"). A new conversation's page has no state yet:
+    /// drafts only.
     public func live() {
         var key: ChatKey?
         if screen == .reading, !expired, let device, let chat { key = ChatKey(scope: scope, device: device.id, app: app, chat: chat.id) }
+        let newPage = isNewPage(key?.chat)
         pollList(foreground && screen == .chats && device != nil && !expired)
         pollDevices(foreground && screen == .devices && account != nil && !fixture)
-        conversation.bind(key, client: client, clientGeneration: clientGeneration, active: foreground, synthetic: fixture) { [weak self] frame, key in
+        conversation.bind(key, client: client, clientGeneration: clientGeneration, active: foreground && !newPage, synthetic: fixture) { [weak self] frame, key in
             self?.apply(frame, for: key)
         }
+        let draft = device.flatMap { device in expired ? nil : ChatKey(scope: scope, device: device.id, app: app, chat: key?.chat ?? "@new") }
+        workspace.bind(draft, client: client, clientGeneration: clientGeneration, synthetic: fixture)
+        jobs.bind(scope: scope, device: expired ? nil : device?.id, client: client, synthetic: fixture)
+        jobs.setForeground(foreground)
+        jobs.onScreen = newPage ? key?.chat : nil
     }
 
     /// 外观: 跟随系统 / 浅色 / 深色.

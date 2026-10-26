@@ -12,6 +12,7 @@ from aiohttp import web, ClientSession, ClientTimeout, ClientError
 from relay_accounts import TTL, digest
 from relay_identity import Identity, Limited, BindingError
 from relay_mail import Mailer
+from relay_push import Push, from_env as push_sender
 from relay_transport import TunnelHub, MAX_BODY, REQUEST_HEADERS, RESPONSE_HEADERS
 from relay_pages import scoped_page, device_error_page
 
@@ -35,7 +36,7 @@ def clean_target(value):
 REASONS={400:'请求无效',401:'请先登录',403:'没有权限',404:'找不到',405:'请求无效',413:'请求过大',421:'请求无效',429:'太频繁了，稍后再试',502:'电脑连接中断，请重试',503:'暂时不可用'}
 
 class Service:
-    def __init__(self, origin, store, mailer=None, trusted_proxy=False):
+    def __init__(self, origin, store, mailer=None, trusted_proxy=False, sender=None):
         p=urlsplit(origin)
         if p.scheme!='https' or not p.netloc or p.path or p.username or p.query or p.fragment:
             raise ValueError('HTTPS origin required')
@@ -43,6 +44,8 @@ class Service:
         self.store=store
         self.mailer=mailer or Mailer(origin)
         self.hub=TunnelHub(store)
+        # 遥应's own notifications (relay_push.py): off until the server has an APNs key (configure-push.py)
+        self.push=Push(store,self.hub,sender if sender is not None else push_sender())
         self.trusted_proxy=trusted_proxy
         self.kdf=asyncio.Semaphore(2);self.kdf_ip={}  # source address -> [lock, requests holding or awaiting it]
         self.legacy_counts={}
@@ -51,9 +54,11 @@ class Service:
         self.app.router.add_get('/tunnel/connect',self.hub.control)
         self.app.router.add_get('/tunnel/stream/{stream:[0-9a-f]{32}}',self.hub.stream)
         self.app.router.add_route('*','/{tail:.*}',self.route)
+        self.app.on_startup.append(self.push.start)
         self.app.on_cleanup.append(self.close)
 
     async def close(self,app):
+        await self.push.stop()
         for task in self.availability_tasks.values():task.cancel()
         await asyncio.gather(*self.availability_tasks.values(),return_exceptions=True)
         for ident in list(self.hub.connections): await self.hub.disconnect(ident)
@@ -261,6 +266,10 @@ class Service:
             if not await self.connectable(row,fresh=True):
                 return web.json_response({'error':'电脑已离线，请等待上线后再连接','code':'device_offline'},status=409,headers={'Cache-Control':'no-store'})
             result['url']='/d/'+ident+'/'
+        elif action.startswith('push/'):  # 遥应通知 on this phone (relay_push.py)
+            if action!='push/state' and not self.push.available:
+                return web.json_response({'error':'服务器还没开通遥应通知','code':'push_unavailable'},status=409,headers={'Cache-Control':'no-store'})
+            result=await self.push.account(action[5:],token,data)
         else: raise web.HTTPNotFound()
         response=web.json_response(result,headers={'Cache-Control':'no-store'})
         if session is not None:

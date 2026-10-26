@@ -2,9 +2,9 @@ import SwiftUI
 import TeleplyModel
 import TeleplyState
 
-/// The conversation page's reading part (spec 4.3; Android ChatScreen): the title with project and source, the
-/// context ring and ⋯ in the title bar; the messages scroll under it. Following the bottom only while the reader is
-/// there; reading above keeps its place and "有新消息 ↓" appears (B09). Sending arrives in 0.3.0.
+/// The conversation page (spec 4.3; Android ChatScreen): the title with project and source, 停止这一轮, the context
+/// ring and ⋯ in the title bar; the messages scroll under it and under the glass input card. Following the bottom
+/// only while the reader is there; reading above keeps its place and "有新消息 ↓" appears (B09).
 struct ConversationView: View {
     let model: AppModel
     @State private var position = ScrollPosition(idType: String.self)
@@ -18,16 +18,50 @@ struct ConversationView: View {
     /// The first message before 加载更早消息, kept in view when the older ones arrive above it.
     @State private var keepTop: String?
     @State private var saveTick = 0
+    @State private var pendingShown = false
+    @State private var promptsShown = false
+    /// 从电脑选择文件 was tapped in an empty 对话文件: the picker opens when that sheet has gone.
+    @State private var pickAfterFiles = false
+    /// The question bar's tap moves VoiceOver to the first card too (spec 7).
+    @AccessibilityFocusState private var cardFocused: Bool
 
     var body: some View {
         let control = model.conversation.control
         let roles = timelineRoles(model.messages, app: model.app, raw: control.raw, running: control.running, asking: control.questions)
-        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, busy: model.busy)
+        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, diff: { model.workspace.diff($0) },
+                                     files: { model.workspace.filesOf(message: $0) }, busy: model.busy)
+        let submissions = model.conversation.submissions
+        let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
+        // Sends still on their way that the record does not show yet (Android outbox).
+        let outbox = submissions.filter { record in
+            record.action == "send" && record.label == "提交中" && !model.messages.contains { $0.request == record.request }
+        }
+        let cards = inlineCards(app: model.conversation.key?.app ?? model.app, raw: control.raw)
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // A plain stack, not a lazy one: with LazyVStack the area above the input card went blank after the
+            // keyboard came up (0.3.0 screenshots on iOS 26.5, two runs of three). Pages hold 60 messages, the
+            // long demo 200; how that scrolls on a phone is T04.
+            VStack(alignment: .leading, spacing: 0) {
                 historyTools
+                newFirst
                 ForEach(Array(zip(model.messages, roles)), id: \.0.id) { message, role in
-                    TimelineItem(message: message, role: role, raw: control.raw, folds: $folds, actions: actions)
+                    TimelineItem(model: model, message: message, role: role, raw: control.raw,
+                                 receipt: message.request.isEmpty ? nil : receipts[message.request], folds: $folds, actions: actions)
+                }
+                // Questions and approvals where the source asked: at the end of its turn (spec 4.3).
+                if !cards.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(cards) { card in
+                            if card.id == cards.first?.id {
+                                InlineCardView(model: model, card: card)
+                                    .accessibilityFocused($cardFocused)
+                            } else {
+                                InlineCardView(model: model, card: card)
+                            }
+                        }
+                    }
+                    .padding(.top, 16)
+                    .id("interactions")
                 }
                 if model.newerAvailable {
                     Button("回到最新") {
@@ -38,6 +72,10 @@ struct ConversationView: View {
                     .disabled(model.busy)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 16)
+                }
+                ForEach(outbox.reversed()) { record in
+                    UserBubble(message: Message(id: record.request, role: "user", text: record.text), actions: actions, receipt: record.label, sending: true)
+                        .padding(.top, 16)
                 }
             }
             .scrollTargetLayout()
@@ -65,7 +103,16 @@ struct ConversationView: View {
         }
         .background(Palette.page)
         .safeAreaBar(edge: .top) { notes(control: control) }
-        .overlay(alignment: .bottom) { newMessagesPill }
+        .safeAreaBar(edge: .bottom) {
+            VStack(spacing: 0) {
+                newMessagesPill
+                InputArea(model: model) {
+                    withAnimation(.easeOut(duration: 0.3)) { position.scrollTo(id: "interactions", anchor: .top) }
+                    cardFocused = true
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
         .toolbar { toolbar(control: control) }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarRole(.editor)
@@ -75,16 +122,59 @@ struct ConversationView: View {
         .onChange(of: model.screen) { if model.screen != .reading { saveAnchor() } }
         .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
         .sheet(item: $selecting) { message in SelectTextSheet(text: message.text) }
+        .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
+        .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
+        .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } }),
+               onDismiss: {
+                   // 从电脑选择文件 from an empty 对话文件: its sheet comes once this one has gone.
+                   if pickAfterFiles {
+                       pickAfterFiles = false
+                       model.workspace.openPicker("remote")
+                   }
+               }) {
+            FilesSheet(model: model) {
+                pickAfterFiles = true
+                model.workspace.close()
+            }
+        }
+        .sheet(isPresented: Binding(get: { model.workspace.picker != nil && model.workspace.key?.chat != "@new" },
+                                    set: { if !$0 { model.workspace.closePicker() } })) {
+            PickerSheet(model: model)
+        }
     }
 
     // MARK: Title bar
 
     @ToolbarContentBuilder
     private func toolbar(control: Control) -> some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        // The middle of the bar takes what the back button and the right side leave; the title sits left in it, so it
+        // starts beside the back button (spec 4.3) without a fixed width.
+        ToolbarItem(placement: .principal) {
             ConversationTitle(model: model)
         }
         .sharedBackgroundVisibility(.hidden)
+        // A new conversation's page has nothing to stop and no menu yet (web .new-provisional).
+        if !isNewPage(model.chat?.id) {
+            conversationTools(control: control)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func conversationTools(control: Control) -> some ToolbarContent {
+        if canStop(control) {
+            ToolbarItem(placement: .topBarTrailing) {
+                StopPill(enabled: control.available && !model.conversation.submitting && !model.workspace.busy) {
+                    let token = control.raw["stop_token"].string()
+                    if model.app == "claude" {
+                        model.workspace.action("claude/choose", ["token": .string(token)])
+                    } else {
+                        model.conversation.stop()
+                    }
+                }
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
+        }
         ToolbarItem(placement: .topBarTrailing) {
             let runtime = runtimeOf(app: model.app, control: control.raw, page: model.runtime)
             HStack(spacing: 0) {
@@ -92,6 +182,8 @@ struct ConversationView: View {
                     ContextRing(percent: percent) { runtimeShown = true }
                 }
                 Menu {
+                    Button("电脑上打开", systemImage: "arrow.up.forward.app") { model.workspace.openOnComputer() }
+                        .disabled(model.workspace.busy)
                     Button("会话状态", systemImage: "info.circle") {
                         // The menu closes first; the panel then opens from the ring.
                         Task {
@@ -100,6 +192,16 @@ struct ConversationView: View {
                         }
                     }
                     Button("查找消息", systemImage: "magnifyingglass") { searchShown = true }
+                    Button("对话文件", systemImage: "doc.on.doc") { model.workspace.panel("files") }
+                    Button("常用提示语", systemImage: "text.quote") { promptsShown = true }
+                    let unconfirmed = model.conversation.submissions.filter { ["提交中", "送达状态待确认"].contains($0.label) }.count
+                    if unconfirmed > 0 {
+                        Button {
+                            pendingShown = true
+                        } label: {
+                            Label("待核对发送记录（\(unconfirmed)）", systemImage: "clock")
+                        }
+                    }
                     let folder = folderLine
                     if !folder.isEmpty {
                         Section {
@@ -118,6 +220,11 @@ struct ConversationView: View {
                     .presentationCompactAdaptation(.popover)
             }
         }
+    }
+
+    /// 停止这一轮 shows while the source runs; Claude stops with the token its desktop gives.
+    private func canStop(_ control: Control) -> Bool {
+        control.running && (model.app != "claude" || !control.raw["stop_token"].string().isEmpty)
     }
 
     /// The folder the conversation runs in, grey at the menu's bottom (the web has it after the first two rows).
@@ -165,7 +272,7 @@ struct ConversationView: View {
                     .foregroundStyle(Palette.muted)
                     .padding(.vertical, 8)
             }
-            if !model.busy && model.messages.isEmpty {
+            if !model.busy && model.messages.isEmpty && !isNewPage(model.chat?.id) && handoff == nil {
                 Text("暂无消息")
                     .noteFont()
                     .foregroundStyle(Palette.muted)
@@ -173,6 +280,32 @@ struct ConversationView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// A first message whose conversation the computer has not made yet ends up here (web new-chat-ui.js): the page
+    /// shows it with where it stands; once made, the conversation shows it until its record has it.
+    @ViewBuilder
+    private var newFirst: some View {
+        if isNewPage(model.chat?.id) {
+            if let job = model.jobs.jobs.first(where: { $0.preview == model.chat?.id }) {
+                NewFirstMessage(text: job.text, status: newJobInline(job), problem: job.problem) { model.openJob(job) }
+            } else {
+                Text("这个创建请求已经处理过了，请从对话列表打开。")
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+            }
+        } else if let handoff {
+            NewFirstMessage(text: handoff.text, status: "", problem: false)
+        }
+    }
+
+    /// The first message of a conversation just made, until its record shows a message of the user's.
+    private var handoff: NewHandoff? {
+        guard let handoff = model.handoff, handoff.id == model.chat?.id, handoff.app == model.app,
+              !model.messages.contains(where: { $0.role == "user" }) else { return nil }
+        return handoff
     }
 
     @ViewBuilder
@@ -239,6 +372,28 @@ struct ConversationView: View {
     }
 }
 
+/// 停止这一轮 (web .stop-turn): a light red capsule with red text in the title bar, kept apart from the ring and ⋯.
+private struct StopPill: View {
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("停止这一轮")
+                .captionFont(.medium)
+                .foregroundStyle(Palette.stopInk.opacity(enabled ? 1 : 0.45))
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 36)
+                .background(Palette.stopFill, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!enabled)
+        .accessibilityHint(Text(enabled ? "" : "暂时不能控制这个来源"))
+    }
+}
+
 /// The title and, under it, the project and source (web #cvTitle, #cvMeta), left beside the back button.
 private struct ConversationTitle: View {
     let model: AppModel
@@ -259,7 +414,7 @@ private struct ConversationTitle: View {
                     .lineLimit(1)
             }
         }
-        .frame(maxWidth: 260, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
     }
 }

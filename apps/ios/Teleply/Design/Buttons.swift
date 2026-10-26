@@ -41,9 +41,11 @@ struct PillStyle: ButtonStyle {
 
     var kind = Kind.secondary
     var minHeight: CGFloat = 44
+    /// Takes the whole width it is given (a card's 提交回答, 执行计划).
+    var wide = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Pill(configuration: configuration, kind: kind, minHeight: minHeight)
+        Pill(configuration: configuration, kind: kind, minHeight: minHeight, wide: wide)
     }
 }
 
@@ -51,6 +53,7 @@ private struct Pill: View {
     let configuration: ButtonStyleConfiguration
     let kind: PillStyle.Kind
     let minHeight: CGFloat
+    let wide: Bool
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -60,7 +63,7 @@ private struct Pill: View {
             .lineLimit(1)
             .foregroundStyle(ink)
             .padding(.horizontal, kind == .text ? 10 : 16)
-            .frame(minHeight: minHeight)
+            .frame(maxWidth: wide ? .infinity : nil, minHeight: minHeight)
             .background(fill, in: Capsule())
             .contentShape(Capsule())
             .opacity(isEnabled ? 1 : 0.35)
