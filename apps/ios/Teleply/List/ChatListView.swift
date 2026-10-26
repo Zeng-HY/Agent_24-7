@@ -130,6 +130,8 @@ struct ChatListView: View {
         case .chat(let chat, let first):
             let key = rowKey(chat)
             Button {
+                // The lift that ends a sidebar swipe started on this row is the swipe's.
+                guard chrome.tapsAllowed else { return }
                 if chat.group {
                     withAnimation(.easeOut(duration: 0.2)) { folds.toggle(key) }
                 } else if !chat.kind.isEmpty {
@@ -138,7 +140,7 @@ struct ChatListView: View {
                     model.open(chat)
                 }
             } label: {
-                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil)
+                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil, draft: model.drafts[key])
             }
             .buttonStyle(RowPressStyle())
             .disabled(model.busy)
@@ -157,11 +159,12 @@ struct ChatListView: View {
             }
         case .fold(let chat):
             let key = rowKey(chat)
-            FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning) {
+            FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning, toggle: chrome.tap {
                 withAnimation(.easeOut(duration: 0.2)) { folds.toggle(key) }
-            }
+            })
         case .child(let parent, let child):
             Button {
+                guard chrome.tapsAllowed else { return }
                 model.openChild(child, parent: parent)
             } label: {
                 ChildRow(chat: child)

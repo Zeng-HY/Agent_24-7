@@ -62,6 +62,13 @@ struct DrawerHost<Content: View>: View {
             // On the whole workspace, beside its scrolling and taps. It sits on what stays: a view that leaves takes
             // its gesture with it, and the drag would then never end (what left the drawer stuck in 0.3.0).
             .simultaneousGesture(swipe(width), including: enabled || chrome.drawer ? .all : .subviews)
+            // Ended or taken away: taps count again a moment later.
+            .onChange(of: pull) {
+                if pull == .idle, chrome.pulling {
+                    chrome.pulling = false
+                    chrome.pulledAt = Date()
+                }
+            }
             .animation(reduceMotion ? .easeOut(duration: 0.08) : .drawer(), value: chrome.drawer)
         }
     }
@@ -93,11 +100,13 @@ struct DrawerHost<Content: View>: View {
                     pull = moving ? .moving(opening ? -width : 0) : .ignored
                 }
                 guard case .moving = pull, let opening = decided.opening else { return }
+                chrome.pulling = true
                 pull = .moving(opening ? min(0, max(-width, dx - width)) : min(0, dx))
             }
             .onEnded { value in
                 guard let opening = decided.opening else { return }
                 decided.opening = nil
+                chrome.pulledAt = Date()
                 let dx = value.translation.width
                 let flung = value.predictedEndTranslation.width
                 if opening {

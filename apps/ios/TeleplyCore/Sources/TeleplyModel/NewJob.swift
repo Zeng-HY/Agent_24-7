@@ -57,6 +57,12 @@ public func oneLine(_ text: String, limit: Int) -> String {
     String(text.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(limit))
 }
 
+/// A conversation's unsent words as the list shows them after a red [草稿] (WeChat): one line, at most 100
+/// characters; empty when there is nothing but spaces.
+public func draftPreview(_ text: String) -> String {
+    oneLine(text, limit: 100)
+}
+
 /// Where a job stands, in the web's words (stateText).
 public func newJobState(_ job: NewJob) -> String {
     switch job.state {

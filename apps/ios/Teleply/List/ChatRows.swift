@@ -14,11 +14,13 @@ func statusColor(_ status: String) -> Color {
 
 /// Web .conv row (static/reading-ui.js; Android ChatRow): source badge, title, time; state and folder; one line
 /// of preview. A group row (未分组的会话) says how many sessions it holds and folds them ([open]); a child found
-/// by search says whose it is.
+/// by search says whose it is. Words left unsent in the conversation's box show instead of the preview, after a red
+/// [草稿] (WeChat; user 10-26).
 struct ChatRow: View {
     let chat: Chat
     var first = false
     var open: Bool?
+    var draft: String?
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -71,7 +73,13 @@ struct ChatRow: View {
                         }
                     }
                 }
-                if !chat.preview.isEmpty {
+                if let draft {
+                    Text("\(Text("[草稿]").foregroundStyle(Palette.danger)) \(draft)")
+                        .smallBodyFont()
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(large ? 2 : 1)
+                        .accessibilityLabel(Text("草稿：" + draft))
+                } else if !chat.preview.isEmpty {
                     Text(chat.preview)
                         .smallBodyFont()
                         .foregroundStyle(Palette.muted)

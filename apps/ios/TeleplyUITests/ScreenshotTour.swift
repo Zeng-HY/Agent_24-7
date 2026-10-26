@@ -4,8 +4,8 @@ import XCTest
 /// service is down, the demo's 登录, 我的电脑, the list, the sidebar, a conversation with Markdown and code, 会话状态,
 /// sending, Claude's cards; from 0.4.0 the question and approval cards, 新建对话 and its job, 对话文件, a file, 本轮差异,
 /// ＋, 左滑归档; 设置 with 已归档对话, and 开发者选项; from 0.4.1 the sidebar swiped out and back, a file picked from the
-/// computer, DeepSeek's result file in Quick Look. Each picture is a test attachment; with TEST_RUNNER_SHOTS_DIR on
-/// the xcodebuild line it is also written there.
+/// computer, DeepSeek's result file in Quick Look; from 0.4.2 the list's red [草稿]. Each picture is a test attachment;
+/// with TEST_RUNNER_SHOTS_DIR on the xcodebuild line it is also written there.
 final class ScreenshotTour: XCTestCase {
     @MainActor func testLight() throws {
         try tour(variant: "light", appearance: "light")
@@ -63,6 +63,9 @@ final class ScreenshotTour: XCTestCase {
             XCTAssertTrue(app.staticTexts["电脑遥控"].waitForNonExistence(timeout: 5), "a swipe left did not close the sidebar")
             if app.staticTexts["电脑遥控"].exists { app.buttons["关闭导航"].firstMatch.tap() }
         }
+        // The swipe started on this row and must not have opened it (0.4.1 tour); a tap a moment later does.
+        XCTAssertFalse(app.staticTexts["原生阅读示例"].exists, "a swipe on a row opened its conversation")
+        sleep(1)
 
         first.tap()
         XCTAssertTrue(app.staticTexts["原生阅读示例"].waitForExistence(timeout: 10), "the conversation never opened")
@@ -173,7 +176,15 @@ final class ScreenshotTour: XCTestCase {
             }
         }
 
+        // 0.4.2: words left in the box show on the list after a red [草稿].
+        let box = composer(app)
+        if box.waitForExistence(timeout: 5), focus(box) {
+            box.typeText("还没发出去的话")
+        }
         back(app)
+        let marked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "草稿：还没发出去的话")).firstMatch
+        XCTAssertTrue(marked.waitForExistence(timeout: 5), "the list showed no 草稿 for a box left with words")
+        if marked.exists { snap(app, page: "34-draft", variant: variant) }
         let cards = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Claude 下一步示例")).firstMatch
         if cards.waitForExistence(timeout: 10) {
             cards.tap()

@@ -15,8 +15,39 @@ extension AppModel {
         return apps.contains(wanted) ? wanted : apps.first ?? wanted
     }
 
+    /// The list's 草稿 for the computer in use, read from this phone once per sign-in and computer. Rows whose box
+    /// was left while it read keep what the box said.
+    func loadDrafts() async {
+        guard let device else { return }
+        let owner = scope + "\n" + device.id
+        guard draftsFor != owner else { return }
+        draftsFor = owner
+        drafts = [:]
+        draftsTouched = []
+        guard !fixture else { return }
+        let found = await services.store.drafts(scope: scope, device: device.id)
+        guard draftsFor == owner else { return }
+        for (key, words) in found where key.chat != "@new" && !isNewPage(key.chat) {
+            let row = key.app + ":" + key.chat
+            let line = draftPreview(words)
+            if !draftsTouched.contains(row), !line.isEmpty { drafts[row] = line }
+        }
+    }
+
+    /// A conversation left with [words] in its box: its row shows them after [草稿], or no longer when the box is
+    /// empty (sent or cleared). A new conversation's page is no row.
+    func noteDraft(_ key: ChatKey, _ words: String) {
+        guard key.scope == scope, key.device == device?.id, key.chat != "@new", !isNewPage(key.chat) else { return }
+        let row = key.app + ":" + key.chat
+        let line = draftPreview(words)
+        let next: String? = line.isEmpty ? nil : line
+        draftsTouched.insert(row)
+        if drafts[row] != next { drafts[row] = next }
+    }
+
     func loadChats(_ g: Int, more: Bool = false) async throws {
         guard let device else { return }
+        await loadDrafts()
         let source = listSource
         let page = try await client.chatList(device: device.id, app: source, query: query, cursor: more ? listCursor : nil, sort: listSort, status: listStatus)
         guard current(g), self.device?.id == device.id, listSource == source else { return }
