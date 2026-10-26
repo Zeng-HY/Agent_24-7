@@ -58,5 +58,17 @@ foreach ($artifact in $build.artifacts) {
     Invoke-WebRequest -Headers $headers -Uri $artifact.url -OutFile $file
     Write-Host "Downloaded $($artifact.name)"
 }
+
+# Each step's status, and its log when the API offers one, so a failure can be read without the website.
+$step = 0
+foreach ($action in @($build.buildActions)) {
+    $step++
+    Write-Host ('step {0:00} {1,-10} {2}' -f $step, $action.status, $action.name)
+    if ($action.logUrl) {
+        $name = ($action.name -replace '[^\w\-]+', '-').Trim('-')
+        try { Invoke-WebRequest -Headers $headers -Uri $action.logUrl -OutFile (Join-Path $target ('{0:00}-{1}.log' -f $step, $name)) }
+        catch { Write-Host "  (log not downloaded: $($_.Exception.Message))" }
+    }
+}
 Write-Host "Build $buildId $($build.status) after $([int]((Get-Date) - $started).TotalMinutes) min; artifacts in $target"
 if ($build.status -ne 'finished') { exit 1 }
