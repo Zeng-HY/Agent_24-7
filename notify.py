@@ -6,6 +6,9 @@ for all its apps, so nothing runs on the phone meanwhile. The address is pasted 
 kept in remote_config.json as "bark"; it is not shown again and not written to the log.
 Bark has no Android app. An Android phone gets them in the ntfy app, which subscribes to this service itself over
 Tailscale (ntfy_feed.py); turned on on the page, kept as "ntfy": true. Both can be on, for two phones.
+遥应's own notifications on the iPhone (10-26) need nothing set here: while an account has such a phone, the relay
+reads GET /api/notify/push (ntfy_feed.relay_stream) and is told only which app, which conversation and whether it is
+done, failed or waiting; it writes the words and asks Apple to deliver them (relay_push.py).
 
 Every 10 s the newest conversations are looked at, and a file that grew is read from its end. A turn that ended there
 after this service started (Codex: task_complete; Claude: an answer that stopped for good, not to use a tool) is sent
@@ -190,6 +193,7 @@ class Notifier:
         self.cfg, self.name, self.log, self.save = cfg, name, log, save
         self.clock, self.idle, self.sender = clock, idle, sender
         self.feed = feed or ntfy_feed.Feed(clock=clock)  # what the ntfy app on an Android phone listens to
+        self.relay = ntfy_feed.Feed(topic="teleply-push", clock=clock)  # what the relay reads for 遥应's own
         self._own_url = page_url or (lambda: machines.own_url(machines.tailscale_status()))
         self.lock = threading.Lock()
         self.since = clock()                         # turns that ended before this are not sent
@@ -209,12 +213,18 @@ class Notifier:
     def ntfy_on(self) -> bool:
         return self.cfg.get("ntfy") is True
 
+    def relay_on(self) -> bool:
+        """The relay reads this computer's events now, or did lately (12 h, what the stream keeps for it): an account
+        with a phone for 遥应's own notifications. A relay that comes back gets what it missed."""
+        seen = self.relay.last_seen
+        return self.relay.listening > 0 or bool(seen and self.clock() - seen < ntfy_feed.KEEP_SECONDS)
+
     def public(self) -> dict:
         found, seen = self.address(), self.feed.last_seen
         ntfy = {"on": self.ntfy_on(), "topic": self.feed.topic, "server": self.url.rstrip("/"),
                 "listening": self.feed.listening, "last_seen": time.strftime("%m-%d %H:%M", time.localtime(seen)) if seen else ""}
         return {"configured": bool(found), "server": urlsplit(found["server"]).netloc if found else "", "ntfy": ntfy,
-                "recent": list(self.recent)[::-1]}
+                "relay": {"listening": self.relay.listening > 0}, "recent": list(self.recent)[::-1]}
 
     def set_address(self, text: str) -> dict:
         """Keep the pasted address once a first notification went through; an empty one turns them off."""
@@ -228,7 +238,7 @@ class Notifier:
         self.sender(found, f"{self.name}的通知设好了", "对话做完时会推到这里，点通知能打开那个对话。",
                     group=self.name, url=self.page_url())
         with self.lock:
-            if self.address() is None and not self.ntfy_on():
+            if self.address() is None and not self.ntfy_on() and not self.relay_on():
                 self._count_from_now()
             self.cfg["bark"] = found
             self.save()
@@ -238,7 +248,7 @@ class Notifier:
     def set_ntfy(self, on: bool) -> dict:
         """Turn on (or off) what the ntfy app gets; turned on, a first one goes to the phones listening now."""
         with self.lock:
-            if on and self.address() is None and not self.ntfy_on():
+            if on and self.address() is None and not self.ntfy_on() and not self.relay_on():
                 self._count_from_now()
             if on:
                 self.cfg["ntfy"] = True
@@ -312,8 +322,8 @@ class Notifier:
 
     def look(self) -> None:
         found = self.address()
-        if found is None and not self.ntfy_on():  # nothing to send to; once Bark or ntfy is on, only later turns count
-            self.since = None
+        if found is None and not self.ntfy_on() and not self.relay_on():
+            self.since = None  # nothing to send to; once Bark, ntfy or the relay is on, only later turns count
             return
         if self.since is None:
             self._count_from_now()
@@ -405,6 +415,10 @@ class Notifier:
             self._note(what, "没推：" + why)
             return
         body, subtitle, outcomes = _preview(end["text"]), f"{self.name} · {app} {done}", []
+        if self.relay_on():  # what happened, not what was said: the relay writes the words (relay_push.py)
+            kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
+            self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"]})
+            outcomes.append("遥应通知已交给中转" if self.relay.listening else "中转现在没连着，连上后会补报")
         if self.ntfy_on():  # kept for a phone that is away, which gets it when it connects again (ntfy_feed.py)
             self.feed.publish(title, f"{subtitle}\n{body}", click=self.page_url(item))
             outcomes.append("ntfy 已推到" if self.feed.listening else "ntfy 现在没连着，连上后会收到")

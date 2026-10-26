@@ -15,8 +15,9 @@ computer at 127.0.0.1, Funnel, a tagged device, or bind other than 127.0.0.1) th
 The token lives in remote_config.json next to this file, with "name" (this computer, as the phone shows it),
 "voice": false on a computer without the microphone, and optionally "apps": ["codex"] to override what is found.
 "bark" is the phone's notification address, pasted on the page (notify.py); "ntfy": true when the ntfy app on an
-Android phone gets them from this service (ntfy_feed.py), turned on on the page. "phone_files": the folder files sent
-up from the phone go into (pc_files.py; 下载\\手机传来的文件 when not set).
+Android phone gets them from this service (ntfy_feed.py), turned on on the page. 遥应's own notifications are set
+on the phone: the relay reads /api/notify/push while the account has such a phone (relay_push.py). "phone_files":
+the folder files sent up from the phone go into (pc_files.py; 下载\\手机传来的文件 when not set).
 """
 
 from __future__ import annotations
@@ -390,6 +391,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/notify":  # 设置 → 手机通知: whether an address is set (never the address) and the last outcomes
             self._json(self.server.notifier.public())
+            return
+        if path == "/api/notify/push":  # the relay reads what happened, for 遥应's own notifications (relay_push.py)
+            ntfy_feed.relay_stream(self, self.server.notifier.relay, self._query().get("since", "none"))
             return
         if path == "/api/voice/status":
             self._json({"local": self.server.local_asr.status(), "cloud": self.server.voice.status()})

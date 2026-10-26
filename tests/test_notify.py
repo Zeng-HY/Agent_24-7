@@ -198,7 +198,7 @@ class Watcher(unittest.TestCase):
         self.assertEqual(self.sent[0][1]["url"], "https://pc.example.ts.net/")
         self.assertEqual(self.notifier.public(), {"configured": True, "server": "api.day.app", "recent": [],
                                                   "ntfy": {"on": False, "topic": "agent-remote", "server": "https://pc.example.ts.net",
-                                                           "listening": 0, "last_seen": ""}})
+                                                           "listening": 0, "last_seen": ""}, "relay": {"listening": False}})
 
         def refused(*a, **k):
             raise notify.NotifyError("Bark 没收下（400）：failed to get device token")
@@ -261,6 +261,45 @@ class Watcher(unittest.TestCase):
         self.assertNotIn("ntfy", self.cfg)
         with self.assertRaises(notify.NotifyError):
             self.notifier.test("ntfy")
+
+    # -- 遥应's own notifications: the relay reads what happened, never what was said (relay_push.py, 10-26)
+
+    def test_with_the_relay_reading_it_is_told_what_happened_and_nothing_of_the_conversation(self):
+        self.cfg.pop("bark")
+        self.notifier.look()
+        self.assertIsNone(self.notifier.since)  # nothing to tell: nothing read
+        with self.notifier.relay.listener():  # an account with a phone: the relay connected
+            self.notifier.look()
+            self.turn("task_complete", "t1", "**改好了**，密码是 hunter2")
+            self.notifier.look()
+            self.assertTrue(self.notifier.public()["relay"]["listening"])
+        event = self.notifier.relay.since("all")[0]
+        self.assertEqual({k: event[k] for k in ("event", "kind", "app", "chat", "title", "message")},
+                         {"event": "message", "kind": "done", "app": "codex", "chat": "x1", "title": "", "message": ""})
+        self.assertNotIn("hunter2", json.dumps(event, ensure_ascii=False))
+        self.assertNotIn("改通知", json.dumps(event, ensure_ascii=False))  # the title stays here too
+        self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · 遥应通知已交给中转")
+        self.assertEqual(self.sent, [])
+        self.turn("task_complete", "t2", "又好了")  # the relay away for a moment: kept for it to read when it is back
+        self.notifier.look()
+        self.assertEqual(len(self.notifier.relay.since("all")), 2)
+        self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · 中转现在没连着，连上后会补报")
+        self.now += 13 * 3600  # away half a day: no account here has such a phone any more, nothing is read
+        self.notifier.look()
+        self.assertFalse(self.notifier.relay_on())
+        self.assertIsNone(self.notifier.since)
+
+    def test_the_relay_hears_failed_and_waiting_and_the_quiet_rules_hold(self):
+        item, bark = {"app": "claude", "id": "c1", "title": "部署"}, self.notifier.address()
+        with self.notifier.relay.listener():
+            self.notifier._tell(bark, item, {"state": "failed", "text": "API Error"})
+            self.notifier._tell(bark, item, {"state": "done", "text": "先改方案还是先测？", "asks": True})
+            with self.notifier.watching("claude", "c1"):
+                self.notifier._tell(bark, item, {"state": "done", "text": "好了"})
+            self.idle = 30.0
+            self.notifier._tell(bark, item, {"state": "done", "text": "好了"})
+        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["failed", "waiting"])
+        self.assertEqual(len(self.sent), 2)  # Bark is on here too: the same two
 
 
 class PersonIdle(unittest.TestCase):
