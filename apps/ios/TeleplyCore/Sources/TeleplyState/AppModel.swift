@@ -36,10 +36,16 @@ public struct AppServices: Sendable {
     /// Teleply's own service (spec 4.8): used until another address is set under 开发者选项.
     public var defaultOrigin: ServiceOrigin
     public var newScope: @Sendable () -> String
+    /// A send's request id (Android UUID.randomUUID()).
+    public var newID: @Sendable () -> String
+    /// Milliseconds, for when a send was made.
+    public var now: @Sendable () -> Int64
 
     public init(store: LocalStore, vault: any CookieVault, transport: any RelayTransport, demo: @escaping @Sendable () -> any RelayTransport,
                 pacer: any Pacer = RealPacer(), defaultOrigin: ServiceOrigin = .default,
-                newScope: @escaping @Sendable () -> String = { UUID().uuidString }) {
+                newScope: @escaping @Sendable () -> String = { UUID().uuidString },
+                newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
+                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.store = store
         self.vault = vault
         self.transport = transport
@@ -47,6 +53,8 @@ public struct AppServices: Sendable {
         self.pacer = pacer
         self.defaultOrigin = defaultOrigin
         self.newScope = newScope
+        self.newID = newID
+        self.now = now
     }
 }
 
@@ -114,8 +122,10 @@ public final class AppModel {
     public internal(set) var searched = false
     public internal(set) var searchQuery = ""
 
-    /// The open conversation's live connection and, from phase 2, its composer.
+    /// The open conversation's live connection and its composer.
     public let conversation: ChatModel
+    /// What goes with the open conversation's next message, and the source's own menus and actions.
+    public let workspace: WorkspaceModel
 
     @ObservationIgnored let services: AppServices
     @ObservationIgnored var client: RelayClient
@@ -139,7 +149,18 @@ public final class AppModel {
         self.services = services
         origin = services.defaultOrigin
         client = RelayClient(origin: services.defaultOrigin, transport: services.transport, vault: services.vault)
-        conversation = ChatModel(pacer: services.pacer)
+        let conversation = ChatModel(pacer: services.pacer, store: services.store, newID: services.newID, now: services.now)
+        let workspace = WorkspaceModel(store: services.store, newID: services.newID)
+        conversation.extras = { try workspace.sendExtras() }
+        conversation.boundSettings = { workspace.boundSettings() }
+        conversation.sentExtras = { key, extras in workspace.clearSent(key, extras) }
+        conversation.restoreExtras = { key, body in try workspace.restoreSent(key, body) }
+        // A tap waiting on the computer holds the state polls (web claude-ui.js `choosing`).
+        conversation.pollPaused = { workspace.busy }
+        workspace.changed = { conversation.refreshControl() }
+        workspace.stateRead = { key, raw in conversation.applyState(key, raw) }
+        self.conversation = conversation
+        self.workspace = workspace
     }
 
     // MARK: Operations
@@ -485,6 +506,7 @@ public final class AppModel {
     /// The app came to the front or went to the background (not a brief pull of Control Center).
     public func setForeground(_ active: Bool) {
         foreground = active
+        if !active { Task { await conversation.flushDraft() } }
         live()
     }
 
@@ -498,6 +520,7 @@ public final class AppModel {
         conversation.bind(key, client: client, clientGeneration: clientGeneration, active: foreground, synthetic: fixture) { [weak self] frame, key in
             self?.apply(frame, for: key)
         }
+        workspace.bind(key, client: client, clientGeneration: clientGeneration, synthetic: fixture)
     }
 
     /// 外观: 跟随系统 / 浅色 / 深色.

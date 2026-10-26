@@ -231,6 +231,77 @@ public struct RelayClient: Sendable {
         return parseControl(state)
     }
 
+    // MARK: Acting on a computer
+
+    /// The computer routes the phone calls besides reading (Android RelayApi DetailRoutes).
+    public static let detailRoutes: Set<String> = [
+        "chat/new/options", "chat/folders", "chat/new/draft", "chat/new", "chat/new/state", "chat/new/retry", "chat/new/references",
+        "composer/references", "files/places", "files/list", "files/image", "files/remove", "codex/remove-attachment", "codex/attachments",
+        "chat/files", "chat/diff", "file/text", "file/meta", "deepseek/models", "deepseek/permissions", "deepseek/model", "deepseek/permission",
+        "deepseek/answer", "deepseek/approval", "claude/catalog", "claude/setting", "claude/choose", "claude/menu", "claude/close-menu",
+        "chat/projects", "chat/open", "chat/resolve", "claude/next", "claude/task", "chat/check", "chat/archive", "chat/unarchive",
+        "chat/delete", "chat/archived", "chats/children", "notify", "notify/ntfy", "notify/test", "voice/status", "voice/terms",
+        "voice/tidy", "status",
+    ]
+
+    /// A computer route outside the read set (Android detail): a GET with [query] when there is no [body], a POST
+    /// otherwise. Slow routes get their own deadline.
+    public func detail(device: String, route: String, query: [(String, String?)] = [], body: JSONValue? = nil) async throws -> JSONValue {
+        guard Self.detailRoutes.contains(route) else { throw ReadFailure("当前服务不支持此功能") }
+        let path = try Self.devicePath(device, "/api/" + route)
+        let deadline = Self.slowRoutes[route] ?? Self.defaultDeadline
+        if let body { return try await json(post(path, json: body, query: query, deadline: deadline)) }
+        return try await json(get(path, query: query, deadline: deadline))
+    }
+
+    /// A send, stop, queue action or answer, the way each source takes it (Android RelayApi.command): DeepSeek
+    /// names its routes and fields its own way; Claude sends through chat/send and does the rest with desktop
+    /// tokens; Codex takes them as they are. Posted once; never again by itself.
+    public func command(device: String, app: String, route: String, body: JSONValue) async throws -> JSONValue {
+        guard ["send", "stop", "queue-action", "answer"].contains(route) else { throw ReadFailure("当前来源不支持操作") }
+        switch app {
+        case "deepseek":
+            var outgoing = body.object
+            let actual: String
+            switch route {
+            case "send":
+                if body["intent"].string() == "auto" { outgoing["intent"] = "steer" }
+                actual = "send"
+            case "stop":
+                outgoing["expected_turn"] = .string(body["turn_id"].string())
+                actual = "stop"
+            case "queue-action":
+                // 立即补充 is "steer" for DeepSeek, 撤回 is "remove".
+                outgoing["item_id"] = .string(body["message_id"].string())
+                outgoing["action"] = .string(body["action"].string() == "promote" ? "steer" : "remove")
+                actual = "queue"
+            default:
+                actual = route
+            }
+            let result = try await json(post(Self.devicePath(device, "/api/deepseek/" + actual), json: .object(outgoing)))
+            guard route == "send", result["accepted"].bool(), case .object(var fields) = result else { return result }
+            fields["delivery_state"] = .string(outgoing["intent"]?.string() == "queue" ? "queued" : "accepted")
+            return .object(fields)
+        case "claude":
+            guard route == "send" else { throw ReadFailure("Claude 的停止与队列动作需使用当前桌面令牌") }
+            var outgoing = body.object
+            outgoing["app"] = "claude"
+            return try await json(post(Self.devicePath(device, "/api/chat/send"), json: .object(outgoing)))
+        default:
+            return try await json(post(Self.devicePath(device, "/api/codex/" + route), json: body))
+        }
+    }
+
+    /// A send's receipt by its request id (Codex, DeepSeek); Claude keeps none, its record is checked instead.
+    public func receipt(device: String, app: String, chat: String, request: String) async throws -> JSONValue {
+        guard app != "claude" else { return ["state": "unknown"] }
+        let response = try await json(get(Self.devicePath(device, "/api/\(app)/receipt"), query: [("id", chat), ("request_id", request)]))
+        guard app == "deepseek", response["state"].string() != "unknown", case .object(var fields) = response else { return response }
+        guard response["id"].string() == chat else { throw ReadFailure("回执会话身份不匹配") }
+        fields["request_id"] = .string(request)
+        return .object(fields)
+    }
+
     /// The sidebar tree (GET /api/chat/projects): apps → projects → conversations. Only the apps this computer
     /// has are in it, so it also says which source chips to show (spec 4.1, 0.8).
     public func projects(device: String) async throws -> JSONValue {

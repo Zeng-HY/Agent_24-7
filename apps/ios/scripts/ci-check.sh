@@ -14,10 +14,11 @@ mkdir -p build
 generate_project
 swift test --package-path TeleplyCore
 
+# The build machine is an M2, so the simulator builds are arm64 only; both architectures doubled the compile.
 if [ "$MODE" = compile ]; then
   xcodebuild build -project Teleply.xcodeproj -scheme Teleply -configuration Debug \
     -destination 'generic/platform=iOS Simulator' -derivedDataPath build/dd \
-    COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO | xcbeautify
+    COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO ARCHS=arm64 | xcbeautify
   exit 0
 fi
 
@@ -49,14 +50,18 @@ def rank(name):
     return (2, 0) if re.search(r"Duo|Fold", name) else (1, 0)
 phones = sorted((d for d in simctl("devices", "available")["devices"].get(runtime_id, []) if d["name"].startswith("iPhone")), key=lambda d: rank(d["name"]))
 sys.stderr.write("iPhone simulators on %s: %s\n" % (key, ", ".join(d["name"] for d in phones)))
-if phones:
+runtimes = simctl("runtimes")["runtimes"]
+types = next((r.get("supportedDeviceTypes", []) for r in runtimes if r["identifier"] == runtime_id), [])
+kinds = sorted((t for t in types if t["name"].startswith("iPhone")), key=lambda t: rank(t["name"]))
+# An existing plain phone is used as it is. When the machine only has a foldable for this runtime (build
+# 6aded501: just "iPhone Duo" on 27.1, which moves the navigation bar into a side column), a plain one is
+# made below if the runtime supports any.
+plain_kind = next((t for t in kinds if rank(t["name"])[0] == 0), None)
+if phones and (rank(phones[0]["name"])[0] == 0 or plain_kind is None):
     choice = next((d for d in phones if d["name"] == preferred), phones[0])
     sys.stderr.write("Using simulator %s (%s) on %s\n" % (choice["name"], choice["udid"], key))
     print(choice["udid"])
     sys.exit(0)
-runtimes = simctl("runtimes")["runtimes"]
-types = next((r.get("supportedDeviceTypes", []) for r in runtimes if r["identifier"] == runtime_id), [])
-kinds = sorted((t for t in types if t["name"].startswith("iPhone")), key=lambda t: rank(t["name"]))
 if not kinds:
     sys.stderr.write("No iPhone simulator for %s. Runtimes here: %s\n" % (runtime_id, ", ".join(r["identifier"] for r in runtimes)))
     sys.exit(1)
@@ -68,7 +73,7 @@ PY
 
 xcodebuild build-for-testing -project Teleply.xcodeproj -scheme Teleply -configuration Debug \
   -destination 'generic/platform=iOS Simulator' -derivedDataPath build/dd \
-  COMPILER_INDEX_STORE_ENABLE=NO | xcbeautify
+  COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 | xcbeautify
 XCTESTRUN=$(ls build/dd/Build/Products/*.xctestrun | head -n 1)
 
 rm -rf build/shots && mkdir -p build/shots

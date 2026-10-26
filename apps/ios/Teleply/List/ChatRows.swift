@@ -21,8 +21,12 @@ struct ChatRow: View {
     var open: Bool?
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        // At the largest text sizes the parts take their own lines instead of cutting the title (spec 2.3).
+        let large = typeSize.isAccessibilitySize
+        let ago = Labels.ago(chat.updated)
         VStack(alignment: .leading, spacing: 0) {
             if !first {
                 Rectangle()
@@ -30,39 +34,48 @@ struct ChatRow: View {
                     .frame(height: 1)
             }
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
+                if large {
                     if !chat.app.isEmpty { SourceBadge(app: chat.app) }
-                    Text(chat.title + (open.map { $0 ? " ▾" : " ▸" } ?? ""))
-                        .bodyFont(.semibold)
-                        .foregroundStyle(Palette.ink)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    let ago = Labels.ago(chat.updated)
-                    if !ago.isEmpty {
-                        Text(ago)
-                            .captionFont()
-                            .foregroundStyle(Palette.muted)
+                    title.lineLimit(3)
+                    if !ago.isEmpty { time(ago) }
+                } else {
+                    HStack(spacing: 8) {
+                        if !chat.app.isEmpty { SourceBadge(app: chat.app) }
+                        title
                             .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if !ago.isEmpty { time(ago) }
                     }
                 }
-                HStack(spacing: 0) {
-                    Text(Labels.status(chat.status))
-                        .noteFont(chat.status == "running" || chat.status == "waiting" ? .semibold : .regular)
-                        .foregroundStyle(statusColor(chat.status))
-                        .lineLimit(1)
-                        .fixedSize()
+                let state = Text(Labels.status(chat.status))
+                    .noteFont(chat.status == "running" || chat.status == "waiting" ? .semibold : .regular)
+                    .foregroundStyle(statusColor(chat.status))
+                if large {
+                    state
                     if !detail.isEmpty {
-                        Text(detail)
+                        Text(String(detail.dropFirst(3)))
                             .noteFont()
                             .foregroundStyle(Palette.muted)
+                            .lineLimit(3)
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        state
                             .lineLimit(1)
+                            .fixedSize()
+                        if !detail.isEmpty {
+                            Text(detail)
+                                .noteFont()
+                                .foregroundStyle(Palette.muted)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 if !chat.preview.isEmpty {
                     Text(chat.preview)
                         .smallBodyFont()
                         .foregroundStyle(Palette.muted)
-                        .lineLimit(1)
+                        .lineLimit(large ? 2 : 1)
                 }
             }
             .padding(.horizontal, 4)
@@ -71,6 +84,19 @@ struct ChatRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(Text(open.map { $0 ? "已展开" : "已收起" } ?? ""))
+    }
+
+    private var title: some View {
+        Text(chat.title + (open.map { $0 ? " ▾" : " ▸" } ?? ""))
+            .bodyFont(.semibold)
+            .foregroundStyle(Palette.ink)
+    }
+
+    private func time(_ ago: String) -> some View {
+        Text(ago)
+            .captionFont()
+            .foregroundStyle(Palette.muted)
+            .lineLimit(1)
     }
 
     private var detail: String {

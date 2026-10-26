@@ -1,0 +1,428 @@
+import Foundation
+import Observation
+import TeleplyModel
+
+/// Which action a pending one is, to refuse the same action twice while the first is unknown.
+func actionIdentity(_ route: String, _ body: JSONValue) -> String {
+    let id = ["question_id", "event_id", "call_id", "token", "tool_id", "title"].lazy.map { body[$0].string() }.first { !$0.isEmpty }
+    return route + ":" + (id ?? body["kind"].string())
+}
+
+/// What goes with a conversation's next message and the source's own choices (Android WorkspaceController, the
+/// parts the composer needs): settings bound to the next message (Codex), the model, effort, mode and permission
+/// menus (Claude, DeepSeek) with their lists kept on this phone, actions posted to the computer, and their
+/// one-line results. Attachments, references and the panes arrive in 0.4.0.
+@Observable
+public final class WorkspaceModel {
+    public internal(set) var key: ChatKey?
+    public internal(set) var ready = false
+    /// An action or a Claude setting is with the computer; one at a time.
+    public internal(set) var busy = false
+    public var error: String?
+    /// The last action's one-line result (设置已绑定下一条消息…), for the composer's status line.
+    public internal(set) var result = ""
+    /// This conversation's saved workspace (Android "workspace" detail): settings and expected_settings bound to
+    /// the next message, pending_action and action_history.
+    public internal(set) var saved: JSONValue = [:]
+    /// The menus' lists: source_catalog (Claude's or DeepSeek's models), permissions (DeepSeek), refreshing.
+    public internal(set) var choices: JSONValue = [:]
+    public internal(set) var choicesBusy = false
+    public internal(set) var choicesError: String?
+
+    /// After an action reached the source, so the conversation reads its state again.
+    @ObservationIgnored public var changed: () -> Void = {}
+    /// A state the computer sent back with an action (Claude settings), shown at once.
+    @ObservationIgnored public var stateRead: (ChatKey, JSONValue) -> Void = { _, _ in }
+
+    @ObservationIgnored let store: LocalStore?
+    @ObservationIgnored let newID: @Sendable () -> String
+    @ObservationIgnored var client: RelayClient?
+    @ObservationIgnored var clientGeneration = -1
+    @ObservationIgnored var synthetic = false
+    @ObservationIgnored var generation = 0
+    @ObservationIgnored var read: Task<Void, Never>?
+    @ObservationIgnored var choiceRead: Task<Void, Never>?
+    @ObservationIgnored var work: Task<Void, Never>?
+    @ObservationIgnored var cache: [ChatKey: JSONValue] = [:]
+    @ObservationIgnored var demo: [ChatKey: JSONValue] = [:]
+    /// Lists kept on this phone (0.8): Claude's model lists by conversation and the computer's latest; DeepSeek's.
+    @ObservationIgnored var catalogs: [String: JSONValue] = [:]
+
+    init(store: LocalStore? = nil, newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() }) {
+        self.store = store
+        self.newID = newID
+    }
+
+    /// Waits for reads and actions under way (tests).
+    public func settle() async {
+        await read?.value
+        await choiceRead?.value
+        await work?.value
+    }
+
+    func bind(_ next: ChatKey?, client: RelayClient, clientGeneration: Int, synthetic: Bool) {
+        if next == key && clientGeneration == self.clientGeneration { return }
+        read?.cancel()
+        choiceRead?.cancel()
+        generation += 1
+        let g = generation
+        key = next
+        self.client = client
+        self.clientGeneration = clientGeneration
+        self.synthetic = synthetic
+        ready = false
+        busy = false
+        error = nil
+        result = ""
+        saved = [:]
+        choices = [:]
+        choicesBusy = false
+        choicesError = nil
+        guard let next else { return }
+        read = Task { [weak self] in
+            guard let self else { return }
+            let stored: JSONValue
+            if synthetic {
+                stored = self.demo[next] ?? [:]
+            } else {
+                let text = await self.store?.detail(scope: next.scope, device: next.device, app: next.app, chat: next.chat, kind: "workspace")
+                stored = text.map(jsonValue) ?? [:]
+            }
+            // Claude's model lists of last time, this conversation's and the computer's latest, for the model menu.
+            if next.app == "claude" && !synthetic {
+                for (name, owner) in [(self.catalogKey(next), next), (self.lastCatalogKey(next), self.lastCatalog(next))] where self.catalogs[name] == nil {
+                    if let text = await self.store?.detail(scope: owner.scope, device: owner.device, app: owner.app, chat: owner.chat, kind: "claude_catalog") {
+                        self.catalogs[name] = jsonValue(text)
+                    }
+                }
+            }
+            guard g == self.generation else { return }
+            self.cache[next] = stored
+            self.saved = stored
+            self.ready = true
+        }
+    }
+
+    func current(_ key: ChatKey) -> JSONValue {
+        cache[key] ?? [:]
+    }
+
+    func persist(_ key: ChatKey, _ value: JSONValue) async {
+        cache[key] = value
+        if self.key == key { saved = value }
+        if synthetic {
+            demo[key] = value
+        } else {
+            await store?.setDetail(scope: key.scope, device: key.device, app: key.app, chat: key.chat, kind: "workspace", value: jsonText(value))
+        }
+    }
+
+    // MARK: What goes with the next message
+
+    /// A model, effort or mode picked from a Codex chip: bound to the next message, checked by Codex against
+    /// [expected] (what the conversation had when it was picked).
+    public func selectSettings(_ settings: JSONValue, expected: JSONValue) {
+        guard let key else { return }
+        var next = current(key).object
+        next["settings"] = settings
+        next["expected_settings"] = expected
+        let value = JSONValue.object(next)
+        result = "设置已绑定下一条消息，尚未发送"
+        work = Task { [weak self] in await self?.persist(key, value) }
+    }
+
+    /// The model, effort and mode bound to the next message, and what they were chosen against (Codex).
+    public func boundSettings() -> JSONValue {
+        guard let key else { return [:] }
+        let saved = current(key)
+        var bound: [String: JSONValue] = [:]
+        if saved["settings"].isObject { bound["settings"] = saved["settings"] }
+        if saved["expected_settings"].isObject { bound["expected_settings"] = saved["expected_settings"] }
+        return .object(bound)
+    }
+
+    /// What a send carries besides its words: attachments and references (from 0.4.0) and the bound settings.
+    public func sendExtras() throws -> JSONValue {
+        guard key != nil else { throw ReadFailure("没有活动会话") }
+        guard ready else { throw ReadFailure("附件和设置仍在恢复，请稍候") }
+        var extras: [String: JSONValue] = ["attachments": [], "references": []]
+        for (name, value) in boundSettings().object { extras[name] = value }
+        return .object(extras)
+    }
+
+    /// The settings went with a send: they bound that one message only, and the chips show the computer's again.
+    func clearSent(_ key: ChatKey, _ extras: JSONValue) {
+        guard extras.has("settings") else { return }
+        var next = current(key).object
+        next["settings"] = nil
+        next["expected_settings"] = nil
+        let value = JSONValue.object(next)
+        if self.key == key { result = "" }
+        work = Task { [weak self] in await self?.persist(key, value) }
+    }
+
+    /// 恢复提交快照: the settings a send carried, bound to the next message again.
+    func restoreSent(_ key: ChatKey, _ body: JSONValue) throws {
+        guard self.key == key, ready else { throw ReadFailure("当前会话已变化，未恢复附件") }
+        var next = current(key).object
+        if body["settings"].isObject { next["settings"] = body["settings"] }
+        if body["expected_settings"].isObject { next["expected_settings"] = body["expected_settings"] }
+        let value = JSONValue.object(next)
+        cache[key] = value
+        saved = value
+        work = Task { [weak self] in await self?.persist(key, value) }
+    }
+
+    // MARK: The chips' lists (spec 8.4, B17)
+
+    func catalogKey(_ key: ChatKey) -> String { "claude|\(key.scope)|\(key.device)|\(key.chat)" }
+    func lastCatalogKey(_ key: ChatKey) -> String { "claude-last|\(key.scope)|\(key.device)" }
+    func lastCatalog(_ key: ChatKey) -> ChatKey { ChatKey(scope: key.scope, device: key.device, app: "@catalog", chat: "claude") }
+
+    /// What the menus showed last (web savedCatalog): this conversation's list, or the latest on the same model
+    /// with its picks unknown; DeepSeek's models and permissions as read last.
+    func remembered(_ key: ChatKey, model: String) -> [String: JSONValue] {
+        var shown: [String: JSONValue] = [:]
+        if key.app == "claude" {
+            if let own = catalogs[catalogKey(key)] {
+                shown["source_catalog"] = own
+            } else if !model.isEmpty, let last = catalogs[lastCatalogKey(key)], last["model_id"].string() == model {
+                var borrowed = last.object
+                borrowed["fast"] = .array(last["fast"].array.map { row in
+                    var fields = row.object
+                    fields["selected"] = .null
+                    return .object(fields)
+                })
+                borrowed["effort"] = .array(last["effort"].array.map { row in
+                    var fields = row.object
+                    fields["selected"] = false
+                    if fields["range"]?.isObject == true, case .object(var range)? = fields["range"] {
+                        range["value"] = .null
+                        fields["range"] = .object(range)
+                    }
+                    return .object(fields)
+                })
+                borrowed["borrowed"] = true
+                shown["source_catalog"] = .object(borrowed)
+            }
+        }
+        if key.app == "deepseek" {
+            if let models = catalogs["deepseek-models|\(key.device)"] { shown["source_catalog"] = models }
+            if let permissions = catalogs["deepseek-permissions|\(key.device)|\(key.chat)"] { shown["permissions"] = permissions }
+        }
+        return shown
+    }
+
+    func keepCatalog(_ key: ChatKey, _ catalog: JSONValue) async {
+        var own = catalog.object
+        own["borrowed"] = nil
+        own["cached"] = nil
+        let value = JSONValue.object(own)
+        catalogs[catalogKey(key)] = value
+        catalogs[lastCatalogKey(key)] = value
+        guard !synthetic else { return }
+        let last = lastCatalog(key)
+        await store?.setDetail(scope: key.scope, device: key.device, app: key.app, chat: key.chat, kind: "claude_catalog", value: jsonText(value))
+        await store?.setDetail(scope: last.scope, device: last.device, app: last.app, chat: last.chat, kind: "claude_catalog", value: jsonText(value))
+    }
+
+    /// The model and mode menus' lists: shown at once as last read, then asked of the computer, which answers
+    /// from the list it keeps. [fresh] (刷新电脑上的列表) has it open Claude's menus on the desktop again. Codex
+    /// needs none: its catalog comes with the conversation state.
+    public func loadChoices(fresh: Bool = false, model: String = "") {
+        guard let key, let client, key.app != "codex" else { return }
+        choiceRead?.cancel()
+        var shown = remembered(key, model: model)
+        if fresh { shown["refreshing"] = true }
+        choices = .object(shown)
+        choicesBusy = true
+        choicesError = nil
+        choiceRead = Task { [weak self] in
+            var data = shown
+            data["refreshing"] = nil
+            do {
+                if key.app == "claude" {
+                    let catalog = try await client.detail(device: key.device, route: "claude/catalog", body: ["id": .string(key.chat), "fresh": .bool(fresh)])
+                    await self?.keepCatalog(key, catalog)
+                    data["source_catalog"] = catalog
+                }
+                if key.app == "deepseek" {
+                    let models = try await client.detail(device: key.device, route: "deepseek/models")
+                    self?.catalogs["deepseek-models|\(key.device)"] = models
+                    let permissions = try await client.detail(device: key.device, route: "deepseek/permissions", query: [("app", key.app), ("id", key.chat)])
+                    self?.catalogs["deepseek-permissions|\(key.device)|\(key.chat)"] = permissions
+                    data["source_catalog"] = models
+                    data["permissions"] = permissions
+                }
+                guard let self, self.key == key, !Task.isCancelled else { return }
+                self.choices = .object(data)
+                self.choicesBusy = false
+            } catch is CancellationError {
+            } catch {
+                guard let self, self.key == key else { return }
+                self.choicesError = describe(error)
+                self.choicesBusy = false
+            }
+        }
+    }
+
+    /// A model, effort, speed or mode picked from a Claude chip (web claude-ui.js change): applied on the computer,
+    /// which sends back the state and mostly the updated list; only without a list is the desktop read again.
+    public func claudeSetting(kind: String, name: String, value: JSONValue = .null, expected: String = "") {
+        guard let key, let client, key.app == "claude", !busy else { return }
+        busy = true
+        error = nil
+        result = ""
+        work = Task { [weak self] in
+            var again = false
+            do {
+                var body: [String: JSONValue] = ["id": .string(key.chat), "kind": .string(kind), "name": .string(name), "value": value]
+                if !expected.isEmpty { body["expected_model"] = .string(expected) }
+                let reply = try await client.detail(device: key.device, route: "claude/setting", body: .object(body))
+                guard let self else { return }
+                if reply["state"].isObject { self.stateRead(key, reply["state"]) } else { self.changed() }
+                if reply["catalog"].isObject {
+                    await self.keepCatalog(key, reply["catalog"])
+                    if self.key == key {
+                        var choices = self.choices.object
+                        choices["source_catalog"] = reply["catalog"]
+                        self.choices = .object(choices)
+                    }
+                } else {
+                    again = kind != "mode"
+                }
+                let text = reply["text"].string()
+                if self.key == key { self.result = text.isEmpty ? (kind == "mode" ? "已切换到「\(name)」" : "已应用到这个 Claude 对话") : text }
+            } catch {
+                if self?.key == key { self?.error = describe(error) }
+            }
+            if self?.key == key { self?.busy = false }
+            if again { self?.loadChoices(fresh: true) }
+        }
+    }
+
+    /// Leaves no menu open on the computer once the phone's model menu closed (web claude-ui.js closeMenu).
+    public func closeClaudeMenu() {
+        guard let key, let client, key.app == "claude" else { return }
+        Task { _ = try? await client.detail(device: key.device, route: "claude/close-menu", body: ["id": .string(key.chat)]) }
+    }
+
+    // MARK: Actions on the computer
+
+    /// An answer, approval, desktop choice or setting, posted at once as the web does (spec 8.4): the computer checks
+    /// it still applies and turns a stale one away. Only a reply lost on the way stays to be checked; it is never
+    /// sent again by itself.
+    public func action(_ route: String, _ body: JSONValue) {
+        guard let key, let client, !busy else { return }
+        busy = true
+        error = nil
+        result = ""
+        work = Task { [weak self] in
+            guard let self else { return }
+            var posted = false
+            do {
+                guard route != "claude/choose" || !body["token"].string().isEmpty else { throw ReadFailure("桌面选项已变化，请刷新") }
+                guard self.key == key else { throw ReadFailure("来源或会话已切换，未提交") }
+                var payload = body.object
+                payload["id"] = .string(key.chat)
+                payload["request_id"] = .string(self.newID())
+                let previous = self.current(key)["pending_action"]
+                if previous.isObject && previous["status"].string() != "done"
+                    && actionIdentity(previous["route"].string(), previous["body"]) == actionIdentity(route, .object(payload)) {
+                    throw ReadFailure("上次操作结果仍待核对，请刷新来源状态后处理")
+                }
+                var next = self.current(key).object
+                if previous.isObject { next["action_history"] = .array(self.current(key)["action_history"].array + [previous]) }
+                next["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "unknown"]
+                await self.persist(key, .object(next))
+                posted = true
+                let reply = route == "codex/answer"
+                    ? try await client.command(device: key.device, app: key.app, route: "answer", body: .object(payload))
+                    : try await client.detail(device: key.device, route: route, body: .object(payload))
+                var done = self.current(key).object
+                done["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "done"]
+                await self.persist(key, .object(done))
+                let text = reply["text"].string()
+                if self.key == key { self.result = text.isEmpty ? "操作已返回，请刷新核对实际状态" : text }
+                self.changed()
+            } catch {
+                // Turned away by the computer (4xx: answered elsewhere, expired, changed): nothing happened there, so
+                // it is not left to be checked.
+                let refused = (error as? ServiceFailure).map { (400..<500).contains($0.status) } ?? false
+                if posted && refused {
+                    var next = self.current(key).object
+                    next["pending_action"] = nil
+                    await self.persist(key, .object(next))
+                }
+                if self.key == key { self.error = describe(error) }
+                if posted && refused { self.changed() }
+            }
+            if self.key == key { self.busy = false }
+        }
+    }
+
+    /// 核对上次操作: reads back whether an action whose reply was lost took effect; never sends it again.
+    public func checkAction() {
+        guard let key, let client, !busy else { return }
+        let pending = current(key)["pending_action"]
+        guard pending.isObject else { return }
+        work = Task { [weak self] in
+            do {
+                let route = pending["route"].string()
+                let body = pending["body"]
+                var confirmed = false
+                var line: String
+                if route == "codex/answer" {
+                    let receipt = try await client.receipt(device: key.device, app: key.app, chat: key.chat, request: body["request_id"].string())
+                    confirmed = ["accepted", "rejected"].contains(receipt["state"].string())
+                    line = "回答回执：" + receipt["state"].string()
+                } else {
+                    let actual = try await client.control(device: key.device, app: key.app, chat: key.chat).raw
+                    switch route {
+                    case "deepseek/permission":
+                        confirmed = actual["permission"].string() == body["preset"].string()
+                    case "deepseek/model":
+                        confirmed = body["settings"].isObject && body["settings"].object.allSatisfy { actual["settings"][$0.key] == $0.value }
+                    default:
+                        confirmed = false
+                    }
+                    line = confirmed ? "已读回所选设置" : "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。"
+                }
+                guard let self else { return }
+                if confirmed {
+                    var next = self.current(key).object
+                    var done = pending.object
+                    done["status"] = "done"
+                    next["pending_action"] = .object(done)
+                    await self.persist(key, .object(next))
+                }
+                if self.key == key { self.result = line }
+            } catch {
+                if self?.key == key { self?.error = describe(error) }
+            }
+        }
+    }
+
+    /// 电脑上打开: the computer shows this conversation in its desktop app. Not a message; nothing is sent.
+    public func openOnComputer() {
+        guard let key, let client, !busy else { return }
+        busy = true
+        error = nil
+        result = ""
+        work = Task { [weak self] in
+            do {
+                let reply = try await client.detail(device: key.device, route: "chat/open", body: ["app": .string(key.app), "id": .string(key.chat)])
+                let text = reply["text"].string()
+                if self?.key == key { self?.result = text.isEmpty ? "已在电脑上打开" : text }
+            } catch {
+                if self?.key == key { self?.error = describe(error) }
+            }
+            if self?.key == key { self?.busy = false }
+        }
+    }
+
+    /// The composer showed the one-line result; it goes.
+    public func clearResult() {
+        result = ""
+    }
+}

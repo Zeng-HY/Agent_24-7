@@ -38,6 +38,24 @@ public final class DemoWorld: Sendable {
         ]
         /// State reads asked of the demo computer (source, conversation, fresh): polls must not ask for fresh ones.
         var stateReads: [(app: String, chat: String, fresh: Bool)] = []
+        // What sending changes (Android FixtureWorld): a turn per source, its queue, receipts by request id.
+        var running: [String: Bool] = [:]
+        var turns: [String: String] = [:]
+        var turnCount = 0
+        var queues: [String: [Queued]] = [:]
+        var receipts: [String: JSONValue] = [:]
+        // Claude has no receipts: Enter in its box, then its record is looked at (chat/check).
+        var claudeOffset: Int64 = 0
+        var claudeChecks: [Int64: Int] = [:]
+        var claudeModel = "Opus 4.7"
+        var claudeEffort = "高"
+        var claudeMode = "default"
+        /// Claude's model lists the computer keeps, by conversation, oldest first.
+        var claudeCatalogs: [(chat: String, catalog: JSONValue)] = []
+        var desktopMenuReads = 0
+        var deepseekModel = "deepseek-v4"
+        var deepseekEffort = "high"
+        var deepseekPermission = "workspace"
     }
 
     let state = Mutex(State())
@@ -56,6 +74,197 @@ public final class DemoWorld: Sendable {
     /// The desktop apps each demo computer has; 测试电脑 B has no Claude, like a tester's (Android 0.9.1).
     func apps(of device: String) -> [String] {
         device == DemoData.computerB ? ["codex", "deepseek"] : sourceOrder
+    }
+
+    /// Times the demo computer opened Claude's menus on its desktop (only 刷新 or a first read should).
+    public var desktopMenuReads: Int {
+        state.withLock { $0.desktopMenuReads }
+    }
+
+    // MARK: What the demo computer does when asked (Android FixtureWorld)
+
+    /// A source's state as /api/{app}/state reports it, with the turn, queue and settings that sending changed.
+    func control(app: String, chat: String) -> JSONValue {
+        state.withLock { state in Self.control(state, app: app, chat: chat) }
+    }
+
+    private static func control(_ state: State, app: String, chat: String) -> JSONValue {
+        let queued = state.queues[app] ?? []
+        let run = state.running[app] == true
+        let turn = state.turns[app] ?? ""
+        var fields = DemoData.state(app: app, chat: chat).object
+        fields["running"] = .bool(run)
+        fields["active_turn_id"] = .string(run ? turn : "")
+        fields["turn_id"] = .string(turn)
+        fields["queue_available"] = true
+        fields["recent_turns"] = turn.isEmpty ? [] : [["id": .string(turn), "status": .string(run ? "inProgress" : "interrupted")]]
+        switch app {
+        case "claude":
+            var settings = fields["settings"]?.object ?? [:]
+            settings["model"] = .string(claudeID(state.claudeModel))
+            settings["mode"] = .string(state.claudeMode)
+            fields["settings"] = .object(settings)
+            fields["model_label"] = .string(state.claudeModel)
+            fields["effort_label"] = .string(state.claudeEffort)
+            fields["mode_label"] = .string(["default": "默认", "acceptEdits": "自动接受修改", "plan": "计划"][state.claudeMode] ?? state.claudeMode)
+            fields["stop_token"] = .string(run ? "t-stop" : "")
+            fields["queued"] = .array(queued.map { ["id": .string($0.id), "text": .string($0.text), "token": .string("t-steer-" + $0.id)] })
+        case "deepseek":
+            var settings = fields["settings"]?.object ?? [:]
+            settings["model"] = .string(state.deepseekModel)
+            settings["reasoningEffort"] = .string(state.deepseekEffort)
+            fields["settings"] = .object(settings)
+            fields["permission"] = .string(state.deepseekPermission)
+            fields["permission_name"] = .string(["read": "仅可查看", "workspace": "工作区内修改", "full": "完全权限"][state.deepseekPermission] ?? state.deepseekPermission)
+            fields["queued"] = .array(queued.map { ["id": .string($0.id), "text": .string($0.text), "status": .string($0.status)] })
+        default:
+            fields["queued"] = .array(queued.map { ["id": .string($0.id), "text": .string($0.text), "status": .string($0.status)] })
+        }
+        return .object(fields)
+    }
+
+    /// A send, stop or queue action, with the status the computer answers. Claude takes a message by Enter in its
+    /// box; "测试电脑草稿" (or "draft") plays a box on the computer that already holds a letter typed there, until it
+    /// is replaced.
+    func command(app: String, route: String, body: JSONValue) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            if app == "claude" && route == "send" {
+                if ["测试电脑草稿", "draft"].contains(body["text"].string()) && body["replace_draft"].string().isEmpty {
+                    return (400, ["error": "电脑上 Claude 的输入框里已经有「e」，没有发出", "code": "desktop_draft", "not_submitted": true, "draft": "e"])
+                }
+                state.claudeOffset += 100
+                state.claudeChecks[state.claudeOffset] = 0
+                return (200, ["ok": true, "pressed": true, "offset": .number(Double(state.claudeOffset)),
+                              "running": .bool(state.running["claude"] == true), "text": "已提交，等待 Claude 读取"])
+            }
+            let rid = body[route == "stop" ? "operation_id" : "request_id"].string()
+            var queue = state.queues[app] ?? []
+            let delivery: String
+            switch route {
+            case "stop":
+                state.running[app] = false
+                delivery = "accepted"
+            case "queue-action":
+                queue.removeAll { $0.id == body["message_id"].string() }
+                delivery = body["action"].string() == "promote" ? "accepted" : "cancelled"
+            default:
+                if body["intent"].string() == "queue" {
+                    queue.append(Queued(id: rid, text: body["text"].string(), status: "queued"))
+                    delivery = "queued"
+                } else {
+                    if state.running[app] != true {
+                        state.turnCount += 1
+                        state.turns[app] = "fixture-turn-\(state.turnCount)"
+                    }
+                    state.running[app] = true
+                    delivery = "accepted"
+                }
+            }
+            state.queues[app] = queue
+            let result: JSONValue = ["request_id": .string(rid), "accepted": true, "delivery_state": .string(delivery)]
+            state.receipts[rid] = ["request_id": .string(rid), "state": .string(delivery), "result": result]
+            return (200, result)
+        }
+    }
+
+    func receipt(_ request: String) -> JSONValue? {
+        state.withLock { $0.receipts[request] }
+    }
+
+    /// Claude read the message on the second look; while it runs, the first two looks find it queued.
+    func claudeCheck(offset: Int64) -> JSONValue {
+        state.withLock { state in
+            let looks = (state.claudeChecks[offset] ?? 0) + 1
+            state.claudeChecks[offset] = looks
+            let queued = state.running["claude"] == true && looks < 3
+            return ["delivered": .bool(!queued && looks >= 2), "queued": .bool(queued)]
+        }
+    }
+
+    /// A desktop option tapped on the computer: 停止 (t-stop) or 立即补充 (t-steer-…).
+    func claudeChoose(token: String) -> JSONValue {
+        state.withLock { state in
+            if token == "t-stop" {
+                state.running["claude"] = false
+            } else if token.hasPrefix("t-steer-") {
+                let id = String(token.dropFirst("t-steer-".count))
+                state.queues["claude"]?.removeAll { $0.id == id }
+            }
+            return ["ok": true, "text": "本地示例：已在电脑上点选"]
+        }
+    }
+
+    static func claudeID(_ name: String) -> String {
+        name.hasPrefix("Sonnet") ? "sonnet" : "opus"
+    }
+
+    /// Claude's model list as the computer keeps it: kept unless [fresh] or the model changed; a conversation never
+    /// read borrows the latest one on the same model, its picks unknown.
+    func claudeCatalog(chat: String, fresh: Bool) -> JSONValue {
+        state.withLock { state in
+            let model = Self.claudeID(state.claudeModel)
+            if !fresh, let kept = state.claudeCatalogs.last(where: { $0.chat == chat })?.catalog, kept["model_id"].string() == model {
+                var copy = kept.object
+                copy["cached"] = true
+                return .object(copy)
+            }
+            if !fresh, let other = state.claudeCatalogs.last(where: { $0.catalog["model_id"].string() == model })?.catalog {
+                var copy = other.object
+                copy["cached"] = true
+                copy["borrowed"] = true
+                copy["effort"] = .array(other["effort"].array.map { step in
+                    var fields = step.object
+                    fields["selected"] = false
+                    return .object(fields)
+                })
+                return .object(copy)
+            }
+            state.desktopMenuReads += 1
+            let now = Self.catalogNow(state)
+            state.claudeCatalogs.append((chat, now))
+            return now
+        }
+    }
+
+    private static func catalogNow(_ state: State) -> JSONValue {
+        ["model_id": .string(claudeID(state.claudeModel)), "updated_at": .number(Double(DemoData.now)), "cached": false,
+         "model": .array(["Opus 4.7", "Sonnet 4.6"].map { ["name": .string($0), "selected": .bool($0 == state.claudeModel)] }),
+         "effort": .array(["高", "中", "低"].map { ["name": .string($0), "selected": .bool($0 == state.claudeEffort)] })]
+    }
+
+    /// A Claude setting applied "on the computer": the state and the list come back, nothing is read again.
+    func claudeSetting(chat: String, kind: String, name: String) -> JSONValue {
+        state.withLock { state in
+            switch kind {
+            case "model":
+                state.claudeModel = name
+                state.claudeEffort = "高"
+            case "effort":
+                state.claudeEffort = name
+            case "mode":
+                state.claudeMode = name
+            default:
+                break
+            }
+            var result: [String: JSONValue] = ["ok": true, "text": "本地示例：已在电脑上换好", "state": Self.control(state, app: "claude", chat: chat)]
+            if kind != "mode" {
+                let now = Self.catalogNow(state)
+                state.claudeCatalogs.append((chat, now))
+                result["catalog"] = now
+            }
+            return .object(result)
+        }
+    }
+
+    func deepseekModel(_ settings: JSONValue) {
+        state.withLock { state in
+            if settings.has("model") { state.deepseekModel = settings["model"].string() }
+            if settings.has("reasoningEffort") { state.deepseekEffort = settings["reasoningEffort"].string() }
+        }
+    }
+
+    func deepseekPermission(_ preset: String) {
+        state.withLock { $0.deepseekPermission = preset }
     }
 }
 
@@ -225,6 +434,9 @@ enum DemoData {
             return .object(fields)
         }
     }
+
+    static let deepseekModels = parse(#"{"groups":[{"id":"deepseek","name":"DeepSeek","models":[{"id":"deepseek-v4","name":"DeepSeek V4","reasoning":{"efforts":[{"id":"high","name":"高"},{"id":"low","name":"低"}]}}]}]}"#)
+    static let deepseekPermissions = parse(#"{"options":[{"value":"read","name":"仅可查看","description":"只读文件，不修改"},{"value":"workspace","name":"工作区内修改","description":"只改工作区里的文件"},{"value":"full","name":"完全权限","description":"可以修改电脑上的任何文件","confirm":true}]}"#)
 
     static let plan = """
     ## 计划：补齐发布说明

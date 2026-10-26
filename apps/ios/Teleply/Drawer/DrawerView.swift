@@ -63,7 +63,7 @@ struct DrawerView: View {
             .padding(.bottom, 4)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    tree
+                    ForEach(rows) { item in row(item) }
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
@@ -77,76 +77,87 @@ struct DrawerView: View {
         }
     }
 
-    @ViewBuilder
-    private var tree: some View {
-        if let error = model.treeError {
-            NoteBar(text: error, tone: .error, action: "重试", onAction: model.retrySources)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
+    /// The tree as one flat run of rows, each with its own id: a lazy stack shows only one row per id, so ids
+    /// that repeat across groups (an index in each group) would hide rows.
+    private var rows: [DrawerRow] {
+        var rows: [DrawerRow] = []
+        if let error = model.treeError { rows.append(DrawerRow(id: "error", kind: .error(error))) }
         let apps = model.tree["apps"].array
         if apps.isEmpty && model.treeError == nil {
-            Text(model.device == nil ? "先选择一台电脑" : "读取中…")
-                .noteFont()
-                .foregroundStyle(Palette.muted)
-                .padding(12)
+            rows.append(DrawerRow(id: "loading", kind: .loading(model.device == nil ? "先选择一台电脑" : "读取中…")))
         }
-        ForEach(Array(apps.enumerated()), id: \.offset) { index, group in
+        for (index, group) in apps.enumerated() {
             let app = group["app"].string()
             let appKey = "app:" + app
             let appOpen = !folds.keys.contains(appKey)
-            TreeApp(app: app, name: group["name"].string().isEmpty ? Labels.sourceName(app) : group["name"].string(), open: appOpen) {
-                withAnimation(.drawer()) { folds.toggle(appKey) }
-            }
-            .modifier(Arrive(index: index + 1, serial: opening))
-            if appOpen {
-                let projects = group["projects"].array
-                if projects.isEmpty {
-                    Text("没有对话")
-                        .noteFont()
-                        .foregroundStyle(Palette.muted)
-                        .padding(.leading, 12)
-                        .padding(.vertical, 8)
-                        .transition(.opacity)
+            let name = group["name"].string().isEmpty ? Labels.sourceName(app) : group["name"].string()
+            rows.append(DrawerRow(id: appKey, kind: .app(index: index, app: app, name: name, open: appOpen)))
+            guard appOpen else { continue }
+            let projects = group["projects"].array
+            if projects.isEmpty { rows.append(DrawerRow(id: appKey + ":none", kind: .empty)) }
+            for project in projects {
+                let key = "project:\(app):\(project["key"].string())"
+                let open = folds.keys.contains("open:" + key)
+                rows.append(DrawerRow(id: key, kind: .project(key: key, name: project["name"].string(), projectless: project["projectless"].bool(), open: open)))
+                guard open else { continue }
+                let items = project["items"].array
+                for item in items {
+                    let chat = treeChat(item, app: app)
+                    rows.append(DrawerRow(id: key + ":" + chat.app + ":" + chat.id, kind: .chat(chat, place: item["place"].string())))
                 }
-                ForEach(Array(projects.enumerated()), id: \.offset) { _, project in
-                    projectRows(app: app, project: project)
-                }
+                let left = project["count"].int() - items.count
+                if left > 0 { rows.append(DrawerRow(id: key + ":more", kind: .more(app: app, project: project["key"].string(), left: left))) }
             }
         }
+        return rows
     }
 
     @ViewBuilder
-    private func projectRows(app: String, project: JSONValue) -> some View {
-        let key = "project:\(app):\(project["key"].string())"
-        let open = folds.keys.contains("open:" + key)
-        TreeProject(name: project["name"].string(), projectless: project["projectless"].bool(), open: open) {
-            withAnimation(.drawer()) { folds.toggle("open:" + key) }
-        }
-        .transition(.opacity)
-        if open {
-            let items = project["items"].array
-            ForEach(Array(items.enumerated()), id: \.offset) { _, row in
-                let chat = treeChat(row, app: app)
-                TreeChat(chat: chat, place: row["place"].string(), current: chat.id == model.chat?.id && chat.app == model.app) {
-                    close()
-                    model.open(chat)
-                }
-                .transition(.opacity)
+    private func row(_ row: DrawerRow) -> some View {
+        switch row.kind {
+        case .error(let error):
+            NoteBar(text: error, tone: .error, action: "重试", onAction: model.retrySources)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        case .loading(let text):
+            Text(text)
+                .noteFont()
+                .foregroundStyle(Palette.muted)
+                .padding(12)
+        case .app(let index, let app, let name, let open):
+            TreeApp(app: app, name: name, open: open) {
+                withAnimation(.drawer()) { folds.toggle(row.id) }
             }
-            let left = project["count"].int() - items.count
-            if left > 0 {
-                Button {
-                    model.moreTree(app: app, project: project["key"].string())
-                } label: {
-                    Text("显示更多（还有 \(left) 个）")
-                        .noteFont()
-                        .foregroundStyle(Palette.accent)
-                        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                        .padding(.leading, 43)
-                }
-                .buttonStyle(RowPressStyle(radius: 12))
+            .modifier(Arrive(index: index + 1, serial: opening))
+        case .empty:
+            Text("没有对话")
+                .noteFont()
+                .foregroundStyle(Palette.muted)
+                .padding(.leading, 12)
+                .padding(.vertical, 8)
                 .transition(.opacity)
+        case .project(let key, let name, let projectless, let open):
+            TreeProject(name: name, projectless: projectless, open: open) {
+                withAnimation(.drawer()) { folds.toggle("open:" + key) }
             }
+            .transition(.opacity)
+        case .chat(let chat, let place):
+            TreeChat(chat: chat, place: place, current: chat.id == model.chat?.id && chat.app == model.app) {
+                close()
+                model.open(chat)
+            }
+            .transition(.opacity)
+        case .more(let app, let project, let left):
+            Button {
+                model.moreTree(app: app, project: project)
+            } label: {
+                Text("显示更多（还有 \(left) 个）")
+                    .noteFont()
+                    .foregroundStyle(Palette.accent)
+                    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                    .padding(.leading, 43)
+            }
+            .buttonStyle(RowPressStyle(radius: 12))
+            .transition(.opacity)
         }
     }
 
@@ -184,6 +195,22 @@ struct DrawerView: View {
         .padding(.top, 4)
         .padding(.bottom, 8)
     }
+}
+
+/// One row of the sidebar tree.
+private struct DrawerRow: Identifiable {
+    enum Kind {
+        case error(String)
+        case loading(String)
+        case app(index: Int, app: String, name: String, open: Bool)
+        case empty
+        case project(key: String, name: String, projectless: Bool, open: Bool)
+        case chat(Chat, place: String)
+        case more(app: String, project: String, left: Int)
+    }
+
+    let id: String
+    let kind: Kind
 }
 
 /// A source arriving as the drawer opens (web lbrRowIn): 10 pt from the left over 300 ms, 24 ms after the one

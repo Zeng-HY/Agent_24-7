@@ -35,7 +35,7 @@ public struct DemoTransport: RelayTransport {
         let network = world.network
         if network == .offline { throw Offline() }
         if network.delay > .zero { try await Task.sleep(for: network.delay) }
-        return computer(device, route, query)
+        return computer(device, route, query, request.method, body)
     }
 
     static let notFound = RelayResponse.json(#"{"error":"本地示例没有这个地址"}"#, status: 404)
@@ -93,7 +93,8 @@ public struct DemoTransport: RelayTransport {
 
     // MARK: A demo computer
 
-    func computer(_ device: String, _ route: String, _ query: [String: String]) -> RelayResponse {
+    func computer(_ device: String, _ route: String, _ query: [String: String], _ method: HTTPMethod = .get, _ body: JSONValue = [:]) -> RelayResponse {
+        if method == .post, let answer = action(route, body) { return answer }
         let app = query["app"] ?? "codex"
         let chat = query["id"] ?? ""
         switch route {
@@ -108,7 +109,17 @@ public struct DemoTransport: RelayTransport {
         case "/api/codex/state", "/api/claude/state", "/api/deepseek/state":
             let source = String(route.dropFirst(5).prefix { $0 != "/" })
             world.state.withLock { $0.stateReads.append((source, chat, query["fresh"] == "1")) }
-            return Self.json(DemoData.state(app: source, chat: chat))
+            return Self.json(world.control(app: source, chat: chat))
+        case "/api/codex/receipt":
+            return Self.json(world.receipt(query["request_id"] ?? "") ?? ["state": "unknown"])
+        case "/api/deepseek/receipt":
+            guard case .object(var fields)? = world.receipt(query["request_id"] ?? "") else { return Self.json(["state": "unknown"]) }
+            fields["id"] = .string(chat)
+            return Self.json(.object(fields))
+        case "/api/deepseek/models":
+            return Self.json(DemoData.deepseekModels)
+        case "/api/deepseek/permissions":
+            return Self.json(DemoData.deepseekPermissions)
         case "/api/chat/projects":
             return Self.json(DemoData.tree(device: device, apps: world.apps(of: device), more: query["more"]))
         case "/api/chats/children":
@@ -120,6 +131,50 @@ public struct DemoTransport: RelayTransport {
         default:
             return Self.notFound
         }
+    }
+
+    /// The POST routes of a demo computer: sending, receipts' counterpart, Claude's desktop and the settings.
+    func action(_ route: String, _ body: JSONValue) -> RelayResponse? {
+        let reply: (status: Int, reply: JSONValue)
+        switch route {
+        case "/api/codex/send", "/api/codex/stop", "/api/codex/queue-action":
+            reply = world.command(app: "codex", route: String(route.dropFirst("/api/codex/".count)), body: body)
+        case "/api/chat/send":
+            reply = world.command(app: body["app"].string(), route: "send", body: body)
+        case "/api/deepseek/send":
+            var fields = body.object
+            if body["intent"].string() == "steer" { fields["intent"] = "auto" }
+            reply = world.command(app: "deepseek", route: "send", body: .object(fields))
+        case "/api/deepseek/stop":
+            var fields = body.object
+            fields["operation_id"] = .string(body["operation_id"].string())
+            reply = world.command(app: "deepseek", route: "stop", body: .object(fields))
+        case "/api/deepseek/queue":
+            let fields: JSONValue = ["request_id": .string(body["request_id"].string()), "message_id": .string(body["item_id"].string()),
+                                     "action": .string(body["action"].string() == "steer" ? "promote" : "cancel")]
+            reply = world.command(app: "deepseek", route: "queue-action", body: fields)
+        case "/api/chat/check":
+            reply = (200, world.claudeCheck(offset: body["offset"].int64()))
+        case "/api/claude/choose":
+            reply = (200, world.claudeChoose(token: body["token"].string()))
+        case "/api/claude/catalog":
+            reply = (200, world.claudeCatalog(chat: body["id"].string(), fresh: body["fresh"].bool()))
+        case "/api/claude/setting":
+            reply = (200, world.claudeSetting(chat: body["id"].string(), kind: body["kind"].string(), name: body["name"].string()))
+        case "/api/claude/close-menu":
+            reply = (200, ["ok": true])
+        case "/api/deepseek/model":
+            world.deepseekModel(body["settings"])
+            reply = (200, ["ok": true, "text": "本地示例：设置已记录"])
+        case "/api/deepseek/permission":
+            world.deepseekPermission(body["preset"].string())
+            reply = (200, ["ok": true, "text": "本地示例：设置已记录"])
+        case "/api/chat/open":
+            reply = (200, ["ok": true, "text": "本地示例：没有真的打开电脑上的窗口"])
+        default:
+            return nil
+        }
+        return Self.json(reply.reply, status: reply.status)
     }
 
     func chats(device: String, app: String, query: [String: String]) -> RelayResponse {

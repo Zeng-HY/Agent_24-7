@@ -266,6 +266,8 @@ private struct ListTitle: View {
                         .foregroundStyle(Palette.muted)
                         .lineLimit(1)
                 }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
                 .accessibilityLabel(Text("切换电脑，当前是\(model.device?.label ?? "未选择")"))
             } else {
                 Text(label)
