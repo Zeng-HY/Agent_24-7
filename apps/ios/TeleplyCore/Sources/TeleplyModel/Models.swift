@@ -88,6 +88,27 @@ public struct Page<Item: Sendable & Equatable>: Sendable, Equatable {
     }
 }
 
+/// Which conversation something belongs to (Android ChatKey): sign-in scope, computer, source and conversation.
+/// Drafts, sends and reading positions never cross from one key to another (spec B01).
+public struct ChatKey: Hashable, Sendable {
+    public var scope: String
+    public var device: String
+    public var app: String
+    public var chat: String
+
+    public init(scope: String, device: String, app: String, chat: String) {
+        self.scope = scope
+        self.device = device
+        self.app = app
+        self.chat = chat
+    }
+}
+
+/// A row's key in the list: its source and id.
+public func rowKey(_ chat: Chat) -> String {
+    chat.app + ":" + chat.id
+}
+
 /// The computer broke the contract (wrong identity, source or path), with Android's words for it.
 public struct ReadFailure: Error, Sendable, Equatable {
     public let message: String

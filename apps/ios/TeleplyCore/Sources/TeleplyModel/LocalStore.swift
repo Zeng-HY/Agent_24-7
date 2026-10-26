@@ -102,7 +102,7 @@ public actor LocalStore {
         return found
     }
 
-    public func update(scope: String, device: String, app: String, chat: String, _ change: (inout ChatRecord) -> Void) {
+    public func update(scope: String, device: String, app: String, chat: String, _ change: @Sendable (inout ChatRecord) -> Void) {
         let key = Self.recordName(scope: scope, device: device, app: app, chat: chat)
         var record = record(scope: scope, device: device, app: app, chat: chat)
         change(&record)

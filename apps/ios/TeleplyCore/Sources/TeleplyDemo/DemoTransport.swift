@@ -8,7 +8,7 @@ public struct DemoTransport: RelayTransport {
     /// The whole demo service down, for the launch page's "连不上服务器" screenshots.
     public struct Unreachable: Error {}
     /// 示例网络 → 断开: the computer cannot be reached (Android: IOException).
-    public struct Offline: Error {
+    public struct Offline: UserFacingError {
         public var message: String { "连不上电脑（本地示例：网络已断开）" }
     }
 
