@@ -56,8 +56,9 @@ kinds = sorted((t for t in types if t["name"].startswith("iPhone")), key=lambda 
 # An existing plain phone is used as it is. When the machine only has a foldable for this runtime (build
 # 6aded501: just "iPhone Duo" on 27.1, which moves the navigation bar into a side column), a plain one is
 # made below if the runtime supports any.
-plain_kind = next((t for t in kinds if rank(t["name"])[0] == 0), None)
-if phones and (rank(phones[0]["name"])[0] == 0 or plain_kind is None):
+sys.stderr.write("iPhone types %s supports: %s\n" % (key, ", ".join(t["name"] for t in kinds)))
+plain_kind = next((t for t in kinds if rank(t["name"])[0] < 2), None)
+if phones and (rank(phones[0]["name"])[0] < 2 or plain_kind is None):
     choice = next((d for d in phones if d["name"] == preferred), phones[0])
     sys.stderr.write("Using simulator %s (%s) on %s\n" % (choice["name"], choice["udid"], key))
     print(choice["udid"])

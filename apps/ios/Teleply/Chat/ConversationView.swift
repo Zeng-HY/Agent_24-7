@@ -81,7 +81,9 @@ struct ConversationView: View {
 
     @ToolbarContentBuilder
     private func toolbar(control: Control) -> some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        // The middle of the bar takes what the back button and the right side leave; the title sits left in it, so it
+        // starts beside the back button (spec 4.3) without a fixed width.
+        ToolbarItem(placement: .principal) {
             ConversationTitle(model: model)
         }
         .sharedBackgroundVisibility(.hidden)
@@ -259,7 +261,7 @@ private struct ConversationTitle: View {
                     .lineLimit(1)
             }
         }
-        .frame(maxWidth: 260, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
     }
 }
