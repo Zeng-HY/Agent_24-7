@@ -1,12 +1,15 @@
 #!/bin/bash
 # ios-native-check. "compile" (default): TeleplyCore tests plus a simulator build, to catch compile errors fast.
-# "shots": the same, then the screenshot tour on each simulator runtime in SHOT_RUNTIMES (default iOS 27.1;
-# add iOS-26-5 at the end of a phase). Pictures land in build/shots.zip.
+# "shots": the same, then the screenshot tour on each simulator runtime in SHOT_RUNTIMES (default iOS 26.5;
+# add iOS-27-1 at the end of a phase). Pictures land in build/shots.zip. A failed test does not wait for the
+# simulator's diagnostics (they took 10 minutes in build 6adede40).
 set -euo pipefail
 source "$(dirname "$0")/ci-common.sh"
 
 MODE="${1:-compile}"
-RUNTIMES="${SHOT_RUNTIMES:-iOS-27-1}"
+# iOS 26.5 by default: on this Xcode 27.1 image the 27.1 runtime only supports the foldable iPhone Duo, whose
+# side column moves the navigation bar (builds 6aded501, 6adeda5d). Add iOS-27-1 at the end of a phase.
+RUNTIMES="${SHOT_RUNTIMES:-iOS-26-5}"
 DEVICE="${SHOT_DEVICE:-iPhone 17}"
 
 cd "$IOS_DIR"
@@ -85,7 +88,7 @@ for runtime in $RUNTIMES; do
   xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
   TEST_RUNNER_SHOTS_DIR="$IOS_DIR/build/shots" xcodebuild test-without-building \
     -xctestrun "$XCTESTRUN" -destination "id=$udid" \
-    -only-testing:TeleplyUITests/ScreenshotTour \
+    -only-testing:TeleplyUITests/ScreenshotTour -collect-test-diagnostics never \
     -resultBundlePath "build/shots-$runtime.xcresult" | xcbeautify
   xcrun simctl shutdown "$udid" || true
 done

@@ -63,21 +63,21 @@ final class ScreenshotTour: XCTestCase {
                 snap(app, page: "07-runtime", variant: variant)
             }
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
+            sleep(1)  // the popover closes before the next tap lands
         }
 
-        // Sending on the demo (0.3.0): a send starts a turn (停止这一轮 shows), the next one queues.
+        // Sending on the demo (0.3.0): a send starts a turn (停止这一轮 shows), the next one queues. Typing waits for
+        // the box to hold the keyboard focus (build 6adede40: a tap while the popover closed was swallowed).
         let field = composer(app)
-        if field.waitForExistence(timeout: 5) {
-            field.tap()
+        if field.waitForExistence(timeout: 5), focus(field) {
             field.typeText("hello")
             app.buttons["发送"].firstMatch.tap()
             if app.buttons["停止这一轮"].waitForExistence(timeout: 5) {
                 snap(app, page: "08-sent", variant: variant)
             }
-            field.tap()
-            field.typeText("one more")
             let queue = app.buttons["发送并排队"].firstMatch
-            if queue.waitForExistence(timeout: 5) {
+            if focus(field), queue.waitForExistence(timeout: 5) {
+                field.typeText("one more")
                 queue.tap()
                 if app.buttons["立即补充"].firstMatch.waitForExistence(timeout: 5) {
                     app.swipeDown()
@@ -119,6 +119,16 @@ final class ScreenshotTour: XCTestCase {
             }
         }
         app.terminate()
+    }
+
+    /// Taps [field] until it holds the keyboard focus (twice at most); typing without it fails the whole test.
+    @MainActor private func focus(_ field: XCUIElement) -> Bool {
+        for _ in 0..<2 {
+            field.tap()
+            sleep(1)
+            if (field.value(forKey: "hasKeyboardFocus") as? Bool) == true { return true }
+        }
+        return false
     }
 
     /// The composer's text box: a growing text field is a text view to XCUITest.

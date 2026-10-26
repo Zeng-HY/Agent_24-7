@@ -5,6 +5,10 @@ import TeleplyState
 /// The conversation list (spec 4.1; Android ChatListScreen): ☰, "对话" and the computer in the title bar, ✎ on
 /// the right; under it the source chips with ⋯ 列表显示, the search capsule and the rows. Read again every 10 s
 /// while shown (the model does that); rows merge in without moving what was read.
+///
+/// The title bar is drawn by the page (spec 4.1 allows it when the system bar cannot lay it out): in the system
+/// bar's leading slot the title got one character's width on a real iPhone (0.2.0, user 10-26), "对话" stacked
+/// and the computer cut to its first letter. It sits in the top safe-area bar, so rows still fade under it.
 struct ChatListView: View {
     let model: AppModel
     @Environment(Chrome.self) private var chrome
@@ -24,13 +28,17 @@ struct ChatListView: View {
         .environment(\.defaultMinListRowHeight, 0)
         .background(Palette.page)
         .scrollDismissesKeyboard(.immediately)
-        .safeAreaBar(edge: .top) { notes }
+        .safeAreaBar(edge: .top) {
+            VStack(spacing: 0) {
+                header
+                notes
+            }
+        }
         .overlay(alignment: .bottom) {
             NoticeToast(text: model.notice) { model.notice = nil }
                 .padding(.bottom, 16)
         }
-        .toolbar { toolbar }
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .task(id: query) {
             guard query != model.query else { return }
             try? await Task.sleep(for: .milliseconds(450))
@@ -42,29 +50,20 @@ struct ChatListView: View {
 
     // MARK: Title bar
 
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button {
-                chrome.openDrawer()
-            } label: {
-                Image(systemName: "line.3.horizontal")
-            }
-            .accessibilityLabel(Text("打开导航"))
-        }
-        ToolbarItem(placement: .topBarLeading) {
+    /// ☰, then "对话" with the computer under it taking the room left, then ✎ (Android ListTopBar: 16 pt sides,
+    /// 12 pt between).
+    private var header: some View {
+        HStack(spacing: 12) {
+            GlassIconButton(symbol: "line.3.horizontal", label: "打开导航") { chrome.openDrawer() }
             ListTitle(model: model)
-        }
-        .sharedBackgroundVisibility(.hidden)
-        ToolbarItem(placement: .topBarTrailing) {
+                .frame(maxWidth: .infinity, alignment: .leading)
             // 新建对话 arrives in 0.4.0 (plan phase 3); until then the button shows where it will be.
-            Button {} label: {
-                Image(systemName: "square.and.pencil")
-            }
-            .disabled(true)
-            .accessibilityLabel(Text("新建对话"))
-            .accessibilityHint(Text("新建对话在 0.4.0 提供"))
+            GlassIconButton(symbol: "square.and.pencil", label: "新建对话") {}
+                .disabled(true)
+                .accessibilityHint(Text("新建对话在 0.4.0 提供"))
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
