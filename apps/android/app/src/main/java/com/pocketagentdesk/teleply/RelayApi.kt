@@ -173,6 +173,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
                     require((r.body?.contentLength() ?: 0)<=100L*1024*1024) { "文件超过100MB，请在电脑上打开" }
                     val input=r.body?.byteStream() ?: throw IOException("文件为空");val buffer=ByteArray(65536);var count=0L
                     while(true) { if(!continuation.isActive) return;val n=input.read(buffer);if(n<0) break;count+=n;require(count<=100L*1024*1024) { "文件超过100MB" };output.write(buffer,0,n) }
+                    val expected=r.body?.contentLength() ?: -1L
+                    require(expected<0 || count==expected) { "文件接收不完整，请重试" }
                     output.flush();if(continuation.isActive) continuation.resume(Unit)
                 } } catch(e:Exception) { if(continuation.isActive) continuation.resumeWithException(e) }
             }

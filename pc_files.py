@@ -12,6 +12,8 @@ Hidden and system files and names starting with a dot are not listed.
 """
 from __future__ import annotations
 
+import base64
+import mimetypes
 import ctypes
 import hashlib
 import hmac
@@ -235,9 +237,29 @@ class Files:
         st = st or path.stat()
         folder = stat.S_ISDIR(st.st_mode)
         kind = "folder" if folder else "file"
-        return {"kind": kind, "app": "pc", "id": self._token(kind, path), "name": path.name or str(path),
+        extra = {} if folder else {"download_id": self.download_ticket(path, st)}
+        return {**extra, "kind": kind, "app": "pc", "id": self._token(kind, path), "name": path.name or str(path),
                 "path": str(path), "size": None if folder else st.st_size, "modified": int(st.st_mtime * 1000),
                 "type": "folder" if folder else type_of(path.name)}
+
+    def download_ticket(self,path,st):
+        body=base64.urlsafe_b64encode(json.dumps([str(path.absolute()),st.st_size,st.st_mtime_ns],ensure_ascii=False).encode()).decode().rstrip('=')
+        return 'pc.'+body+'.'+hmac.new(self.secret,('download:'+body).encode(),hashlib.sha256).hexdigest()
+
+    def download_meta(self,ticket):
+        try:
+            prefix,body,signature=ticket.split('.')
+            if prefix!='pc' or len(body)>12000 or not hmac.compare_digest(signature,hmac.new(self.secret,('download:'+body).encode(),hashlib.sha256).hexdigest()):raise ValueError()
+            raw,size,mtime=json.loads(base64.urlsafe_b64decode(body+'='*(-len(body)%4)))
+            p=self._place(raw)
+            if p.resolve()!=p.absolute():raise FileError('文件实际位置已变化，请重新选择',409)
+            st=p.stat()
+            if not stat.S_ISREG(st.st_mode):raise FileError('只能下载普通文件',400)
+            if (size,mtime)!=(st.st_size,st.st_mtime_ns):raise FileError('文件已变化，请重新选择后下载',409)
+            if size>100*1024*1024:raise FileError('文件超过100MB，请在电脑上打开',413)
+            return {'path':p,'size':size,'mtime':mtime,'kind':'download','mime':mimetypes.guess_type(p.name)[0] or 'application/octet-stream'}
+        except FileError:raise
+        except (ValueError,TypeError,OSError):raise FileError('文件不可用或下载引用无效，请重新选择',403) from None
 
     def places(self, folder: str = "") -> dict:
         """Where the sheet starts: the conversation's folder, files from the phone, Desktop, Downloads, Documents, disks."""

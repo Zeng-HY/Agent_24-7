@@ -37,6 +37,30 @@ private class WorkspaceApi:ReadApi by FixtureApi() {
 }
 @OptIn(ExperimentalCoroutinesApi::class)
 class WorkspaceControllerTest {
+    @Test fun computerFileOpensDownloadWithoutChangingReferencesOrDraft()=runTest {
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                assertEquals("file/meta",route);assertEquals("pc.ticket.signature",query["file"])
+                return JSONObject("""{"kind":"download","size":12,"state":"current"}""")
+            }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent();c.edit("first_message","draft");runCurrent()
+        c.computerFile(JSONObject("""{"id":"reference","download_id":"pc.ticket.signature","name":"报告.xlsx","kind":"file"}"""));runCurrent()
+        assertEquals("file",c.state.value.pane);assertEquals("draft",JSONObject(c.state.value.saved).string("first_message"))
+        assertEquals(0,c.sendExtras().getJSONArray("references").length())
+        assertEquals("pc.ticket.signature",JSONObject(c.state.value.data).string("id"));assertNull(c.state.value.error)
+    }
+    @Test fun previewFailureStillAllowsOriginalFileDownload()=runTest {
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                if(route=="file/text") throw java.io.IOException("bad encoding")
+                return JSONObject("""{"kind":"text","size":12}""")
+            }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.file(JSONObject("""{"id":"file","name":"报告.txt"}"""));runCurrent()
+        assertNull(c.state.value.error);assertFalse(c.state.value.busy);assertTrue(c.state.value.transfer.contains("仍可"))
+    }
     @Test fun skillRetryForcesBothRoutesAndKeepsDraft()=runTest {
         for(chat in listOf("chat","@new")) {
             val requests=mutableListOf<Pair<String,Map<String,String?>>>()

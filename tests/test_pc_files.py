@@ -23,6 +23,28 @@ class FilesTestCase(unittest.TestCase):
         p = self.disk / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(data); return p
 
 
+class DownloadTests(FilesTestCase):
+    def test_exact_download_ticket_rejects_changes_forgery_and_wrong_computer(self):
+        p=self.write('中文 报告.xlsx',b'PK-test');row=self.files.entry(p)
+        self.assertEqual(self.files.download_meta(row['download_id'])['path'],p)
+        self.assertEqual(self.files.resolve(row)['path'],str(p))
+        with self.assertRaises(pc_files.FileError):self.files.download_meta(row['download_id']+'0')
+        other=pc_files.Files('other',inbox=self.inbox,registry=self.root/'other.json',drives=self.files.drives)
+        with self.assertRaises(pc_files.FileError):other.download_meta(row['download_id'])
+        p.write_bytes(b'changed')
+        with self.assertRaises(pc_files.FileError):self.files.download_meta(row['download_id'])
+        p.unlink()
+        with self.assertRaises(pc_files.FileError):self.files.download_meta(row['download_id'])
+    def test_download_bytes_and_replacement_after_metadata(self):
+        from remote import Handler
+        p=self.write('结果.pptx',b'PK-content')
+        meta=self.files.download_meta(self.files.entry(p)['download_id']);headers={};errors=[]
+        h=SimpleNamespace(headers={},wfile=io.BytesIO(),send_response=lambda n:None,send_header=lambda k,v:headers.update({k:v}),end_headers=lambda:None,_json=lambda *a:errors.append(a))
+        Handler._serve_result_file(h,meta,True)
+        self.assertEqual(h.wfile.getvalue(),p.read_bytes());self.assertIn('attachment',headers['Content-Disposition'])
+        p.write_bytes(b'changed-length');h.wfile=io.BytesIO();Handler._serve_result_file(h,meta,True)
+        self.assertEqual(h.wfile.getvalue(),b'');self.assertEqual(errors[0][1],409)
+
 class ListingTests(FilesTestCase):
     def test_folders_first_natural_order_and_hidden_left_out(self):
         for name in ('第10章.docx', '第2章.docx', '.git/config', '~$第2章.docx', 'b.txt'):

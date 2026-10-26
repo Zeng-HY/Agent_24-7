@@ -716,7 +716,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/chat/files':self._json(self.history.list_files(app,tid,q.get('message')))
             elif path=='/api/chat/diff':self._json(self.history.diff(app,tid,q.get('ref',''),q.get('offset',0)))
             else:
-                meta=self.history.file(app,tid,q.get('file',''))
+                meta=self.server.files.download_meta(q['file']) if q.get('file','').startswith('pc.') else self.history.file(app,tid,q.get('file',''))
                 if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime')})
                 elif path=='/api/file/text':
                     if meta['kind']!='text':raise chat_history.HistoryError('这个文件不提供文本预览')
@@ -726,7 +726,7 @@ class Handler(BaseHTTPRequestHandler):
                     except UnicodeError:raise chat_history.HistoryError('无法按 UTF-8 或 UTF-16 预览，请下载原文件') from None
                     self._json({'text':text,'name':meta['path'].name})
                 else:self._serve_result_file(meta,q.get('download')=='1')
-        except (chat_history.HistoryError,chats.ChatError,OSError,ValueError,TypeError) as exc:
+        except (chat_history.HistoryError,pc_files.FileError,chats.ChatError,OSError,ValueError,TypeError) as exc:
             self._json({'error':str(exc)},getattr(exc,'status',400))
 
     def _serve_result_file(self,meta,download=False):
@@ -743,6 +743,9 @@ class Handler(BaseHTTPRequestHandler):
             status=206
         length=end-start+1 if size else 0
         with meta['path'].open('rb') as f:
+            opened=os.fstat(f.fileno())
+            if opened.st_size!=size or (meta.get('mtime') is not None and opened.st_mtime_ns!=meta['mtime']):
+                self._json({'error':'文件已变化，请重新打开后下载'},409);return
             self.send_response(status);self.send_header('Content-Type',meta['mime']);self.send_header('Content-Length',str(length));self.send_header('Accept-Ranges','bytes');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
             self.send_header('Content-Disposition',('attachment' if download or meta['kind']=='download' else 'inline')+"; filename*=UTF-8''"+quote(meta['path'].name))
             if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')

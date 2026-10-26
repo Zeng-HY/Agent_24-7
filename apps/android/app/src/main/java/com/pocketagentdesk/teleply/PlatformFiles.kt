@@ -17,6 +17,9 @@ fun safeShareName(name:String):String {
     return safe
 }
 fun shareMime(name:String):String=when(name.substringAfterLast('.',"").lowercase()) {
+    "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     "pdf" -> "application/pdf";"png" -> "image/png";"jpg","jpeg" -> "image/jpeg";"webp" -> "image/webp"
     // HTML goes as a web page, so a browser opens it as one (user's choice, 2026-10-24).
     "html","htm" -> "text/html"

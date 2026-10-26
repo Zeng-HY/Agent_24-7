@@ -35,7 +35,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "files/places" -> JSONObject("""{"items":[{"name":"固定目录","path":"D:/fixture","kind":"conversation"}]}""")
         "files/list" -> JSONObject("""{"path":"D:/fixture","items":[{"kind":"file","app":"pc","id":"fixture-file-ref","name":"测试.txt","path":"D:/fixture/测试.txt"}]}""")
         "chat/files" -> JSONObject().put("items", JSONArray(FixtureWorld.FILES))
-        "file/meta" -> FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")) } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
+        "file/meta" -> if(query["file"]=="fixture-download") JSONObject().put("kind","download").put("size","固定测试内容".toByteArray().size).put("state","current") else FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")) } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
         "file/text" -> JSONObject().put("text", if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
         "chat/diff" -> JSONObject("""{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}""")
         "chat/projects" -> world.tree(query["more"], device)

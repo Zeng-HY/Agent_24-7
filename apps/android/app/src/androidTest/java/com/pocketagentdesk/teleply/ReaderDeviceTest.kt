@@ -7,6 +7,33 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Test
 @RunWith(AndroidJUnit4::class)
 class ReaderDeviceTest:ReaderUiScenarios() {
+    @Test fun savesThroughSystemDocumentPickerWithoutSendingMessage() {
+        launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.ready && !vm.state.value.busy }
+        compose.onNodeWithTag("composer").performTextInput("保留下载前草稿")
+        compose.runOnIdle { vm.workspace.file(org.json.JSONObject().put("id","fixture-download").put("name","遥应下载测试-${System.currentTimeMillis()}.txt").put("kind","download")) }
+        compose.waitUntil(10000) { !vm.workspace.state.value.busy }
+        compose.onNodeWithText("保存到手机").performScrollTo().performClick()
+        val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
+        var button:android.view.accessibility.AccessibilityNodeInfo?=null
+        val until=System.currentTimeMillis()+10000
+        while(button==null && System.currentTimeMillis()<until) {
+            val root=automation.rootInActiveWindow
+            if(root?.packageName?.toString()?.contains("documentsui")==true) {
+                button=(root.findAccessibilityNodeInfosByText("Save")+root.findAccessibilityNodeInfosByText("保存")).firstOrNull { it.isClickable && it.isEnabled && it.className.toString().contains("Button") }
+            }
+            if(button==null) Thread.sleep(100)
+        }
+        org.junit.Assert.assertNotNull("System save button not found",button)
+        org.junit.Assert.assertTrue(button!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        compose.waitUntil(15000) { vm.workspace.state.value.savedUri!=null || vm.workspace.state.value.transfer.startsWith("保存失败") }
+        val uri=android.net.Uri.parse(requireNotNull(vm.workspace.state.value.savedUri) { vm.workspace.state.value.transfer })
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        try { org.junit.Assert.assertEquals("固定测试内容",context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }) }
+        finally { android.provider.DocumentsContract.deleteDocument(context.contentResolver,uri) }
+        org.junit.Assert.assertEquals(0,vm.workspace.sendExtras().getJSONArray("references").length())
+        compose.onNodeWithText("打开已保存的文件").assertExists()
+    }
     @Test fun shareChooserCancellationDoesNotClaimDelivery() {
         launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.workspace.state.value.ready && !vm.state.value.busy }
