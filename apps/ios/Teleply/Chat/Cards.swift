@@ -312,7 +312,9 @@ func codexPlan(_ raw: JSONValue, for message: Message) -> JSONValue? {
     guard plan.isObject else { return nil }
     let id = plan["id"].string()
     guard !id.isEmpty, !plan["text"].string().isEmpty else { return nil }
-    return message.id == id || message.details["source_id"].string() == id ? plan : nil
+    // Not `c ? plan : nil`: that nil is JSONValue.null, which made every message of the conversation a plan card.
+    guard message.id == id || message.details["source_id"].string() == id else { return nil }
+    return plan
 }
 
 /// A plan Codex made in plan mode (web codex-ui.js renderCard plan): 计划 · 待确认 with a preview, 展开完整计划;

@@ -125,7 +125,7 @@ extension WorkspaceModel {
                 let extras = try self.sendExtras()
                 let text = saved["first_message"].string().trimmingCharacters(in: .whitespacesAndNewlines)
                 let references = extras["references"]
-                let images = saved["uploads"].array.filter { $0["image"].bool() }.compactMap { $0["meta"].isObject ? $0["meta"] : nil }
+                let images = saved["uploads"].array.filter { $0["image"].bool() && $0["meta"].isObject }.map { $0["meta"] }
                 guard !text.isEmpty || !images.isEmpty || !references.array.isEmpty else { throw ReadFailure("请输入首条消息") }
                 // No folder is 无项目, as the sheet shows it; DeepSeek always needs one of its workspaces.
                 let folder = saved["folder"].string()

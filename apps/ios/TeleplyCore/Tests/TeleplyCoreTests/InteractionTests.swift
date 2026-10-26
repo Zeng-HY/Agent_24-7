@@ -24,6 +24,18 @@ struct PendingCardTests {
         #expect(deepseekQuestionEvent(raw, callId: "c1") == "e2")
         #expect(pendingCards(app: "deepseek", raw: [:]).isEmpty)
     }
+
+    /// The trap behind the 0.5.0 crash (10-27): in `c ? value : nil` the nil is JSONValue.null, a value `if let`
+    /// binds. A question event without a request object is dropped, not kept as null.
+    @Test func aBareNilInATernaryIsJSONNullSoEventsWithoutARequestAreDropped() {
+        func pick(_ yes: Bool) -> JSONValue? {
+            let value = JSONValue.string("x")
+            return yes ? value : nil
+        }
+        #expect(pick(false) == .some(.null))
+        let raw = DemoData.parse(#"{"interactions":[{"event":"user-questions/request","eventId":"e1","request":"broken"},{"event":"user-questions/request","eventId":"e2","request":{"callId":"c2","questions":[]}}]}"#)
+        #expect(deepseekQuestionCards(raw).map { $0["callId"].string() } == ["c2"])
+    }
 }
 
 /// Answering in the timeline on the local demo, through the whole app (Android ReaderUiScenarios card cases).

@@ -12,15 +12,21 @@ final class Chrome {
     @ObservationIgnored var noPull: CGRect = .null
     /// A sidebar swipe is moving, or ended a moment ago. The row under the finger takes the lift as a tap (the 0.4.1
     /// tour: a swipe right on a row opened that conversation under the sidebar), so rows and the sidebar's buttons
-    /// ask [tapsAllowed] first.
+    /// act through [tap].
     @ObservationIgnored var pulling = false
     @ObservationIgnored var pulledAt = Date.distantPast
 
     var tapsAllowed: Bool { !pulling && Date().timeIntervalSince(pulledAt) > 0.3 }
 
-    /// [action] unless its tap ends a sidebar swipe.
+    /// [action] a tenth of a second after its tap, unless that tap ended a sidebar swipe. The row hears the lift
+    /// before the swipe has told anyone it moved (0.4.2 tour), so it is asked again a moment later.
     func tap(_ action: @escaping () -> Void) -> () -> Void {
-        { [weak self] in if self?.tapsAllowed != false { action() } }
+        {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
+                if self.tapsAllowed { action() }
+            }
+        }
     }
 
     func openDrawer() {

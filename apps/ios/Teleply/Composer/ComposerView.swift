@@ -178,7 +178,9 @@ struct ComposerCard: View {
         let queue = chat.control.running && chat.control.queueAvailable
         let words = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let extras = !saved["uploads"].array.isEmpty || !saved["references"].array.isEmpty
-        let canSend = chat.ready && chat.control.available && !chat.submitting && (!words.isEmpty || extras) && words.count <= 20_000
+        // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
+        let reachable = chat.control.available || sendsWhileAway(chat.key?.app ?? model.app)
+        let canSend = chat.ready && reachable && !chat.submitting && (!words.isEmpty || extras) && words.count <= 20_000
         // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
         let newPage = isNewPage(chat.key?.chat)
         let prompt = newPage ? "可以先写下一条，创建完成后发送" : chat.hint.isEmpty ? "输入消息…" : chat.hint
@@ -277,34 +279,54 @@ struct ComposerCard: View {
 
     private var chips: some View {
         let app = model.conversation.key?.app ?? model.app
-        let labels = chipLabels(app: app, raw: model.conversation.control.raw, saved: model.workspace.saved)
+        let raw = model.conversation.control.raw
+        let labels = chipLabels(app: app, raw: raw, saved: model.workspace.saved)
         let narrow = width + 24 < 370
         let modeName = app == "deepseek" ? "权限" : "模式"
         return Group {
-            Menu {
-                ModelMenu(model: model)
-            } label: {
-                ChipLabel(text: labels.model, narrow: narrow)
+            if chipAway(app: app, raw: raw) {
+                // Not open on the computer: the chip opens it there; its menus would act on another conversation
+                // (web codex-ui.js, claude-ui.js "away").
+                Button { model.workspace.openOnComputer() } label: {
+                    ChipLabel(text: "电脑上打开", narrow: narrow)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.workspace.busy)
+                .accessibilityLabel(Text("电脑上打开这个对话"))
+            } else {
+                modelChip(labels: labels, narrow: narrow)
+                modeChip(labels: labels, narrow: narrow, modeName: modeName)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            // The system turns a menu that opens upward around; the models stay first (spec 4.3).
-            .menuOrder(.fixed)
-            .accessibilityLabel(Text("模型：\(labels.model)"))
-            Menu {
-                ModeMenu(model: model) { confirming = $0 }
-            } label: {
-                ChipLabel(text: labels.mode, selected: labels.plan, narrow: narrow)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            // The system turns a menu that opens upward around; the models stay first (spec 4.3).
-            .menuOrder(.fixed)
-            .accessibilityLabel(Text("\(modeName)：\(labels.mode)"))
-            .accessibilityValue(Text(labels.plan ? "计划模式" : ""))
         }
+    }
+
+    private func modelChip(labels: (model: String, mode: String, plan: Bool), narrow: Bool) -> some View {
+        Menu {
+            ModelMenu(model: model)
+        } label: {
+            ChipLabel(text: labels.model, narrow: narrow)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        // The system turns a menu that opens upward around; the models stay first (spec 4.3).
+        .menuOrder(.fixed)
+        .accessibilityLabel(Text("模型：\(labels.model)"))
+    }
+
+    private func modeChip(labels: (model: String, mode: String, plan: Bool), narrow: Bool, modeName: String) -> some View {
+        Menu {
+            ModeMenu(model: model) { confirming = $0 }
+        } label: {
+            ChipLabel(text: labels.mode, selected: labels.plan, narrow: narrow)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        // The system turns a menu that opens upward around; the models stay first (spec 4.3).
+        .menuOrder(.fixed)
+        .accessibilityLabel(Text("\(modeName)：\(labels.mode)"))
+        .accessibilityValue(Text(labels.plan ? "计划模式" : ""))
     }
 
     private func sendButton(queue: Bool, enabled: Bool) -> some View {
@@ -377,11 +399,14 @@ private struct StatusLine: View {
         let workspace = model.workspace
         let receipt = chat.submissions.first { $0.label != removedLabel }?.label
         let unknown = workspace.saved["pending_action"]["status"].string() == "unknown"
+        // The computer's words on why the next message cannot go, in place of an old receipt (user 10-27).
+        let away = awayReason(app: chat.key?.app ?? model.app, raw: chat.control.raw)
         let line: (text: String, error: Bool)? = {
             if let error = chat.error { return (error, true) }
             if let error = workspace.error { return (error, true) }
             if !workspace.result.isEmpty { return (workspace.result, false) }
             if unknown { return ("上次操作的结果还没确认", false) }
+            if let away { return (away, false) }
             if let receipt, receipt != "未接收", receipt != "送达状态待确认" { return (receipt, false) }
             return nil
         }()
@@ -395,6 +420,10 @@ private struct StatusLine: View {
                     .padding(.vertical, 4)
                 if unknown {
                     Button("核对上次操作") { workspace.checkAction() }
+                        .buttonStyle(PillStyle(kind: .text, minHeight: 32))
+                        .disabled(workspace.busy)
+                } else if let away, line.text == away {
+                    Button("电脑上打开") { workspace.openOnComputer() }
                         .buttonStyle(PillStyle(kind: .text, minHeight: 32))
                         .disabled(workspace.busy)
                 }

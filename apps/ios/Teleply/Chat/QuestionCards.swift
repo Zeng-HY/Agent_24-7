@@ -179,7 +179,9 @@ struct OptionCard: View {
 /// The action waiting on [route] in a conversation's saved workspace, when there is one.
 private func pendingAction(_ saved: JSONValue, _ route: String) -> JSONValue? {
     let action = saved["pending_action"]
-    return action.isObject && action["route"].string() == route ? action : nil
+    // Not `c ? action : nil`: that nil is JSONValue.null, a value.
+    guard action.isObject, action["route"].string() == route else { return nil }
+    return action
 }
 
 /// The labels chosen for one question.

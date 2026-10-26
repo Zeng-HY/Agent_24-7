@@ -422,7 +422,9 @@ public final class ChatModel {
             return
         }
         let hasExtras = !extra["attachments"].array.isEmpty || !extra["references"].array.isEmpty
-        guard foreground, ready, control.available, !inFlight.contains(key) else { return }
+        // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
+        let reachable = control.available || action == "send" && !planned && !promote && sendsWhileAway(key.app)
+        guard foreground, ready, reachable, !inFlight.contains(key) else { return }
         if action == "send" && !planned && (words.isEmpty && !hasExtras || words.count > 20_000 || queue && !control.queueAvailable)
             || action == "stop" && !control.running || promote && !control.running || planned && (key.app != "codex" || control.running) {
             return
@@ -476,7 +478,15 @@ public final class ChatModel {
         submitting = true
         error = nil
         if planned { hint = "" }
-        let sent: JSONValue? = clearDraft ? extra : planned ? ["settings": [:]] : nil
+        // Spelled out: in `c ? v : nil` the nil is JSONValue.null, a value.
+        let sent: JSONValue?
+        if clearDraft {
+            sent = extra
+        } else if planned {
+            sent = ["settings": [:]]
+        } else {
+            sent = nil
+        }
         let synthetic = synthetic
         let give = backgroundTime { [weak self] in self?.sends[rid]?.cancel() }
         sends[rid] = Task { [weak self] in

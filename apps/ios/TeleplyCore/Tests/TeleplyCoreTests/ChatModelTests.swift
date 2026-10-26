@@ -40,11 +40,14 @@ final class CommandComputer: RelayStreamingTransport, @unchecked Sendable {
     let counts = Counts()
     let unknown: Bool
     let running: Bool
+    /// False: the computer shows another conversation (state `available` false, with its reason).
+    let available: Bool
     private let streams = Mutexed<[AsyncThrowingStream<[UInt8], any Error>.Continuation]>([])
 
-    init(unknown: Bool = false, running: Bool = true) {
+    init(unknown: Bool = false, running: Bool = true, available: Bool = true) {
         self.unknown = unknown
         self.running = running
+        self.available = available
     }
 
     func send(_ request: RelayRequest) async throws -> RelayResponse {
@@ -52,6 +55,9 @@ final class CommandComputer: RelayStreamingTransport, @unchecked Sendable {
         if path.hasSuffix("/state") {
             let fresh = URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "fresh" } ?? false
             await counts.read(fresh: fresh)
+            if !available {
+                return .json(#"{"available":false,"reason":"电脑端尚未打开这个对话","running":false,"settings":{"model":"opus"}}"#)
+            }
             return .json(#"{"available":true,"running":\#(running),"active_turn_id":"turn","queue_available":true}"#)
         }
         if path.hasSuffix("/send") {

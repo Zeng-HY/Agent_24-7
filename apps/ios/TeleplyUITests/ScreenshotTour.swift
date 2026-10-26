@@ -63,8 +63,9 @@ final class ScreenshotTour: XCTestCase {
             XCTAssertTrue(app.staticTexts["电脑遥控"].waitForNonExistence(timeout: 5), "a swipe left did not close the sidebar")
             if app.staticTexts["电脑遥控"].exists { app.buttons["关闭导航"].firstMatch.tap() }
         }
-        // The swipe started on this row and must not have opened it (0.4.1 tour); a tap a moment later does.
-        XCTAssertFalse(app.staticTexts["原生阅读示例"].exists, "a swipe on a row opened its conversation")
+        // The swipe started on this row and must not have opened it (0.4.1 tour): no message box. The row's own title
+        // reads as static text too, so the title is no sign of the conversation.
+        XCTAssertFalse(composer(app).exists, "a swipe on a row opened its conversation")
         sleep(1)
 
         first.tap()
@@ -237,9 +238,10 @@ final class ScreenshotTour: XCTestCase {
                         let look = app.buttons["用快速查看打开"].firstMatch
                         if look.waitForExistence(timeout: 5), look.isHittable {
                             look.tap()
-                            sleep(3)
+                            sleep(6)
                             snap(app, page: "32-quick-look", variant: variant)
-                            let done = app.buttons["完成"].firstMatch
+                            // Quick Look speaks the simulator's own language, not the app's.
+                            let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["完成", "Done", "关闭", "Close"])).firstMatch
                             if done.waitForExistence(timeout: 5) { done.tap() }
                             sleep(1)
                         }
@@ -288,7 +290,8 @@ final class ScreenshotTour: XCTestCase {
         if row.waitForExistence(timeout: 10), reach(app, row) {
             row.swipeLeft()
             let archive = app.buttons["归档"].firstMatch
-            if archive.waitForExistence(timeout: 3) { snap(app, page: "33-swipe-archive", variant: variant) }
+            _ = archive.waitForExistence(timeout: 3)
+            snap(app, page: "33-swipe-archive", variant: variant)
             if archive.exists, archive.isHittable { archive.tap() }
             if app.buttons["撤销"].waitForExistence(timeout: 5) {
                 snap(app, page: "24-undo", variant: variant)

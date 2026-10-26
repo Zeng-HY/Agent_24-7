@@ -53,9 +53,8 @@ public func deepseekApprovals(_ raw: JSONValue) -> [JSONValue] {
 
 /// DeepSeek's question cards: those in its state and those that came as events, once per call id.
 public func deepseekQuestionCards(_ raw: JSONValue) -> [JSONValue] {
-    let events = raw["interactions"].array.filter { $0["event"].string() == "user-questions/request" }.compactMap { event -> JSONValue? in
-        event["request"].isObject ? event["request"] : nil
-    }
+    // Filtered rather than `c ? request : nil`, whose nil is JSONValue.null and would be kept.
+    let events = raw["interactions"].array.filter { $0["event"].string() == "user-questions/request" && $0["request"].isObject }.map { $0["request"] }
     var seen = Set<String>()
     return (raw["questions"].array + events).filter { seen.insert($0["callId"].string()).inserted }
 }
