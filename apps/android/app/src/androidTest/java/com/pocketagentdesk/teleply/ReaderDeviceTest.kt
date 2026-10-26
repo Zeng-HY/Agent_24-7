@@ -11,7 +11,14 @@ class ReaderDeviceTest:ReaderUiScenarios() {
         launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.workspace.state.value.ready && !vm.state.value.busy }
         compose.onNodeWithTag("composer").performTextInput("保留下载前草稿")
-        compose.runOnIdle { vm.workspace.file(org.json.JSONObject().put("id","fixture-download").put("name","遥应下载测试-${System.currentTimeMillis()}.txt").put("kind","download")) }
+        compose.onNodeWithContentDescription("添加附件或引用").performClick()
+        compose.onNodeWithText("从电脑选择文件").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.busy }
+        compose.onNodeWithText("固定目录").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.busy }
+        compose.onNodeWithText("遥应下载测试-",substring=true).performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
+        compose.onNodeWithText("添加到消息").assertExists()
         compose.waitUntil(10000) { !vm.workspace.state.value.busy }
         compose.onNodeWithText("保存到手机").performScrollTo().performClick()
         val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
