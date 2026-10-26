@@ -422,7 +422,9 @@ public final class ChatModel {
             return
         }
         let hasExtras = !extra["attachments"].array.isEmpty || !extra["references"].array.isEmpty
-        guard foreground, ready, control.available, !inFlight.contains(key) else { return }
+        // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
+        let reachable = control.available || action == "send" && !planned && !promote && sendsWhileAway(key.app)
+        guard foreground, ready, reachable, !inFlight.contains(key) else { return }
         if action == "send" && !planned && (words.isEmpty && !hasExtras || words.count > 20_000 || queue && !control.queueAvailable)
             || action == "stop" && !control.running || promote && !control.running || planned && (key.app != "codex" || control.running) {
             return

@@ -590,7 +590,11 @@ public final class WorkspaceModel {
             do {
                 let reply = try await client.detail(device: key.device, route: "chat/open", body: ["app": .string(key.app), "id": .string(key.chat)])
                 let text = reply["text"].string()
-                if self?.key == key { self?.result = text.isEmpty ? "已在电脑上打开" : text }
+                if self?.key == key {
+                    self?.result = text.isEmpty ? "已在电脑上打开" : text
+                    // Read again at once, so the chips and the send button follow (web: openOnPC, then refresh).
+                    self?.changed()
+                }
             } catch {
                 if self?.key == key { self?.error = describe(error) }
             }

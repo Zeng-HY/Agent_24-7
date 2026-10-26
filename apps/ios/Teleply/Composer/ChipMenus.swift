@@ -2,39 +2,6 @@ import SwiftUI
 import TeleplyModel
 import TeleplyState
 
-/// Effort names as the web writes them (Android EffortNames).
-func effortName(_ value: String) -> String {
-    ["none": "无", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "极高", "max": "最高", "ultra": "Ultra"][value] ?? value
-}
-
-/// What the chips say, per source (spec 4.3; Android chipLabels): Codex model · effort and 普通执行 / 计划;
-/// Claude its desktop labels; DeepSeek model · effort and its permission. [plan] gives the mode chip the
-/// selected look.
-func chipLabels(app: String, raw: JSONValue, saved: JSONValue) -> (model: String, mode: String, plan: Bool) {
-    let settings = raw["settings"]
-    switch app {
-    case "claude":
-        let label = raw["model_label"].string()
-        let model = label.isEmpty ? (settings["model"].string().isEmpty ? "模型" : settings["model"].string()) : label
-        let effort = raw["effort_label"].string()
-        let mode = raw["mode_label"].string()
-        return (effort.isEmpty ? model : "\(model) · \(effort)", mode.isEmpty ? "默认" : mode, settings["mode"].string() == "plan")
-    case "deepseek":
-        let model = settings["model"].string().isEmpty ? "模型" : settings["model"].string()
-        let effort = effortName(settings["reasoningEffort"].string())
-        let permission = raw["permission_name"].string()
-        return (effort.isEmpty ? model : "\(model) · \(effort)", permission.isEmpty ? "权限" : permission, false)
-    default:
-        let chosen = saved["settings"].isObject ? saved["settings"] : settings
-        let id = chosen["model"].string()
-        let named = raw["catalog"]["models"].array.first { $0["id"].string() == id }?["name"].string() ?? ""
-        let name = named.isEmpty ? (id.isEmpty ? "模型" : id) : named
-        let effort = effortName(chosen["effort"].string())
-        let plan = chosen["mode"].string() == "plan"
-        return (effort.isEmpty ? name : "\(name) · \(effort)", plan ? "计划" : "普通执行", plan)
-    }
-}
-
 /// A model or mode chip (web .composer-chip): a clear capsule, 12 pt / 500 (11 pt on screens under 370 pt), a
 /// small arrow, at most 150 pt wide; plan mode takes the selected colours. The label of a system menu.
 struct ChipLabel: View {
