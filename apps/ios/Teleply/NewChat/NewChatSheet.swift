@@ -90,6 +90,10 @@ struct NewChatSheet: View {
             .navigationDestination(isPresented: $searching) { FolderSearch(model: model, app: app) }
         }
         .presentationDetents([.medium, .large])
+        // 引用 and 电脑上的文件 open over the sheet, which stays with its draft.
+        .sheet(isPresented: Binding(get: { workspace.picker != nil }, set: { if !$0 { workspace.closePicker() } })) {
+            PickerSheet(model: model)
+        }
         // A source the computer turns out not to have: its first app instead, with the words typed so far.
         .task(id: "\(known ?? [])|\(app)|\(ready)") {
             guard let first = known?.first, ready, known?.contains(app) == false else { return }
@@ -338,6 +342,7 @@ private struct NewComposer: View {
         let canCreate = ready && !workspace.busy && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || extras > 0) && !uploading
             && (app != "deepseek" || !folder.isEmpty)
         VStack(alignment: .leading, spacing: 0) {
+            if ready { AttachmentTiles(workspace: workspace, saved: saved) }
             TextField("", text: Binding(get: { text }, set: { workspace.edit("first_message", .string($0)) }),
                       prompt: Text("想做什么？").foregroundStyle(Palette.muted), axis: .vertical)
                 .bodyFont()
@@ -350,6 +355,7 @@ private struct NewComposer: View {
                 .padding(.vertical, 8)
                 .accessibilityLabel(Text("首条消息"))
             HStack(spacing: 4) {
+                AttachButton(model: model, app: app, enabled: ready)
                 Spacer(minLength: 0)
                 Button {
                     guard canCreate else { return }

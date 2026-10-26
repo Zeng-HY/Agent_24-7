@@ -170,14 +170,17 @@ struct ComposerCard: View {
 
     var body: some View {
         let chat = model.conversation
+        let saved = model.workspace.saved
         let queue = chat.control.running && chat.control.queueAvailable
         let words = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canSend = chat.ready && chat.control.available && !chat.submitting && !words.isEmpty && words.count <= 20_000
+        let extras = !saved["uploads"].array.isEmpty || !saved["references"].array.isEmpty
+        let canSend = chat.ready && chat.control.available && !chat.submitting && (!words.isEmpty || extras) && words.count <= 20_000
         // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
         let newPage = isNewPage(chat.key?.chat)
         let prompt = newPage ? "可以先写下一条，创建完成后发送" : chat.hint.isEmpty ? "输入消息…" : chat.hint
         VStack(alignment: .leading, spacing: 0) {
             StatusLine(model: model)
+            if !newPage { AttachmentTiles(workspace: model.workspace, saved: saved) }
             TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Palette.muted), axis: .vertical)
                 .bodyFont()
                 .foregroundStyle(Palette.ink)
@@ -219,8 +222,10 @@ struct ComposerCard: View {
 
     /// The card's bottom row: the chips, then send. At the largest text sizes the chips take their own line.
     private func controls(queue: Bool, canSend: Bool) -> some View {
-        ViewThatFits(in: .horizontal) {
+        let app = model.conversation.key?.app ?? model.app
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 4) {
+                AttachButton(model: model, app: app, enabled: model.workspace.ready)
                 chips
                 Spacer(minLength: 4)
                 sendButton(queue: queue, enabled: canSend)
@@ -229,6 +234,7 @@ struct ComposerCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) { chips }
                 HStack {
+                    AttachButton(model: model, app: app, enabled: model.workspace.ready)
                     Spacer()
                     sendButton(queue: queue, enabled: canSend)
                 }

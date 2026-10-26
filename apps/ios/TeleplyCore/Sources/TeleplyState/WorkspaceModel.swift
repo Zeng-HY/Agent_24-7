@@ -35,9 +35,11 @@ public final class WorkspaceModel {
     /// One Claude button at a time: its click waits for the computer's window.
     public var pressing: Bool { cards.values.contains { $0.hasPrefix("pressing:") } }
 
-    // The panes (Android pane): "new" (新建对话), "chat" and "skill" (引用), "remote" (电脑上的文件), "files"
-    // (对话文件), "file" (a file's page) and "diff" (本轮差异), with what the open one lists.
+    // The panes (Android pane): "new" (新建对话), "files" (对话文件), "file" (a file's page) and "diff" (本轮差异);
+    // a picker opens over the conversation or the new-conversation sheet: "chat" and "skill" (引用), "remote" (电脑上
+    // 的文件). [data] is what the open one lists.
     public internal(set) var pane: String?
+    public internal(set) var picker: String?
     public internal(set) var paneBusy = false
     public internal(set) var paneError: String?
     public internal(set) var data: JSONValue = [:]
@@ -46,6 +48,9 @@ public final class WorkspaceModel {
     public internal(set) var newData: JSONValue = [:]
     /// A line under the sheet: a list that did not come this time, or photos that could not follow a draft back.
     public internal(set) var newNote: String?
+    /// A file page's text (text files) and its copy on this phone (pictures and PDFs, for Quick Look).
+    public internal(set) var fileText = ""
+    public internal(set) var preview: URL?
 
     /// A first message sent: it becomes a job and the sheet is free again at once (web 10-16).
     @ObservationIgnored public var created: (NewJob) -> Void = { _ in }
@@ -57,6 +62,12 @@ public final class WorkspaceModel {
     @ObservationIgnored var newReads: [String: Task<Void, Never>] = [:]
     /// The new conversation's request id being asked for, one per workspace.
     @ObservationIgnored var draftIDs: [ChatKey: Task<String, any Error>] = [:]
+    /// The conversation's files as listed for an HTML page's own resources, read once per conversation.
+    @ObservationIgnored var listing: (key: ChatKey, items: [JSONValue])?
+    /// Uploads under way by their row's local id; removing the row stops its upload.
+    @ObservationIgnored var uploadTasks: [String: Task<Void, Never>] = [:]
+    /// 诊断测速 (开发者选项): an upload's time and what it came to.
+    @ObservationIgnored public var timed: (_ label: String, _ elapsed: Duration, _ outcome: String) -> Void = { _, _, _ in }
 
     /// After an action reached the source, so the conversation reads its state again.
     @ObservationIgnored public var changed: () -> Void = {}
@@ -95,6 +106,7 @@ public final class WorkspaceModel {
         await work?.value
         await paneRead?.value
         for list in Array(newReads.values) { await list.value }
+        for upload in Array(uploadTasks.values) { await upload.value }
         await writing?.value
     }
 
@@ -108,9 +120,13 @@ public final class WorkspaceModel {
         generation += 1
         paneGeneration += 1
         pane = nil
+        picker = nil
         paneBusy = false
         paneError = nil
         data = [:]
+        fileText = ""
+        dropPreview()
+        listing = nil
         newData = next.flatMap { lists[$0] } ?? [:]
         let g = generation
         key = next

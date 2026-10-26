@@ -121,6 +121,10 @@ struct ConversationView: View {
         .sheet(item: $selecting) { message in SelectTextSheet(text: message.text) }
         .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
         .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
+        .sheet(isPresented: Binding(get: { model.workspace.picker != nil && model.workspace.key?.chat != "@new" },
+                                    set: { if !$0 { model.workspace.closePicker() } })) {
+            PickerSheet(model: model)
+        }
     }
 
     // MARK: Title bar

@@ -18,7 +18,11 @@ struct TeleplyApp: App {
             transport: LaunchOptions.transport(),
             demo: { DemoHolder.shared.fresh() }))
         model.conversation.backgroundTime = BackgroundTime.begin
-        model.conversation.timed = { label, elapsed, outcome in SpeedLog.shared.add(label, elapsed: elapsed, result: outcome, notify: true) }
+        // 诊断测速 times what carries a message or a file (web: the same requests).
+        let timed: (String, Duration, String) -> Void = { label, elapsed, outcome in SpeedLog.shared.add(label, elapsed: elapsed, result: outcome, notify: true) }
+        model.conversation.timed = timed
+        model.workspace.timed = timed
+        model.jobs.timed = timed
         if LaunchOptions.usesDemo {
             model.openDemo()
         } else {

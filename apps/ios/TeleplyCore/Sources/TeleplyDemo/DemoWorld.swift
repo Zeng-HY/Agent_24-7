@@ -608,6 +608,36 @@ enum DemoData {
 
     static let claudeState = parse(#"{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"默认","mode_options":[{"name":"default","label":"默认"},{"name":"acceptEdits","label":"自动接受修改"},{"name":"plan","label":"计划"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1"},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"#)
 
+    /// The conversation files of the demo (Android FixtureWorld.FILES): a page, a picture beside it, a Markdown note.
+    static let files: [JSONValue] = [
+        ["id": "fixture-html", "name": "安全预览.html", "path": "D:\\fixture\\安全预览.html", "kind": "text", "state": "current", "size": 900],
+        ["id": "fixture-png", "name": "logo.png", "path": "D:\\fixture\\images\\logo.png", "kind": "image", "state": "current", "size": 462],
+        ["id": "fixture-md", "name": "说明.md", "path": "D:\\fixture\\说明.md", "kind": "text", "state": "current", "size": 200],
+    ]
+
+    static func textFile(_ id: String) -> String {
+        switch id {
+        case "fixture-md": return markdownFile
+        case "fixture-html": return htmlFile
+        default: return "固定测试内容"
+        }
+    }
+
+    static let htmlFile = """
+    <script>fetch('https://example.invalid/secret').catch(() => {})</script>
+    <h1>固定 HTML 页面</h1>
+    <p>这一页在手机上按网页显示：脚本照常运行，网上的资源照常加载。</p>
+    <p id="script-state">脚本没有运行</p>
+    <script>document.getElementById('script-state').textContent = '脚本已运行'</script>
+    <p><img src="images/logo.png" alt="同目录下的图片"></p>
+    <table border="1" cellpadding="6"><tr><th>项目</th><th>结果</th></tr><tr><td>脚本</td><td>运行</td></tr><tr><td>同目录的图片</td><td>从电脑上取</td></tr></table>
+    <p><a href="https://developer.apple.com/">点链接用浏览器打开</a></p>
+    """
+
+    static let markdownFile = "# 说明\n\n这是一个 **Markdown** 文件，默认用阅读视图显示。\n\n- 第一条\n- 第二条\n\n> 也可以切到「查看源码」看原文。"
+
+    static let png = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAoCAIAAACO8WhuAAABlUlEQVR42u3QhzICAAAGYM9CyB4hMyF7JDOrsreydyIzhczISNll772P4zjHcRzHOY7jOOcNPIe7/3uETys+6Tcu+Sc25ZuT+sVJ+2Snf7Ay3lmZbzFZr9Hcl2jec1T2U2TOY2TuQ0TePTP/jllwG154E1Z0HVZ8FVpyGVJ6EVx2Hlx+FsQ/ZVScMATHgZVH9KpDuvAgoHrPv2bXv3bbr27Tt37Dt2HNR7Tq3bjsLV7ykix4Ns17NM96tMy4S6dorRpam9qtfdy1Y8y1c8Sla5gqU1G7lc49Coq8n9Lb59Qnd+zvcRyQOSi67Ac77JTtdqpW2yEpebiZPCKxGRVbj4msxxusJupI6lqSptpyUmgxVWkxLTCf4ZvNlpnNlZrOF5ssFBkvFhgv5Rst5xqu5Biu8gzWuMT1TOJGuv5mmt5Wit52su5OImE3gbAXp7Mfq33A1j5kaSEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEIQhCCEIQgBCEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEI+m9BfzQ+a2t+SvdoAAAAAElFTkSuQmCC"
+
     static let claudeSecond = parse(#"{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3"},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"#)
 
     static let deepseekState = parse(#"{"available":true,"settings":{"provider":"deepseek","model":"deepseek-v4","reasoningEffort":"high"},"permission":"workspace","permission_name":"工作区内修改","interactions":[{"event":"approval/request","eventId":"e-approval-1","request":{"toolName":"shell","reason":"rm -rf build/","displayReason":"删除 build 目录（构建缓存）"}}],"questions":[]}"#)

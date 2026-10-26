@@ -28,6 +28,12 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>拍照后作为附件发给电脑上的对话。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>录音交给电脑上的语音服务转成文字，放进输入框；手机不保存录音。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>这台电脑没开语音时，用 iPhone 自带的语音识别把说的话转成文字，放进输入框。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

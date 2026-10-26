@@ -32,6 +32,8 @@ extension WorkspaceModel {
         data = [:]
         paneBusy = false
         paneError = nil
+        fileText = ""
+        dropPreview()
     }
 
     /// 新建对话 opens at once (0.8, web openNewSheet): the folders and models of last time are there already, the

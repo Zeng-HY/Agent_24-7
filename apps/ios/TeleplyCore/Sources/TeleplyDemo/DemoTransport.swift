@@ -4,7 +4,7 @@ import TeleplyModel
 /// The local demo's service (spec 4.6 本地示例; Android FixtureApi), answering the same routes as the relay so the
 /// app's own request and parsing code runs on it. Never contacts a service and never sees real credentials.
 /// 示例网络 slows or breaks only computer routes (/d/…); the account service answers at once, as on Android.
-public struct DemoTransport: RelayTransport {
+public struct DemoTransport: RelayFileTransport {
     /// The whole demo service down, for the launch page's "连不上服务器" screenshots.
     public struct Unreachable: Error {}
     /// 示例网络 → 断开: the computer cannot be reached (Android: IOException).
@@ -35,7 +35,34 @@ public struct DemoTransport: RelayTransport {
         let network = world.network
         if network == .offline { throw Offline() }
         if network.delay > .zero { try await Task.sleep(for: network.delay) }
+        if let file = request.upload { return uploaded(route, query, file) }
         return computer(device, route, query, request.method, body)
+    }
+
+    /// A conversation's file as the demo computer has it: the fixed picture, or a line of text.
+    public func download(_ request: RelayRequest, limit: Int64) async throws -> RelayDownload {
+        if delay > .zero { try await Task.sleep(for: delay) }
+        let network = world.network
+        if network == .offline { throw Offline() }
+        if network.delay > .zero { try await Task.sleep(for: network.delay) }
+        let file = Self.query(request.url)["file"] ?? ""
+        let bytes = file == "fixture-png" ? Data(base64Encoded: DemoData.png) ?? Data() : Data(DemoData.textFile(file).utf8)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-demo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = DemoData.files.first { $0["id"].string() == file }?["name"].string() ?? "download.txt"
+        let saved = folder.appendingPathComponent(name)
+        try bytes.write(to: saved)
+        return RelayDownload(status: 200, file: saved)
+    }
+
+    /// A picture or file taken by the demo computer: its record, as the computer answers (Android FixtureApi upload).
+    func uploaded(_ route: String, _ query: [String: String], _ file: URL) -> RelayResponse {
+        guard route == "/api/codex/upload" || route == "/api/files/upload" else { return Self.notFound }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        let name = query["name"] ?? "文件"
+        let image = route == "/api/codex/upload"
+        return Self.json(["id": .string(UUID().uuidString.lowercased()), "kind": "file", "app": .string(image ? query["app"] ?? "codex" : "pc"),
+                          "name": .string(name), "path": .string("D:/fixture/" + name), "original_size": .number(Double(size)), "size": .number(Double(size))])
     }
 
     static let notFound = RelayResponse.json(#"{"error":"本地示例没有这个地址"}"#, status: 404)
@@ -137,6 +164,15 @@ public struct DemoTransport: RelayTransport {
         case "/api/composer/references", "/api/chat/new/references":
             let kind = query["kind"] ?? "chat"
             return Self.json(["items": [["kind": .string(kind), "id": "fixture-reference", "app": .string(app), "name": "固定引用", "title": "固定引用"]]])
+        case "/api/chat/files":
+            return Self.json(["items": .array(DemoData.files)])
+        case "/api/file/meta":
+            let file = DemoData.files.first { $0["id"].string() == query["file"] }
+            return Self.json(["kind": file?["kind"] ?? "text", "name": file?["name"] ?? "安全预览.html", "state": "current", "size": file?["size"] ?? 60])
+        case "/api/file/text":
+            return Self.json(["text": .string(DemoData.textFile(query["file"] ?? ""))])
+        case "/api/chat/diff":
+            return Self.json(DemoData.parse(#"{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}"#))
         case "/api/files/places":
             return Self.json(DemoData.parse(#"{"items":[{"name":"固定目录","path":"D:/fixture","kind":"conversation"}]}"#))
         case "/api/files/list":

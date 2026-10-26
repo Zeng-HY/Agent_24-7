@@ -20,6 +20,8 @@ public final class NewChatJobs {
     }
     /// An accepted job whose page is on screen: open its conversation.
     @ObservationIgnored public var settle: (NewJob) -> Void = { _ in }
+    /// 诊断测速 (开发者选项): a first message's time and what it came to.
+    @ObservationIgnored public var timed: (_ label: String, _ elapsed: Duration, _ outcome: String) -> Void = { _, _, _ in }
 
     @ObservationIgnored let pacer: any Pacer
     @ObservationIgnored let store: LocalStore?
@@ -111,11 +113,14 @@ public final class NewChatJobs {
         sending.insert(rid)
         working[rid] = Task { [weak self] in
             let pending: JSONValue
+            let started = ContinuousClock.now
             do {
                 pending = try await client.detail(device: owner.device, route: "chat/new", body: job.body)
+                self?.timed("新对话提交", ContinuousClock.now - started, speedOutcome(pending))
             } catch {
                 let refused = (error as? ServiceFailure)?.notSubmitted == true
                 pending = ["state": .string(refused ? "failed" : "unconfirmed"), "message": .string(describe(error))]
+                self?.timed("新对话提交", ContinuousClock.now - started, (error as? ServiceFailure).map { "HTTP \($0.status)" } ?? "网络失败")
             }
             guard let self else { return }
             self.sending.remove(rid)
@@ -209,11 +214,15 @@ public final class NewChatJobs {
         put(going)
         working[rid] = Task { [weak self] in
             let pending: JSONValue
+            let started = ContinuousClock.now
+            let label = previous["can_submit"].bool() ? "新对话提交" : "新对话重试"
             do {
                 pending = previous["can_submit"].bool()
                     ? try await client.detail(device: owner.device, route: "chat/new", body: job.body)
                     : try await client.detail(device: owner.device, route: "chat/new/retry", body: ["request_id": .string(rid)])
+                self?.timed(label, ContinuousClock.now - started, speedOutcome(pending))
             } catch {
+                self?.timed(label, ContinuousClock.now - started, (error as? ServiceFailure).map { "HTTP \($0.status)" } ?? "网络失败")
                 var unknown = previous.object
                 unknown["state"] = "unconfirmed"
                 unknown["can_submit"] = false

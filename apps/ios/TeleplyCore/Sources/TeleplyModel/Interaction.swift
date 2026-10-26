@@ -60,6 +60,26 @@ public func deepseekQuestionCards(_ raw: JSONValue) -> [JSONValue] {
     return (raw["questions"].array + events).filter { seen.insert($0["callId"].string()).inserted }
 }
 
+/// Folds . and .. and the slashes, in lower case, as the web compares an HTML page's resource with the listed files
+/// (artifact-preview.js).
+public func normalizePath(_ path: String) -> String {
+    var parts: [Substring] = []
+    for bit in path.replacingOccurrences(of: "\\", with: "/").split(separator: "/", omittingEmptySubsequences: false) {
+        switch bit {
+        case "", ".": continue
+        case "..": if !parts.isEmpty { parts.removeLast() }
+        default: parts.append(bit)
+        }
+    }
+    return parts.joined(separator: "/").lowercased()
+}
+
+/// A path written in a page that may name a file beside it (web artifact-preview relative()).
+public func relativeResource(_ path: String) -> Bool {
+    !path.isEmpty && !path.hasPrefix("/") && !path.hasPrefix("\\") && !path.contains(":")
+        && !path.unicodeScalars.contains { $0 == "?" || $0 == "#" || $0.value < 0x20 }
+}
+
 /// The event that brought a DeepSeek question card, which its answer names.
 public func deepseekQuestionEvent(_ raw: JSONValue, callId: String) -> String {
     raw["interactions"].array.first { $0["event"].string() == "user-questions/request" && $0["request"]["callId"].string() == callId }?["eventId"].string() ?? ""
