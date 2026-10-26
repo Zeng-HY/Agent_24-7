@@ -29,15 +29,38 @@
 
 目标：TestFlight 装上“遥应”，打开是标志页，显示版本号和默认服务的版本，在真机上提前证明证书和网络设置没问题。
 
-| 项目 | 本机测过 | 模拟器截图看过 | 真机验过 |
+| 项目 | 本机测过 | 云端 / 模拟器 | 真机验过 |
 |---|---|---|---|
-| `TeleplyCore` 编译和测试 | 通过（10-26，Swift 6.4.1 Windows，14 项） | — | — |
-| 云端编译 | — | 待测 | — |
-| 启动页（浅色、深色、最大字号） | — | 待测 | 待测 |
-| TestFlight 安装、显示服务版本 | — | — | 待测 |
+| `TeleplyCore` 编译和测试 | 通过（10-26，Swift 6.4.1 Windows，14 项） | 通过（Mac 上同样 14 项） | — |
+| 应用编译、签名、打包 | — | 通过（Codemagic #3，Release，App Store 签名） | — |
+| 上传 TestFlight | — | 成功（10-26，0.1.0（1），Delivery UUID `c363ca0a-9107-4c07-a2dc-cd341f083bf0`） | — |
+| 启动页（浅色、深色、最大字号） | — | 截图检查改好待重跑 | 用户验过构建 1 的深色和断网画面：标志、版本、“连不上服务器”都对；“重试”字色发灰、浅蓝偏浅，构建 2 修正 |
+| TestFlight 安装、显示服务版本 | — | — | 用户 10-26 在 iPhone 上装上构建 1 |
+
+Codemagic 构建记录（分钟数按构建开始到结束）：
+
+| 构建 | 工作流 | 结果 | 分钟 | 说明 |
+|---|---|---|---|---|
+| #1 `6adec0d6…` | ios-native-testflight | 失败 | 2.4 | 签名一步成功（密钥、证书、描述文件都对）；Xcode 27.1 的编译器在 `RedirectRefusal` 的异步回调上自己崩溃（SILGen emitNativeToForeignThunk），改成传统回调写法 |
+| #2 `6adec214…` | ios-native-testflight | 失败（未上传） | 2.2 | 打出了签名安装包，检查拦下 `UIDeviceFamily` 含 iPad：XcodeGen 的应用预设在目标一级写了 `1,2`；图标检查原来找错了位置（iOS 写在 `CFBundleIcons` 里） |
+| #3 `6adec33a…` | ios-native-testflight | 成功 | 2.7 | 构建号 1；只支持 iPhone；上传 App Store Connect 无错误 |
+| #4 `6adec424…` | ios-native-check（shots） | 失败 | 约 2 | 模拟器上的调试版和截图测试都编译通过；但 iOS 27.1 模拟器不接受“iPhone 17”（Incompatible device）。改为先用构建机现有的 iPhone 模拟器，没有再从该系统支持的机型里挑 |
+
+构建 1 真机反馈（用户，10-26）：“重试”按钮的字被外层文字的灰色盖掉，浅蓝底上看不清；深色模式的浅蓝 #8AB4FF 偏浅。改为专门的主按钮样式（`Design/PrimaryCapsuleStyle.swift`，字色由按钮自己定）：浅色照网页账号页墨色底白字，深色改 #2563EB 底白字（和网页不同，理由写进规范 2.2）。截图测试加拍“连不上服务器”画面（调试开关 `-TeleplyDemoUnreachable`）。
+
+### 留给你在真机上验（0.1.0）
+
+1. TestFlight 里装“遥应”0.1.0（1）。桌面图标是 Teleply 标志，名字“遥应”。
+2. 打开：白底上标志和“Teleply”居中，往上浮现；下面一行“版本 0.1.0（1）”，再下面“服务 ”加服务器版本号（例如 0.27.0-dev.16）。出现服务版本，说明证书和网络设置在真机上没问题。
+3. 系统切到深色模式再打开：黑底、标志和名字变白。
+4. 开飞行模式后从后台划掉再打开：应写“连不上服务器，请检查网络后重试。”和“重试”；关掉飞行模式点“重试”，应出现服务版本。
+5. 设置 → 显示与亮度 → 文字大小调到最大：字跟着变大，不被截断。
 
 - 本机工具链（10-26 装）：Swift 6.4.1 在 `%LOCALAPPDATA%\Programs\Swift`；Visual Studio 2022 生成工具在 `F:\Dev\VS2022BuildTools`，Windows SDK 10.0.22621 在 `F:\Windows Kits\10`。Swift 安装时跳过了它自带的 Python 3.10 依赖，`python` 仍是原来的 3.11。新开的终端才认得 `swift`。
 - Windows 上编译时会出一串 `WinSDK` / `wchar_t` 的提醒，是工具链自己的，不影响结果；`.build\debug` 建不了快捷方式的提醒也一样（Windows 默认不让普通用户建符号链接）。
 - 第一天的检查（计划“工程结构”一节）：`TeleplyState` 的 Observation 和“默认主线程”、Swift Testing、swift-markdown 都能在 Windows 上编译，三块都留在 `TeleplyCore`。
 
-构建分钟数：还没有构建。
+本轮学到的（以后照做）：
+- Xcode 27.1 的编译器编不了“异步写法”的 Objective-C 回调方法（崩溃，不是报错）。系统回调一律用传统的回调写法；`ci-testflight.sh` 发现“nearly matches optional requirement”提醒就让构建失败，免得回调悄悄不生效。
+- XcodeGen 的应用预设会在目标一级填设置，盖掉工程一级的同名设置；只对某个目标生效的设置写在目标里。上传前的 Info.plist 检查要留着。
+- Codemagic 接口：构建产物字段叫 `artefacts`；脚本步骤的日志挂在 `subactions` 上；证书、描述文件、密钥名没有接口可读，只能在构建开始时核对。

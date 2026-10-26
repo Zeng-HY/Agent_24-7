@@ -14,8 +14,9 @@ enum LaunchOptions {
         #endif
     }
 
+    /// -TeleplyDemoUnreachable (with -TeleplyDemo): the demo service is down, for the "连不上服务器" screenshots.
     static func transport() -> any RelayTransport {
-        if usesDemo { return DemoTransport() }
+        if usesDemo { return DemoTransport(unreachable: ProcessInfo.processInfo.arguments.contains("-TeleplyDemoUnreachable")) }
         return URLSessionTransport()
     }
 

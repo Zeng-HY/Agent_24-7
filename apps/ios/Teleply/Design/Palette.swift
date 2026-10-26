@@ -24,4 +24,8 @@ enum Palette {
     static let pressedRow = Color("PressedRow")
     /// The Teleply mark and name: #111113 on light, white on dark (spec 2.4).
     static let brandInk = Color("BrandInk")
+    /// A filled main button and its text: ink on light like the web account page; #2563EB with white text on
+    /// dark, where the web's #8AB4FF looked too pale on a real iPhone (user, 2026-10-26; spec 2.2).
+    static let primaryFill = Color("PrimaryFill")
+    static let onPrimary = Color("OnPrimary")
 }

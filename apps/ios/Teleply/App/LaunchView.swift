@@ -68,8 +68,7 @@ struct LaunchView: View {
             Button("重试") {
                 Task { await model.check() }
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
+            .buttonStyle(PrimaryCapsuleStyle())
             .padding(.top, 8)
         }
     }
