@@ -154,6 +154,7 @@ class Identity(Accounts):
             db.execute('DELETE FROM sessions WHERE owner=?',(row['owner'],))
             db.execute('DELETE FROM grants WHERE owner=?',(row['owner'],))
             db.execute('DELETE FROM email_grants WHERE owner=?',(row['owner'],))
+            db.execute('DELETE FROM push_phones WHERE owner=?',(row['owner'],))
         else:
             if encoded is not None: raise ValueError('无效请求')
             if db.execute('SELECT 1 FROM account_emails WHERE email=?',(row['email'],)).fetchone():
