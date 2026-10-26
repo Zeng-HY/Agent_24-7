@@ -170,6 +170,7 @@ struct ComposerCard: View {
     @FocusState private var focused: Bool
     /// The card's width: under 370 pt the chips use 11 pt (web .composer-chip).
     @State private var width: CGFloat = 400
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let chat = model.conversation
@@ -229,6 +230,9 @@ struct ComposerCard: View {
         .onChange(of: chat.draftReset, initial: true) { if text != chat.draft { text = chat.draft } }
         .onChange(of: chat.key) { text = chat.draft }
         .onChange(of: chat.focus) { focused = true }
+        // A file or 本轮差异 goes over the page: the keyboard goes first, or it comes back over the card on return
+        // (0.4.0 screenshots: the card stayed under the keyboard).
+        .onChange(of: model.workspace.pane) { if ["file", "diff"].contains(model.workspace.pane ?? "") { focused = false } }
         .alert(confirmTitle, isPresented: confirmShown, presenting: confirming) { option in
             Button("取消", role: .cancel) {}
             Button("确认选择此权限") {
@@ -239,18 +243,25 @@ struct ComposerCard: View {
         }
     }
 
-    /// ＋ and the chips, left of the microphone and send. When they do not fit (the largest text sizes, a narrow
-    /// phone), the chips take their own line above ＋; send keeps its size.
+    /// ＋ and the chips, left of the microphone and send. Chips that do not fit slide sideways in their row
+    /// (Android); at the largest text sizes they take their own line above ＋. Send keeps its size.
     private var controls: some View {
         let app = model.conversation.key?.app ?? model.app
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 4) {
-                AttachButton(model: model, app: app, enabled: model.workspace.ready)
-                chips
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) { chips }
-                AttachButton(model: model, app: app, enabled: model.workspace.ready)
+        let row = ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) { chips }
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        return Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    row
+                    AttachButton(model: model, app: app, enabled: model.workspace.ready)
+                }
+            } else {
+                HStack(spacing: 4) {
+                    AttachButton(model: model, app: app, enabled: model.workspace.ready)
+                    row
+                }
             }
         }
     }

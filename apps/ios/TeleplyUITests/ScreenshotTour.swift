@@ -72,6 +72,7 @@ final class ScreenshotTour: XCTestCase {
         let field = composer(app)
         if field.waitForExistence(timeout: 5), focus(field) {
             field.typeText("hello")
+            skipKeyboardTip(app)
             app.buttons["发送"].firstMatch.tap()
             if app.buttons["停止这一轮"].waitForExistence(timeout: 5) {
                 snap(app, page: "08-sent", variant: variant)
@@ -97,10 +98,10 @@ final class ScreenshotTour: XCTestCase {
 
         // 本轮差异 and ＋ in the same conversation (0.4.0); the conversation files from its ⋯.
         let process = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "处理过程")).firstMatch
-        if process.waitForExistence(timeout: 5) {
+        if process.waitForExistence(timeout: 5), reach(app, process, up: false) {
             process.tap()
             let diff = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "本轮差异")).firstMatch
-            if diff.waitForExistence(timeout: 5) {
+            if diff.waitForExistence(timeout: 5), reach(app, diff) {
                 diff.tap()
                 if app.navigationBars["本轮差异"].waitForExistence(timeout: 10) {
                     sleep(1)
@@ -110,7 +111,7 @@ final class ScreenshotTour: XCTestCase {
             }
         }
         let plus = app.buttons["添加附件或引用"].firstMatch
-        if plus.waitForExistence(timeout: 5) {
+        if plus.waitForExistence(timeout: 5), plus.isHittable {
             plus.tap()
             sleep(1)
             snap(app, page: "15-plus", variant: variant)
@@ -196,6 +197,7 @@ final class ScreenshotTour: XCTestCase {
                 snap(app, page: "22-new-chat", variant: variant)
                 if focus(first) {
                     first.typeText("写一个测试")
+                    skipKeyboardTip(app)
                     let create = app.buttons["创建并发送"].firstMatch
                     if create.waitForExistence(timeout: 5) {
                         create.tap()
@@ -208,16 +210,14 @@ final class ScreenshotTour: XCTestCase {
             }
         }
 
-        // 左滑归档 and 撤销 (0.4.0).
-        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Codex 计划示例")).firstMatch
-        if row.waitForExistence(timeout: 10) {
+        // 左滑归档 and 撤销 (0.4.0): a row on screen, slid left; a long slide archives at once, a short one shows 归档.
+        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "只读问题记录")).firstMatch
+        if row.waitForExistence(timeout: 10), reach(app, row) {
             row.swipeLeft()
             let archive = app.buttons["归档"].firstMatch
-            if archive.waitForExistence(timeout: 5) {
-                archive.tap()
-                if app.buttons["撤销"].waitForExistence(timeout: 5) {
-                    snap(app, page: "24-undo", variant: variant)
-                }
+            if archive.waitForExistence(timeout: 3), archive.isHittable { archive.tap() }
+            if app.buttons["撤销"].waitForExistence(timeout: 5) {
+                snap(app, page: "24-undo", variant: variant)
             }
         }
 
@@ -247,6 +247,21 @@ final class ScreenshotTour: XCTestCase {
             }
         }
         app.terminate()
+    }
+
+    /// Scrolls the page (three times at most) until [element] can be tapped: up to reach what is below, down for
+    /// what went under the title bar. A tap on an element that cannot be hit ends the whole test.
+    @MainActor private func reach(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) -> Bool {
+        for _ in 0..<3 where !element.isHittable {
+            if up { app.swipeUp() } else { app.swipeDown() }
+        }
+        return element.isHittable
+    }
+
+    /// The simulator's first keyboard shows a tip over the keys (QuickPath, "Continue"); it goes.
+    @MainActor private func skipKeyboardTip(_ app: XCUIApplication) {
+        let tip = app.buttons["Continue"].firstMatch
+        if tip.exists, tip.isHittable { tip.tap() }
     }
 
     /// Taps [field] until it holds the keyboard focus (twice at most); typing without it fails the whole test.

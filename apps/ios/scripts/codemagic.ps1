@@ -9,6 +9,7 @@
 .EXAMPLE
   ./codemagic.ps1 -ListApps
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots
+  ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots -Only "testLight testLargestText"
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-testflight
   ./codemagic.ps1 -BuildId <id>        # follow a build already started, then download as above
 #>
@@ -18,6 +19,8 @@ param(
     [ValidateSet('compile', 'shots')]
     [string]$Mode = 'compile',
     [string]$Runtimes = '',
+    # Some of the tour's variants only (testLight, testDark, testLargestText), space-separated.
+    [string]$Only = '',
     [string]$Branch = 'ios-native',
     [string]$AppId = $env:TELEPLY_CODEMAGIC_APP,
     [string]$OutDir = (Join-Path $PSScriptRoot '..\build\codemagic'),
@@ -43,6 +46,7 @@ if ($BuildId) {
     if (-not $AppId) { throw 'Pass -AppId (see -ListApps) or set TELEPLY_CODEMAGIC_APP' }
     $variables = @{ CHECK_MODE = $Mode }
     if ($Runtimes) { $variables.SHOT_RUNTIMES = $Runtimes }
+    if ($Only) { $variables.SHOT_ONLY = $Only }
     $body = @{ appId = $AppId; workflowId = $Workflow; branch = $Branch; environment = @{ variables = $variables } } |
         ConvertTo-Json -Depth 5
     $buildId = (Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/json' -Body $body "$api/builds").buildId

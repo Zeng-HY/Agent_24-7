@@ -309,10 +309,11 @@ struct DiffPage: View {
     }
 }
 
-/// One hunk: the old and new line numbers, the sign, the line.
+/// One hunk: the old and new line numbers, the sign, the line. Each line's colour runs the block's whole width.
 private struct DiffHunk: View {
     let text: String
     let wrap: Bool
+    @State private var width: CGFloat = 0
 
     struct Line: Identifiable {
         let id: Int
@@ -329,11 +330,12 @@ private struct DiffHunk: View {
                 HStack(alignment: .top, spacing: 0) {
                     Text(line.old).frame(width: 34, alignment: .trailing)
                     Text(line.new).frame(width: 34, alignment: .trailing)
-                    Text(line.sign).frame(width: 18)
+                    Text(line.sign == "@" ? "" : line.sign).frame(width: 18)
                     Text(line.text.isEmpty ? " " : line.text)
                         .fixedSize(horizontal: !wrap, vertical: true)
-                        .frame(maxWidth: wrap ? .infinity : nil, alignment: .leading)
+                        .padding(.trailing, 12)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .codeFont()
                 .foregroundStyle(line.sign == "@" ? Palette.muted : line.sign == "+" ? Palette.success : line.sign == "−" ? Palette.danger : Palette.ink)
                 .padding(.vertical, 1)
@@ -343,6 +345,7 @@ private struct DiffHunk: View {
             }
         }
         .padding(.vertical, 8)
+        .frame(minWidth: width, alignment: .leading)
         Group {
             if wrap {
                 rows
@@ -351,6 +354,7 @@ private struct DiffHunk: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background(Palette.codeFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
         .textSelection(.enabled)
