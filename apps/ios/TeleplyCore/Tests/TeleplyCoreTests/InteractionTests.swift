@@ -43,9 +43,10 @@ struct AnsweringTests {
         return model
     }
 
-    /// Lets the refresh an action starts come back.
-    func until(_ done: () -> Bool) async {
-        for _ in 0..<2_000 where !done() { await Task.yield() }
+    /// Lets the action and the state read it starts come back.
+    func until(_ model: AppModel) async {
+        await model.workspace.settle()
+        await model.conversation.settle()
     }
 
     @Test func aCodexAnswerIsKeptWhileChosenThenSubmittedOnce() async {
@@ -58,8 +59,7 @@ struct AnsweringTests {
         await workspace.settle()
         #expect(workspace.saved[field]["q1"].array.map { $0.string() } == ["方案A"])
         workspace.action("codex/answer", ["question_id": card["id"], "answer_revision": card["answer_revision"], "answers": workspace.saved[field]])
-        await workspace.settle()
-        await until { model.conversation.control.raw["questions"].array.first?["status"].string() == "answered" }
+        await until(model)
         #expect(workspace.saved["pending_action"]["status"].string() == "done")
         #expect(workspace.saved["pending_action"]["route"].string() == "codex/answer")
         #expect(model.conversation.control.raw["questions"].array.first?["editable"].bool() == true)
@@ -70,12 +70,10 @@ struct AnsweringTests {
         let model = await demoConversation("Claude 选项示例")
         #expect(model.conversation.control.raw["prompt"]["progress"].string() == "1/2")
         model.workspace.action("claude/choose", ["token": "t-choice-1"])
-        await model.workspace.settle()
-        await until { model.conversation.control.raw["prompt"]["progress"].string() == "2/2" }
+        await until(model)
         #expect(model.conversation.control.raw["prompt"]["nav"].array.first?["label"].string() == "提交")
         model.workspace.action("claude/choose", ["token": "t-nav-submit"])
-        await model.workspace.settle()
-        await until { !model.conversation.control.raw["prompt"].isObject }
+        await until(model)
         #expect(pendingCards(app: "claude", raw: model.conversation.control.raw).isEmpty)
     }
 
@@ -83,8 +81,7 @@ struct AnsweringTests {
         let model = await demoConversation("DeepSeek 批准示例")
         #expect(pendingCards(app: "deepseek", raw: model.conversation.control.raw).first?.kind == "approval")
         model.workspace.action("deepseek/approval", ["event_id": "e-approval-1", "choice": "allowed-once"])
-        await model.workspace.settle()
-        await until { deepseekApprovals(model.conversation.control.raw).isEmpty }
+        await until(model)
         #expect(deepseekApprovals(model.conversation.control.raw).isEmpty)
         #expect(model.conversation.control.running)
     }
@@ -106,9 +103,8 @@ struct AnsweringTests {
         let model = await demoConversation("Claude 下一步示例")
         let workspace = model.workspace
         workspace.claudeButton(card: "task:整理发布清单", route: "claude/task", body: ["title": "整理发布清单", "button": "start"], label: "开始")
-        await workspace.settle()
+        await until(model)
         #expect(workspace.cards["task:整理发布清单"] == "done:本地示例：已在电脑上开始了，新对话会出现在列表里")
-        await until { model.conversation.control.raw["tasks"].array.isEmpty }
         #expect(model.conversation.control.raw["tasks"].array.isEmpty)
     }
 

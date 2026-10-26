@@ -162,6 +162,10 @@ public final class AppModel {
     @ObservationIgnored var voiceOn: [String: Bool] = [:]
     /// Archives under way by row; 撤销 waits for its own to finish first.
     @ObservationIgnored var archiving: [String: Task<Bool, Never>] = [:]
+    /// The new conversation's sheet being filled and opened (tests wait for it).
+    @ObservationIgnored var applying: Task<Void, Never>?
+    /// The restore 撤销 started (tests wait for it).
+    @ObservationIgnored var restoring: Task<Void, Never>?
 
     public init(services: AppServices) {
         self.services = services

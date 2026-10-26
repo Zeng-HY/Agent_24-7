@@ -62,7 +62,7 @@ extension AppModel {
     /// restored draft go in, and the sheet opens.
     func applyPendingNew() {
         guard pendingNew != nil else { return }
-        Task { [weak self] in
+        applying = Task { [weak self] in
             guard let self else { return }
             await self.workspace.read?.value
             guard let target = self.pendingNew, let key = self.workspace.key, key.app == target.app, key.chat == "@new", self.workspace.ready else { return }

@@ -62,7 +62,7 @@ extension AppModel {
         let key = rowKey(undo.chat)
         let pending = archiving[key]
         let client = client
-        Task { [weak self] in
+        restoring = Task { [weak self] in
             if let pending, await pending.value == false { return }
             do {
                 _ = try await client.detail(device: device.id, route: "chat/unarchive", body: ["app": .string(undo.chat.app), "id": .string(undo.chat.id)])
@@ -75,6 +75,12 @@ extension AppModel {
                 self.notice = (undo.chat.app == "claude" ? "Claude：" : "没恢复：") + describe(error)
             }
         }
+    }
+
+    /// Waits for the archives and the restore under way (tests).
+    func settleArchives() async {
+        for archive in Array(archiving.values) { _ = await archive.value }
+        await restoring?.value
     }
 
     /// The bar's six seconds are up (not while Claude still reads the archive back).

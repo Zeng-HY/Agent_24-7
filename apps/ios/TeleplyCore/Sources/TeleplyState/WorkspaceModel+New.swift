@@ -42,7 +42,7 @@ extension WorkspaceModel {
     func openNew() {
         guard let key, let client, key.chat == "@new" else { return }
         loadNewFolders()
-        Task { [weak self] in _ = try? await self?.ensureNewID(key, client) }
+        newIDRead = Task { [weak self] in _ = try? await self?.ensureNewID(key, client) }
     }
 
     public func loadNewFolders() {

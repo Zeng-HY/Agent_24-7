@@ -20,7 +20,7 @@ struct NewConversationTests {
 
     func openSheet(_ model: AppModel, app: String? = nil, folder: String = "", projectless: Bool = false) async {
         model.startNew(app: app, folder: folder, projectless: projectless)
-        for _ in 0..<1_000 where model.workspace.pane != "new" { await Task.yield() }
+        await model.applying?.value
         await model.workspace.settle()
     }
 
@@ -97,7 +97,8 @@ struct NewConversationTests {
         model.openJob(job)
         #expect(model.jobSheet == job.request)
         model.restoreJob(job)
-        for _ in 0..<1_000 where model.workspace.pane != "new" { await Task.yield() }
+        await model.settle()
+        await model.applying?.value
         await model.workspace.settle()
         #expect(model.jobSheet == nil && model.jobs.jobs.isEmpty)
         #expect(model.workspace.saved["first_message"].string() == "fail")

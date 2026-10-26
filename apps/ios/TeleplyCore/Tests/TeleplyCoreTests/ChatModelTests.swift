@@ -358,7 +358,7 @@ struct SendingTests {
         let model = await demoConversation("DeepSeek 批准示例")
         model.workspace.action("deepseek/permission", ["preset": "read", "confirmed": false])
         await model.workspace.settle()
-        for _ in 0..<500 where model.conversation.control.raw["permission"].string() != "read" { await Task.yield() }
+        await model.conversation.settle()
         #expect(model.workspace.result == "本地示例：设置已记录")
         #expect(model.workspace.saved["pending_action"]["status"].string() == "done")
         #expect(model.conversation.control.raw["permission"].string() == "read")

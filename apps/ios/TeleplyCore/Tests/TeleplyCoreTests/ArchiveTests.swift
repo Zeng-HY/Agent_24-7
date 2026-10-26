@@ -17,22 +17,19 @@ struct ArchiveTests {
         return model
     }
 
-    func until(_ done: () -> Bool) async {
-        for _ in 0..<2_000 where !done() { await Task.yield() }
-    }
-
     @Test func aRowLeavesAtOnceAndUndoBringsItBack() async throws {
         let model = await demoList()
         let row = model.chats.first { $0.title == "只读问题记录" }!
         model.archive(row)
         #expect(!model.chats.contains { $0.id == row.id })
         #expect(model.undo?.chat.id == row.id && model.undo?.waiting == false)
-        await until { model.archiving.isEmpty }
+        await model.settleArchives()
         let archived = try await model.deviceCall("chat/archived")
         #expect(archived["items"].array.map { $0["id"].string() } == ["question"])
         model.undoArchive()
         #expect(model.chats.contains { $0.id == row.id })
-        await until { model.notice == "已恢复" }
+        await model.settleArchives()
+        #expect(model.notice == "已恢复")
         #expect(try await model.deviceCall("chat/archived")["items"].array.isEmpty)
     }
 
@@ -52,7 +49,7 @@ struct ArchiveTests {
         #expect(model.undo?.waiting == true)
         model.undoArchive()
         #expect(model.undo != nil)
-        await until { model.undo?.waiting == false }
+        await model.settleArchives()
         #expect(model.undo?.waiting == false)
     }
 
@@ -60,7 +57,7 @@ struct ArchiveTests {
         let model = await demoList()
         model.archive(model.chats.first { $0.title == "只读问题记录" }!)
         model.archive(model.chats.first { $0.app == "deepseek" && !$0.group }!)
-        await until { model.archiving.isEmpty }
+        await model.settleArchives()
         let list = try await model.deviceCall("chat/archived")
         #expect(list["items"].array.map { $0["app"].string() } == ["codex", "deepseek"])
         #expect(list["items"].array.map { $0["can_delete"].bool() } == [true, false])

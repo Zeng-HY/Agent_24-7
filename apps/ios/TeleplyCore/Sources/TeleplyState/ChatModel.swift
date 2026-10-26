@@ -105,6 +105,8 @@ public final class ChatModel {
     @ObservationIgnored var inFlight: Set<ChatKey> = []
     @ObservationIgnored var confirming: Set<String> = []
     @ObservationIgnored var sends: [String: Task<Void, Never>] = [:]
+    /// A state read after an action (refreshControl), so tests can wait for it.
+    @ObservationIgnored var refreshing: Task<Void, Never>?
 
     init(pacer: any Pacer, store: LocalStore? = nil, newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
          now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
@@ -114,10 +116,12 @@ public final class ChatModel {
         self.now = now
     }
 
-    /// Waits for the current round and the sends under way to stop (tests; a round waiting to reconnect never does).
+    /// Waits for the current round, the sends under way and a state read after an action to stop (tests; a round
+    /// waiting to reconnect never does).
     public func settle() async {
         await task?.value
         await settleSends()
+        await refreshing?.value
     }
 
     /// Waits for the sends under way only (the live round may stay open).
@@ -272,7 +276,7 @@ public final class ChatModel {
     public func refreshControl() {
         guard let key, let client else { return }
         let t = token
-        Task { [weak self] in
+        refreshing = Task { [weak self] in
             guard let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat), let self, t == self.token else { return }
             self.control = mergeControl(previous: self.control, incoming: fresh)
         }

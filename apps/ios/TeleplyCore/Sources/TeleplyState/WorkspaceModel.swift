@@ -60,6 +60,8 @@ public final class WorkspaceModel {
     /// The sheet's lists by its workspace (kept on this phone as "new_lists").
     @ObservationIgnored var lists: [ChatKey: JSONValue] = [:]
     @ObservationIgnored var newReads: [String: Task<Void, Never>] = [:]
+    /// The request id the sheet asks for as it opens (tests wait for it).
+    @ObservationIgnored var newIDRead: Task<Void, Never>?
     /// The new conversation's request id being asked for, one per workspace.
     @ObservationIgnored var draftIDs: [ChatKey: Task<String, any Error>] = [:]
     /// The conversation's files as listed for an HTML page's own resources, read once per conversation.
@@ -105,6 +107,7 @@ public final class WorkspaceModel {
         await choiceRead?.value
         await work?.value
         await paneRead?.value
+        await newIDRead?.value
         for list in Array(newReads.values) { await list.value }
         for upload in Array(uploadTasks.values) { await upload.value }
         await writing?.value
