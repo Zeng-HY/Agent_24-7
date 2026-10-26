@@ -45,12 +45,16 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 45
     integrations:
-      app_store_connect: teleply-asc
+      app_store_connect: "Teleply Codemagic"
     environment:
       xcode: 27.1
+      # Code signing identities in the Codemagic team: the Apple Distribution certificate and the App Store
+      # profile "Teleply App Store" for com.pocketagentdesk.teleply (team CPSVJ7235A).
       ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.pocketagentdesk.teleply
+        certificates:
+          - teleply_distribution
+        provisioning_profiles:
+          - teleply_appstore
     scripts:
       - name: Archive with the next build number and check the IPA
         script: bash apps/ios/scripts/ci-testflight.sh
