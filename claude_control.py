@@ -151,10 +151,10 @@ class Controller:
         except ValueError:matched=False
         if not matched:raise chats.ChatError('电脑上显示的不是此 Claude 会话；请点击「电脑上打开」')
         return hwnd,root,doc
-    def _walk(self,node,depth=40):
+    def _walk(self,node,depth=40,offscreen=False):
         for ctrl,_ in self.desktop.auto.WalkControl(node,maxDepth=depth):
             try:
-                if not ctrl.IsOffscreen:yield ctrl
+                if offscreen or not ctrl.IsOffscreen:yield ctrl
             except Exception:continue
     @staticmethod
     def _enabled(ctrl):
@@ -241,8 +241,11 @@ class Controller:
             out.append((button,{'id':identity,'text':content[:4000],'full_text':content}))
         return out
     OPTION_TYPES=('ButtonControl','RadioButtonControl','CheckBoxControl')
-    PROMPT_NAV={'Back':'上一题','Previous':'上一题','Skip':'跳过','Next':'下一题','Submit':'提交','Dismiss question':'不回答'}
-    PROMPT_HIDDEN={'View question options'}
+    # The question card of Claude's new window (10-26) has arrows at its top as well: back is the only way back there;
+    # forward only looks at the next question unanswered, which its Next does too.
+    PROMPT_NAV={'Back':'上一题','Previous':'上一题','Show previous question':'上一题','Skip':'跳过','Next':'下一题','Submit':'提交',
+                'Dismiss question':'不回答'}
+    PROMPT_HIDDEN={'View question options','Show next question'}
     @staticmethod
     def _pressed(ctrl):
         for getter,attr in (('GetTogglePattern','ToggleState'),('GetSelectionItemPattern','IsSelected')):
@@ -254,7 +257,7 @@ class Controller:
     def _action_state(self,item):
         """The dock and its action revision exactly as _read computes them (the visible options + the transcript stamp),
         read from the dock alone: a full _read walks the whole conversation first and took ~2.3 s (1.35 s now)."""
-        _,root,_=self._document(item);dock=self.desktop._claude_dock(root)
+        _,root,doc=self._document(item);dock=self.desktop._claude_ask(root,doc)
         options,_=self._dock_read(dock) if dock else ([],None)
         path=chats.conv_path(item);stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
         return signature([item['id'],options,stamp]),dock
@@ -264,7 +267,12 @@ class Controller:
         out: question text, progress such as '1 / 2', each choice as label + description, and the navigation.
         10-11 recording of a question (AskUserQuestion): texts '1' '/' '2' and the question; one button per option
         named 'label description N' holding a label text, a description text and the shortcut digit; 'Other N' with
-        an 'Other option' field; 'Skip' / 'Next'; 'View question options' and 'Dismiss question' in the header."""
+        an 'Other option' field; 'Skip' / 'Next'; 'View question options' and 'Dismiss question' in the header.
+        dock may also be a question card of Claude's new window (chats.question_card, recorded 10-26): the question,
+        'Show previous question', a text '1 of 2', 'Show next question', one button per option named 'label description'
+        holding the two texts, 'Other', 'Skip' / 'Next'. It sits among the messages, so it is read scrolled out of
+        view as well."""
+        card=chats.question_card(dock)
         options,buttons,texts,stack,box_top=[],[],[],[],None
         rows=list(self.desktop.auto.WalkControl(dock,maxDepth=30))
         attachment_names=set()
@@ -276,7 +284,7 @@ class Controller:
             try:kind=ctrl.ControlTypeName;name=(ctrl.Name or '').strip();off=ctrl.IsOffscreen
             except Exception:continue
             del stack[max(depth-1,0):];stack.append((kind,name))
-            if off:continue
+            if off and not card:continue
             if kind=='EditControl' and name=='Prompt':
                 try:box_top=ctrl.BoundingRectangle.top
                 except Exception:pass
@@ -299,7 +307,9 @@ class Controller:
         panel=[b for b in buttons if above(b['top'])];words=[name for top,name in texts if above(top)]
         if not panel:return options,None
         marks=[w for w in words if re.fullmatch(r'\d+|/',w)]
-        prompt={'title':'\n'.join(w for w in words if not re.fullmatch(r'\d+|/',w)),'progress':' '.join(marks[:3]) if len(marks)>=3 else None,
+        counter=next((w for w in words if re.fullmatch(r'\d+ of \d+',w)),None)  # the card's one text '1 of 2'
+        progress=counter.replace(' of ',' / ') if counter else ' '.join(marks[:3]) if len(marks)>=3 else None
+        prompt={'title':'\n'.join(w for w in words if not re.fullmatch(r'\d+|/|\d+ of \d+',w)),'progress':progress,
                 'choices':[],'nav':[],'other':None}
         for b in panel:
             name=b['option']['name']
@@ -385,7 +395,7 @@ class Controller:
             if result['running'] and anchor:
                 result['stop_revision']=signature([item['id'],anchor]);result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
             if usage:result['runtime']={**runtime,**usage}
-            dock=self.desktop._claude_dock(root)
+            dock=self.desktop._claude_ask(root,doc)  # a question card of Claude's new window, or the dock (10-26)
             options,prompt=self._dock_read(dock) if dock else ([],None)
             # Bind execution/answer buttons to both the visible set and the latest transcript version.
             stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
@@ -770,7 +780,7 @@ class Controller:
                 elif ticket['kind']=='action':
                     revision,dock=self._action_state(item)
                     if revision!=ticket['revision']:raise chats.ChatError('计划或执行选项已变化，未执行旧选项')
-                    targets=[c for c in self._walk(dock,30) if c.ControlTypeName==ticket['option']['type'] and (c.Name or '').strip()==ticket['option']['name']] if dock else []
+                    targets=[c for c in self._walk(dock,30,offscreen=chats.question_card(dock)) if c.ControlTypeName==ticket['option']['type'] and (c.Name or '').strip()==ticket['option']['name']] if dock else []
                 else:
                     options=self._again(self._menu,item,ticket['kind']);rev=signature([{k:v for k,v in settings(item).items() if k!='recorded_at'},[v['name'] for _,v in options]])
                     if rev!=ticket['revision']:raise chats.ChatError('模型或菜单已变化，请重新选择')

@@ -89,12 +89,22 @@ CLAUDE_FIXED_PREFIXES = ("Model:", "Effort:", "Usage:", "Usage,", "Permission", 
                          "Folder:", "Claude thinks longer with Max effort", "Scroll ", "Jump to", "Remove ")
 OPTION_TYPES = ("ButtonControl", "RadioButtonControl", "CheckBoxControl", "ListItemControl", "MenuItemControl",
                 "HyperlinkControl", "TabItemControl", "EditControl", "ComboBoxControl")
+# Claude's new window asks a question (AskUserQuestion) in a card of this class among the messages, not in the dock (10-26)
+CLAUDE_QUESTION_CARD = "epitaxy-approval-card"
 
 
 def in_notice(kinds: list[str]) -> bool:
     """Whether a control whose ancestors in the dock are these control types sits in a notice bar. Claude's notices
     (the usage limit, 10-16) are status bars; a question (AskUserQuestion, recorded 10-11) is a group and never is."""
     return "StatusBarControl" in kinds
+
+
+def question_card(ctrl) -> bool:
+    """Whether this is one of the question cards of Claude's new window rather than the dock."""
+    try:
+        return CLAUDE_QUESTION_CARD in (ctrl.ClassName or "")
+    except Exception:
+        return False
 
 
 class ChatError(Exception):
@@ -1222,6 +1232,13 @@ class Desktop:
         found=scope.Element.FindAll(4,condition)  # 4: TreeScope_Descendants
         return [auto.Control.CreateControlFromElement(found.GetElement(i)) for i in range(found.Length)]
 
+    def _find_class(self,scope,part):
+        """Everything under scope whose class holds part (Chromium gives an element all its classes in one string), from
+        one question that Windows answers itself, as _find."""
+        uia,auto=self.uia,self.auto
+        found=scope.Element.FindAll(4,uia.CreatePropertyConditionEx(auto.PropertyId.ClassNameProperty,part,2))  # 2: within the name
+        return [auto.Control.CreateControlFromElement(found.GetElement(i)) for i in range(found.Length)]
+
     def _claude_verified_prompt(self,root,conv_id):
         doc=self._claude_document(root,conv_id)
         if doc is None:raise InputNotSubmitted('Claude 会话身份未核实，尚未发送；请打开目标对话')
@@ -1556,6 +1573,20 @@ class Desktop:
         except Exception:pass
         dock = root.GroupControl(searchDepth=45, Compare=lambda c, d: "approval-dock" in (c.ClassName or ""))
         return dock if dock.Exists(1, 0.1) else None
+
+    def _claude_ask(self, root, doc=None):
+        """Where Claude asks something: its newest question card, or else the dock. In Claude's new window (10-26) a
+        question (AskUserQuestion) is a card among the messages (CLAUDE_QUESTION_CARD) and the dock holds only the message
+        box; read in the dock alone, the phone showed no question at all, with the conversation on screen all along
+        (10-26 22:00-22:17), and none could be answered from it. A card with no button left to press is passed over.
+        doc: the conversation, to look in it alone (one question to Windows) rather than the whole window."""
+        try:
+            for card in reversed(self._find_class(doc if doc is not None else root, CLAUDE_QUESTION_CARD)):
+                if any(button.IsEnabled for button in self._find(card, "ButtonControl")):
+                    return card
+        except Exception:
+            pass
+        return self._claude_dock(root)
 
     # -- actions (run on the worker thread)
 
@@ -1966,13 +1997,17 @@ class Desktop:
         shown = self._claude_title(root)
         if not self._same_title(shown, titles):
             return {"on_screen": False, "shown": shown, "options": [], "running": None}
-        dock = self._claude_dock(root)
-        if dock is None:
+        box = self._claude_ask(root)  # a question card of Claude's new window (10-26), or else the dock
+        if box is None:
             return {"on_screen": True, "shown": shown, "options": [], "running": None}
+        card = question_card(box)
         auto = self.auto
         options, counts, kinds = [], {}, []
         running = False
-        for ctrl, depth in auto.WalkControl(dock, maxDepth=30):
+        if card:  # Stop stays in the dock, below the card
+            dock = self._claude_dock(root)
+            running = dock is not None and bool(self._find(dock, "ButtonControl", "Stop"))
+        for ctrl, depth in auto.WalkControl(box, maxDepth=30):
             ctype = ctrl.ControlTypeName
             del kinds[max(depth - 1, 0):]
             kinds.append(ctype)
@@ -1987,7 +2022,7 @@ class Desktop:
             elif not name or name in CLAUDE_FIXED_BUTTONS or name.startswith(CLAUDE_FIXED_PREFIXES):
                 continue
             try:
-                if ctrl.IsOffscreen:
+                if ctrl.IsOffscreen and not card:  # a card scrolled out of view still asks
                     continue
                 r = ctrl.BoundingRectangle
                 if r.width() <= 2 or r.height() <= 2:
@@ -2017,15 +2052,15 @@ class Desktop:
         hwnd, root = self._claude_root()
         if not self._same_title(self._claude_title(root), titles):
             hwnd, root = self._claude_open(item, titles)
-        dock = self._claude_dock(root)
-        if dock is None:
+        box = self._claude_ask(root)  # where claude_options read the option
+        if box is None:
             raise ChatError("Claude 的输入区没找到")
         ctype = str(option.get("type", "")) + "Control"
         name = str(option.get("name", ""))
         nth = int(option.get("nth", 0))
         seen = 0
         target = None
-        for ctrl, _depth in self.auto.WalkControl(dock, maxDepth=30):
+        for ctrl, _depth in self.auto.WalkControl(box, maxDepth=30):
             if ctrl.ControlTypeName == ctype and (ctrl.Name or "").strip() == name:
                 if seen == nth:
                     target = ctrl

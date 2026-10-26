@@ -156,7 +156,7 @@ class Tests(unittest.TestCase):
         def document(item):
             if card is False:raise chats.ChatError('电脑上显示的不是此 Claude 会话；请点击「电脑上打开」')
             return 1,'root','doc'
-        c.desktop._find=find;c.desktop._claude_unminimize=lambda:None;c.desktop._claude_dock=lambda root:None;c._document=document
+        c.desktop._find=find;c.desktop._claude_unminimize=lambda:None;c.desktop._claude_ask=lambda root,doc=None:None;c._document=document
         folder=Path(tempfile.mkdtemp());path=folder/'t.jsonl';path.write_text(json.dumps(transcript)+'\n',encoding='utf-8')
         recorded={'model':'claude-opus-5-5','effort':'high','mode':'auto','recorded_at':1}
         with patch('claude_control.settings',return_value=recorded),patch('claude_control.chats.conv_path',return_value=path),patch('claude_control.chats.summary',return_value={'status':'idle'}):
@@ -246,5 +246,21 @@ class Tests(unittest.TestCase):
             for kind,revision in [('action','old'),('stop','old-turn')]:
                 token=c._ticket('s',kind,{'name':'Execute'},revision)
                 with self.assertRaises(chats.ChatError):c.choose('s',token)
+    def test_an_answer_is_pressed_in_the_question_card_even_out_of_view(self):
+        # 10-26: Claude's new window asks in a card among the messages, which the PC may show scrolled away
+        card=SimpleNamespace(ClassName='epitaxy-approval-card relative isolate flex flex-col')
+        option={'type':'ButtonControl','name':'选项甲 随便选'}
+        target=SimpleNamespace(ControlTypeName='ButtonControl',Name='选项甲 随便选',IsOffscreen=True)
+        c=Controller(Desktop());asked=[];pressed=[]
+        c.desktop._claude_ask=lambda root,doc=None:asked.append((root,doc)) or card
+        c.desktop._claude_show=lambda hwnd:None
+        c.desktop.auto=SimpleNamespace(WalkControl=lambda node,maxDepth=30:iter([(target,2)]))
+        c._document=lambda item:(1,'root','doc');c._dock_read=lambda box:([option],None)
+        c._invoke=pressed.append;c._read=lambda item:{}
+        with patch('claude_control.chats.find',return_value={'id':'s'}),patch('claude_control.chats.conv_path',return_value=None),patch('claude_control.time.sleep'):
+            revision,box=c._action_state({'id':'s'})
+            self.assertIs(box,card)
+            c.choose('s',c._ticket('s','action',option,revision))
+        self.assertEqual(pressed,[target]);self.assertEqual(asked,[('root','doc')]*2)
 
 if __name__=='__main__':unittest.main()

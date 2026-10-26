@@ -368,6 +368,35 @@ class SendTests(unittest.TestCase):
         found=SimpleNamespace(Exists=lambda *a:True);root=SimpleNamespace(GroupControl=Mock(return_value=found))
         d._find=Mock(return_value=[])  # no message box: a question took its place
         self.assertIs(d._claude_dock(root),found)
+    def test_a_question_card_among_the_messages_is_where_claude_asks(self):
+        # 10-26: Claude's new window asks in a card among the messages; read in the dock alone, the phone showed nothing
+        button=lambda enabled=True:SimpleNamespace(IsEnabled=enabled)
+        old,new,answered=SimpleNamespace(name='old'),SimpleNamespace(name='new'),SimpleNamespace(name='answered')
+        presses={'old':[button()],'new':[button(False),button()],'answered':[button(False)]}
+        d=object.__new__(chats.Desktop);d._claude_dock=Mock(return_value='dock')
+        d._find=Mock(side_effect=lambda scope,kind,name=None:presses[scope.name])
+        d._find_class=Mock(return_value=[old,new])
+        self.assertIs(d._claude_ask('root','doc'),new);d._find_class.assert_called_once_with('doc',chats.CLAUDE_QUESTION_CARD)
+        d._find_class=Mock(return_value=[old,answered])  # nothing left to press in the newest: an older card that still asks
+        self.assertIs(d._claude_ask('root'),old);d._find_class.assert_called_once_with('root',chats.CLAUDE_QUESTION_CARD)
+        for cards in ([],[answered]):
+            d._find_class=Mock(return_value=cards);self.assertEqual(d._claude_ask('root','doc'),'dock')
+        d._find_class=Mock(side_effect=RuntimeError('COM'));self.assertEqual(d._claude_ask('root','doc'),'dock')
+        self.assertTrue(chats.question_card(SimpleNamespace(ClassName='epitaxy-approval-card relative isolate')))
+        self.assertFalse(chats.question_card(SimpleNamespace(ClassName='group/approval-dock pointer-events-auto')))
+        self.assertFalse(chats.question_card(object()))
+    def test_a_class_is_found_within_the_class_names_in_one_question(self):
+        asked=[]
+        class Found:
+            Length=1
+            def GetElement(self,i):return 'e0'
+        class Element:
+            def FindAll(self,scope,condition):asked.append((scope,condition));return Found()
+        d=object.__new__(chats.Desktop)
+        d.uia=SimpleNamespace(CreatePropertyConditionEx=lambda prop,value,flags:('has',prop,value,flags))
+        d.auto=SimpleNamespace(PropertyId=SimpleNamespace(ClassNameProperty='class'),Control=SimpleNamespace(CreateControlFromElement=lambda e:'control '+e))
+        self.assertEqual(d._find_class(SimpleNamespace(Element=Element()),'epitaxy-approval-card'),['control e0'])
+        self.assertEqual(asked,[(4,('has','class','epitaxy-approval-card',2))])  # 2: within the class names
     def test_whitespace_is_not_erased_by_verification(self):
         self.assertFalse(chats.Desktop._same_input('ab c','a bc'));self.assertTrue(chats.Desktop._same_input('第一行\r\n第二行\n','第一行\n第二行'))
     def test_queue_admission_is_not_engine_read_receipt(self):
