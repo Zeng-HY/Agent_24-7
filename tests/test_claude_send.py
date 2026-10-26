@@ -286,6 +286,70 @@ class SendTests(unittest.TestCase):
         d=object.__new__(chats.Desktop);d._find=Mock(return_value=rows)
         self.assertEqual([b.Name for b in d._claude_sidebar_buttons('root',{'title':'t'},['t'])],['t','t Started by Claude from p','Idle t'])
         self.assertEqual(d._claude_sidebar_buttons('root',{'title':''},[]),[])
+    def test_sidebar_rows_are_found_by_the_names_of_claudes_new_window(self):
+        # 10-26: '<title> Running' and '<title> Started from a suggestion in <project>' rows were never pressed, so those
+        # sends went to the link; the states come from claude.ai's page code, the other names from the window
+        names=['t','t Running','t Awaiting input','t Awaiting answer','t Using the browser','t Unread response','t Idle','t Done',
+               't Started by Claude from p','t Started from a suggestion in proj','t Running Started by Claude from p','Running t']
+        others=['More options for t','Hide nested sessions t','Show nested sessions t','Pin t','t, rename session','tt','t2 Running','Running tt']
+        rows=[SimpleNamespace(Name=n,GetParentControl=lambda:None) for n in others[:4]+names+others[4:]]
+        d=object.__new__(chats.Desktop);d._find=Mock(return_value=rows);d._claude_id_rows=Mock(return_value=[])
+        d._claude_row_parts=Mock(return_value=('',''))  # the line under the title is read only for other endings
+        self.assertEqual([b.Name for b in d._claude_sidebar_buttons('root',{'id':'s','title':'t'},['t'])],names)
+        d._claude_id_rows.assert_called_once_with('root','s')
+    def test_a_row_with_another_ending_counts_when_its_first_line_is_the_title(self):
+        # an error state, say: its words are not on the list, but the row's first line is the session's title
+        rows=[SimpleNamespace(Name=n,GetParentControl=lambda:None) for n in ('t Model not found','t and more','t unread')]
+        first={'t Model not found':'t','t and more':'t and more','t unread':''}  # '': the row's lines could not be read
+        d=object.__new__(chats.Desktop);d._find=Mock(return_value=rows);d._claude_id_rows=Mock(return_value=[])
+        d._claude_row_parts=Mock(side_effect=lambda b:('',first[b.Name]))
+        self.assertEqual([b.Name for b in d._claude_sidebar_buttons('root',{'id':'s','title':'t'},['t'])],['t Model not found'])
+    def test_the_row_that_carries_the_session_id_comes_first(self):
+        # 10-26: a row that has nested sessions carries its session id; a row of the same title that carries another
+        # session's id is not this one, and this session's own row is not listed twice
+        own,other='local_11111111-1111-4111-8111-111111111111','local_22222222-2222-4222-8222-222222222222'
+        rows=[SimpleNamespace(Name='t',GetParentControl=lambda:None,carried=c) for c in (other,own,'')]
+        d=object.__new__(chats.Desktop);d._find=Mock(return_value=rows);d._claude_id_rows=Mock(return_value=['own row'])
+        d._claude_row_parts=Mock(side_effect=lambda b:(b.carried,'t'))
+        self.assertEqual(d._claude_sidebar_buttons('root',{'id':own,'title':'t'},['t']),['own row',rows[2]])
+        d._claude_id_rows=Mock(return_value=[])  # the id search found nothing: the row that carries this id stays in page order
+        self.assertEqual(d._claude_sidebar_buttons('root',{'id':own,'title':'t'},['t']),[rows[1],rows[2]])
+        d._claude_id_rows=Mock(return_value=['own row'])  # renamed since the index was written: the id still finds it
+        self.assertEqual(d._claude_sidebar_buttons('root',{'id':own,'title':'old title'},['old title']),['own row'])
+    def test_rows_with_the_session_id_come_from_one_raw_view_question(self):
+        # the group that holds the id is not a control element: the usual search (control view) found none on 10-26
+        own,other='local_11111111-1111-4111-8111-111111111111','local_22222222-2222-4222-8222-222222222222'
+        row=SimpleNamespace(ControlTypeName='ButtonControl');box=SimpleNamespace(ControlTypeName='GroupControl')
+        groups=[SimpleNamespace(CachedAutomationId=a,parent=p) for a,p in (('_r_82_'+own,row),('command-palette-item-'+own,row),
+                                                                            ('_r_9_'+own,box),('_r_83_'+other,row),('_r_84_'+own,None))]
+        asked=[]
+        class Found:
+            Length=len(groups)
+            def GetElement(self,i):return groups[i]
+        def find(scope,condition,request):asked.append((scope,condition,request.TreeFilter,request.props));return Found()
+        d=object.__new__(chats.Desktop)
+        d.uia=SimpleNamespace(RawViewCondition='raw',RawViewWalker=SimpleNamespace(GetParentElement=lambda e:e.parent),
+                              CreatePropertyConditionEx=lambda prop,value,flags:('has',prop,value,flags))
+        d.uia.CreateCacheRequest=lambda:(lambda r:setattr(r,'AddProperty',r.props.append) or r)(SimpleNamespace(TreeFilter=None,props=[]))
+        d.auto=SimpleNamespace(PropertyId=SimpleNamespace(AutomationIdProperty='aid'),Control=SimpleNamespace(CreateControlFromElement=lambda e:e))
+        self.assertEqual(d._claude_id_rows(SimpleNamespace(Element=SimpleNamespace(FindAllBuildCache=find)),own),[row])
+        self.assertEqual(asked,[(4,('has','aid',own,2),'raw',['aid'])])  # 4: all below the window; 2: the id within the name
+        self.assertEqual(d._claude_id_rows('root','__new__'),[]);self.assertEqual(len(asked),1)
+        d.uia=None;self.assertEqual(d._claude_id_rows('root',own),[])  # no UI Automation: the names alone decide
+    def test_row_parts_are_its_session_id_and_first_line(self):
+        own='local_11111111-1111-4111-8111-111111111111';TEXT,GROUP,STATUS=50020,50026,50017
+        def row(*parts):
+            class Found:
+                Length=len(parts)
+                def GetElement(self,i):return SimpleNamespace(CachedAutomationId=parts[i][0],CachedControlType=parts[i][1],CachedName=parts[i][2])
+            return SimpleNamespace(Element=SimpleNamespace(FindAllBuildCache=lambda scope,condition,request:Found()))
+        d=object.__new__(chats.Desktop)
+        d.uia=SimpleNamespace(RawViewCondition='raw',CreateCacheRequest=lambda:SimpleNamespace(TreeFilter=None,AddProperty=lambda p:None))
+        d.auto=SimpleNamespace(PropertyId=SimpleNamespace(AutomationIdProperty=1,ControlTypeProperty=2,NameProperty=3),ControlType=SimpleNamespace(TextControl=TEXT))
+        # the parts of a row with nested sessions, and of this running session's own row, as read on 10-26
+        self.assertEqual(d._claude_row_parts(row(('_r_82_'+own,GROUP,''),('_r_94_',GROUP,''),('',TEXT,'t '),('',STATUS,''))),(own,'t'))
+        self.assertEqual(d._claude_row_parts(row(('_r_jij_',GROUP,''),('',TEXT,''),('',TEXT,'t'),('',TEXT,'Started by Claude from p'),('',TEXT,'Running'))),('','t'))
+        self.assertEqual(d._claude_row_parts(SimpleNamespace(Name='no Element')),('',''))
     def test_another_session_of_the_same_title_is_pressed_next(self):
         d=object.__new__(chats.Desktop);pressed=[];clock=iter(range(0,100000))
         d._claude_root=Mock(return_value=(1,'root'));d._claude_document=Mock(side_effect=lambda *a:'doc' if pressed[-1:]==['second'] else None)

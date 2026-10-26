@@ -66,6 +66,14 @@ KEYBOARD_IN_USE = 120
 CLAUDE_SWITCH_TAKEN_WAIT = 45
 _FOCUS_LINE = re.compile(rb"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[info\] \[CCD\] LocalSessions\.setFocusedSession: sessionId=(\S+)")
 CLAUDE_NO_FOLDER = "No folder"  # a new session in no folder: the first item of the folder menu, then the folder button's name
+# What Claude's sidebar says of a session after its title (claude.ai's page code, 10-26: waiting on a permission, on a
+# question, running, using the browser, unread, idle, done); before Claude 2.1.299 (10-15) it came before the title.
+CLAUDE_ROW_STATES = ("Running", "Awaiting input", "Awaiting answer", "Using the browser", "Unread response", "Idle", "Done")
+_CLAUDE_ROW_STATE = re.compile("|".join(CLAUDE_ROW_STATES))
+# after '<title> ' in a row's name: a state, or the line under the title ('Started by Claude from <parent>', 'Started
+# from a suggestion in <project>'), with or without a state before it
+_CLAUDE_ROW_ENDING = re.compile(rf"(?:(?:{_CLAUDE_ROW_STATE.pattern}) )?Started (?:by|from) .+|{_CLAUDE_ROW_STATE.pattern}")
+_CLAUDE_ROW_ID = re.compile(r"_r_[0-9a-z]+_(local_[0-9a-fA-F-]{36})")  # React's id for a row's part, then the session id
 
 # buttons that always sit around Claude's message box; the phone lists only the others
 # Get more usage: the usage-limit notice above the box ("Approaching weekly usage limit · Resets … · Get more usage ·
@@ -1356,31 +1364,108 @@ class Desktop:
             return ""
 
     def _claude_sidebar_buttons(self, root, item, titles=()) -> list:
-        """The buttons in Claude's sidebar that may open this session, in page order. A click there switches inside
+        """The buttons in Claude's sidebar that may open this session, best first. A click there switches inside
         the running app at once, while a claude:// link first starts a second Claude.exe (8-15 s on a busy morning,
-        10-12). Since Claude 2.1.299 (10-15) a session's row is named by its title alone, a session Claude started
-        '<title> Started by Claude from <parent>'; before, '<state> <title>' ('Idle …', 'Running …'). Until 10-20 only
-        the old names were looked for, so every switch fell back to the link, and 2.1.299 mostly ignores the link:
-        sending to a session not on screen failed after 25 s. Two sessions can share a title and one session can
-        show twice, so the caller presses these in turn and checks the session address after each; a suggested
-        task card names a button by its title too, and that one is left out."""
+        10-12), and since Claude 2.1.299 (10-15) Claude mostly ignores the link: with no row found, sending to a
+        session not on screen failed after 25 s (10-20).
+        A row is named by the session's title, alone or followed by what Claude says of it; in Claude's new window
+        (10-26) '<title> Running', '<title> Awaiting answer', '<title> Started by Claude from <parent>' or '<title>
+        Started from a suggestion in <project>'; before 10-15, '<state> <title>'. Until 10-26 only 'Started by' was
+        looked for after the title, so a running session, or one waiting on an answer from the phone, went to the
+        link. A name with any other ending (an error, say) counts when the row's first line is the title itself.
+        A row that has nested sessions carries its session id: that row comes first, and a row of the same title that
+        carries another session's id is left out. Two sessions can still share a title and one session can show
+        twice, so the caller presses these in turn and checks the session address after each. A suggested task card
+        names a button by its title too, and so do buttons inside a row ('More options for …', 'Hide nested
+        sessions …'): those are left out."""
         wanted = {t.strip() for t in [item.get("title") or "", *titles] if t and t.strip()}
+        conv_id = item.get("id") or ""
+        found = self._claude_id_rows(root, conv_id)
+        by_id = bool(found)
         if not wanted:
-            return []
-        found = []
+            return found
         for ctrl in self._find(root, "ButtonControl"):
             try:
                 name = (ctrl.Name or "").strip()
             except Exception:
                 continue
-            for title in wanted:
-                prefix = name[: -len(title) - 1] if name.endswith(" " + title) else ""
-                if (name == title or name.startswith(title + " Started by ")
-                        or prefix and prefix != "More options for" and re.fullmatch(r"[A-Za-z][A-Za-z ]{2,28}", prefix)):
-                    if not self._in_task_card(ctrl):
-                        found.append(ctrl)
-                    break
+            fit = self._claude_row_fit(name, wanted)
+            if not fit or self._in_task_card(ctrl):
+                continue
+            carried, first_line = self._claude_row_parts(ctrl)
+            if carried and (carried != conv_id or by_id):
+                continue  # another session's row, or this one's, already first
+            if fit == "first line" and first_line not in wanted:
+                continue
+            found.append(ctrl)
         return found
+
+    @staticmethod
+    def _claude_row_fit(name: str, wanted) -> str:
+        """'name' when a row of one of these titles is named so; 'first line' when the name is a title and something
+        else ('<title> <error>', or another session's '<title> and more'), a row of that title only if its first line
+        is the title; '' otherwise."""
+        fit = ""
+        for title in wanted:
+            if name == title:
+                return "name"
+            if name.startswith(title + " "):
+                if _CLAUDE_ROW_ENDING.fullmatch(name[len(title) + 1:]):
+                    return "name"
+                fit = "first line"
+            elif name.endswith(" " + title) and _CLAUDE_ROW_STATE.fullmatch(name[: -len(title) - 1]):
+                return "name"
+        return fit
+
+    def _claude_row_parts(self, ctrl) -> tuple[str, str]:
+        """The session id a sidebar row carries ('' for most rows) and its first line, from one question to Windows
+        (1-7 ms on 10-26). Neither the group that holds the id nor the row's lines are control elements, so _find does
+        not see them; the raw view does."""
+        try:
+            uia, auto = self.uia, self.auto
+            request = uia.CreateCacheRequest()
+            request.TreeFilter = uia.RawViewCondition
+            props = auto.PropertyId
+            for prop in (props.AutomationIdProperty, props.ControlTypeProperty, props.NameProperty):
+                request.AddProperty(prop)
+            found = ctrl.Element.FindAllBuildCache(4, uia.RawViewCondition, request)  # 4: TreeScope_Descendants
+            carried = first_line = ""
+            for i in range(found.Length):
+                element = found.GetElement(i)
+                m = _CLAUDE_ROW_ID.fullmatch(element.CachedAutomationId or "")
+                carried = carried or (m[1] if m else "")
+                if not first_line and element.CachedControlType == auto.ControlType.TextControl:
+                    first_line = (element.CachedName or "").strip()
+            return carried, first_line
+        except Exception:
+            return "", ""
+
+    def _claude_id_rows(self, root, conv_id: str) -> list:
+        """The sidebar rows that carry this session's id. In Claude's new window (10-26) a row that has nested sessions
+        holds a group named by React's id for it and then the session's ('_r_82_local_…'), and the row is that group's
+        parent. One question to Windows (0.05 s on 10-26), in the raw view: the group is not a control element."""
+        if not conv_id.startswith("local_"):
+            return []
+        try:
+            uia, auto = self.uia, self.auto
+            request = uia.CreateCacheRequest()
+            request.TreeFilter = uia.RawViewCondition
+            request.AddProperty(auto.PropertyId.AutomationIdProperty)
+            condition = uia.CreatePropertyConditionEx(auto.PropertyId.AutomationIdProperty, conv_id, 2)  # 2: substring
+            found = root.Element.FindAllBuildCache(4, condition, request)
+            rows = []
+            for i in range(found.Length):
+                group = found.GetElement(i)
+                m = _CLAUDE_ROW_ID.fullmatch(group.CachedAutomationId or "")
+                if not m or m[1] != conv_id:
+                    continue  # the search palette's items hold the id too ('command-palette-item-local_…')
+                parent = uia.RawViewWalker.GetParentElement(group)
+                row = auto.Control.CreateControlFromElement(parent) if parent else None
+                if row is not None and row.ControlTypeName == "ButtonControl":
+                    rows.append(row)
+            return rows
+        except Exception:
+            return []
 
     @staticmethod
     def _in_task_card(ctrl) -> bool:
