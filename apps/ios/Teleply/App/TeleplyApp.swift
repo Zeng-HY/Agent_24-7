@@ -17,6 +17,8 @@ struct TeleplyApp: App {
             vault: vault,
             transport: LaunchOptions.transport(),
             demo: { DemoHolder.shared.fresh() }))
+        model.conversation.backgroundTime = BackgroundTime.begin
+        model.conversation.timed = { label, elapsed, outcome in SpeedLog.shared.add(label, elapsed: elapsed, result: outcome, notify: true) }
         if LaunchOptions.usesDemo {
             model.openDemo()
         } else {

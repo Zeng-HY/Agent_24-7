@@ -128,6 +128,210 @@ struct SelectTextSheet: View {
     }
 }
 
+/// 待核对发送记录 (web workspace-ui.js; Android PendingSheet): sends whose result is not confirmed yet. 核对状态
+/// reads the receipt again; 恢复提交快照 puts a send back in an empty box. Nothing is sent again.
+struct PendingSheet: View {
+    let model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let chat = model.conversation
+        let rows = chat.submissions.filter { ["提交中", "送达状态待确认", "已接收", "已排队"].contains($0.label) }
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("这些消息的结果还没确认。核对只读取回执，不会重新发送。")
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                    if rows.isEmpty {
+                        Text("没有待核对的记录")
+                            .noteFont()
+                            .foregroundStyle(Palette.muted)
+                    }
+                    ForEach(rows) { record in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(record.label)
+                                .buttonFont()
+                                .foregroundStyle(record.label == "送达状态待确认" ? Palette.warning : Palette.ink)
+                            Text(record.text)
+                                .scaledFont(15, relativeTo: .callout, lineHeight: 1.6)
+                                .foregroundStyle(Palette.ink)
+                                .lineLimit(4)
+                            HStack(spacing: 8) {
+                                Button("核对状态") { chat.check(record) }
+                                    .buttonStyle(PillStyle())
+                                    .disabled(chat.submitting)
+                                if record.action == "send" {
+                                    Button("恢复提交快照") { chat.restore(record) }
+                                        .buttonStyle(PillStyle(kind: .text))
+                                        .disabled(!chat.draft.isEmpty || chat.submitting)
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Palette.sheet, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.line, lineWidth: 1))
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("待核对发送记录")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Text("\(rows.count) 条")
+                        .captionFont()
+                        .foregroundStyle(Palette.muted)
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { dismiss() }
+                }
+            }
+        }
+        .presentationBackground(Palette.sheet)
+    }
+}
+
+/// One saved prompt (web prompt library).
+private struct Prompt: Codable, Equatable {
+    var name: String
+    var text: String
+}
+
+/// 常用提示语 (web prompt library; Android PromptLibrarySheet): insert into the draft; add, edit and delete. Kept on
+/// this phone only.
+struct PromptLibrarySheet: View {
+    let model: AppModel
+    @State private var items: [Prompt] = PromptLibrarySheet.load()
+    @State private var editing: Int?
+    @State private var name = ""
+    @State private var text = ""
+    @State private var removing: Int?
+    @Environment(\.dismiss) private var dismiss
+
+    private static let key = "teleply.prompts"
+
+    private static func load() -> [Prompt] {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+        return (try? JSONDecoder().decode([Prompt].self, from: data)) ?? []
+    }
+
+    private func save() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(items), forKey: Self.key)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let editing {
+                        editor(editing)
+                    } else {
+                        if items.isEmpty {
+                            Text("还没有提示语。点下面的按钮加一条，以后可以一点插入草稿。")
+                                .noteFont()
+                                .foregroundStyle(Palette.muted)
+                        }
+                        ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(item.name)
+                                    .scaledFont(14, .semibold, relativeTo: .subheadline)
+                                    .foregroundStyle(Palette.ink)
+                                Text(item.text)
+                                    .smallBodyFont()
+                                    .foregroundStyle(Palette.muted)
+                                    .lineLimit(3)
+                                HStack(spacing: 8) {
+                                    Button("插入") {
+                                        let current = model.conversation.draft
+                                        let trimmed = current.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+                                        model.conversation.replaceDraft(current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? item.text : trimmed + "\n" + item.text)
+                                        dismiss()
+                                    }
+                                    .buttonStyle(PillStyle(kind: .primary))
+                                    Button("编辑") {
+                                        name = item.name
+                                        text = item.text
+                                        self.editing = index
+                                    }
+                                    .buttonStyle(PillStyle())
+                                    Button("删除") { removing = index }
+                                        .buttonStyle(PillStyle(kind: .text))
+                                }
+                            }
+                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Palette.sheet, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.line, lineWidth: 1))
+                        }
+                        Button {
+                            name = ""
+                            text = ""
+                            editing = -1
+                        } label: {
+                            Label("添加提示语", systemImage: "plus")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(PillStyle())
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("常用提示语")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { dismiss() }
+                }
+            }
+        }
+        .presentationBackground(Palette.sheet)
+        .alert("删除这条提示语？", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { index in
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) {
+                if items.indices.contains(index) { items.remove(at: index) }
+                save()
+            }
+        } message: { index in
+            Text("「\(items.indices.contains(index) ? items[index].name : "")」会从这台手机上删除。")
+        }
+    }
+
+    @ViewBuilder
+    private func editor(_ index: Int) -> some View {
+        TextField("", text: $name, prompt: Text("名称").foregroundStyle(Palette.muted))
+            .bodyFont()
+            .padding(.horizontal, 14)
+            .frame(minHeight: 48)
+            .background(Palette.sheet, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Palette.line, lineWidth: 1))
+            .accessibilityLabel(Text("名称"))
+        TextField("", text: $text, prompt: Text("内容").foregroundStyle(Palette.muted), axis: .vertical)
+            .bodyFont()
+            .lineLimit(3...8)
+            .padding(14)
+            .background(Palette.sheet, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Palette.line, lineWidth: 1))
+            .accessibilityLabel(Text("内容"))
+        HStack(spacing: 8) {
+            Button("保存") {
+                let item = Prompt(name: name.trimmingCharacters(in: .whitespaces), text: text)
+                if index >= 0, items.indices.contains(index) { items[index] = item } else { items.append(item) }
+                save()
+                editing = nil
+            }
+            .buttonStyle(PillStyle(kind: .primary))
+            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("取消") { editing = nil }
+                .buttonStyle(PillStyle())
+        }
+    }
+}
+
 private struct SelectableText: UIViewRepresentable {
     let text: String
 

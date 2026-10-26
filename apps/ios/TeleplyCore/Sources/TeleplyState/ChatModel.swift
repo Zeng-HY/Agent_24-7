@@ -17,6 +17,15 @@ public enum SendNote {
 let unsettledLabels: Set<String> = ["提交中", "送达状态待确认", "已接收", "已排队"]
 public let removedLabel = "已移除"
 
+/// What a timed request came to, by the web's rules: not done on the computer, delivery unconfirmed, or done.
+public func speedOutcome(_ reply: JSONValue) -> String {
+    let refused = !reply["error"].string().isEmpty || reply.has("ok") && !reply["ok"].bool(or: true)
+        || reply.has("accepted") && !reply["accepted"].bool(or: true) || reply["state"].string() == "failed"
+    if refused { return "服务端未成功" }
+    if reply["state"].string() == "unconfirmed" { return "送达未确认" }
+    return "请求完成"
+}
+
 func jsonText(_ value: JSONValue) -> String {
     String(decoding: (try? value.encoded()) ?? Data("{}".utf8), as: UTF8.self)
 }
@@ -68,7 +77,9 @@ public final class ChatModel {
     @ObservationIgnored public var restoreExtras: (ChatKey, JSONValue) throws -> Void = { _, _ in }
     /// Asks the phone for a little time in the background while a send is under way (spec 6.10); [expired] runs
     /// when that time is up. Returns the call that gives the time back.
-    @ObservationIgnored public var backgroundTime: (_ expired: @escaping () -> Void) -> (() -> Void) = { _ in {} }
+    /// 诊断测速 (开发者选项): a send's time and what it came to, as the web words it.
+    @ObservationIgnored public var timed: (_ label: String, _ elapsed: Duration, _ outcome: String) -> Void = { _, _, _ in }
+    @ObservationIgnored public var backgroundTime: (_ expired: @escaping @MainActor @Sendable () -> Void) -> (@MainActor () -> Void) = { _ in {} }
 
     @ObservationIgnored let pacer: any Pacer
     @ObservationIgnored let store: LocalStore?
@@ -462,7 +473,15 @@ public final class ChatModel {
                 submissions = [record] + submissions.filter { $0.request != record.request }
             }
             try Task.checkCancellation()
-            let result = try await client.command(device: key.device, app: key.app, route: action, body: body)
+            let started = ContinuousClock.now
+            let result: JSONValue
+            do {
+                result = try await client.command(device: key.device, app: key.app, route: action, body: body)
+            } catch {
+                if action == "send" { timed("消息提交", ContinuousClock.now - started, (error as? ServiceFailure).map { "HTTP \($0.status)" } ?? "网络失败") }
+                throw error
+            }
+            if action == "send" { timed("消息提交", ContinuousClock.now - started, speedOutcome(result)) }
             if action != "stop", key.app == "codex", result["request_id"].string() != record.request { throw ReadFailure("回执身份不匹配") }
             if action == "send", key.app == "claude", result["pressed"].bool() {
                 // The computer pressed Enter in Claude's box; whether Claude read it is looked for in its record.

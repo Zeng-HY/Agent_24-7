@@ -29,6 +29,7 @@ struct RootView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: page)
+        .overlay(alignment: .top) { SpeedToast() }
         .environment(chrome)
         .sheet(isPresented: $chrome.settings) {
             SettingsView(model: model)

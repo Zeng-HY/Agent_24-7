@@ -62,7 +62,35 @@ final class ScreenshotTour: XCTestCase {
             if app.staticTexts["上下文"].waitForExistence(timeout: 5) {
                 snap(app, page: "07-runtime", variant: variant)
             }
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
+        }
+
+        // Sending on the demo (0.3.0): a send starts a turn (停止这一轮 shows), the next one queues.
+        let field = composer(app)
+        if field.waitForExistence(timeout: 5) {
+            field.tap()
+            field.typeText("hello")
+            app.buttons["发送"].firstMatch.tap()
+            if app.buttons["停止这一轮"].waitForExistence(timeout: 5) {
+                snap(app, page: "08-sent", variant: variant)
+            }
+            field.tap()
+            field.typeText("one more")
+            let queue = app.buttons["发送并排队"].firstMatch
+            if queue.waitForExistence(timeout: 5) {
+                queue.tap()
+                if app.buttons["立即补充"].firstMatch.waitForExistence(timeout: 5) {
+                    app.swipeDown()
+                    snap(app, page: "09-queued", variant: variant)
+                }
+            }
+            let chip = app.buttons.containing(NSPredicate(format: "label BEGINSWITH %@", "模型：")).firstMatch
+            if chip.waitForExistence(timeout: 5) {
+                chip.tap()
+                sleep(1)
+                snap(app, page: "10-model-menu", variant: variant)
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            }
         }
 
         back(app)
@@ -71,7 +99,7 @@ final class ScreenshotTour: XCTestCase {
             cards.tap()
             if app.staticTexts["Claude 下一步示例"].waitForExistence(timeout: 10) {
                 app.swipeUp()
-                snap(app, page: "08-cards", variant: variant)
+                snap(app, page: "11-cards", variant: variant)
             }
             back(app)
         }
@@ -82,15 +110,22 @@ final class ScreenshotTour: XCTestCase {
             if gear.waitForExistence(timeout: 5) {
                 gear.tap()
                 if app.navigationBars["设置"].waitForExistence(timeout: 5) {
-                    snap(app, page: "09-settings", variant: variant)
+                    snap(app, page: "12-settings", variant: variant)
                     app.buttons["开发者选项"].firstMatch.tap()
                     if app.navigationBars["开发者选项"].waitForExistence(timeout: 5) {
-                        snap(app, page: "10-developer", variant: variant)
+                        snap(app, page: "13-developer", variant: variant)
                     }
                 }
             }
         }
         app.terminate()
+    }
+
+    /// The composer's text box: a growing text field is a text view to XCUITest.
+    @MainActor private func composer(_ app: XCUIApplication) -> XCUIElement {
+        let kinds = NSPredicate(format: "label == %@ AND (elementType == %d OR elementType == %d)", "输入消息",
+                                XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.textField.rawValue)
+        return app.descendants(matching: .any).matching(kinds).firstMatch
     }
 
     @MainActor private func back(_ app: XCUIApplication) {

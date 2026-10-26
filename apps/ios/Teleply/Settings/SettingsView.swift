@@ -274,6 +274,9 @@ final class SpeedLog {
     static let shared = SpeedLog()
     private(set) var enabled = UserDefaults.standard.bool(forKey: "teleply.diagnostics.speed")
     private(set) var records: [String] = []
+    /// The newest record to show for a moment where the user is (web: a toast), with a serial to tell repeats apart.
+    private(set) var shown: (serial: Int, text: String, ok: Bool)?
+    @ObservationIgnored private var serial = 0
 
     func setEnabled(_ on: Bool) {
         enabled = on
@@ -285,11 +288,49 @@ final class SpeedLog {
         records = []
     }
 
-    /// "连接请求 1/3：0.412 秒 · 成功", as the web writes it.
-    func add(_ label: String, elapsed: Duration, result: String) {
+    /// "连接请求 1/3：0.412 秒 · 成功", as the web writes it. [notify] ones also show for a moment.
+    func add(_ label: String, elapsed: Duration, result: String, notify: Bool = false) {
         guard enabled else { return }
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         let time = Date().formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits))
-        records = Array(([time + " " + label + "：" + String(format: "%.3f", seconds) + " 秒 · " + result] + records).prefix(10))
+        let text = label + "：" + String(format: "%.3f", seconds) + " 秒 · " + result
+        records = Array(([time + " " + text] + records).prefix(10))
+        if notify {
+            serial += 1
+            shown = (serial, text, ["成功", "请求完成"].contains(result))
+        }
+    }
+
+    func hide(_ serial: Int) {
+        if shown?.serial == serial { shown = nil }
+    }
+}
+
+/// Each timed operation shown for a moment at the top while 显示操作耗时 is on (web toast; Android DiagnosticToast):
+/// dark for a request done, red otherwise.
+struct SpeedToast: View {
+    @State private var speed = SpeedLog.shared
+
+    var body: some View {
+        ZStack {
+            if let shown = speed.shown {
+                Text(shown.text)
+                    .scaledFont(13, relativeTo: .footnote)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(shown.ok ? Color(white: 0.07, opacity: 0.9) : Color(red: 0.73, green: 0.11, blue: 0.11, opacity: 0.9),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.horizontal, 24)
+                    .transition(.opacity)
+                    .task(id: shown.serial) {
+                        AccessibilityNotification.Announcement(shown.text).post()
+                        try? await Task.sleep(for: .milliseconds(2_800))
+                        speed.hide(shown.serial)
+                    }
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: speed.shown?.serial)
+        .allowsHitTesting(false)
     }
 }

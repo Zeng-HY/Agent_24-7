@@ -1,5 +1,6 @@
 import SwiftUI
 import TeleplyModel
+import TeleplyState
 
 /// A run of process steps that folds under its first step's header (design language §8; Android TimelineItem).
 struct ProcessGroup: Equatable {
@@ -80,6 +81,8 @@ struct TimelineItem: View {
     let message: Message
     let role: TimelineRole
     let raw: JSONValue
+    /// The label of the send from this phone that became this message (已送达…), shown under the bubble.
+    var receipt: String?
     @Binding var folds: [String: Bool]
     let actions: MessageActions
 
@@ -89,7 +92,7 @@ struct TimelineItem: View {
             VStack(alignment: .trailing, spacing: 0) {
                 OriginLabel(message: message)
                     .padding(.trailing, 4)
-                UserBubble(message: message, actions: actions)
+                UserBubble(message: message, actions: actions, receipt: receipt)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.top, 20)
@@ -225,11 +228,28 @@ private struct ProcessStep: View {
 struct UserBubble: View {
     let message: Message
     let actions: MessageActions
+    var receipt: String?
+    /// Still being sent: shown lighter (Android sending).
+    var sending = false
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            bubble
+                .opacity(sending ? 0.6 : 1)
+            if let receipt, receipt != removedLabel {
+                Text(receipt)
+                    .captionFont()
+                    .foregroundStyle(receipt == "送达状态待确认" ? Palette.warning : Palette.muted)
+                    .padding(.trailing, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var bubble: some View {
         let dark = scheme == .dark
-        TrailingFraction(fraction: 0.88) {
+        return TrailingFraction(fraction: 0.88) {
             MarkdownView(source: message.text,
                          look: MarkdownLook(link: dark ? Palette.accent : .white, code: dark ? Palette.codeFill : .white.opacity(0.18)),
                          fill: false)

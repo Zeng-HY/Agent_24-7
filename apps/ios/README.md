@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI，0.1.0 进行中）
+# 遥应 Teleply iOS 版（原生 SwiftUI，0.2.0 已发 TestFlight，0.3.0 进行中）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -12,7 +12,7 @@
 ## 工程
 
 - `project.yml`：XcodeGen 的工程描述，在云端生成 `Teleply.xcodeproj`（生成物不进 git）。Xcode 新建工程模板里的设置（Swift 6、默认主线程、图标名等）都写在这里。
-- `Teleply/`：应用本体。`App/` 入口和启动页，`Design/` 颜色，`Platform/` 网络收发，`Resources/` 资源（颜色和图标由 `Assets.xcassets` 提供，开发语言简体中文）。
+- `Teleply/`：应用本体。`App/` 入口、页面切换和启动页，`Account/` 登录和我的电脑，`List/` 对话列表，`Drawer/` 侧栏，`Chat/` 会话页（时间线、Markdown、卡片、会话状态、查找和选择文字），`Composer/` 输入区（0.3.0），`Settings/` 设置和开发者选项，`Design/` 颜色、字号、动效和按钮，`Platform/` 网络收发、钥匙串、诊断记录和后台发送，`Resources/` 资源（颜色和图标由 `Assets.xcassets` 提供，开发语言简体中文）。
 - `TeleplyCore/`：不碰界面的 Swift 包，Windows 上也能编译和测试。`TeleplyModel` 数据和逻辑（接口返回的宽松读法、服务地址、请求构造、错误文字、Markdown），`TeleplyState` 页面状态（主线程），`TeleplyDemo` 本地示例。依赖只有 swift-markdown 0.9.0 和它带的 swift-cmark 0.9.0（`Package.swift` 里写死提交号）。
 - `TeleplyUITests/`：截图测试，用本地示例跑（启动参数 `-TeleplyDemo`、`-TeleplyAppearance`，只在调试版生效）。
 - `scripts/`：`ci-check.sh`、`ci-testflight.sh`（云端），`codemagic.ps1`（本机启动构建、等结果、下载产物）。
@@ -25,7 +25,29 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.1.0（进行中）
+## 0.2.0：只读（10-26 发 TestFlight 构建 3，待真机验）
+
+做了什么：登录、我的电脑（重命名、移除、每 15 秒重读）、对话列表（来源胶囊只列这台电脑有的、列表显示菜单、搜索、子对话折叠、每 10 秒合并第一页）、侧栏（应用、项目、会话，折叠记在手机上，从左边缘拖出）、会话页的阅读部分（Markdown、代码块自动换行或原始行、表格横滑、处理过程折叠、Claude 和 Codex 的卡片只显示、长按复制 / 选择文字 / 分享、查找消息、会话状态、有新消息、加载更早消息）、实时连接和前后台、设置（外观、账号、开源组件、开发者选项：服务地址、本地示例和示例网络、诊断测速、诊断记录导出、版本）。
+
+| 项目 | 本机测过 | 云端 / 模拟器 | 真机验过 |
+|---|---|---|---|
+| `TeleplyCore`（状态、存储、示例） | 通过，65 项 | 通过 | — |
+| 各页截图（浅色、深色、最大字号） | — | 看过：登录、连不上、我的电脑、列表、侧栏、会话、会话状态（#9 修了侧栏漏行、最大字号行被截断） | 待验 |
+| 会话页标题位置 | — | 折叠屏模拟器上被挤成一个字，改放标题栏中间靠左，普通 iPhone 待截图 | 待验 |
+
+### 留给你在真机上验（0.2.0）
+
+1. **T01 启动和电脑**：打开先是标志，然后登录页（右上角只有齿轮）。用真账号登录；有一台电脑会直接进列表，多台进“我的电脑”。点“连接”进列表，标题下面是电脑名；电脑多于一台时点它能切换。
+2. **T01 来源和列表**：胶囊只列这台电脑上有的应用；点 ⋯ 看四个子菜单（分组、排序、状态、来源）；搜索框停手半秒就搜。子对话的“▸ 子对话 N 个”能展开。
+3. **T02 进出会话**：点一条进会话，标题靠左紧挨返回键，下面一行是项目和来源；右滑或点返回回到列表。再进同一条，回到上次看的位置。
+4. **T04 阅读**：电脑上让一轮正在跑，停在底部时跟着新输出；往上翻时位置不动，底部出现“有新消息 ↓”，点了回到底部。处理过程默认折叠，点开后不被刷新收回。
+5. **T09 内容**：代码块“原始行”能横滑，表格能横滑，整页不左右晃；长按消息有复制、选择文字、分享。
+6. **T11 前后台**：切到别的应用一会儿再回来，连接提示条恢复正常；从后台划掉再打开，回到原来的电脑和对话。
+7. **T12 外观和字号**：设置里切深色；系统文字调到最大，列表行换行不截断。
+8. **T15 会话状态**：有上下文数据时标题栏有圆环，点开看百分比、模型、推理强度和数据来源；80% 以上变橙色。
+9. **诊断记录**：设置 → 开发者选项 → 诊断记录 → 导出，发给我（遇到问题时）。
+
+## 0.1.0（10-26 完成）
 
 目标：TestFlight 装上“遥应”，打开是标志页，显示版本号和默认服务的版本，在真机上提前证明证书和网络设置没问题。
 
@@ -47,6 +69,11 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #4 `6adec424…` | ios-native-check（shots） | 失败 | 1.9 | 模拟器上的调试版和截图测试都编译通过；但 iOS 27.1 模拟器不接受“iPhone 17”（Incompatible device）。改为先用构建机现有的 iPhone 模拟器，没有再从该系统支持的机型里挑 |
 | #5 `6adec600…` | ios-native-testflight | 成功 | 2.8 | 构建号 2：“重试”按钮改色；上传无错误 |
 | #6 `6adec604…` | ios-native-check（shots） | 成功 | 6.8 | 6 张截图（浅色、深色、最大字号 × 连上、连不上），存 `F:\Android-Dev\work\ios-010-screens`。按钮颜色对了，最大字号换行不截断。模拟器挑到了折叠屏“iPhone Duo”，以后优先普通 iPhone |
+| #7 `6aded34a…` | ios-native-check（shots） | 失败 | 2.1 | 阶段 1 页面第一次编译：诊断记录导出少引 `CoreTransferable` |
+| #8 `6aded3fb…` | ios-native-check（shots） | 失败 | 3.1 | 设置页少引 `TeleplyDemo`（示例网络） |
+| #9 `6aded501…` | ios-native-check（shots） | 成功 | 18 | 21 张截图。只有折叠屏“iPhone Duo”可用，它把导航栏放到右侧一栏；侧栏有几行没画出来（嵌套列表的行编号重复），最大字号下列表标题被截成一个字 |
+| #10 `6adeda5d…` | ios-native-check（shots） | 成功 | 10 | 只编 arm64，时间减半；侧栏和最大字号的行修好。仍是 iPhone Duo（这台机器的 27.1 没有名字恰好是“iPhone 数字”的机型），改为任何非折叠 iPhone 都优先 |
+| #11 `6adedd18…` | ios-native-testflight | 成功 | 4.2 | 0.2.0（3）上传，Delivery UUID `2ab3808a-2bc4-4964-9e00-5ef72c88a660` |
 
 构建 1 真机反馈（用户，10-26）：“重试”按钮的字被外层文字的灰色盖掉，浅蓝底上看不清；深色模式的浅蓝 #8AB4FF 偏浅。改为专门的主按钮样式（`Design/PrimaryCapsuleStyle.swift`，字色由按钮自己定）：浅色照网页账号页墨色底白字，深色改 #2563EB 底白字（和网页不同，理由写进规范 2.2）。截图测试加拍“连不上服务器”画面（调试开关 `-TeleplyDemoUnreachable`）。
 
