@@ -31,6 +31,11 @@ check_ipa() {
   { [ "$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$plist")" = "1" ] &&
     ! /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$plist" >/dev/null 2>&1; } || fail "iPhone only (UIDeviceFamily)"
   [ -f "$app/PrivacyInfo.xcprivacy" ] || fail "privacy manifest"
+  # 遥应通知: the App Store profile must carry push (App ID capability on, profile made again after it), in the
+  # production environment TestFlight uses; a token from any other would not reach the phone.
+  codesign -d --entitlements - --xml "$app" > "$unpacked/entitlements.plist" 2>/dev/null || fail "entitlements unreadable"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$unpacked/entitlements.plist" 2>/dev/null)" = "production" ] ||
+    fail "push entitlement (aps-environment production): is the profile made again with Push Notifications on?"
   [ -d "$app/zh-Hans.lproj" ] || fail "Simplified Chinese localization"
   echo "IPA checks passed for build $build"
 }

@@ -34,6 +34,12 @@ targets:
         product: TeleplyState
       - package: TeleplyCore
         product: TeleplyDemo
+    # 遥应通知 through Apple's push service. Every build that reaches a phone is signed with the App Store profile
+    # (TestFlight), whose push environment is production; that profile needs Push Notifications on the App ID.
+    entitlements:
+      path: Teleply/Resources/Teleply.entitlements
+      properties:
+        aps-environment: production
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pocketagentdesk.teleply

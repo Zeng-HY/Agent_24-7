@@ -40,12 +40,15 @@ public struct AppServices: Sendable {
     public var newID: @Sendable () -> String
     /// Milliseconds, for when a send was made.
     public var now: @Sendable () -> Int64
+    /// The system's notification switch and push token (遥应通知, AppModel+Push).
+    public var push: any PushPlatform
 
     public init(store: LocalStore, vault: any CookieVault, transport: any RelayTransport, demo: @escaping @Sendable () -> any RelayTransport,
                 pacer: any Pacer = RealPacer(), defaultOrigin: ServiceOrigin = .default,
                 newScope: @escaping @Sendable () -> String = { UUID().uuidString },
                 newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
-                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+                push: any PushPlatform = NoPush()) {
         self.store = store
         self.vault = vault
         self.transport = transport
@@ -55,6 +58,7 @@ public struct AppServices: Sendable {
         self.newScope = newScope
         self.newID = newID
         self.now = now
+        self.push = push
     }
 }
 
@@ -139,6 +143,8 @@ public final class AppModel {
     public let workspace: WorkspaceModel
     /// The first messages of the computer in use under way.
     public let jobs: NewChatJobs
+    /// 遥应通知 on this phone (AppModel+Push).
+    public let push = PushModel()
 
     @ObservationIgnored let services: AppServices
     @ObservationIgnored var client: RelayClient
@@ -420,10 +426,12 @@ public final class AppModel {
                                chat: sameOwner ? previousChat?.id ?? "" : "", title: sameOwner ? previousChat?.title ?? "" : "")
     }
 
-    /// 退出登录 (web account menu): the service forgets the sign-in, this phone its cookie and where it was.
+    /// 退出登录 (web account menu): the service forgets the sign-in and this phone's 遥应通知, this phone its cookie
+    /// and where it was.
     public func logout() {
         operation { [weak self] g in
             guard let self else { return }
+            await self.pushSignOut()
             try? await self.client.logout()
             await self.persistSelection(scope: self.scope, device: "")
             guard self.current(g) else { return }
