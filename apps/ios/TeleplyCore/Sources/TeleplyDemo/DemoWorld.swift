@@ -63,6 +63,10 @@ public final class DemoWorld: Sendable {
         var nextPressed = ""
         var tasksDone: Set<String> = []
         var planDone = false
+        // New conversations: requests by id, and the conversations they made (newest last).
+        var newRequests: [String: JSONValue] = [:]
+        var drafts = 0
+        var created: [(row: JSONValue, text: String)] = []
     }
 
     let state = Mutex(State())
@@ -100,8 +104,13 @@ public final class DemoWorld: Sendable {
         let run = state.running[app] == true
         let turn = state.turns[app] ?? ""
         var fields = DemoData.state(app: app, chat: chat).object
-        // The cards as far as they have been answered.
+        // The cards as far as they have been answered; a conversation the demo just made has nothing waiting.
+        let made = state.created.contains { $0.row["id"].string() == chat }
         switch app {
+        case _ where made:
+            fields["prompt"] = nil
+            fields["interactions"] = []
+            fields["questions"] = []
         case "claude" where chat == "claude-next":
             fields["tasks"] = .array([DemoData.taskTitle].filter { !state.tasksDone.contains($0) }.map(JSONValue.string))
         case "claude":
@@ -256,10 +265,11 @@ public final class DemoWorld: Sendable {
         }
     }
 
-    /// The first list page as things stand: rows whose state answering changed say so (Android FixtureWorld.all).
+    /// The first list page as things stand: the conversations made here first, then the fixed rows, those whose
+    /// state answering changed saying so (Android FixtureWorld.firstPage).
     func firstPage() -> [JSONValue] {
         state.withLock { state in
-            DemoData.firstPage.map { row in
+            Array(state.created.map(\.row).reversed()) + DemoData.firstPage.map { row in
                 var fields = row.object
                 switch row["id"].string() {
                 case "demo":
@@ -290,6 +300,86 @@ public final class DemoWorld: Sendable {
     /// The next-step button pressed so far ("" before), which the conversation then shows as sent.
     var nextPressed: String {
         state.withLock { $0.nextPressed }
+    }
+
+    // MARK: New conversations (Android FixtureWorld)
+
+    func folders(app: String) -> JSONValue {
+        app == "deepseek"
+            ? DemoData.parse(#"{"items":[{"path":"D:/fixture","name":"固定测试项目","sources":["DeepSeek 工作区"]}]}"#)
+            : DemoData.parse(#"{"items":[{"path":"D:/fixture","name":"固定测试项目","sources":["Codex 项目"]},{"path":"D:/fixture-docs","name":"文档项目","sources":["Claude 项目"]},{"path":"D:/fixture-site","name":"网站项目","sources":["Codex 对话"]}]}"#)
+    }
+
+    func newDraft() -> JSONValue {
+        state.withLock { state in
+            state.drafts += 1
+            let hex = String(state.drafts, radix: 16)
+            return ["request_id": .string(String(repeating: "0", count: max(0, 32 - hex.count)) + hex)]
+        }
+    }
+
+    /// A first message: the demo computer makes it in three looks (opening the app, sending, done). "测试失败" (or
+    /// "fail") plays one that did not go out, until 继续发送.
+    func createNew(_ body: JSONValue) -> JSONValue {
+        state.withLock { state in
+            let rid = body["request_id"].string()
+            let fail = ["测试失败", "fail"].contains(body["text"].string())
+            if state.newRequests[rid] == nil { state.newRequests[rid] = ["body": body, "checks": 0, "fail": .bool(fail)] }
+            return fail ? Self.failedNew(rid) : Self.creating(rid)
+        }
+    }
+
+    private static func creating(_ rid: String) -> JSONValue {
+        ["request_id": .string(rid), "state": "creating", "timing": ["active": ["name": "desktop_open"]]]
+    }
+
+    private static func failedNew(_ rid: String) -> JSONValue {
+        ["request_id": .string(rid), "state": "failed", "not_submitted": true, "can_retry": true, "message": "本地示例：电脑上的应用没有响应，首条消息没有发出"]
+    }
+
+    func newState(_ rid: String) -> JSONValue {
+        state.withLock { state in
+            guard case .object(var row)? = state.newRequests[rid] else { return ["request_id": .string(rid), "state": "draft"] }
+            if row["fail"]?.bool() == true { return Self.failedNew(rid) }
+            let looks = Int(row["checks"]?.int64() ?? 0) + 1
+            row["checks"] = .number(Double(looks))
+            state.newRequests[rid] = .object(row)
+            if looks == 1 { return Self.creating(rid) }
+            if looks == 2 { return ["request_id": .string(rid), "state": "dispatching", "timing": ["active": ["name": "send_text"]]] }
+            let body = row["body"] ?? [:]
+            var id = row["id"]?.string() ?? ""
+            if id.isEmpty {
+                id = "fixture-new-\(state.created.count + 1)"
+                let words = oneLine(body["text"].string(), limit: 30)
+                let folder = body["projectless"].bool() ? "" : Self.lastPart(body["folder"].string())
+                let app = body["app"].string().isEmpty ? "codex" : body["app"].string()
+                let made = DemoData.row(id, words.isEmpty ? "新对话" : words, folder, String(body["text"].string().prefix(40)), "idle", app, DemoData.now)
+                state.created.append((made, body["text"].string()))
+                row["id"] = .string(id)
+                state.newRequests[rid] = .object(row)
+            }
+            let chat = state.created.first { $0.row["id"].string() == id }!.row
+            return ["request_id": .string(rid), "state": "accepted", "app": chat["app"], "id": .string(id), "title": chat["title"], "folder": chat["folder"]]
+        }
+    }
+
+    func retryNew(_ rid: String) -> JSONValue {
+        state.withLock { state in
+            if case .object(var row)? = state.newRequests[rid] {
+                row["fail"] = false
+                state.newRequests[rid] = .object(row)
+            }
+            return Self.creating(rid)
+        }
+    }
+
+    /// What a conversation made here was started with; nil for the fixed ones.
+    func createdText(_ chat: String) -> String? {
+        state.withLock { state in state.created.first { $0.row["id"].string() == chat }?.text }
+    }
+
+    private static func lastPart(_ path: String) -> String {
+        path.split(separator: "/").last.map(String.init) ?? path
     }
 
     static func claudeID(_ name: String) -> String {

@@ -21,6 +21,10 @@ struct ChatListView: View {
                 .plainRow()
             SearchLine(query: $query) { model.searchChats(query) }
                 .plainRow()
+            if !model.dockJobs.isEmpty {
+                NewJobDock(model: model)
+                    .plainRow()
+            }
             rows
         }
         .listStyle(.plain)
@@ -57,10 +61,10 @@ struct ChatListView: View {
             GlassIconButton(symbol: "line.3.horizontal", label: "打开导航") { chrome.openDrawer() }
             ListTitle(model: model)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            // 新建对话 arrives in 0.4.0 (plan phase 3); until then the button shows where it will be.
-            GlassIconButton(symbol: "square.and.pencil", label: "新建对话") {}
-                .disabled(true)
-                .accessibilityHint(Text("新建对话在 0.4.0 提供"))
+            GlassIconButton(symbol: "square.and.pencil", label: "新建对话") {
+                model.startNew(app: model.listSource == "all" ? model.app : model.listSource)
+            }
+            .disabled(model.device == nil || model.knownApps?.isEmpty == true)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -510,9 +514,15 @@ private struct EmptyList: View {
                         .foregroundStyle(Palette.muted)
                         .multilineTextAlignment(.center)
                 }
-                if searching || model.listSource != "all" || model.listStatus != "all" {
-                    Button("清除筛选", action: clear)
-                        .buttonStyle(PillStyle())
+                HStack(spacing: 8) {
+                    if model.device != nil {
+                        Button("新建对话") { model.startNew(app: model.listSource == "all" ? model.app : model.listSource) }
+                            .buttonStyle(PillStyle(kind: .primary))
+                    }
+                    if searching || model.listSource != "all" || model.listStatus != "all" {
+                        Button("清除筛选", action: clear)
+                            .buttonStyle(PillStyle())
+                    }
                 }
             }
         }

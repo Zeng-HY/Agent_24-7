@@ -59,7 +59,8 @@ struct RootView: View {
 }
 
 /// The list as the root of a navigation stack and the open conversation pushed on it, so the system back button
-/// and the swipe back work (spec 4.3). The stack follows the model: reading pushes, leaving pops.
+/// and the swipe back work (spec 4.3). The stack follows the model: reading pushes, leaving pops. 新建对话 and a
+/// new conversation's result sheet come up over either.
 private struct WorkspaceView: View {
     let model: AppModel
     @Environment(Chrome.self) private var chrome
@@ -73,12 +74,32 @@ private struct WorkspaceView: View {
                     }
             }
         }
+        .sheet(isPresented: newShown) { NewChatSheet(model: model) }
+        .sheet(item: jobSheet) { route in NewJobSheet(model: model, request: route.id) }
     }
 
     private var path: Binding<[ReadingRoute]> {
         Binding(get: { model.screen == .reading ? [ReadingRoute()] : [] },
                 set: { routes in if routes.isEmpty, model.screen == .reading { model.back() } })
     }
+
+    /// Up while the workspace holds the sheet open, and while a source switch inside it binds another source.
+    private var newShown: Binding<Bool> {
+        Binding(get: { model.workspace.pane == "new" || model.pendingNew?.switching == true },
+                set: { shown in
+                    guard !shown else { return }
+                    model.workspace.close()
+                    model.consumeNew()
+                })
+    }
+
+    private var jobSheet: Binding<JobSheetRoute?> {
+        Binding(get: { model.jobSheet.map(JobSheetRoute.init) }, set: { if $0 == nil { model.closeJobSheet() } })
+    }
 }
 
 private struct ReadingRoute: Hashable {}
+
+private struct JobSheetRoute: Identifiable {
+    let id: String
+}

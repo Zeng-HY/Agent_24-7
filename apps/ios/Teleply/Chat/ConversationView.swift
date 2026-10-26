@@ -40,6 +40,7 @@ struct ConversationView: View {
             // long demo 200; how that scrolls on a phone is T04.
             VStack(alignment: .leading, spacing: 0) {
                 historyTools
+                newFirst
                 ForEach(Array(zip(model.messages, roles)), id: \.0.id) { message, role in
                     TimelineItem(model: model, message: message, role: role, raw: control.raw,
                                  receipt: message.request.isEmpty ? nil : receipts[message.request], folds: $folds, actions: actions)
@@ -132,6 +133,14 @@ struct ConversationView: View {
             ConversationTitle(model: model)
         }
         .sharedBackgroundVisibility(.hidden)
+        // A new conversation's page has nothing to stop and no menu yet (web .new-provisional).
+        if !isNewPage(model.chat?.id) {
+            conversationTools(control: control)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func conversationTools(control: Control) -> some ToolbarContent {
         if canStop(control) {
             ToolbarItem(placement: .topBarTrailing) {
                 StopPill(enabled: control.available && !model.conversation.submitting && !model.workspace.busy) {
@@ -242,7 +251,7 @@ struct ConversationView: View {
                     .foregroundStyle(Palette.muted)
                     .padding(.vertical, 8)
             }
-            if !model.busy && model.messages.isEmpty {
+            if !model.busy && model.messages.isEmpty && !isNewPage(model.chat?.id) && handoff == nil {
                 Text("暂无消息")
                     .noteFont()
                     .foregroundStyle(Palette.muted)
@@ -250,6 +259,32 @@ struct ConversationView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// A first message whose conversation the computer has not made yet ends up here (web new-chat-ui.js): the page
+    /// shows it with where it stands; once made, the conversation shows it until its record has it.
+    @ViewBuilder
+    private var newFirst: some View {
+        if isNewPage(model.chat?.id) {
+            if let job = model.jobs.jobs.first(where: { $0.preview == model.chat?.id }) {
+                NewFirstMessage(text: job.text, status: newJobInline(job), problem: job.problem) { model.openJob(job) }
+            } else {
+                Text("这个创建请求已经处理过了，请从对话列表打开。")
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+            }
+        } else if let handoff {
+            NewFirstMessage(text: handoff.text, status: "", problem: false)
+        }
+    }
+
+    /// The first message of a conversation just made, until its record shows a message of the user's.
+    private var handoff: NewHandoff? {
+        guard let handoff = model.handoff, handoff.id == model.chat?.id, handoff.app == model.app,
+              !model.messages.contains(where: { $0.role == "user" }) else { return nil }
+        return handoff
     }
 
     @ViewBuilder

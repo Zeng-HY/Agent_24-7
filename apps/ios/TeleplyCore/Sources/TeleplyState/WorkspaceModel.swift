@@ -35,6 +35,29 @@ public final class WorkspaceModel {
     /// One Claude button at a time: its click waits for the computer's window.
     public var pressing: Bool { cards.values.contains { $0.hasPrefix("pressing:") } }
 
+    // The panes (Android pane): "new" (新建对话), "chat" and "skill" (引用), "remote" (电脑上的文件), "files"
+    // (对话文件), "file" (a file's page) and "diff" (本轮差异), with what the open one lists.
+    public internal(set) var pane: String?
+    public internal(set) var paneBusy = false
+    public internal(set) var paneError: String?
+    public internal(set) var data: JSONValue = [:]
+    /// What the new-conversation sheet lists (folders, models, permissions): this phone's copy first, the
+    /// computer's when it comes (spec 4.4, 8.4).
+    public internal(set) var newData: JSONValue = [:]
+    /// A line under the sheet: a list that did not come this time, or photos that could not follow a draft back.
+    public internal(set) var newNote: String?
+
+    /// A first message sent: it becomes a job and the sheet is free again at once (web 10-16).
+    @ObservationIgnored public var created: (NewJob) -> Void = { _ in }
+    @ObservationIgnored let now: @Sendable () -> Int64
+    @ObservationIgnored var paneRead: Task<Void, Never>?
+    @ObservationIgnored var paneGeneration = 0
+    /// The sheet's lists by its workspace (kept on this phone as "new_lists").
+    @ObservationIgnored var lists: [ChatKey: JSONValue] = [:]
+    @ObservationIgnored var newReads: [String: Task<Void, Never>] = [:]
+    /// The new conversation's request id being asked for, one per workspace.
+    @ObservationIgnored var draftIDs: [ChatKey: Task<String, any Error>] = [:]
+
     /// After an action reached the source, so the conversation reads its state again.
     @ObservationIgnored public var changed: () -> Void = {}
     /// A state the computer sent back with an action (Claude settings), shown at once.
@@ -58,9 +81,11 @@ public final class WorkspaceModel {
     /// Lists kept on this phone (0.8): Claude's model lists by conversation and the computer's latest; DeepSeek's.
     @ObservationIgnored var catalogs: [String: JSONValue] = [:]
 
-    init(store: LocalStore? = nil, newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() }) {
+    init(store: LocalStore? = nil, newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
+         now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.store = store
         self.newID = newID
+        self.now = now
     }
 
     /// Waits for reads and actions under way (tests).
@@ -68,6 +93,8 @@ public final class WorkspaceModel {
         await read?.value
         await choiceRead?.value
         await work?.value
+        await paneRead?.value
+        for list in Array(newReads.values) { await list.value }
         await writing?.value
     }
 
@@ -75,7 +102,16 @@ public final class WorkspaceModel {
         if next == key && clientGeneration == self.clientGeneration { return }
         read?.cancel()
         choiceRead?.cancel()
+        paneRead?.cancel()
+        for task in newReads.values { task.cancel() }
+        newReads = [:]
         generation += 1
+        paneGeneration += 1
+        pane = nil
+        paneBusy = false
+        paneError = nil
+        data = [:]
+        newData = next.flatMap { lists[$0] } ?? [:]
         let g = generation
         key = next
         self.client = client
@@ -94,12 +130,27 @@ public final class WorkspaceModel {
         modes[next] = synthetic
         read = Task { [weak self] in
             guard let self else { return }
-            let stored: JSONValue
+            var stored: JSONValue
             if synthetic {
                 stored = self.demo[next] ?? [:]
             } else {
                 let text = await self.store?.detail(scope: next.scope, device: next.device, app: next.app, chat: next.chat, kind: "workspace")
                 stored = text.map(jsonValue) ?? [:]
+            }
+            // An upload the app stopped in the middle of did not finish; it says so instead of waiting forever.
+            if stored["uploads"].array.contains(where: { ["uploading", "checking"].contains($0["status"].string()) }), case .object(var fields) = stored {
+                fields["uploads"] = .array(stored["uploads"].array.map { row in
+                    guard ["uploading", "checking"].contains(row["status"].string()), case .object(var upload) = row else { return row }
+                    upload["status"] = "failed"
+                    upload["error"] = "上传中断，请重新选择文件"
+                    return .object(upload)
+                })
+                stored = .object(fields)
+            }
+            // The sheet's lists of last time, so it opens with them; the computer's come in behind.
+            if next.chat == "@new", self.lists[next] == nil, !synthetic,
+               let text = await self.store?.detail(scope: next.scope, device: next.device, app: next.app, chat: next.chat, kind: "new_lists") {
+                self.lists[next] = jsonValue(text)
             }
             // Claude's model lists of last time, this conversation's and the computer's latest, for the model menu.
             if next.app == "claude" && !synthetic {
@@ -112,6 +163,7 @@ public final class WorkspaceModel {
             guard g == self.generation else { return }
             self.cache[next] = stored
             self.saved = stored
+            self.newData = self.lists[next] ?? [:]
             self.ready = true
         }
     }
@@ -176,32 +228,75 @@ public final class WorkspaceModel {
         return .object(bound)
     }
 
-    /// What a send carries besides its words: attachments and references (from 0.4.0) and the bound settings.
+    /// What a send carries besides its words: the pictures (by their ids on the computer), the references and the
+    /// other files, and the bound settings. Refuses while a file is still going up or failed (spec 8.1).
     public func sendExtras() throws -> JSONValue {
-        guard key != nil else { throw ReadFailure("没有活动会话") }
+        guard let key else { throw ReadFailure("没有活动会话") }
         guard ready else { throw ReadFailure("附件和设置仍在恢复，请稍候") }
-        var extras: [String: JSONValue] = ["attachments": [], "references": []]
+        let saved = current(key)
+        let uploads = saved["uploads"].array
+        let pictures = uploads.filter { $0["image"].bool() }
+        guard pictures.reduce(Int64(0), { $0 + $1["meta"]["original_size"].int64() }) <= 50 * 1024 * 1024 else { throw ReadFailure("图片合计不能超过50MB") }
+        guard uploads.allSatisfy({ $0["status"].string() == "ready" }) else { throw ReadFailure("存在未完成或失败的附件，请重选或移除后再发送") }
+        var extras: [String: JSONValue] = [
+            "attachments": .array(pictures.map { $0["meta"]["id"] }),
+            "references": .array(saved["references"].array + uploads.filter { !$0["image"].bool() }.map { $0["meta"] }),
+        ]
         for (name, value) in boundSettings().object { extras[name] = value }
         return .object(extras)
     }
 
-    /// The settings went with a send: they bound that one message only, and the chips show the computer's again.
+    /// What went with a send leaves the card: its files and references, and the settings, which bound that one
+    /// message only (the chips show the computer's again). Its receipt now takes the status line.
     func clearSent(_ key: ChatKey, _ extras: JSONValue) {
-        guard extras.has("settings") else { return }
-        var next = current(key).object
-        next["settings"] = nil
-        next["expected_settings"] = nil
+        let saved = current(key)
+        let sent = Set(extras["attachments"].array.map { $0.string() } + extras["references"].array.map { $0["id"].string() })
+        var next = saved.object
+        next["uploads"] = .array(saved["uploads"].array.filter { !sent.contains($0["meta"]["id"].string()) })
+        next["references"] = .array(saved["references"].array.filter { !sent.contains($0["id"].string()) })
+        if extras.has("settings") {
+            next["settings"] = nil
+            next["expected_settings"] = nil
+        }
         if self.key == key { result = "" }
         keep(key, .object(next))
     }
 
-    /// 恢复提交快照: the settings a send carried, bound to the next message again.
+    /// 恢复提交快照: what a send carried, back on the card: its references, its pictures (checked on the computer;
+    /// one it no longer has says so and is never left out quietly), its settings.
     func restoreSent(_ key: ChatKey, _ body: JSONValue) throws {
         guard self.key == key, ready else { throw ReadFailure("当前会话已变化，未恢复附件") }
-        var next = current(key).object
+        let saved = current(key)
+        guard saved["uploads"].array.isEmpty && saved["references"].array.isEmpty else { throw ReadFailure("已有新附件或引用，请先处理它们，再恢复提交快照") }
+        let pictures = body["attachments"].array.map { $0.string() }
+        var next = saved.object
+        next["references"] = .array(body["references"].array)
+        next["uploads"] = .array(pictures.map { id -> JSONValue in
+            ["local": .string(newID()), "name": "恢复的图片", "image": true, "status": "checking", "meta": ["id": .string(id)]]
+        })
         if body["settings"].isObject { next["settings"] = body["settings"] }
         if body["expected_settings"].isObject { next["expected_settings"] = body["expected_settings"] }
         keep(key, .object(next))
+        guard !pictures.isEmpty, let client else { return }
+        Task { [weak self] in
+            let found = (try? await client.detail(device: key.device, route: "codex/attachments", query: [("id", key.chat), ("ids", pictures.joined(separator: ","))]))?["items"].array ?? []
+            guard let self, self.key == key else { return }
+            let now = self.current(key)
+            var fields = now.object
+            fields["uploads"] = .array(now["uploads"].array.map { row in
+                guard row["status"].string() == "checking", case .object(var upload) = row else { return row }
+                if let meta = found.first(where: { $0["id"].string() == row["meta"]["id"].string() }) {
+                    upload["status"] = "ready"
+                    upload["meta"] = meta
+                    upload["name"] = meta["name"]
+                } else {
+                    upload["status"] = "failed"
+                    upload["error"] = "原图片无法恢复，请重选或移除；不会省略附件发送"
+                }
+                return .object(upload)
+            })
+            self.keep(key, .object(fields))
+        }
     }
 
     // MARK: The chips' lists (spec 8.4, B17)

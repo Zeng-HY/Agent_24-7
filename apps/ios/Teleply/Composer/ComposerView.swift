@@ -173,9 +173,12 @@ struct ComposerCard: View {
         let queue = chat.control.running && chat.control.queueAvailable
         let words = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let canSend = chat.ready && chat.control.available && !chat.submitting && !words.isEmpty && words.count <= 20_000
+        // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
+        let newPage = isNewPage(chat.key?.chat)
+        let prompt = newPage ? "可以先写下一条，创建完成后发送" : chat.hint.isEmpty ? "输入消息…" : chat.hint
         VStack(alignment: .leading, spacing: 0) {
             StatusLine(model: model)
-            TextField("", text: $text, prompt: Text(chat.hint.isEmpty ? "输入消息…" : chat.hint).foregroundStyle(Palette.muted), axis: .vertical)
+            TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Palette.muted), axis: .vertical)
                 .bodyFont()
                 .foregroundStyle(Palette.ink)
                 .tint(Palette.accent)
@@ -185,20 +188,13 @@ struct ComposerCard: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .accessibilityLabel(Text("输入消息"))
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 4) {
-                    chips
-                    Spacer(minLength: 4)
-                    sendButton(queue: queue, enabled: canSend)
+            if newPage {
+                HStack {
+                    Spacer()
+                    sendButton(queue: false, enabled: false)
                 }
-                // At the largest text sizes the chips take their own line; send keeps its size.
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) { chips }
-                    HStack {
-                        Spacer()
-                        sendButton(queue: queue, enabled: canSend)
-                    }
-                }
+            } else {
+                controls(queue: queue, canSend: canSend)
             }
         }
         .padding(.horizontal, 6)
@@ -218,6 +214,25 @@ struct ComposerCard: View {
             }
         } message: { option in
             Text(option["description"].string())
+        }
+    }
+
+    /// The card's bottom row: the chips, then send. At the largest text sizes the chips take their own line.
+    private func controls(queue: Bool, canSend: Bool) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) {
+                chips
+                Spacer(minLength: 4)
+                sendButton(queue: queue, enabled: canSend)
+            }
+            // At the largest text sizes the chips take their own line; send keeps its size.
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) { chips }
+                HStack {
+                    Spacer()
+                    sendButton(queue: queue, enabled: canSend)
+                }
+            }
         }
     }
 

@@ -329,6 +329,25 @@ public final class ChatModel {
         draftReset += 1
     }
 
+    /// A new conversation's page became the conversation: what was written there goes to the conversation's draft,
+    /// after anything already there.
+    public func moveDraft(from: ChatKey, to: ChatKey) async {
+        await flushDraft()
+        let synthetic = synthetic
+        let stored = synthetic ? "" : await store?.draft(from) ?? ""
+        let text = (memory[from] ?? stored).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let storedThere = synthetic ? "" : await store?.draft(to) ?? ""
+        let there = memory[to] ?? storedThere
+        let kept = there.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        let next = kept.isEmpty ? text : kept + "\n" + text
+        memory[to] = next
+        memory[from] = nil
+        guard !synthetic else { return }
+        await store?.setDraft(to, next)
+        await store?.setDraft(from, "")
+    }
+
     /// Puts the cursor in the box with [hint] showing (继续修改 a Codex plan).
     public func focusInput(hint: String) {
         focus += 1

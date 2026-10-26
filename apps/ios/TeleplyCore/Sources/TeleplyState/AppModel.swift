@@ -122,10 +122,21 @@ public final class AppModel {
     public internal(set) var searched = false
     public internal(set) var searchQuery = ""
 
+    // New conversations (AppModel+New)
+    /// A new conversation waiting for its sheet.
+    public internal(set) var pendingNew: NewTarget?
+    /// The job whose 新建对话的结果 sheet is open, by request id.
+    public internal(set) var jobSheet: String?
+    /// A conversation just made from its job: its first message shows until the record has it.
+    public internal(set) var handoff: NewHandoff?
+
     /// The open conversation's live connection and its composer.
     public let conversation: ChatModel
-    /// What goes with the open conversation's next message, and the source's own menus and actions.
+    /// What goes with the open conversation's next message (or the new conversation's first), the source's own
+    /// menus and actions, and the panes.
     public let workspace: WorkspaceModel
+    /// The first messages of the computer in use under way.
+    public let jobs: NewChatJobs
 
     @ObservationIgnored let services: AppServices
     @ObservationIgnored var client: RelayClient
@@ -150,7 +161,7 @@ public final class AppModel {
         origin = services.defaultOrigin
         client = RelayClient(origin: services.defaultOrigin, transport: services.transport, vault: services.vault)
         let conversation = ChatModel(pacer: services.pacer, store: services.store, newID: services.newID, now: services.now)
-        let workspace = WorkspaceModel(store: services.store, newID: services.newID)
+        let workspace = WorkspaceModel(store: services.store, newID: services.newID, now: services.now)
         conversation.extras = { try workspace.sendExtras() }
         conversation.boundSettings = { workspace.boundSettings() }
         conversation.sentExtras = { key, extras in workspace.clearSent(key, extras) }
@@ -161,6 +172,12 @@ public final class AppModel {
         workspace.stateRead = { key, raw in conversation.applyState(key, raw) }
         self.conversation = conversation
         self.workspace = workspace
+        jobs = NewChatJobs(pacer: services.pacer, store: services.store, now: services.now)
+        workspace.created = { [weak self] job in self?.jobCreated(job) }
+        jobs.settle = { [weak self] job in
+            guard let self, self.screen == .reading, self.chat?.id == job.preview else { return }
+            self.finishJob(job)
+        }
     }
 
     // MARK: Operations
@@ -238,6 +255,8 @@ public final class AppModel {
         treeTask?.cancel()
         treeMore = [:]
         treeAt = nil
+        pendingNew = nil
+        jobSheet = nil
         clearReading()
     }
 
@@ -254,6 +273,7 @@ public final class AppModel {
         hitMore = false
         searched = false
         searchQuery = ""
+        handoff = nil
     }
 
     func persistSelection(scope: String, device: String, chat: String = "", title: String = "") async {
@@ -511,16 +531,23 @@ public final class AppModel {
     }
 
     /// Binds what should be running to what is shown: the open conversation's live connection, the list's 10 s
-    /// read and 我的电脑's 15 s read, all only in the foreground.
+    /// read and 我的电脑's 15 s read, the new conversations' looks, all only in the foreground. Off a conversation,
+    /// the workspace holds the new conversation's draft ("@new"). A new conversation's page has no state yet:
+    /// drafts only.
     public func live() {
         var key: ChatKey?
         if screen == .reading, !expired, let device, let chat { key = ChatKey(scope: scope, device: device.id, app: app, chat: chat.id) }
+        let newPage = isNewPage(key?.chat)
         pollList(foreground && screen == .chats && device != nil && !expired)
         pollDevices(foreground && screen == .devices && account != nil && !fixture)
-        conversation.bind(key, client: client, clientGeneration: clientGeneration, active: foreground, synthetic: fixture) { [weak self] frame, key in
+        conversation.bind(key, client: client, clientGeneration: clientGeneration, active: foreground && !newPage, synthetic: fixture) { [weak self] frame, key in
             self?.apply(frame, for: key)
         }
-        workspace.bind(key, client: client, clientGeneration: clientGeneration, synthetic: fixture)
+        let draft = device.flatMap { device in expired ? nil : ChatKey(scope: scope, device: device.id, app: app, chat: key?.chat ?? "@new") }
+        workspace.bind(draft, client: client, clientGeneration: clientGeneration, synthetic: fixture)
+        jobs.bind(scope: scope, device: expired ? nil : device?.id, client: client, synthetic: fixture)
+        jobs.setForeground(foreground)
+        jobs.onScreen = newPage ? key?.chat : nil
     }
 
     /// 外观: 跟随系统 / 浅色 / 深色.

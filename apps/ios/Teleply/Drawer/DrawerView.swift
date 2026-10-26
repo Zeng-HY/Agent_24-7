@@ -98,7 +98,8 @@ struct DrawerView: View {
             for project in projects {
                 let key = "project:\(app):\(project["key"].string())"
                 let open = folds.keys.contains("open:" + key)
-                rows.append(DrawerRow(id: key, kind: .project(key: key, name: project["name"].string(), projectless: project["projectless"].bool(), open: open)))
+                rows.append(DrawerRow(id: key, kind: .project(key: key, app: app, name: project["name"].string(), folder: project["folder"].string(),
+                                                              projectless: project["projectless"].bool(), open: open)))
                 guard open else { continue }
                 let items = project["items"].array
                 for item in items {
@@ -135,8 +136,13 @@ struct DrawerView: View {
                 .padding(.leading, 12)
                 .padding(.vertical, 8)
                 .transition(.opacity)
-        case .project(let key, let name, let projectless, let open):
-            TreeProject(name: name, projectless: projectless, open: open) {
+        case .project(let key, let app, let name, let folder, let projectless, let open):
+            TreeProject(name: name, projectless: projectless, open: open,
+                        addLabel: projectless ? "新建不在项目里的\(Labels.sourceName(app))对话" : "在「\(name)」新建对话",
+                        add: folder.isEmpty && !projectless ? nil : {
+                            close()
+                            model.startNew(app: app, folder: projectless ? "" : folder, projectless: projectless)
+                        }) {
                 withAnimation(.drawer()) { folds.toggle("open:" + key) }
             }
             .transition(.opacity)
@@ -204,7 +210,7 @@ private struct DrawerRow: Identifiable {
         case loading(String)
         case app(index: Int, app: String, name: String, open: Bool)
         case empty
-        case project(key: String, name: String, projectless: Bool, open: Bool)
+        case project(key: String, app: String, name: String, folder: String, projectless: Bool, open: Bool)
         case chat(Chat, place: String)
         case more(app: String, project: String, left: Int)
     }
@@ -277,35 +283,50 @@ private struct TreeApp: View {
     }
 }
 
-/// A project (web .tree-proj): the folder (or the bubble of 其他对话), its name and the chevron. The ＋ for a new
-/// conversation there arrives with 新建对话 in 0.4.0.
+/// A project (web .tree-proj): the folder (or the bubble of 其他对话), its name and the chevron; its ＋ starts a new
+/// conversation there, the source and project filled in (spec 4.4).
 private struct TreeProject: View {
     let name: String
     let projectless: Bool
     let open: Bool
+    let addLabel: String
+    let add: (() -> Void)?
     let toggle: () -> Void
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 9) {
-                Image(systemName: projectless ? "bubble.left" : "folder")
-                    .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(scheme == .dark ? Palette.muted : Color(red: 0x60 / 255, green: 0x69 / 255, blue: 0x75 / 255))
-                    .frame(width: 24, height: 24)
-                    .accessibilityHidden(true)
-                Text(name)
-                    .scaledFont(15, .medium, relativeTo: .callout)
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Chevron(open: open)
+        HStack(spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 9) {
+                    Image(systemName: projectless ? "bubble.left" : "folder")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(scheme == .dark ? Palette.muted : Color(red: 0x60 / 255, green: 0x69 / 255, blue: 0x75 / 255))
+                        .frame(width: 24, height: 24)
+                        .accessibilityHidden(true)
+                    Text(name)
+                        .scaledFont(15, .medium, relativeTo: .callout)
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Chevron(open: open)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
             }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
+            .buttonStyle(RowPressStyle(radius: 12))
+            .accessibilityValue(Text(open ? "已展开" : "已收起"))
+            if let add {
+                Button(action: add) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Palette.muted)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(RowPressStyle(radius: 12))
+                .accessibilityLabel(Text(addLabel))
+            }
         }
-        .buttonStyle(RowPressStyle(radius: 12))
-        .accessibilityValue(Text(open ? "已展开" : "已收起"))
     }
 }
 

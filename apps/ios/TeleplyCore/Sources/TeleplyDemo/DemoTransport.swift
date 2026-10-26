@@ -128,6 +128,19 @@ public struct DemoTransport: RelayTransport {
             return Self.json(["items": .array(Array(kids.dropFirst(offset).prefix(50))), "total": .number(Double(kids.count)), "offset": .number(Double(offset))])
         case "/api/status":
             return Self.json(["ok": true, "ui_version": "fixture"])
+        case "/api/chat/folders":
+            return Self.json(world.folders(app: app))
+        case "/api/chat/new/options":
+            return Self.json(DemoData.parse(#"{"models":[{"id":"fixture-model","label":"测试模型","efforts":[{"id":"medium","label":"中"}]}]}"#))
+        case "/api/chat/new/state":
+            return Self.json(world.newState(query["request_id"] ?? ""))
+        case "/api/composer/references", "/api/chat/new/references":
+            let kind = query["kind"] ?? "chat"
+            return Self.json(["items": [["kind": .string(kind), "id": "fixture-reference", "app": .string(app), "name": "固定引用", "title": "固定引用"]]])
+        case "/api/files/places":
+            return Self.json(DemoData.parse(#"{"items":[{"name":"固定目录","path":"D:/fixture","kind":"conversation"}]}"#))
+        case "/api/files/list":
+            return Self.json(DemoData.parse(#"{"path":"D:/fixture","parent":"","folder":{"kind":"folder","app":"pc","id":"fixture-folder-ref","name":"fixture","path":"D:/fixture"},"items":[{"kind":"file","app":"pc","id":"fixture-file-ref","name":"测试.txt","path":"D:/fixture/测试.txt"}]}"#))
         default:
             return Self.notFound
         }
@@ -179,6 +192,12 @@ public struct DemoTransport: RelayTransport {
             reply = (200, world.deepseekApproval(event: body["event_id"].string(), choice: body["choice"].string()))
         case "/api/deepseek/answer":
             reply = (200, ["ok": true])
+        case "/api/chat/new/draft":
+            reply = (200, world.newDraft())
+        case "/api/chat/new":
+            reply = (200, world.createNew(body))
+        case "/api/chat/new/retry":
+            reply = (200, world.retryNew(body["request_id"].string()))
         default:
             return nil
         }
@@ -224,6 +243,9 @@ public struct DemoTransport: RelayTransport {
                                          "folder": .string(app == "deepseek" ? "固定测试项目" : "测试项目"), "runtime": DemoData.runtime(app)]
         if chat == "performance" {
             page["messages"] = .array(DemoData.performance)
+        } else if let text = world.createdText(chat) {
+            page["messages"] = [DemoData.message(chat + "-1", "user", text.isEmpty ? "请查看这些图片或引用。" : text),
+                                DemoData.message(chat + "-2", "assistant", "本地示例：收到，这是固定的回复。")]
         } else if before != nil {
             page["messages"] = [DemoData.message("m0", "user", "更早的测试消息。")]
         } else {
