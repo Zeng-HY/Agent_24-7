@@ -149,7 +149,6 @@ struct OptionCard: View {
         }
         .buttonStyle(PressScaleStyle())
         .disabled(!enabled)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(detail.isEmpty ? title : title + "，" + detail))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
