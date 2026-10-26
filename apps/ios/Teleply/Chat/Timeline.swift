@@ -73,11 +73,14 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
 struct MessageActions {
     var select: (Message) -> Void
     var expand: (Message) -> Void
+    /// 本轮差异 of a step that changed files: the diff page by its reference.
+    var diff: (String) -> Void = { _ in }
     var busy: Bool
 }
 
 /// One message in the timeline (spec 4.3; Android TimelineItem).
 struct TimelineItem: View {
+    let model: AppModel
     let message: Message
     let role: TimelineRole
     let raw: JSONValue
@@ -99,13 +102,13 @@ struct TimelineItem: View {
         case .checklist:
             ChecklistCard(message: message)
         case .next:
-            NextStepCard(message: message)
+            NextStepCard(message: message, model: model)
         case .task:
-            TaskCard(message: message, raw: raw)
+            TaskCard(message: message, raw: raw, model: model)
         case .subagent:
             SubagentCard(message: message)
         case .codexPlan(let plan):
-            CodexPlanCard(plan: plan)
+            CodexPlanCard(plan: plan, model: model)
         case .process(let group, let first):
             let open = folds[group.key] ?? group.live
             VStack(alignment: .leading, spacing: 0) {
@@ -118,7 +121,7 @@ struct TimelineItem: View {
                     HStack(spacing: 0) {
                         Rectangle().fill(Palette.line).frame(width: 3)
                             .padding(.leading, 7)
-                        ProcessStep(message: message)
+                        ProcessStep(message: message, diff: actions.diff)
                             .padding(.leading, 12)
                             .padding(.vertical, 4)
                     }
@@ -179,6 +182,7 @@ private struct ProcessHeader: View {
 /// files it changed; commentary and thinking as grey text.
 private struct ProcessStep: View {
     let message: Message
+    let diff: (String) -> Void
 
     var body: some View {
         if message.role == "tool" {
@@ -196,13 +200,22 @@ private struct ProcessStep: View {
                             .foregroundStyle(Palette.danger)
                     }
                 }
-                // 本轮差异 opens the diff page from 0.4.0 (plan phase 3).
+                // 本轮差异 opens the diff page; a change without a reference has no record to show (B12).
                 ForEach(Array(message.details["changes"].array.enumerated()), id: \.offset) { _, change in
-                    Text("本轮差异：" + change["path"].string())
-                        .processFont()
-                        .foregroundStyle(Palette.muted)
-                        .padding(.top, 4)
-                        .padding(.vertical, 4)
+                    let ref = change["ref"].string()
+                    Button {
+                        diff(ref)
+                    } label: {
+                        Text("本轮差异：" + change["path"].string())
+                            .processFont()
+                            .foregroundStyle(ref.isEmpty ? Palette.muted : Palette.accent)
+                            .multilineTextAlignment(.leading)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(ref.isEmpty)
+                    .padding(.top, 4)
                 }
             }
         } else {

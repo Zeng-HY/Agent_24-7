@@ -20,6 +20,8 @@ struct ConversationView: View {
     @State private var saveTick = 0
     @State private var pendingShown = false
     @State private var promptsShown = false
+    /// The question bar's tap moves VoiceOver to the first card too (spec 7).
+    @AccessibilityFocusState private var cardFocused: Bool
 
     var body: some View {
         let control = model.conversation.control
@@ -31,6 +33,7 @@ struct ConversationView: View {
         let outbox = submissions.filter { record in
             record.action == "send" && record.label == "提交中" && !model.messages.contains { $0.request == record.request }
         }
+        let cards = inlineCards(app: model.conversation.key?.app ?? model.app, raw: control.raw)
         ScrollView {
             // A plain stack, not a lazy one: with LazyVStack the area above the input card went blank after the
             // keyboard came up (0.3.0 screenshots on iOS 26.5, two runs of three). Pages hold 60 messages, the
@@ -38,12 +41,23 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: 0) {
                 historyTools
                 ForEach(Array(zip(model.messages, roles)), id: \.0.id) { message, role in
-                    TimelineItem(message: message, role: role, raw: control.raw, receipt: message.request.isEmpty ? nil : receipts[message.request],
-                                 folds: $folds, actions: actions)
+                    TimelineItem(model: model, message: message, role: role, raw: control.raw,
+                                 receipt: message.request.isEmpty ? nil : receipts[message.request], folds: $folds, actions: actions)
                 }
-                ForEach(outbox.reversed()) { record in
-                    UserBubble(message: Message(id: record.request, role: "user", text: record.text), actions: actions, receipt: record.label, sending: true)
-                        .padding(.top, 16)
+                // Questions and approvals where the source asked: at the end of its turn (spec 4.3).
+                if !cards.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(cards) { card in
+                            if card.id == cards.first?.id {
+                                InlineCardView(model: model, card: card)
+                                    .accessibilityFocused($cardFocused)
+                            } else {
+                                InlineCardView(model: model, card: card)
+                            }
+                        }
+                    }
+                    .padding(.top, 16)
+                    .id("interactions")
                 }
                 if model.newerAvailable {
                     Button("回到最新") {
@@ -54,6 +68,10 @@ struct ConversationView: View {
                     .disabled(model.busy)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 16)
+                }
+                ForEach(outbox.reversed()) { record in
+                    UserBubble(message: Message(id: record.request, role: "user", text: record.text), actions: actions, receipt: record.label, sending: true)
+                        .padding(.top, 16)
                 }
             }
             .scrollTargetLayout()
@@ -84,7 +102,10 @@ struct ConversationView: View {
         .safeAreaBar(edge: .bottom) {
             VStack(spacing: 0) {
                 newMessagesPill
-                InputArea(model: model)
+                InputArea(model: model) {
+                    withAnimation(.easeOut(duration: 0.3)) { position.scrollTo(id: "interactions", anchor: .top) }
+                    cardFocused = true
+                }
             }
             .frame(maxWidth: .infinity)
         }

@@ -156,7 +156,7 @@ public final class AppModel {
         conversation.sentExtras = { key, extras in workspace.clearSent(key, extras) }
         conversation.restoreExtras = { key, body in try workspace.restoreSent(key, body) }
         // A tap waiting on the computer holds the state polls (web claude-ui.js `choosing`).
-        conversation.pollPaused = { workspace.busy }
+        conversation.pollPaused = { workspace.busy || workspace.pressing || conversation.submitting }
         workspace.changed = { conversation.refreshControl() }
         workspace.stateRead = { key, raw in conversation.applyState(key, raw) }
         self.conversation = conversation

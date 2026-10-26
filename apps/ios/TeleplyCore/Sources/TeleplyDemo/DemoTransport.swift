@@ -121,7 +121,7 @@ public struct DemoTransport: RelayTransport {
         case "/api/deepseek/permissions":
             return Self.json(DemoData.deepseekPermissions)
         case "/api/chat/projects":
-            return Self.json(DemoData.tree(device: device, apps: world.apps(of: device), more: query["more"]))
+            return Self.json(DemoData.tree(device: device, apps: world.apps(of: device), more: query["more"], rows: world.firstPage()))
         case "/api/chats/children":
             let offset = Int(query["offset"] ?? "") ?? 0
             let kids = chat == "deepseek-demo" ? DemoData.deepseekChildren : []
@@ -137,7 +137,7 @@ public struct DemoTransport: RelayTransport {
     func action(_ route: String, _ body: JSONValue) -> RelayResponse? {
         let reply: (status: Int, reply: JSONValue)
         switch route {
-        case "/api/codex/send", "/api/codex/stop", "/api/codex/queue-action":
+        case "/api/codex/send", "/api/codex/stop", "/api/codex/queue-action", "/api/codex/answer":
             reply = world.command(app: "codex", route: String(route.dropFirst("/api/codex/".count)), body: body)
         case "/api/chat/send":
             reply = world.command(app: body["app"].string(), route: "send", body: body)
@@ -171,6 +171,14 @@ public struct DemoTransport: RelayTransport {
             reply = (200, ["ok": true, "text": "本地示例：设置已记录"])
         case "/api/chat/open":
             reply = (200, ["ok": true, "text": "本地示例：没有真的打开电脑上的窗口"])
+        case "/api/claude/next":
+            reply = world.claudeNext(label: body["label"].string())
+        case "/api/claude/task":
+            reply = world.claudeTask(title: body["title"].string(), button: body["button"].string())
+        case "/api/deepseek/approval":
+            reply = (200, world.deepseekApproval(event: body["event_id"].string(), choice: body["choice"].string()))
+        case "/api/deepseek/answer":
+            reply = (200, ["ok": true])
         default:
             return nil
         }
@@ -192,7 +200,7 @@ public struct DemoTransport: RelayTransport {
         let cursor = query["cursor"]
         let has = world.apps(of: device)
         let status = query["status"] ?? "all"
-        let rows = (cursor == nil ? DemoData.firstPage : [DemoData.older]).filter { row in
+        let rows = (cursor == nil ? world.firstPage() : [DemoData.older]).filter { row in
             has.contains(row["app"].string()) && (app == "all" || row["app"].string() == app)
                 && (words.isEmpty || row["title"].string().contains(words) || row["folder"].string().contains(words))
                 && Self.statusMatches(row["status"].string(), status)
@@ -211,7 +219,7 @@ public struct DemoTransport: RelayTransport {
     }
 
     func history(app: String, chat: String, before: String?) -> RelayResponse {
-        let title = DemoData.firstPage.first { $0["id"].string() == chat }?["title"].string() ?? "固定对话"
+        let title = world.firstPage().first { $0["id"].string() == chat }?["title"].string() ?? "固定对话"
         var page: [String: JSONValue] = ["app": .string(app), "id": .string(chat), "title": .string(title),
                                          "folder": .string(app == "deepseek" ? "固定测试项目" : "测试项目"), "runtime": DemoData.runtime(app)]
         if chat == "performance" {
@@ -219,7 +227,7 @@ public struct DemoTransport: RelayTransport {
         } else if before != nil {
             page["messages"] = [DemoData.message("m0", "user", "更早的测试消息。")]
         } else {
-            page["messages"] = .array(DemoData.messages(app: app, chat: chat))
+            page["messages"] = .array(DemoData.messages(app: app, chat: chat, nextPressed: world.nextPressed))
             page["next_cursor"] = "m1"
             page["has_more"] = .bool(app == "codex")
         }

@@ -56,6 +56,13 @@ public final class DemoWorld: Sendable {
         var deepseekModel = "deepseek-v4"
         var deepseekEffort = "high"
         var deepseekPermission = "workspace"
+        // What answering changes (Android FixtureWorld): the cards each source shows until they are dealt with.
+        var codexAnswered = false
+        var claudeStep = 0
+        var deepseekDecided = false
+        var nextPressed = ""
+        var tasksDone: Set<String> = []
+        var planDone = false
     }
 
     let state = Mutex(State())
@@ -93,6 +100,24 @@ public final class DemoWorld: Sendable {
         let run = state.running[app] == true
         let turn = state.turns[app] ?? ""
         var fields = DemoData.state(app: app, chat: chat).object
+        // The cards as far as they have been answered.
+        switch app {
+        case "claude" where chat == "claude-next":
+            fields["tasks"] = .array([DemoData.taskTitle].filter { !state.tasksDone.contains($0) }.map(JSONValue.string))
+        case "claude":
+            if state.claudeStep == 1 { fields["prompt"] = DemoData.claudeSecond }
+            if state.claudeStep >= 2 { fields["prompt"] = nil }
+        case "deepseek":
+            if state.deepseekDecided { fields["interactions"] = [] }
+        default:
+            if chat == "plan-demo" {
+                fields["plan"] = ["id": "plan-item-1", "turn_id": "plan-turn", "text": .string(DemoData.plan), "ready": .bool(!state.planDone && !run)]
+            } else if state.codexAnswered, case .object(var card)? = fields["questions"]?.array.first {
+                card["status"] = "answered"
+                card["editable"] = true
+                fields["questions"] = [.object(card)]
+            }
+        }
         fields["running"] = .bool(run)
         fields["active_turn_id"] = .string(run ? turn : "")
         fields["turn_id"] = .string(turn)
@@ -140,7 +165,11 @@ public final class DemoWorld: Sendable {
             let rid = body[route == "stop" ? "operation_id" : "request_id"].string()
             var queue = state.queues[app] ?? []
             let delivery: String
+            if !body["plan_id"].string().isEmpty { state.planDone = true }
             switch route {
+            case "answer":
+                state.codexAnswered = true
+                delivery = "accepted"
             case "stop":
                 state.running[app] = false
                 delivery = "accepted"
@@ -181,7 +210,8 @@ public final class DemoWorld: Sendable {
         }
     }
 
-    /// A desktop option tapped on the computer: 停止 (t-stop) or 立即补充 (t-steer-…).
+    /// A desktop option tapped on the computer: 停止 (t-stop), 立即补充 (t-steer-…), or a choice or 下一题 / 提交 of
+    /// its question (t-choice-…, t-nav-…), which moves the question on.
     func claudeChoose(token: String) -> JSONValue {
         state.withLock { state in
             if token == "t-stop" {
@@ -189,9 +219,77 @@ public final class DemoWorld: Sendable {
             } else if token.hasPrefix("t-steer-") {
                 let id = String(token.dropFirst("t-steer-".count))
                 state.queues["claude"]?.removeAll { $0.id == id }
+            } else if token.hasPrefix("t-choice-") || token.hasPrefix("t-nav-") {
+                state.claudeStep = min(state.claudeStep + 1, 2)
             }
             return ["ok": true, "text": "本地示例：已在电脑上点选"]
         }
+    }
+
+    /// A button of the next-step box: pressed once; after that the box is gone (409, as the computer says).
+    func claudeNext(label: String) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            guard state.nextPressed.isEmpty else { return (409, ["error": "这个框已经不在了：回复过了，或者已经是新的一轮。刷新看看"]) }
+            state.nextPressed = label
+            return (200, ["ok": true, "text": .string("本地示例：已在电脑上点了「\(label)」")])
+        }
+    }
+
+    /// 开始 / 在这里做 / 不要了 on a task card; a card already dealt with is refused.
+    func claudeTask(title: String, button: String) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            guard !state.tasksDone.contains(title) else { return (409, ["error": "电脑上这张任务卡片已经处理过了，或者不在了"]) }
+            state.tasksDone.insert(title)
+            let done = ["start": "开始了", "here": "点了「Do it here」", "dismiss": "关掉了"][button] ?? "处理了"
+            return (200, ["ok": true, "text": .string("本地示例：已在电脑上" + done + (button == "start" ? "，新对话会出现在列表里" : ""))])
+        }
+    }
+
+    /// 拒绝 / 仅允许本次: the approval is decided; allowed, DeepSeek carries on.
+    func deepseekApproval(event: String, choice: String) -> JSONValue {
+        state.withLock { state in
+            if event == "e-approval-1" {
+                state.deepseekDecided = true
+                if choice == "allowed-once" { state.running["deepseek"] = true }
+            }
+            return ["ok": true]
+        }
+    }
+
+    /// The first list page as things stand: rows whose state answering changed say so (Android FixtureWorld.all).
+    func firstPage() -> [JSONValue] {
+        state.withLock { state in
+            DemoData.firstPage.map { row in
+                var fields = row.object
+                switch row["id"].string() {
+                case "demo":
+                    if state.running["codex"] == true { fields["status"] = "running" }
+                case "claude-demo":
+                    if state.claudeStep >= 2 {
+                        fields["status"] = "idle"
+                        fields["preview"] = "已选好格式"
+                    }
+                case "deepseek-demo":
+                    if state.deepseekDecided {
+                        fields["status"] = "running"
+                        fields["preview"] = "已处理批准"
+                    }
+                case "plan-demo":
+                    if state.planDone {
+                        fields["preview"] = "已按计划开始"
+                        if state.running["codex"] == true { fields["status"] = "running" }
+                    }
+                default:
+                    break
+                }
+                return .object(fields)
+            }
+        }
+    }
+
+    /// The next-step button pressed so far ("" before), which the conversation then shows as sent.
+    var nextPressed: String {
+        state.withLock { $0.nextPressed }
     }
 
     static func claudeID(_ name: String) -> String {
@@ -313,21 +411,26 @@ enum DemoData {
         return .object(fields)
     }
 
-    static func messages(app: String, chat: String) -> [JSONValue] {
+    /// [nextPressed]: the next-step button pressed so far; the box then keeps its recap and the words show as sent.
+    static func messages(app: String, chat: String, nextPressed: String = "") -> [JSONValue] {
         if app == "claude" && chat == "claude-next" {
             let plan: JSONValue = .array([("读现有测试", "completed"), ("补发布说明的测试", "completed"), ("跑一遍全部测试", "in_progress"), ("更新说明文档", "pending")]
                 .map { ["text": .string($0.0), "status": .string($0.1)] })
-            return [
+            var next: [String: JSONValue] = ["tool_id": "wrap-1", "recap": "补了 3 个测试，全部通过；说明文档还没改。", "ask": "接下来做什么？",
+                                             "actions": [["label": "接着改说明文档", "message": "接着改说明文档"], ["label": "先停在这里", "message": "先停在这里"]]]
+            if nextPressed.isEmpty { next["open"] = true }
+            var rows = [
                 message("n1", "user", "把发布说明的测试补齐。", ["origin": "other_chat"]),
                 message("n2", "assistant", "先列一下要做的几步。", ["phase": "commentary"]),
                 message("n3", "plan", "计划 2/4", ["items": plan]),
                 message("n4", "tool", "运行 测试", ["tool": "shell", "title": "运行 npm test", "tool_status": "completed"]),
                 message("n5", "assistant", "测试补好了，全部通过。说明文档还没改。"),
-                message("n6", "next", "这一轮做完了", ["tool_id": "wrap-1", "recap": "补了 3 个测试，全部通过；说明文档还没改。", "ask": "接下来做什么？",
-                                                   "actions": [["label": "接着改说明文档", "message": "接着改说明文档"], ["label": "先停在这里", "message": "先停在这里"]], "open": true]),
-                message("n8", "task", taskTitle, ["tool_id": "task-1", "title": .string(taskTitle), "offer": false,
-                                                  "brief": "把这次改动整理成发布清单：列出新增的测试、受影响的页面、需要人工确认的地方，并附上每一项的验证方法。改完发给我看。"]),
+                message("n6", "next", "这一轮做完了", next),
             ]
+            if !nextPressed.isEmpty { rows.append(message("n7", "user", nextPressed)) }
+            rows.append(message("n8", "task", taskTitle, ["tool_id": "task-1", "title": .string(taskTitle), "offer": false,
+                                                          "brief": "把这次改动整理成发布清单：列出新增的测试、受影响的页面、需要人工确认的地方，并附上每一项的验证方法。改完发给我看。"]))
+            return rows
         }
         switch app {
         case "claude":
@@ -384,7 +487,7 @@ enum DemoData {
         }
     }
 
-    static func tree(device: String, apps: [String], more: String?) -> JSONValue {
+    static func tree(device: String, apps: [String], more: String?, rows: [JSONValue] = firstPage) -> JSONValue {
         func item(_ row: JSONValue) -> JSONValue {
             ["app": row["app"], "id": row["id"], "title": row["title"], "folder": row["folder"], "updated": row["updated"], "status": row["status"]]
         }
@@ -393,7 +496,7 @@ enum DemoData {
              "projectless": .bool(projectless), "updated": .number(Double(now)), "items": .array(items)]
         }
         func only(_ app: String) -> [JSONValue] {
-            firstPage.filter { $0["app"].string() == app && !$0["group"].bool() }.map(item)
+            rows.filter { $0["app"].string() == app && !$0["group"].bool() }.map(item)
         }
         var codex = only("codex")
         if (more ?? "").contains("p-test") { codex.append(item(older)) }
@@ -414,6 +517,8 @@ enum DemoData {
     static let codexState = parse(#"{"available":true,"settings":{"model":"fixture-model","effort":"medium","mode":"default","service_tier":null},"catalog":{"models":[{"id":"fixture-model","name":"测试模型","efforts":["low","medium"],"default_effort":"medium"}]},"questions":[{"id":"fixture-question","answer_revision":"v1","status":"pending","kind":"native","turn_id":"fixture-question-turn","questions":[{"id":"q1","header":"方案","question":"选择固定测试方案","options":[{"label":"方案A","description":"固定选项"},{"label":"方案B","description":"另一选项"}]}]}]}"#)
 
     static let claudeState = parse(#"{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"默认","mode_options":[{"name":"default","label":"默认"},{"name":"acceptEdits","label":"自动接受修改"},{"name":"plan","label":"计划"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1"},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"#)
+
+    static let claudeSecond = parse(#"{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3"},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"#)
 
     static let deepseekState = parse(#"{"available":true,"settings":{"provider":"deepseek","model":"deepseek-v4","reasoningEffort":"high"},"permission":"workspace","permission_name":"工作区内修改","interactions":[{"event":"approval/request","eventId":"e-approval-1","request":{"toolName":"shell","reason":"rm -rf build/","displayReason":"删除 build 目录（构建缓存）"}}],"questions":[]}"#)
 

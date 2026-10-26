@@ -2,16 +2,19 @@ import SwiftUI
 import TeleplyModel
 import TeleplyState
 
-/// The input area (spec 4.3, 8.1; Android InputArea), top to bottom: the queue tray, a send the computer turned
-/// away or whose delivery is unknown, then the input card. It has no background of its own: messages slide under
-/// the glass card (the page puts it in a bottom safe-area bar).
+/// The input area (spec 4.3, 8.1; Android InputArea), top to bottom: the question bar, the queue tray, a send the
+/// computer turned away or whose delivery is unknown, then the input card. It has no background of its own:
+/// messages slide under the glass card (the page puts it in a bottom safe-area bar).
 struct InputArea: View {
     let model: AppModel
+    /// The question bar's tap: to the first card in the timeline.
+    var onAsk: () -> Void = {}
 
     var body: some View {
         let chat = model.conversation
         let last = chat.submissions.first { $0.label != removedLabel }
         VStack(spacing: 8) {
+            AskBar(model: model, onAsk: onAsk)
             QueueTray(model: model)
             if let last, last.action == "send", last.label == "未接收" {
                 RejectedBar(model: model, record: last)

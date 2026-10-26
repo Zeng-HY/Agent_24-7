@@ -8,10 +8,10 @@ func actionIdentity(_ route: String, _ body: JSONValue) -> String {
     return route + ":" + (id ?? body["kind"].string())
 }
 
-/// What goes with a conversation's next message and the source's own choices (Android WorkspaceController, the
-/// parts the composer needs): settings bound to the next message (Codex), the model, effort, mode and permission
-/// menus (Claude, DeepSeek) with their lists kept on this phone, actions posted to the computer, and their
-/// one-line results. Attachments, references and the panes arrive in 0.4.0.
+/// What goes with a conversation's next message and the source's own choices (Android WorkspaceController):
+/// settings bound to the next message (Codex), the model, effort, mode and permission menus (Claude, DeepSeek)
+/// with their lists kept on this phone, answers being chosen in the timeline's cards, actions posted to the
+/// computer and their one-line results, Claude's timeline buttons.
 @Observable
 public final class WorkspaceModel {
     public internal(set) var key: ChatKey?
@@ -22,12 +22,18 @@ public final class WorkspaceModel {
     /// The last action's one-line result (设置已绑定下一条消息…), for the composer's status line.
     public internal(set) var result = ""
     /// This conversation's saved workspace (Android "workspace" detail): settings and expected_settings bound to
-    /// the next message, pending_action and action_history.
+    /// the next message, pending_action and action_history, the answers being chosen in its cards.
     public internal(set) var saved: JSONValue = [:]
     /// The menus' lists: source_catalog (Claude's or DeepSeek's models), permissions (DeepSeek), refreshing.
     public internal(set) var choices: JSONValue = [:]
     public internal(set) var choicesBusy = false
     public internal(set) var choicesError: String?
+    /// Where each Claude timeline button stands (next-step box, task card), by card: pressing:label, done:what was
+    /// done, error:why.
+    public internal(set) var cards: [String: String] = [:]
+
+    /// One Claude button at a time: its click waits for the computer's window.
+    public var pressing: Bool { cards.values.contains { $0.hasPrefix("pressing:") } }
 
     /// After an action reached the source, so the conversation reads its state again.
     @ObservationIgnored public var changed: () -> Void = {}
@@ -45,6 +51,10 @@ public final class WorkspaceModel {
     @ObservationIgnored var work: Task<Void, Never>?
     @ObservationIgnored var cache: [ChatKey: JSONValue] = [:]
     @ObservationIgnored var demo: [ChatKey: JSONValue] = [:]
+    /// Whether each workspace belongs to the local demo (kept in memory) or a real computer (kept in the store).
+    @ObservationIgnored var modes: [ChatKey: Bool] = [:]
+    /// Workspace writes under way, one after another; each writes the latest value of its conversation.
+    @ObservationIgnored var writing: Task<Void, Never>?
     /// Lists kept on this phone (0.8): Claude's model lists by conversation and the computer's latest; DeepSeek's.
     @ObservationIgnored var catalogs: [String: JSONValue] = [:]
 
@@ -58,6 +68,7 @@ public final class WorkspaceModel {
         await read?.value
         await choiceRead?.value
         await work?.value
+        await writing?.value
     }
 
     func bind(_ next: ChatKey?, client: RelayClient, clientGeneration: Int, synthetic: Bool) {
@@ -78,7 +89,9 @@ public final class WorkspaceModel {
         choices = [:]
         choicesBusy = false
         choicesError = nil
+        cards = [:]
         guard let next else { return }
+        modes[next] = synthetic
         read = Task { [weak self] in
             guard let self else { return }
             let stored: JSONValue
@@ -107,14 +120,37 @@ public final class WorkspaceModel {
         cache[key] ?? [:]
     }
 
-    func persist(_ key: ChatKey, _ value: JSONValue) async {
+    /// Keeps [value] as [key]'s workspace now and writes it after the writes under way; the last write always
+    /// carries the latest value, so fast edits never land out of order.
+    func keep(_ key: ChatKey, _ value: JSONValue) {
         cache[key] = value
         if self.key == key { saved = value }
-        if synthetic {
-            demo[key] = value
-        } else {
-            await store?.setDetail(scope: key.scope, device: key.device, app: key.app, chat: key.chat, kind: "workspace", value: jsonText(value))
+        let previous = writing
+        let synthetic = modes[key] ?? self.synthetic
+        writing = Task { [weak self] in
+            await previous?.value
+            guard let self, let latest = self.cache[key] else { return }
+            if synthetic {
+                self.demo[key] = latest
+            } else {
+                await self.store?.setDetail(scope: key.scope, device: key.device, app: key.app, chat: key.chat, kind: "workspace", value: jsonText(latest))
+            }
         }
+    }
+
+    /// Keeps [value] and waits until it is written.
+    func persist(_ key: ChatKey, _ value: JSONValue) async {
+        keep(key, value)
+        await writing?.value
+    }
+
+    /// An answer being chosen in a card, or a field of the new conversation's draft: kept at once, written behind
+    /// (Android edit). Refused only while an action or a create of this conversation is with the computer.
+    public func edit(_ field: String, _ value: JSONValue) {
+        guard let key, ready, !busy else { return }
+        var next = current(key).object
+        next[field] = value
+        keep(key, .object(next))
     }
 
     // MARK: What goes with the next message
@@ -126,9 +162,8 @@ public final class WorkspaceModel {
         var next = current(key).object
         next["settings"] = settings
         next["expected_settings"] = expected
-        let value = JSONValue.object(next)
         result = "设置已绑定下一条消息，尚未发送"
-        work = Task { [weak self] in await self?.persist(key, value) }
+        keep(key, .object(next))
     }
 
     /// The model, effort and mode bound to the next message, and what they were chosen against (Codex).
@@ -156,9 +191,8 @@ public final class WorkspaceModel {
         var next = current(key).object
         next["settings"] = nil
         next["expected_settings"] = nil
-        let value = JSONValue.object(next)
         if self.key == key { result = "" }
-        work = Task { [weak self] in await self?.persist(key, value) }
+        keep(key, .object(next))
     }
 
     /// 恢复提交快照: the settings a send carried, bound to the next message again.
@@ -167,10 +201,7 @@ public final class WorkspaceModel {
         var next = current(key).object
         if body["settings"].isObject { next["settings"] = body["settings"] }
         if body["expected_settings"].isObject { next["expected_settings"] = body["expected_settings"] }
-        let value = JSONValue.object(next)
-        cache[key] = value
-        saved = value
-        work = Task { [weak self] in await self?.persist(key, value) }
+        keep(key, .object(next))
     }
 
     // MARK: The chips' lists (spec 8.4, B17)
@@ -358,6 +389,30 @@ public final class WorkspaceModel {
                 if posted && refused { self.changed() }
             }
             if self.key == key { self.busy = false }
+        }
+    }
+
+    /// A button of Claude's next-step box or of a task card, pressed on the computer as if clicked there (web
+    /// pressNext, pressTask). The computer checks the box or card still waits with that very button, so a press
+    /// that comes too late is refused there instead of landing elsewhere; a refusal leaves the buttons for another
+    /// try.
+    public func claudeButton(card: String, route: String, body: JSONValue, label: String) {
+        guard let key, let client, key.app == "claude", ["claude/next", "claude/task"].contains(route), !pressing else { return }
+        cards[card] = "pressing:" + label
+        error = nil
+        work = Task { [weak self] in
+            do {
+                var payload = body.object
+                payload["id"] = .string(key.chat)
+                let reply = try await client.detail(device: key.device, route: route, body: .object(payload))
+                guard let self, self.key == key else { return }
+                let text = reply["text"].string()
+                self.cards[card] = "done:" + (text.isEmpty ? "已在电脑上点了「\(label)」" : text)
+                self.changed()
+            } catch {
+                guard let self, self.key == key else { return }
+                self.cards[card] = "error:" + describe(error)
+            }
         }
     }
 
