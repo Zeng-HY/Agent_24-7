@@ -12,6 +12,7 @@ extension WorkspaceModel {
     public func panel(_ name: String) {
         paneRead?.cancel()
         paneGeneration += 1
+        dropFile()
         pane = name
         data = [:]
         paneBusy = false
@@ -32,8 +33,7 @@ extension WorkspaceModel {
         data = [:]
         paneBusy = false
         paneError = nil
-        fileText = ""
-        dropPreview()
+        dropFile()
     }
 
     /// 新建对话 opens at once (0.8, web openNewSheet): the folders and models of last time are there already, the

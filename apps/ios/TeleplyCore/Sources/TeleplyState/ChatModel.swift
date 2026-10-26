@@ -75,6 +75,8 @@ public final class ChatModel {
     @ObservationIgnored public var boundSettings: () -> JSONValue = { [:] }
     @ObservationIgnored public var sentExtras: (ChatKey, JSONValue) -> Void = { _, _ in }
     @ObservationIgnored public var restoreExtras: (ChatKey, JSONValue) throws -> Void = { _, _ in }
+    /// A conversation was left with these words in its box (the list's 草稿 follows; not on every key).
+    @ObservationIgnored public var draftLeft: (ChatKey, String) -> Void = { _, _ in }
     /// Asks the phone for a little time in the background while a send is under way (spec 6.10); [expired] runs
     /// when that time is up. Returns the call that gives the time back.
     /// 诊断测速 (开发者选项): a send's time and what it came to, as the web words it.
@@ -143,6 +145,8 @@ public final class ChatModel {
         let changed = next != key || clientGeneration != self.clientGeneration
         // Leaving the conversation or going to the background writes the draft now.
         if changed || !active { flushDraftSoon() }
+        // The list's 草稿 follows the box just left; one whose draft was not read yet stays as the list has it.
+        if next != key, let left = key, let words = memory[left] { draftLeft(left, words) }
         key = next
         self.client = client
         self.clientGeneration = clientGeneration

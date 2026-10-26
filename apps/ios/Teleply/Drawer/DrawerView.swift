@@ -47,7 +47,7 @@ struct DrawerView: View {
                     .foregroundStyle(Palette.ink)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button(action: close) {
+                Button(action: chrome.tap(close)) {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .medium))
                         .frame(width: 30, height: 30)
@@ -125,9 +125,9 @@ struct DrawerView: View {
                 .foregroundStyle(Palette.muted)
                 .padding(12)
         case .app(let index, let app, let name, let open):
-            TreeApp(app: app, name: name, open: open) {
+            TreeApp(app: app, name: name, open: open, toggle: chrome.tap {
                 withAnimation(.drawer()) { folds.toggle(row.id) }
-            }
+            })
             .modifier(Arrive(index: index + 1, serial: opening))
         case .empty:
             Text("没有对话")
@@ -139,23 +139,21 @@ struct DrawerView: View {
         case .project(let key, let app, let name, let folder, let projectless, let open):
             TreeProject(name: name, projectless: projectless, open: open,
                         addLabel: projectless ? "新建不在项目里的\(Labels.sourceName(app))对话" : "在「\(name)」新建对话",
-                        add: folder.isEmpty && !projectless ? nil : {
+                        add: folder.isEmpty && !projectless ? nil : chrome.tap {
                             close()
                             model.startNew(app: app, folder: projectless ? "" : folder, projectless: projectless)
-                        }) {
+                        }, toggle: chrome.tap {
                 withAnimation(.drawer()) { folds.toggle("open:" + key) }
-            }
+            })
             .transition(.opacity)
         case .chat(let chat, let place):
-            TreeChat(chat: chat, place: place, current: chat.id == model.chat?.id && chat.app == model.app) {
+            TreeChat(chat: chat, place: place, current: chat.id == model.chat?.id && chat.app == model.app, open: chrome.tap {
                 close()
                 model.open(chat)
-            }
+            })
             .transition(.opacity)
         case .more(let app, let project, let left):
-            Button {
-                model.moreTree(app: app, project: project)
-            } label: {
+            Button(action: chrome.tap { model.moreTree(app: app, project: project) }) {
                 Text("显示更多（还有 \(left) 个）")
                     .noteFont()
                     .foregroundStyle(Palette.accent)
@@ -191,10 +189,10 @@ struct DrawerView: View {
                 .foregroundStyle(Palette.muted)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            GlassIconButton(symbol: "gearshape", label: "设置") {
+            GlassIconButton(symbol: "gearshape", label: "设置", action: chrome.tap {
                 close()
                 chrome.settings = true
-            }
+            })
         }
         .padding(.leading, 20)
         .padding(.trailing, 12)

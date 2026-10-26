@@ -102,6 +102,9 @@ public final class AppModel {
     public internal(set) var listCursor: String?
     public internal(set) var listMore = false
     public internal(set) var hidden: Set<String> = []
+    /// Words typed on this phone and not sent, by row, as the list shows them after a red [草稿] (WeChat; user
+    /// 10-26): read from this phone once per computer, then following each conversation's box as it is left.
+    public internal(set) var drafts: [String: String] = [:]
     /// The bar under the list after a swipe: 对话已归档 with 撤销 (AppModel+Archive).
     public internal(set) var undo: ArchiveUndo?
     public internal(set) var moreKids: [String: [Chat]] = [:]
@@ -172,6 +175,9 @@ public final class AppModel {
     @ObservationIgnored var applying: Task<Void, Never>?
     /// The restore 撤销 started (tests wait for it).
     @ObservationIgnored var restoring: Task<Void, Never>?
+    /// The sign-in and computer [drafts] were read for, and the rows changed since that read began.
+    @ObservationIgnored var draftsFor: String?
+    @ObservationIgnored var draftsTouched: Set<String> = []
 
     public init(services: AppServices) {
         self.services = services
@@ -191,6 +197,7 @@ public final class AppModel {
         self.workspace = workspace
         jobs = NewChatJobs(pacer: services.pacer, store: services.store, now: services.now)
         workspace.created = { [weak self] job in self?.jobCreated(job) }
+        conversation.draftLeft = { [weak self] key, words in self?.noteDraft(key, words) }
         jobs.settle = { [weak self] job in
             guard let self, self.screen == .reading, self.chat?.id == job.preview else { return }
             self.finishJob(job)
@@ -265,6 +272,8 @@ public final class AppModel {
         listCursor = nil
         listMore = false
         hidden = []
+        drafts = [:]
+        draftsFor = nil
         moreKids = [:]
         sources = SourceInfo()
         tree = [:]

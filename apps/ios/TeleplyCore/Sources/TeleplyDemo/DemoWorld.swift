@@ -649,6 +649,8 @@ enum DemoData {
             ]
         case "deepseek":
             return [
+                message("d0", "user", "把发布说明翻译成英文，做成 Word。"),
+                message("d0b", "assistant", "成果文件：\n翻译稿.docx", ["kind": "deliverables", "presented_files": [["path": "D:\\fixture\\翻译稿.docx", "description": "英文译稿"]]]),
                 message("d1", "user", "清理一下构建缓存。"),
                 message("d2", "assistant", "需要运行一个命令删除构建目录，等你批准。", ["phase": "commentary"]),
                 message("subagent:sa-1", "subagent", "子智能体：检查日志", ["child": "sa-1", "label": "检查日志", "status": "running"]),
@@ -731,6 +733,32 @@ enum DemoData {
         ["id": "fixture-png", "name": "logo.png", "path": "D:\\fixture\\images\\logo.png", "kind": "image", "state": "current", "size": 462],
         ["id": "fixture-md", "name": "说明.md", "path": "D:\\fixture\\说明.md", "kind": "text", "state": "current", "size": 200],
     ]
+
+    /// What DeepSeek presented as a turn's result (deliverables/presented, Android 1.0.2): a small Word file that
+    /// the computer lists for that message only.
+    static let deliverable: JSONValue = ["id": "fixture-docx", "name": "翻译稿.docx", "path": "D:\\fixture\\翻译稿.docx", "kind": "download",
+                                         "state": "current", "size": .number(Double(docx.count)), "message_id": "d0b"]
+
+    /// 翻译稿.docx: a real Word file (1106 bytes), so Quick Look shows it.
+    static let docx = Data(base64Encoded: """
+        UEsDBBQAAAAIAAAAWl3JTxqw6wAAAK4BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH1QvU7DMBDeeQrLK4odGBBCSTrwMwJDeYCTfUks7LPlc0
+        v79jht6YAK4933q69b7YIXW8zsIvXyRrVSIJloHU29/Fi/NPdScAGy4CNhL/fIcjVcdet9QhZVTNzLuZT0oDWbGQOwigmpImPMAUo986QTmE+Y
+        UN+27Z02kQpSacriIYfuCUfY+CKed/V9LJLRsxSPR+KS1UtIyTsDpeJ6S/ZXSnNKUFV54PDsEl9XgtQXExbk74CT7q0uk51F8Q65vEKoLP0Vs9
+        U2mk2oSvW/zYWecRydwbN+cUs5GmSukwevzkgARz/99WHu4RtQSwMEFAAAAAgAAABaXbmBRHGwAAAAKgEAAAsAAABfcmVscy8ucmVsc43POw7C
+        MAwG4J1TRN5pWgaEUJMuCKkrKgeIEjeNaB5KwqO3JwMDIAZG278/y233sDO5YUzGOwZNVQNBJ70yTjM4D8f1DkjKwikxe4cMFkzQ8VV7wlnksp
+        MmExIpiEsMppzDntIkJ7QiVT6gK5PRRytyKaOmQciL0Eg3db2l8d0A/mGSXjGIvWqADEvAf2w/jkbiwcurRZd/nPhKFFlEjZnB3UdF1atdFRYo
+        b+nHi/wJUEsDBBQAAAAIAAAAWl3OeekWXwEAAGwCAAARAAAAd29yZC9kb2N1bWVudC54bWydUr1KA0EQ7n2KYSsFzUaFIEfu0kgq8Tc+wOZukj
+        tyt7vsbBLjK1jZp7SwELQTFAz4LGp8DOcuGBG0SfMNs7Pzfd/ObLN1UeQwQkeZ0aHYrtUFoI5Nkul+KM477a09AeSVTlRuNIZigiRa0VpzHCQm
+        HhaoPTCDpmAcitR7G0hJcYqFopqxqLnWM65QnlPXl2PjEutMjEQsUORyp15vyEJlWkRM2TXJpIy2BFfBcRW6skS6hHEwUnkodhuCT+SyXpkIyK
+        qYLVqHhG6EIjrFHBUhHBqPBOsdpzTlyvNTN8pmv6Co0P7W/YdwPnv+vL+e387g9RE+pnfv04f5zdPby9VqdJ00I+hlOS5GTJBp4HGBguVw9xHt
+        GeIAqi7tMQHF9zwB58Pc11ZTPtLgUwSb8lKZDcpdVfInwywewIExg01gS2UtVhq6bFGNWNwbaLNhArZJqXKY/OVAfu9S/vyT6AtQSwECFAAUAA
+        AACAAAAFpdyU8asOsAAACuAQAAEwAAAAAAAAAAAAAAgAEAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQIUABQAAAAIAAAAWl25gURxsAAAACoB
+        AAALAAAAAAAAAAAAAACAARwBAABfcmVscy8ucmVsc1BLAQIUABQAAAAIAAAAWl3OeekWXwEAAGwCAAARAAAAAAAAAAAAAACAAfUBAAB3b3JkL2
+        RvY3VtZW50LnhtbFBLBQYAAAAAAwADALkAAACDAwAAAAA=
+        """, options: .ignoreUnknownCharacters) ?? Data()
+
+    /// A file picked from the demo computer (从电脑选择文件): its ticket and its text.
+    static let computerFile = "固定测试内容"
 
     static func textFile(_ id: String) -> String {
         switch id {

@@ -20,13 +20,16 @@ struct ConversationView: View {
     @State private var saveTick = 0
     @State private var pendingShown = false
     @State private var promptsShown = false
+    /// 从电脑选择文件 was tapped in an empty 对话文件: the picker opens when that sheet has gone.
+    @State private var pickAfterFiles = false
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
 
     var body: some View {
         let control = model.conversation.control
         let roles = timelineRoles(model.messages, app: model.app, raw: control.raw, running: control.running, asking: control.questions)
-        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, diff: { model.workspace.diff($0) }, busy: model.busy)
+        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, diff: { model.workspace.diff($0) },
+                                     files: { model.workspace.filesOf(message: $0) }, busy: model.busy)
         let submissions = model.conversation.submissions
         let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
         // Sends still on their way that the record does not show yet (Android outbox).
@@ -121,8 +124,18 @@ struct ConversationView: View {
         .sheet(item: $selecting) { message in SelectTextSheet(text: message.text) }
         .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
         .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
-        .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } })) {
-            FilesSheet(model: model)
+        .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } }),
+               onDismiss: {
+                   // 从电脑选择文件 from an empty 对话文件: its sheet comes once this one has gone.
+                   if pickAfterFiles {
+                       pickAfterFiles = false
+                       model.workspace.openPicker("remote")
+                   }
+               }) {
+            FilesSheet(model: model) {
+                pickAfterFiles = true
+                model.workspace.close()
+            }
         }
         .sheet(isPresented: Binding(get: { model.workspace.picker != nil && model.workspace.key?.chat != "@new" },
                                     set: { if !$0 { model.workspace.closePicker() } })) {

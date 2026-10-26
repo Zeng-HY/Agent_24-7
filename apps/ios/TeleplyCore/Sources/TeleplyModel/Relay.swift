@@ -78,9 +78,10 @@ public struct RelayDownload: Sendable {
     }
 }
 
-/// Downloads to a file, at most [limit] bytes; a bigger file is refused rather than cut short.
+/// Downloads to a file, at most [limit] bytes; a bigger file is refused rather than cut short, and one that came
+/// short of its stated length too. [progress] hears the bytes so far and the whole (-1 when the answer does not say).
 public protocol RelayFileTransport: RelayTransport {
-    func download(_ request: RelayRequest, limit: Int64) async throws -> RelayDownload
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload
 }
 
 /// Builds requests the way the relay's guard wants them (relay_service.py): every call asks for JSON, a GET
@@ -347,12 +348,14 @@ public struct RelayClient: Sendable {
         return try await json(request)
     }
 
-    /// One of a conversation's files (GET /api/file) to a file on this phone, at most 100 MB; the caller owns it.
-    public func download(device: String, app: String, chat: String, file: String) async throws -> URL {
+    /// One of a conversation's files (GET /api/file), or a computer file by its ticket (pc.…), to a file on this
+    /// phone, at most 100 MB; the caller owns it. [progress] hears the bytes so far and the whole.
+    public func download(device: String, app: String, chat: String, file: String,
+                         progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> URL {
         guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
         var request = try get(Self.devicePath(device, "/api/file"), query: [("app", app), ("id", chat), ("file", file)], deadline: 300)
         request.headers["Accept"] = "*/*"
-        let answer = try await files.download(request, limit: Self.downloadLimit)
+        let answer = try await files.download(request, limit: Self.downloadLimit, progress: progress)
         if answer.status == 401 { try? vault?.write(origin.key, nil) }
         guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
         return saved

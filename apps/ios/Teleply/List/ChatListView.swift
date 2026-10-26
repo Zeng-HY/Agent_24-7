@@ -130,6 +130,8 @@ struct ChatListView: View {
         case .chat(let chat, let first):
             let key = rowKey(chat)
             Button {
+                // The lift that ends a sidebar swipe started on this row is the swipe's.
+                guard chrome.tapsAllowed else { return }
                 if chat.group {
                     withAnimation(.easeOut(duration: 0.2)) { folds.toggle(key) }
                 } else if !chat.kind.isEmpty {
@@ -138,13 +140,14 @@ struct ChatListView: View {
                     model.open(chat)
                 }
             } label: {
-                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil)
+                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil, draft: model.drafts[key])
             }
             .buttonStyle(RowPressStyle())
             .disabled(model.busy)
-            // 左滑归档 (spec 4.1, web archive-ui.js): a short slide uncovers 归档, a long one archives at once; 撤销
-            // stays under the list for six seconds. VoiceOver finds it among the row's actions.
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            // 左滑归档 (spec 4.1, web archive-ui.js): a slide uncovers 归档 and stops there; a tap on it archives. No full
+            // swipe: the system's takes a flick as one too, and a conversation went at a brush (user 10-26). 撤销 stays
+            // under the list for six seconds. VoiceOver finds it among the row's actions.
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !chat.group && chat.kind.isEmpty && sourceOrder.contains(chat.app) {
                     Button {
                         model.archive(chat)
@@ -156,11 +159,12 @@ struct ChatListView: View {
             }
         case .fold(let chat):
             let key = rowKey(chat)
-            FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning) {
+            FoldRow(open: folds.keys.contains(key), count: chat.childCount, running: chat.childRunning, toggle: chrome.tap {
                 withAnimation(.easeOut(duration: 0.2)) { folds.toggle(key) }
-            }
+            })
         case .child(let parent, let child):
             Button {
+                guard chrome.tapsAllowed else { return }
                 model.openChild(child, parent: parent)
             } label: {
                 ChildRow(chat: child)
@@ -312,7 +316,9 @@ private struct ListTitle: View {
 /// width and scroll sideways; the edge they pass under fades while there is more that way. ⋯ stays put.
 private struct SourceChips: View {
     let model: AppModel
+    @Environment(Chrome.self) private var chrome
     @State private var room = EdgeRoom()
+    @State private var frame = CGRect.null
 
     var body: some View {
         let known = model.knownApps
@@ -355,6 +361,10 @@ private struct SourceChips: View {
                     withAnimation(.easeOut(duration: 0.15)) { room = now }
                 }
                 .mask(fade)
+                // While they scroll, a swipe on them is theirs; the sidebar does not come out over it.
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0; claim() }
+                .onChange(of: room) { claim() }
+                .onDisappear { chrome.noPull = .null }
                 .onAppear { proxy.scrollTo(model.listSource) }
                 .onChange(of: model.listSource) { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(model.listSource) } }
             }
@@ -362,6 +372,10 @@ private struct SourceChips: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 12)
+    }
+
+    private func claim() {
+        chrome.noPull = room.back || room.forward ? frame : .null
     }
 
     private var fade: some View {

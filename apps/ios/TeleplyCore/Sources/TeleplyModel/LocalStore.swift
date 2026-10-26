@@ -189,6 +189,23 @@ public actor LocalStore {
         update(scope: key.scope, device: key.device, app: key.app, chat: key.chat) { $0.draft = text }
     }
 
+    /// The unsent words of every conversation of one sign-in and computer (the list's 草稿). Records not open
+    /// already are read without being kept in memory.
+    public func drafts(scope: String, device: String) -> [ChatKey: String] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: url("chats").path) else { return [:] }
+        var found: [ChatKey: String] = [:]
+        for name in names where name.hasSuffix(".json") {
+            let stem = String(name.dropLast(5))
+            // A record moved aside as unreadable carries a second extension.
+            guard !stem.contains("."), let parts = Self.recordParts(stem), parts.count == 4, parts[0] == scope, parts[1] == device else { continue }
+            let draft = (cache[stem] ?? read(ChatRecord.self, at: url("chats/\(name)")))?.draft ?? ""
+            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                found[ChatKey(scope: scope, device: device, app: parts[2], chat: parts[3])] = draft
+            }
+        }
+        return found
+    }
+
     public func submissions(_ key: ChatKey) -> [Submission] {
         record(scope: key.scope, device: key.device, app: key.app, chat: key.chat).submissions
     }
@@ -220,6 +237,14 @@ public actor LocalStore {
     static func recordName(scope: String, device: String, app: String, chat: String) -> String {
         Data([scope, device, app, chat].joined(separator: "\n").utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    /// The four parts back from a record's file name; nil for a name that is not one.
+    static func recordParts(_ name: String) -> [String]? {
+        var text = name.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        text += String(repeating: "=", count: (4 - text.count % 4) % 4)
+        guard let data = Data(base64Encoded: text), let joined = String(data: data, encoding: .utf8) else { return nil }
+        return joined.components(separatedBy: "\n")
     }
 
     // MARK: Files

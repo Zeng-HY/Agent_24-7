@@ -95,9 +95,11 @@ struct AttachmentTests {
         #expect(workspace.data["items"].array.first?["path"].string() == "D:/fixture")
         workspace.refresh("remote", query: "D:/fixture")
         await workspace.settle()
-        workspace.addReference(workspace.data["items"].array.first!)
-        workspace.closePicker()
-        #expect(workspace.saved["references"].array.map { $0["name"].string() } == ["固定引用", "测试.txt"])
+        workspace.computerFile(workspace.data["items"].array.first!)
+        await workspace.settle()
+        workspace.addComputerFile()
+        #expect(workspace.picker == nil)
+        #expect(workspace.saved["references"].array.map { $0["name"].string() } == ["固定引用", "遥应下载测试.txt"])
         workspace.removeReference("fixture-reference")
         #expect(try workspace.sendExtras()["references"].array.count == 1)
     }
@@ -126,6 +128,94 @@ struct AttachmentTests {
         await workspace.settle()
         #expect(workspace.pane == "diff")
         #expect(workspace.data["hunks"].array.first?.string().contains("+新内容") == true)
+    }
+
+    @Test func aComputerFileOpensItsPageToSaveThenGoesBackToItsFolder() async throws {
+        let model = await demoConversation("原生阅读示例")
+        let workspace = model.workspace
+        workspace.openPicker("remote")
+        workspace.refresh("remote", query: "D:/fixture")
+        await workspace.settle()
+        let row = try #require(workspace.data["items"].array.first)
+        workspace.computerFile(row)
+        await workspace.settle()
+        #expect(workspace.picker == "file" && workspace.pane == nil)
+        #expect(workspace.data["id"].string() == "fixture-download")
+        #expect(workspace.data["kind"].string() == "download")
+        #expect(workspace.data["meta"]["size"].int64() == 18)
+        let copy = try await workspace.fileCopy()
+        #expect(copy.lastPathComponent == "遥应下载测试.txt")
+        #expect(try String(contentsOf: copy, encoding: .utf8) == "固定测试内容")
+        #expect(!workspace.transferring && workspace.transfer.isEmpty)
+        // Saving does not attach it.
+        #expect(workspace.saved["references"].array.isEmpty)
+        workspace.leaveComputerFile()
+        #expect(workspace.picker == "remote")
+        #expect(workspace.data["path"].string() == "D:/fixture")
+        // A computer too old to hand out tickets says so instead of opening a page that cannot download.
+        var old = row.object
+        old.removeValue(forKey: "download_id")
+        workspace.computerFile(.object(old))
+        #expect(workspace.picker == "remote")
+        #expect(workspace.paneError == "请更新电脑端后下载文件")
+    }
+
+    @Test func aDeepSeekResultIsListedForItsMessageAndDownloadsWhole() async throws {
+        let model = await demoConversation("DeepSeek 批准示例")
+        #expect(model.messages.first { $0.id == "d0b" }?.kind == "deliverables")
+        let workspace = model.workspace
+        workspace.filesOf(message: "d0b")
+        await workspace.settle()
+        #expect(workspace.pane == "files")
+        let files = workspace.data["items"].array
+        #expect(files.map { $0["name"].string() } == ["翻译稿.docx"])
+        workspace.file(files[0])
+        await workspace.settle()
+        #expect(workspace.data["kind"].string() == "download")
+        #expect(workspace.preview == nil && workspace.fileNote.isEmpty && workspace.paneError == nil)
+        let copy = try await workspace.fileCopy()
+        #expect(copy.lastPathComponent == "翻译稿.docx")
+        #expect(try Data(contentsOf: copy) == DemoData.docx)
+        // The whole conversation's files still list it beside the others.
+        workspace.panel("files")
+        await workspace.settle()
+        #expect(workspace.data["items"].array.count == 4)
+    }
+
+    @Test func aPreviewThatDoesNotLoadLeavesTheFileToSave() async throws {
+        let model = await demoConversation("原生阅读示例")
+        let workspace = model.workspace
+        workspace.file(["id": "fixture-broken", "name": "报告.txt"])
+        await workspace.settle()
+        #expect(workspace.paneError == nil && !workspace.paneBusy)
+        #expect(workspace.fileNote == "预览未能加载，仍可尝试保存原文件。")
+        #expect(workspace.fileText.isEmpty)
+        let copy = try await workspace.fileCopy()
+        #expect(copy.lastPathComponent == "报告.txt")
+        workspace.close()
+        #expect(workspace.fileNote.isEmpty)
+    }
+
+    @Test func aDownloadCanBeCancelled() async throws {
+        let world = DemoWorld()
+        let model = makeApp(world: world)
+        model.login(name: "x", password: "y")
+        await model.settle()
+        model.select(model.account!.devices[0])
+        await model.settle()
+        model.open(model.chats.first { $0.title == "原生阅读示例" }!)
+        await model.settle()
+        let workspace = model.workspace
+        await workspace.settle()
+        workspace.file(["id": "fixture-md", "name": "说明.md"])
+        await workspace.settle()
+        world.network = .slow
+        let copying = Task { try await workspace.fileCopy() }
+        for _ in 0..<1_000 where !workspace.transferring { await Task.yield() }
+        #expect(workspace.transfer == "正在下载…")
+        workspace.cancelCopy()
+        await #expect(throws: CancellationError.self) { try await copying.value }
+        #expect(!workspace.transferring && workspace.transfer.isEmpty)
     }
 
     @Test func anHTMLPageGetsOnlyTheListedFileBesideIt() async {

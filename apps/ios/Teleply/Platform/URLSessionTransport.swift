@@ -56,15 +56,50 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
         }
     }
 
-    /// Downloads to a file of our own (the system deletes its own when this returns); one bigger than [limit] is
-    /// refused rather than kept cut short.
-    func download(_ request: RelayRequest, limit: Int64) async throws -> RelayDownload {
-        let (temporary, response) = try await fileSession.download(for: Self.urlRequest(request))
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    /// Downloads to a file of our own (the system deletes its own when the task ends); one bigger than [limit] is
+    /// refused rather than kept cut short, and one shorter than its Content-Length too (Android 1.0.2). [progress]
+    /// hears the bytes so far four times a second. Cancelling the caller cancels the download.
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-file-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let kept = folder.appendingPathComponent("download")
-        try FileManager.default.moveItem(at: temporary, to: kept)
+        let running = RunningDownload()
+        let reporter = progress.map { report in
+            Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    if let counts = running.counts, counts.got > 0 { report(counts.got, counts.total) }
+                }
+            }
+        }
+        defer { reporter?.cancel() }
+        let answer: (status: Int, expected: Int64)
+        do {
+            let urlRequest = Self.urlRequest(request)
+            let session = fileSession
+            answer = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(status: Int, expected: Int64), any Error>) in
+                    let task = session.downloadTask(with: urlRequest) { temporary, response, error in
+                        // The system's file goes when this returns, so it is moved now.
+                        do {
+                            if let error { throw error }
+                            guard let temporary, let response else { throw URLError(.badServerResponse) }
+                            try FileManager.default.moveItem(at: temporary, to: kept)
+                            continuation.resume(returning: (status: (response as? HTTPURLResponse)?.statusCode ?? 0, expected: response.expectedContentLength))
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                    running.start(task)
+                }
+            } onCancel: {
+                running.cancel()
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
+        let status = answer.status
         guard (200..<300).contains(status) else {
             let body = (try? Data(contentsOf: kept)).map { Data($0.prefix(65_536)) } ?? Data()
             try? FileManager.default.removeItem(at: folder)
@@ -74,6 +109,10 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
         guard size <= limit else {
             try? FileManager.default.removeItem(at: folder)
             throw ReadFailure("文件超过100MB，请在电脑上打开")
+        }
+        guard answer.expected < 0 || answer.expected == size else {
+            try? FileManager.default.removeItem(at: folder)
+            throw ReadFailure("文件接收不完整，请重试")
         }
         return RelayDownload(status: status, file: kept)
     }
@@ -123,6 +162,36 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
             if let name = name as? String, let value = value as? String { headers[name.lowercased()] = value }
         }
         return RelayResponse(status: http.statusCode, headers: headers, body: data)
+    }
+}
+
+/// A download under way: started once, cancelled from the waiting task (even before it started), its bytes read
+/// for progress.
+nonisolated final class RunningDownload: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDownloadTask?
+    private var cancelled = false
+
+    func start(_ task: URLSessionDownloadTask) {
+        let cancelled = lock.withLock {
+            self.task = task
+            return self.cancelled
+        }
+        task.resume()
+        if cancelled { task.cancel() }
+    }
+
+    func cancel() {
+        let task = lock.withLock {
+            cancelled = true
+            return self.task
+        }
+        task?.cancel()
+    }
+
+    /// The bytes received so far and the whole (-1 when the answer does not say).
+    var counts: (got: Int64, total: Int64)? {
+        lock.withLock { task.map { (got: $0.countOfBytesReceived, total: $0.countOfBytesExpectedToReceive) } }
     }
 }
 
