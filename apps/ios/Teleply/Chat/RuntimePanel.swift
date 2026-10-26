@@ -78,8 +78,10 @@ struct RuntimePanel: View {
         let ink = (percent ?? 0) >= 80 ? Palette.warning : Palette.ink
         let used = runtime["used_tokens"].int64()
         let window = runtime["context_window"].int64()
-        let counts = used > 0 && window > 0 ? "已用\(Labels.wan(used)) · 窗口\(Labels.wan(window))" : nil
-        let effort = runtime["effort"].string()
+        // Without the window only the last request's size is known (web: 最近输入 N tokens).
+        let counts = used > 0 && window > 0 ? "已用\(Labels.wan(used)) · 窗口\(Labels.wan(window))"
+            : used > 0 && state == "partial" ? "最近输入 \(Labels.wan(used)) tokens · 窗口大小未知" : nil
+        let effort = effortShown
         return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .lastTextBaseline, spacing: 0) {
@@ -163,6 +165,15 @@ struct RuntimePanel: View {
         case "partial": return "数据不全"
         default: return "暂无数据"
         }
+    }
+
+    /// The effort the record names; for Claude, when it names none, what the desktop shows or keeps as its setting
+    /// (10-26: the context label was not read, and the effort went with it while the chip showed High).
+    private var effortShown: String {
+        let recorded = runtime["effort"].string()
+        guard recorded.isEmpty, app == "claude" else { return recorded }
+        let shown = control["effort_label"].string()
+        return shown.isEmpty ? control["settings"]["effort"].string() : shown
     }
 
     /// The model's display name: Claude's desktop label, Codex's catalog name, otherwise the id.
