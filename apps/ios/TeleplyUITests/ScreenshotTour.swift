@@ -239,9 +239,12 @@ final class ScreenshotTour: XCTestCase {
                     }
                     app.swipeUp()
                     snap(app, page: "26-settings-more", variant: variant)
-                    app.buttons["开发者选项"].firstMatch.tap()
-                    if app.navigationBars["开发者选项"].waitForExistence(timeout: 5) {
-                        snap(app, page: "13-developer", variant: variant)
+                    let developer = app.buttons["开发者选项"].firstMatch
+                    if developer.waitForExistence(timeout: 5), reach(app, developer) {
+                        developer.tap()
+                        if app.navigationBars["开发者选项"].waitForExistence(timeout: 5) {
+                            snap(app, page: "13-developer", variant: variant)
+                        }
                     }
                 }
             }
