@@ -53,22 +53,33 @@ do {
 
 $target = Join-Path $OutDir $buildId
 New-Item -ItemType Directory -Force $target | Out-Null
-foreach ($artifact in $build.artifacts) {
+# The API spells it "artefacts"; the zip holds every path listed under artifacts in codemagic.yaml.
+foreach ($artifact in @($build.artefacts)) {
     $file = Join-Path $target $artifact.name
     Invoke-WebRequest -Headers $headers -Uri $artifact.url -OutFile $file
     Write-Host "Downloaded $($artifact.name)"
+    if ($file -like '*.zip') { Expand-Archive -Force -Path $file -DestinationPath (Join-Path $target 'artefacts') }
 }
 
-# Each step's status, and its log when the API offers one, so a failure can be read without the website.
+# Each step's status and log (a script step keeps its log on its subaction), readable without the website.
 $step = 0
 foreach ($action in @($build.buildActions)) {
     $step++
     Write-Host ('step {0:00} {1,-10} {2}' -f $step, $action.status, $action.name)
-    if ($action.logUrl) {
+    $urls = @($action.logUrl) + @($action.subactions | ForEach-Object { $_.logUrl }) | Where-Object { $_ }
+    $part = 0
+    foreach ($url in $urls) {
+        $part++
         $name = ($action.name -replace '[^\w\-]+', '-').Trim('-')
-        try { Invoke-WebRequest -Headers $headers -Uri $action.logUrl -OutFile (Join-Path $target ('{0:00}-{1}.log' -f $step, $name)) }
-        catch { Write-Host "  (log not downloaded: $($_.Exception.Message))" }
+        $file = Join-Path $target ('{0:00}-{1}-{2}.log' -f $step, $part, $name)
+        try {
+            Invoke-WebRequest -Headers $headers -Uri $url -OutFile $file
+            # Plain text: the logs come as HTML-coloured lines.
+            (Get-Content $file) -replace '<[^>]+>', '' -replace '&gt;', '>' -replace '&lt;', '<' -replace '&amp;', '&' -replace '&quot;', '"' -replace '&#39;', "'" |
+                Set-Content $file -Encoding utf8
+        } catch { Write-Host "  (log not downloaded: $($_.Exception.Message))" }
     }
 }
+if ($build.message) { Write-Host "Message: $($build.message)" }
 Write-Host "Build $buildId $($build.status) after $([int]((Get-Date) - $started).TotalMinutes) min; artifacts in $target"
 if ($build.status -ne 'finished') { exit 1 }

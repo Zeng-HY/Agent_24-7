@@ -39,9 +39,11 @@ nonisolated final class URLSessionTransport: RelayTransport {
 }
 
 /// Hands a redirect back as the answer (a 3xx becomes an error upstream), like followRedirects(false).
+/// The completion-handler form on purpose: Xcode 27.1's compiler crashes generating the bridge for the
+/// async form of this delegate method (build 6adec0d6…, SILGen emitNativeToForeignThunk).
 nonisolated final class RedirectRefusal: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest) async -> URLRequest? {
-        nil
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

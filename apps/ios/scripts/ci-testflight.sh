@@ -42,4 +42,8 @@ generate_project
 swift test --package-path TeleplyCore
 xcode-project use-profiles --project Teleply.xcodeproj
 xcode-project build-ipa --project Teleply.xcodeproj --scheme Teleply --config Release
+# A delegate method that only "nearly matches" is never called (RedirectRefusal would let redirects through).
+if grep -h "nearly matches optional requirement" /tmp/xcodebuild_logs/*.log 2>/dev/null; then
+  fail "a delegate method does not match its protocol (warning above)"
+fi
 check_ipa "$(ls build/ios/ipa/*.ipa | head -n 1)" "$BUILD"
