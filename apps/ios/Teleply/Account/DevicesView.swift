@@ -116,68 +116,95 @@ private struct DeviceRow: View {
     let rename: () -> Void
     let remove: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        let online = device.connectable
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(device.label)
-                    .scaledFont(16, .semibold, relativeTo: .body)
-                    .foregroundStyle(AccountPalette.ink)
-                    .lineLimit(2)
-                HStack(spacing: 7) {
-                    if online {
-                        Circle().fill(AccountPalette.online).frame(width: 7, height: 7)
-                    }
-                    Text((online ? "在线" : "离线") + (current ? " · 当前" : ""))
-                        .scaledFont(13, relativeTo: .footnote)
-                        .foregroundStyle(AccountPalette.muted)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: connect) {
-                ZStack {
-                    if busy {
-                        ProgressView().tint(Palette.onPrimary)
-                    } else {
-                        Text(online ? "连接" : "离线")
-                            .scaledFont(14, .medium, relativeTo: .subheadline)
-                            .foregroundStyle(online ? Palette.onPrimary : AccountPalette.muted)
+        // At the largest text sizes the buttons go under the name instead of squeezing it (spec 2.3).
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) {
+                    name
+                    HStack(spacing: 8) {
+                        connectButton
+                        Spacer(minLength: 0)
+                        manage
                     }
                 }
-                .padding(.horizontal, 18)
-                .frame(minHeight: 40)
-                .background {
-                    if online {
-                        Capsule().fill(Palette.primaryFill)
-                    } else {
-                        Capsule().fill(AccountPalette.soft).overlay(Capsule().stroke(Palette.line, lineWidth: 1))
-                    }
+            } else {
+                HStack(spacing: 8) {
+                    name.frame(maxWidth: .infinity, alignment: .leading)
+                    connectButton
+                    manage
                 }
-                .contentShape(Capsule())
             }
-            .buttonStyle(PressScaleStyle())
-            .disabled(!online || busy)
-            .accessibilityLabel(Text(online ? "连接\(device.label)" : "\(device.label)离线"))
-            Menu {
-                Button("重命名", systemImage: "pencil", action: rename)
-                Section {
-                    Button("移除", systemImage: "trash", role: .destructive, action: remove)
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(AccountPalette.ink)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel(Text("管理电脑"))
         }
         .padding(.leading, 20)
         .padding(.trailing, 8)
         .padding(.vertical, 14)
         .background(AccountPalette.soft, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .onTapGesture { if online && !busy { connect() } }
+        .onTapGesture { if device.connectable && !busy { connect() } }
+    }
+
+    private var name: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(device.label)
+                .scaledFont(16, .semibold, relativeTo: .body)
+                .foregroundStyle(AccountPalette.ink)
+                .lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+            HStack(spacing: 7) {
+                if device.connectable {
+                    Circle().fill(AccountPalette.online).frame(width: 7, height: 7)
+                }
+                Text((device.connectable ? "在线" : "离线") + (current ? " · 当前" : ""))
+                    .scaledFont(13, relativeTo: .footnote)
+                    .foregroundStyle(AccountPalette.muted)
+            }
+        }
+    }
+
+    private var connectButton: some View {
+        let online = device.connectable
+        return Button(action: connect) {
+            ZStack {
+                if busy {
+                    ProgressView().tint(Palette.onPrimary)
+                } else {
+                    Text(online ? "连接" : "离线")
+                        .scaledFont(14, .medium, relativeTo: .subheadline)
+                        .foregroundStyle(online ? Palette.onPrimary : AccountPalette.muted)
+                }
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 40)
+            .background {
+                if online {
+                    Capsule().fill(Palette.primaryFill)
+                } else {
+                    Capsule().fill(AccountPalette.soft).overlay(Capsule().stroke(Palette.line, lineWidth: 1))
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!online || busy)
+        .accessibilityLabel(Text(online ? "连接\(device.label)" : "\(device.label)离线"))
+    }
+
+    private var manage: some View {
+        Menu {
+            Button("重命名", systemImage: "pencil", action: rename)
+            Section {
+                Button("移除", systemImage: "trash", role: .destructive, action: remove)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(AccountPalette.ink)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("管理电脑"))
     }
 }
 
