@@ -3,7 +3,8 @@ import XCTest
 /// Walks the app on the local demo and keeps one screenshot per page and variant (plan: 云端检查): 登录 when the
 /// service is down, the demo's 登录, 我的电脑, the list, the sidebar, a conversation with Markdown and code, 会话状态,
 /// sending, Claude's cards; from 0.4.0 the question and approval cards, 新建对话 and its job, 对话文件, a file, 本轮差异,
-/// ＋, 左滑归档; 设置 with 已归档对话, and 开发者选项. Each picture is a test attachment; with TEST_RUNNER_SHOTS_DIR on
+/// ＋, 左滑归档; 设置 with 已归档对话, and 开发者选项; from 0.4.1 the sidebar swiped out and back, a file picked from the
+/// computer, DeepSeek's result file in Quick Look. Each picture is a test attachment; with TEST_RUNNER_SHOTS_DIR on
 /// the xcodebuild line it is also written there.
 final class ScreenshotTour: XCTestCase {
     @MainActor func testLight() throws {
@@ -50,6 +51,17 @@ final class ScreenshotTour: XCTestCase {
                 snap(app, page: "05-drawer", variant: variant)
             }
             app.buttons["关闭导航"].firstMatch.tap()
+        }
+
+        // 0.4.1: a swipe right from the middle of the list pulls the sidebar out; a swipe left anywhere takes it back.
+        sleep(1)
+        first.swipeRight()
+        XCTAssertTrue(app.staticTexts["电脑遥控"].waitForExistence(timeout: 5), "a swipe right on the list did not open the sidebar")
+        if app.staticTexts["电脑遥控"].exists {
+            snap(app, page: "27-drawer-swipe", variant: variant)
+            app.swipeLeft()
+            XCTAssertTrue(app.staticTexts["电脑遥控"].waitForNonExistence(timeout: 5), "a swipe left did not close the sidebar")
+            if app.staticTexts["电脑遥控"].exists { app.buttons["关闭导航"].firstMatch.tap() }
         }
 
         first.tap()
@@ -137,6 +149,30 @@ final class ScreenshotTour: XCTestCase {
             }
         }
 
+        // 0.4.1: ＋ → 从电脑选择文件 → a folder → a file's page (save, Quick Look, 添加到消息).
+        if plus.waitForExistence(timeout: 5), plus.isHittable {
+            plus.tap()
+            let pick = app.buttons["从电脑选择文件"].firstMatch
+            if pick.waitForExistence(timeout: 5) {
+                pick.tap()
+                let place = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "固定目录")).firstMatch
+                if place.waitForExistence(timeout: 10) {
+                    place.tap()
+                    let file = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "遥应下载测试.txt")).firstMatch
+                    if file.waitForExistence(timeout: 10) {
+                        snap(app, page: "28-computer-folder", variant: variant)
+                        file.tap()
+                        let add = app.buttons["添加到消息"].firstMatch
+                        XCTAssertTrue(add.waitForExistence(timeout: 10), "a computer file did not open its page")
+                        if add.exists {
+                            snap(app, page: "29-computer-file", variant: variant)
+                            if reach(app, add) { add.tap() }
+                        }
+                    }
+                }
+            }
+        }
+
         back(app)
         let cards = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Claude 下一步示例")).firstMatch
         if cards.waitForExistence(timeout: 10) {
@@ -175,6 +211,31 @@ final class ScreenshotTour: XCTestCase {
                 app.swipeUp()
                 snap(app, page: "20-approval", variant: variant)
             }
+            // 0.4.1: DeepSeek's result file: 查看成果文件 under its message, the Word file's page, Quick Look.
+            let result = app.buttons["查看成果文件"].firstMatch
+            if result.waitForExistence(timeout: 5), reach(app, result, up: false) {
+                result.tap()
+                let word = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "翻译稿.docx")).firstMatch
+                XCTAssertTrue(word.waitForExistence(timeout: 10), "查看成果文件 did not list the Word file")
+                if word.exists {
+                    snap(app, page: "30-deliverables", variant: variant)
+                    word.tap()
+                    if app.navigationBars["翻译稿.docx"].waitForExistence(timeout: 10) {
+                        sleep(1)
+                        snap(app, page: "31-word-file", variant: variant)
+                        let look = app.buttons["用快速查看打开"].firstMatch
+                        if look.waitForExistence(timeout: 5), look.isHittable {
+                            look.tap()
+                            sleep(3)
+                            snap(app, page: "32-quick-look", variant: variant)
+                            let done = app.buttons["完成"].firstMatch
+                            if done.waitForExistence(timeout: 5) { done.tap() }
+                            sleep(1)
+                        }
+                        back(app)
+                    }
+                }
+            }
             back(app)
         }
         let prompt = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Claude 选项示例")).firstMatch
@@ -210,12 +271,14 @@ final class ScreenshotTour: XCTestCase {
             }
         }
 
-        // 左滑归档 and 撤销 (0.4.0): a row on screen, slid left; a long slide archives at once, a short one shows 归档.
+        // 左滑归档 and 撤销: a row on screen, slid left, stops on 归档 (0.4.1: never archived by the slide alone); a tap
+        // archives.
         let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "只读问题记录")).firstMatch
         if row.waitForExistence(timeout: 10), reach(app, row) {
             row.swipeLeft()
             let archive = app.buttons["归档"].firstMatch
-            if archive.waitForExistence(timeout: 3), archive.isHittable { archive.tap() }
+            if archive.waitForExistence(timeout: 3) { snap(app, page: "33-swipe-archive", variant: variant) }
+            if archive.exists, archive.isHittable { archive.tap() }
             if app.buttons["撤销"].waitForExistence(timeout: 5) {
                 snap(app, page: "24-undo", variant: variant)
             }

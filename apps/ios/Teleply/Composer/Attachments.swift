@@ -50,7 +50,7 @@ struct AttachButton: View {
                 openedFor = workspace.key
                 filesShown = true
             }
-            Button("电脑上的文件", systemImage: "desktopcomputer") { workspace.openPicker("remote") }
+            Button("从电脑选择文件", systemImage: "desktopcomputer") { workspace.openPicker("remote") }
             Button("引用对话", systemImage: "bubble.left.and.bubble.right") { workspace.openPicker("chat") }
             if app != "deepseek" {
                 Button("引用技能", systemImage: "wand.and.stars") { workspace.openPicker("skill") }
@@ -270,9 +270,13 @@ private struct Tile: View {
     }
 }
 
-/// 引用对话, 引用技能 and 电脑上的文件 (web references-ui.js, files-ui.js; Android ReferencesPane, RemotePane): a
-/// search, the matches, a page more; a computer folder opens, a file or the folder itself is referred to. Picking
-/// one closes the sheet; the conversation or the new-conversation sheet behind stays as it was.
+/// The one page a picker pushes: the computer file the workspace holds.
+private struct PickedFile: Hashable {}
+
+/// 引用对话, 引用技能 and 从电脑选择文件 (web references-ui.js, files-ui.js; Android ReferencesPane, RemotePane): a
+/// search, the matches, a page more. A computer folder opens; a computer file opens its page, to save it to the phone
+/// or add it to the message (Android 1.0.2); the folder itself can be referred to. Picking a reference closes the
+/// sheet; the conversation or the new-conversation sheet behind stays as it was.
 struct PickerSheet: View {
     let model: AppModel
     @State private var query = ""
@@ -280,13 +284,14 @@ struct PickerSheet: View {
 
     var body: some View {
         let workspace = model.workspace
-        let name = workspace.picker ?? ""
-        let data = workspace.data
-        NavigationStack {
+        // Under a computer file's page, its folder as it was listed.
+        let name = workspace.picker == "file" ? "remote" : workspace.picker ?? ""
+        let data = workspace.picker == "file" ? workspace.folderListing : workspace.data
+        NavigationStack(path: filePath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    if workspace.paneBusy { ProgressView().frame(maxWidth: .infinity) }
-                    if let error = workspace.paneError {
+                    if workspace.paneBusy && workspace.picker != "file" { ProgressView().frame(maxWidth: .infinity) }
+                    if let error = workspace.paneError, workspace.picker != "file" {
                         Text(error)
                             .noteFont()
                             .foregroundStyle(Palette.danger)
@@ -301,15 +306,24 @@ struct PickerSheet: View {
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(name == "remote" ? "电脑上的文件" : name == "skill" ? "引用技能" : "引用对话")
+            .navigationTitle(name == "remote" ? "从电脑选择文件" : name == "skill" ? "引用技能" : "引用对话")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(role: .close) { dismiss() }
                 }
             }
+            .navigationDestination(for: PickedFile.self) { _ in
+                FilePage(model: model)
+            }
         }
         .presentationBackground(Palette.sheet)
+    }
+
+    /// A computer file's page is pushed over its folder; the system back returns to the folder.
+    private var filePath: Binding<[PickedFile]> {
+        Binding(get: { model.workspace.picker == "file" ? [PickedFile()] : [] },
+                set: { if $0.isEmpty && model.workspace.picker == "file" { model.workspace.leaveComputerFile() } })
     }
 
     @ViewBuilder
@@ -401,11 +415,10 @@ struct PickerSheet: View {
         if !items.isEmpty {
             rows(items) { row in
                 let file = row["kind"].string() == "file"
-                return (row["name"].string(), nil, file ? "doc" : "folder")
+                return (row["name"].string(), file && row.has("size") ? byteSize(row["size"].int64()) : nil, file ? "doc" : "folder")
             } pick: { row in
                 if row["kind"].string() == "file" {
-                    workspace.addReference(row)
-                    dismiss()
+                    workspace.computerFile(row)
                 } else {
                     workspace.refresh("remote", query: row["path"].string())
                 }

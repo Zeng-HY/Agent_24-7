@@ -81,11 +81,11 @@ nonisolated struct LoggedTransport: RelayStreamingTransport, RelayFileTransport 
         }
     }
 
-    func download(_ request: RelayRequest, limit: Int64) async throws -> RelayDownload {
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
         guard let files = base as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
         let start = ContinuousClock.now
         do {
-            let answer = try await files.download(request, limit: limit)
+            let answer = try await files.download(request, limit: limit, progress: progress)
             log.request(request, status: answer.status, seconds: Self.seconds(since: start), error: nil)
             return answer
         } catch {

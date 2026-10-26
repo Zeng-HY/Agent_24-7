@@ -8,6 +8,8 @@ final class Chrome {
     private(set) var drawer = false
     /// Goes up each time the sidebar opens, so its sources arrive again (web lbrRowIn).
     private(set) var drawerOpenings = 0
+    /// Where the source chips are on screen while they scroll sideways: a swipe there moves them, not the sidebar.
+    @ObservationIgnored var noPull: CGRect = .null
 
     func openDrawer() {
         drawerOpenings += 1

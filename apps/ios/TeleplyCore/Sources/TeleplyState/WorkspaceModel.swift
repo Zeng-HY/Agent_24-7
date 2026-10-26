@@ -36,8 +36,8 @@ public final class WorkspaceModel {
     public var pressing: Bool { cards.values.contains { $0.hasPrefix("pressing:") } }
 
     // The panes (Android pane): "new" (新建对话), "files" (对话文件), "file" (a file's page) and "diff" (本轮差异);
-    // a picker opens over the conversation or the new-conversation sheet: "chat" and "skill" (引用), "remote" (电脑上
-    // 的文件). [data] is what the open one lists.
+    // a picker opens over the conversation or the new-conversation sheet: "chat" and "skill" (引用), "remote" (从电脑
+    // 选择文件) and "file" (a computer file's page over it). [data] is what the open one lists.
     public internal(set) var pane: String?
     public internal(set) var picker: String?
     public internal(set) var paneBusy = false
@@ -51,12 +51,20 @@ public final class WorkspaceModel {
     /// A file page's text (text files) and its copy on this phone (pictures and PDFs, for Quick Look).
     public internal(set) var fileText = ""
     public internal(set) var preview: URL?
+    /// Why a file page shows less than it could (its preview did not load); the file can still be saved.
+    public internal(set) var fileNote = ""
+    /// A copy for 保存到文件, 分享 or 快速查看 being downloaded, and how far it got (正在下载 37%).
+    public internal(set) var transferring = false
+    public internal(set) var transfer = ""
+    /// The computer folder a file's page was opened from, as listed, for the way back.
+    public internal(set) var folderListing: JSONValue = [:]
 
     /// A first message sent: it becomes a job and the sheet is free again at once (web 10-16).
     @ObservationIgnored public var created: (NewJob) -> Void = { _ in }
     @ObservationIgnored let now: @Sendable () -> Int64
     @ObservationIgnored var paneRead: Task<Void, Never>?
     @ObservationIgnored var paneGeneration = 0
+    @ObservationIgnored var copyTask: Task<URL, any Error>?
     /// The sheet's lists by its workspace (kept on this phone as "new_lists").
     @ObservationIgnored var lists: [ChatKey: JSONValue] = [:]
     @ObservationIgnored var newReads: [String: Task<Void, Never>] = [:]
@@ -127,8 +135,8 @@ public final class WorkspaceModel {
         paneBusy = false
         paneError = nil
         data = [:]
-        fileText = ""
-        dropPreview()
+        folderListing = [:]
+        dropFile()
         listing = nil
         newData = next.flatMap { lists[$0] } ?? [:]
         let g = generation

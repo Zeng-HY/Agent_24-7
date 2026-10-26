@@ -25,10 +25,13 @@ func byteSize(_ bytes: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
 }
 
-/// 对话文件 (web files-ui.js; Android FilesPane): the files this conversation names, as they are now. Which turn
-/// changed what is the timeline's 本轮差异 (spec 4.5, B12).
+/// 对话文件 (web files-ui.js; Android FilesPane): the files this conversation names, as they are now, or those one
+/// message presented (查看成果文件). Which turn changed what is the timeline's 本轮差异 (spec 4.5, B12). With none,
+/// a file can be picked from the computer instead (Android 1.0.2).
 struct FilesSheet: View {
     let model: AppModel
+    /// 从电脑选择文件: this sheet goes and the picker comes.
+    var pickFromComputer: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -47,9 +50,11 @@ struct FilesSheet: View {
                         .noteFont()
                         .foregroundStyle(Palette.muted)
                     if items.isEmpty && !workspace.paneBusy && workspace.paneError == nil {
-                        Text("这个对话没有明确授权的文件引用。")
+                        Text("暂未识别到本对话的成果文件，可从电脑目录选择并保存到手机。")
                             .noteFont()
                             .foregroundStyle(Palette.muted)
+                        Button("从电脑选择文件", systemImage: "desktopcomputer", action: pickFromComputer)
+                            .buttonStyle(PillStyle())
                     } else if !items.isEmpty {
                         VStack(spacing: 0) {
                             ForEach(Array(items.enumerated()), id: \.offset) { index, file in
@@ -108,15 +113,21 @@ struct FilesSheet: View {
 
 /// A file's page (spec 4.5; web artifact-preview.js; Android FilePage): the system back and a centred title, the
 /// file as it is now. HTML opens as a page with 查看源码 beside it, Markdown as text to read; other text in a code
-/// panel; pictures and PDFs in Quick Look. 保存到文件 and 分享 hand a copy to the system.
+/// panel; pictures and PDFs in Quick Look. 保存到文件 and 分享 hand a copy to the system. A file the page cannot
+/// show (a Word file, a file from the computer) has them in the page too, with Quick Look for what the system can
+/// show (Android 1.0.2). A download shows how far it got and can be stopped; a saved file can be opened from where
+/// it went. A computer file's page also adds it to the message.
 struct FilePage: View {
     let model: AppModel
     @State private var rendered = true
     @State private var quickLook: URL?
     @State private var saving: URL?
     @State private var sharing: URL?
-    @State private var working = false
     @State private var note: String?
+    /// Where 保存到文件 put the last copy, to open it from there.
+    @State private var saved: URL?
+    /// The saved copy being looked at, while the system lets this app read it.
+    @State private var reading: URL?
 
     var body: some View {
         let workspace = model.workspace
@@ -126,6 +137,7 @@ struct FilePage: View {
         let lower = name.lowercased()
         let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
         let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
+        let loaded = !workspace.paneBusy && workspace.paneError == nil
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("当前文件 · " + operationLabel(meta["state"].string()) + (meta.has("size") ? " · " + byteSize(meta["size"].int64()) : ""))
@@ -183,17 +195,20 @@ struct FilePage: View {
                         .noteFont()
                         .foregroundStyle(Palette.muted)
                 }
-                if meta["kind"].string() == "download" {
-                    Text("这类文件不提供内嵌预览，可保存后用系统应用打开。")
+                if !workspace.fileNote.isEmpty {
+                    Text(workspace.fileNote)
                         .noteFont()
                         .foregroundStyle(Palette.muted)
                 }
-                if let note {
-                    Text(note)
-                        .noteFont()
-                        .foregroundStyle(Palette.muted)
-                        .task(id: note) { AccessibilityNotification.Announcement(note).post() }
+                if loaded && text.isEmpty && workspace.preview == nil {
+                    unshown(lower)
                 }
+                if data["reference"].isObject {
+                    Button("添加到消息", systemImage: "plus.circle") { workspace.addComputerFile() }
+                        .buttonStyle(PillStyle(wide: true))
+                        .disabled(workspace.transferring)
+                }
+                transferLine(name)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -204,15 +219,25 @@ struct FilePage: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("保存到文件", systemImage: "square.and.arrow.down") { copy { saving = $0 } }
+                    .disabled(workspace.transferring || workspace.paneBusy)
                 Button("分享", systemImage: "square.and.arrow.up") { copy { sharing = $0 } }
+                    .disabled(workspace.transferring || workspace.paneBusy)
             }
         }
-        .disabled(working)
         .quickLookPreview($quickLook)
+        .onChange(of: quickLook) {
+            if quickLook == nil, let reading {
+                reading.stopAccessingSecurityScopedResource()
+                self.reading = nil
+            }
+        }
         .fileMover(isPresented: Binding(get: { saving != nil }, set: { if !$0 { saving = nil } }), file: saving) { result in
             switch result {
-            case .success: note = "已保存到文件"
-            case .failure: note = "没保存"
+            case .success(let url):
+                saved = url
+                note = "已保存到所选位置：" + name
+            case .failure:
+                note = "没保存"
             }
             saving = nil
         }
@@ -224,19 +249,79 @@ struct FilePage: View {
         }
     }
 
-    /// A copy of the file to hand to the system; only one at a time.
+    /// A file the page cannot show: what can be done with it, in the page and not only in the bar above.
+    @ViewBuilder
+    private func unshown(_ lower: String) -> some View {
+        let workspace = model.workspace
+        let looks = Self.quickLooks(lower)
+        Button("保存到文件", systemImage: "square.and.arrow.down") { copy { saving = $0 } }
+            .buttonStyle(PillStyle(kind: .primary, wide: true))
+            .disabled(workspace.transferring)
+        if looks {
+            Button("用快速查看打开", systemImage: "eye") { copy { quickLook = $0 } }
+                .buttonStyle(PillStyle(wide: true))
+                .disabled(workspace.transferring)
+        }
+        Text(looks ? "这类文件不在页面里显示；可以用快速查看打开，或保存到文件、分享给其他应用。" : "这类文件不在页面里显示；可以保存到文件，或分享给其他应用打开。")
+            .noteFont()
+            .foregroundStyle(Palette.muted)
+    }
+
+    /// How far a download got, with 取消; then how the save or share went.
+    @ViewBuilder
+    private func transferLine(_ name: String) -> some View {
+        let workspace = model.workspace
+        if workspace.transferring {
+            HStack(spacing: 12) {
+                ProgressView()
+                Text(workspace.transfer.isEmpty ? "正在准备…" : workspace.transfer)
+                    .noteFont()
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.muted)
+                Spacer(minLength: 0)
+                Button("取消") { workspace.cancelCopy() }
+                    .buttonStyle(PillStyle(kind: .text))
+            }
+        } else if let note {
+            Text(note)
+                .noteFont()
+                .foregroundStyle(Palette.muted)
+                .task(id: note) { AccessibilityNotification.Announcement(note).post() }
+            if saved != nil && note.hasPrefix("已保存到所选位置") {
+                Button("打开已保存的文件", systemImage: "eye") { openSaved() }
+                    .buttonStyle(PillStyle(kind: .text))
+            }
+        }
+    }
+
+    /// What Quick Look shows on a phone: Office and iWork documents, PDFs, pictures, text, sound and video.
+    static func quickLooks(_ name: String) -> Bool {
+        guard let dot = name.lastIndex(of: ".") else { return false }
+        return ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key", "rtf", "csv", "txt", "md", "pdf",
+                "png", "jpg", "jpeg", "heic", "gif", "webp", "tif", "tiff", "mp3", "m4a", "wav", "mp4", "mov", "m4v", "usdz"]
+            .contains(String(name[name.index(after: dot)...]))
+    }
+
+    /// A copy of the file to hand to the system; one at a time, its download shown on the page.
     private func copy(_ then: @escaping (URL) -> Void) {
-        guard !working else { return }
-        working = true
+        guard !model.workspace.transferring else { return }
         note = nil
         Task {
             do {
                 then(try await model.workspace.fileCopy())
+            } catch is CancellationError {
+                note = "已取消下载"
             } catch {
                 note = describe(error)
             }
-            working = false
         }
+    }
+
+    /// The copy where 保存到文件 put it, in Quick Look, while the system lets this app read it there.
+    private func openSaved() {
+        guard let saved else { return }
+        if saved.startAccessingSecurityScopedResource() { reading = saved }
+        quickLook = saved
     }
 }
 

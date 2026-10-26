@@ -1,6 +1,23 @@
 import Foundation
 import TeleplyModel
 
+/// A file name safe to use on this phone: no folder separators, never empty.
+func safeFileName(_ name: String) -> String {
+    let safe = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
+    return safe.trimmingCharacters(in: .whitespaces).isEmpty ? "文件" : safe
+}
+
+/// A downloaded copy moved to the file's own name, so Quick Look knows what it is; left as it was if it cannot be.
+func renamed(_ copy: URL, to name: String) -> URL {
+    let target = copy.deletingLastPathComponent().appendingPathComponent(safeFileName(name))
+    do {
+        try FileManager.default.moveItem(at: copy, to: target)
+        return target
+    } catch {
+        return copy
+    }
+}
+
 /// References, computer files and conversation files (spec 4.3 ＋, 4.5; Android WorkspaceController refresh).
 extension WorkspaceModel {
     /// Reads what a pane lists. A newer read (or another pane) drops this one's answer.
@@ -19,7 +36,8 @@ extension WorkspaceModel {
                 let value: JSONValue
                 switch name {
                 case "files":
-                    value = try await client.detail(device: key.device, route: "chat/files", query: ids)
+                    // [query] is a message: only the files it presented (DeepSeek's 成果文件, Android 1.0.2).
+                    value = try await client.detail(device: key.device, route: "chat/files", query: ids + [("message", query.isEmpty ? nil : query)])
                 case "remote":
                     value = query.isEmpty
                         ? try await client.detail(device: key.device, route: "files/places", query: ids)
@@ -43,19 +61,74 @@ extension WorkspaceModel {
         }
     }
 
+    /// 查看成果文件 under a DeepSeek deliverables message: 对话文件 with only the files that message presented.
+    public func filesOf(message: String) {
+        dropFile()
+        pane = "files"
+        data = [:]
+        paneError = nil
+        readPane("files", query: message, offset: "0", fresh: false)
+    }
+
     /// A conversation file's page (spec 4.5; Android file): what it is, its text for a text file, and for a picture
     /// or PDF up to 20 MB a copy on this phone for Quick Look. It shows the file as it is now (当前文件).
     public func file(_ file: JSONValue) {
+        guard key != nil, client != nil else { return }
+        pane = "file"
+        load(file)
+    }
+
+    /// A file picked in 从电脑选择文件 (Android 1.0.2): its page over the picker, to save it to the phone or add it to
+    /// the message. The computer gives each file a signed download ticket; a computer too old to give one says so.
+    /// The folder's listing is kept for the way back.
+    public func computerFile(_ reference: JSONValue) {
+        guard key != nil, client != nil, picker == "remote" else { return }
+        let ticket = reference["download_id"].string()
+        guard !ticket.isEmpty else {
+            paneError = "请更新电脑端后下载文件"
+            return
+        }
+        var page = reference.object
+        page["id"] = .string(ticket)
+        page["reference"] = reference
+        folderListing = data
+        picker = "file"
+        load(.object(page))
+    }
+
+    /// From a computer file's page back to its folder, as it was listed.
+    public func leaveComputerFile() {
+        guard picker == "file" else { return }
+        paneRead?.cancel()
+        paneGeneration += 1
+        dropFile()
+        picker = "remote"
+        data = folderListing
+        folderListing = [:]
+        paneBusy = false
+        paneError = nil
+    }
+
+    /// 添加到消息 on a computer file's page: the file goes with the next message (or the new conversation) and the
+    /// picker closes, as picking it did before 1.0.2.
+    public func addComputerFile() {
+        let reference = data["reference"]
+        guard picker == "file", reference.isObject else { return }
+        addReference(reference)
+        closePicker()
+    }
+
+    /// Reads a file page: its facts first, then its text or picture. A preview that does not load leaves the file to
+    /// be saved all the same (Android 1.0.2), with a line saying so.
+    func load(_ file: JSONValue) {
         guard let key, let client else { return }
         paneRead?.cancel()
         paneGeneration += 1
         let g = paneGeneration
-        pane = "file"
         data = file
         paneBusy = true
         paneError = nil
-        fileText = ""
-        dropPreview()
+        dropFile()
         result = ""
         paneRead = Task { [weak self] in
             do {
@@ -63,18 +136,32 @@ extension WorkspaceModel {
                 let ids: [(String, String?)] = [("app", key.app), ("id", key.chat), ("file", id)]
                 let meta = try await client.detail(device: key.device, route: "file/meta", query: ids)
                 let kind = meta["kind"].string()
-                let text = kind == "text" ? try await client.detail(device: key.device, route: "file/text", query: ids)["text"].string() : ""
-                let copy = ["image", "pdf"].contains(kind) && meta["size"].int64() <= 20 * 1024 * 1024
-                    ? try await client.download(device: key.device, app: key.app, chat: key.chat, file: id) : nil
+                var text = ""
+                var copy: URL?
+                var note = ""
+                do {
+                    if kind == "text" { text = try await client.detail(device: key.device, route: "file/text", query: ids)["text"].string() }
+                    if ["image", "pdf"].contains(kind) && meta["size"].int64() <= 20 * 1024 * 1024 {
+                        let name = file["name"].string().isEmpty ? meta["name"].string() : file["name"].string()
+                        copy = renamed(try await client.download(device: key.device, app: key.app, chat: key.chat, file: id), to: name)
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    note = "预览未能加载，仍可尝试保存原文件。"
+                }
                 guard let self, g == self.paneGeneration else {
                     if let copy { try? FileManager.default.removeItem(at: copy) }
                     return
                 }
                 var fields = file.object
                 fields["meta"] = meta
+                fields["kind"] = .string(kind)
+                if fields["name"]?.string().isEmpty ?? true { fields["name"] = meta["name"] }
                 self.data = .object(fields)
                 self.fileText = text
                 self.preview = copy
+                self.fileNote = note
                 self.paneBusy = false
             } catch is CancellationError {
             } catch {
@@ -112,25 +199,74 @@ extension WorkspaceModel {
         }
     }
 
-    /// A copy of the open file on this phone to save or share (保存到文件, 分享): the preview when there is one,
-    /// otherwise downloaded now. The caller may move or delete the copy it gets.
+    /// A copy of the open file on this phone to save, share or look at (保存到文件, 分享, 用快速查看打开): the preview
+    /// when there is one, otherwise downloaded now, with how far it got in [transfer]. One at a time; 取消 or leaving
+    /// the page stops it. The caller may move or delete the copy it gets.
     public func fileCopy() async throws -> URL {
-        guard let key, let client, pane == "file" else { throw ReadFailure("文件页已关闭") }
+        guard let key, let client, pane == "file" || picker == "file" else { throw ReadFailure("文件页已关闭") }
+        guard copyTask == nil else { throw ReadFailure("文件还在下载，请稍候") }
         let file = data
-        let name = file["name"].string().isEmpty ? "文件" : file["name"].string()
-        let source: URL
-        if let preview {
-            source = preview
-        } else {
-            source = try await client.download(device: key.device, app: key.app, chat: key.chat, file: file["id"].string())
+        let name = safeFileName(file["name"].string())
+        let size = file["meta"]["size"].int64()
+        let preview = preview
+        let g = paneGeneration
+        transferring = true
+        transfer = preview == nil ? "正在下载…" : ""
+        // Held only while the download runs.
+        let report: @Sendable (Int64, Int64) -> Void = { got, total in
+            Task { @MainActor in self.downloaded(got, of: total > 0 ? total : size, generation: g) }
         }
-        // Under the file's own name, so the system's sheets and the saved file carry it.
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-share-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let named = folder.appendingPathComponent(name)
-        try FileManager.default.copyItem(at: source, to: named)
-        if source != preview { try? FileManager.default.removeItem(at: source) }
-        return named
+        let task = Task<URL, any Error> {
+            let source: URL
+            if let preview {
+                source = preview
+            } else {
+                source = try await client.download(device: key.device, app: key.app, chat: key.chat, file: file["id"].string(), progress: report)
+            }
+            // Under the file's own name, so the system's sheets and the saved file carry it.
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-share-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let named = folder.appendingPathComponent(name)
+            try FileManager.default.copyItem(at: source, to: named)
+            if source != preview { try? FileManager.default.removeItem(at: source) }
+            return named
+        }
+        copyTask = task
+        defer {
+            if copyTask == task {
+                copyTask = nil
+                transferring = false
+                transfer = ""
+            }
+        }
+        do {
+            return try await task.value
+        } catch {
+            if task.isCancelled { throw CancellationError() }
+            throw error
+        }
+    }
+
+    /// How far a download for 保存到文件 or 分享 got: a share of the file's size, or megabytes when it is not known.
+    func downloaded(_ got: Int64, of total: Int64, generation g: Int) {
+        guard transferring, g == paneGeneration else { return }
+        transfer = total > 0 ? "正在下载 \(min(100, got * 100 / total))%" : "已接收 \(got / 1_048_576) MB"
+    }
+
+    /// 取消: stops the copy under way.
+    public func cancelCopy() {
+        copyTask?.cancel()
+        copyTask = nil
+        transferring = false
+        transfer = ""
+    }
+
+    /// A file page's own things go with it: its text, its preview's copy, a copy under way.
+    func dropFile() {
+        cancelCopy()
+        fileText = ""
+        fileNote = ""
+        dropPreview()
     }
 
     /// A file an HTML page names beside itself (web artifact-preview resource): only one this conversation lists,
@@ -159,18 +295,21 @@ extension WorkspaceModel {
         preview = nil
     }
 
-    /// 引用对话, 引用技能 or 电脑上的文件 (＋): over the conversation or the new-conversation sheet, which stays.
+    /// 引用对话, 引用技能 or 从电脑选择文件 (＋): over the conversation or the new-conversation sheet, which stays.
     public func openPicker(_ name: String) {
         picker = name
         data = [:]
+        folderListing = [:]
         readPane(name, query: "", offset: "0", fresh: false)
     }
 
     public func closePicker() {
         paneRead?.cancel()
         paneGeneration += 1
+        if picker == "file" { dropFile() }
         picker = nil
         data = [:]
+        folderListing = [:]
         paneBusy = false
         paneError = nil
     }

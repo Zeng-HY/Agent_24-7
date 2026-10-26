@@ -75,6 +75,8 @@ struct MessageActions {
     var expand: (Message) -> Void
     /// 本轮差异 of a step that changed files: the diff page by its reference.
     var diff: (String) -> Void = { _ in }
+    /// 查看成果文件 under a DeepSeek deliverables message: 对话文件 for that message, by its id.
+    var files: (String) -> Void = { _ in }
     var busy: Bool
 }
 
@@ -299,6 +301,11 @@ private struct AnswerBlock: View {
                         .clipped()
                         .background(Palette.page)
                 }
+            // The files DeepSeek presented as the turn's result (Android 1.0.2), to open or save.
+            if message.kind == "deliverables" {
+                Button("查看成果文件", systemImage: "doc.on.doc") { actions.files(message.id) }
+                    .buttonStyle(PillStyle(kind: .text))
+            }
             if message.truncated {
                 Button("展开完整消息") { actions.expand(message) }
                     .buttonStyle(PillStyle(kind: .text))
