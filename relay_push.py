@@ -16,7 +16,6 @@ base64), AR_APNS_KEY_ID, AR_APNS_TEAM_ID, AR_APNS_TOPIC. Nothing of the key, and
 """
 import asyncio
 import base64
-import contextlib
 import hashlib
 import json
 import logging
@@ -138,7 +137,7 @@ class Push:
         self.sent = {}              # (computer, app, conversation, kind) -> when its last notice went
         self.hours = {}             # account -> when its notices of the last hour went
         self.task = None
-        self.woken = asyncio.Event()
+        self.woken = None           # made in start(), on the service's own loop (Python 3.9 ties it at creation)
 
     @property
     def available(self):
@@ -210,6 +209,7 @@ class Push:
 
     async def start(self, app=None):
         if self.available and self.task is None:
+            self.woken = asyncio.Event()
             self.task = asyncio.create_task(self.sweep())
 
     async def stop(self, app=None):
@@ -223,7 +223,8 @@ class Push:
 
     def wake(self):
         """A phone was added: look at once instead of within SWEEP seconds."""
-        self.woken.set()
+        if self.woken is not None:
+            self.woken.set()
 
     async def sweep(self):
         while True:
@@ -257,7 +258,8 @@ class Push:
             started = self.clock()
             try:
                 target = '/api/notify/push?since=' + quote(self.since.get(device, SINCE), safe='')
-                async with contextlib.aclosing(self.hub.fetch(device, target, {'Accept': NDJSON})) as chunks:
+                chunks = self.hub.fetch(device, target, {'Accept': NDJSON})
+                try:  # not contextlib.aclosing: the server's Python may be 3.9
                     rest = b''
                     async for chunk in chunks:
                         *lines, rest = (rest + chunk).split(b'\n')
@@ -265,6 +267,8 @@ class Push:
                             await self.receive(device, line)
                         if len(rest) > 65536:
                             raise ValueError('line too long')
+                finally:
+                    await chunks.aclose()
                 wait = 1
             except asyncio.CancelledError:
                 raise

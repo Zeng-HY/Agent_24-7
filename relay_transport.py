@@ -96,7 +96,7 @@ class TunnelHub:
     async def fetch(self, device, target, headers=None):
         """A GET of the relay's own on this computer's tunnel (relay_push.py's event stream): the body's chunks as
         they come, until the computer ends it or goes away. Not on a phone's behalf, so no sign-in is checked and
-        no usage counted; it takes one of the computer's 16 places while open. Close it with aclosing()."""
+        no usage counted; it takes one of the computer's 16 places while open. Close it with aclose()."""
         conn=self.connections.get(device)
         if not conn or not self.allowed(conn): raise ConnectionError('device offline')
         if sum(item[0] is conn for item in self.pending.values())>=16: raise ConnectionError('device busy')
