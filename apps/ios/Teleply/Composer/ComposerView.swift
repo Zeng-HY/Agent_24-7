@@ -232,6 +232,8 @@ struct ComposerCard: View {
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
+            // The system turns a menu that opens upward around; the models stay first (spec 4.3).
+            .menuOrder(.fixed)
             .accessibilityLabel(Text("模型：\(labels.model)"))
             Menu {
                 ModeMenu(model: model) { confirming = $0 }
@@ -241,6 +243,8 @@ struct ComposerCard: View {
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
+            // The system turns a menu that opens upward around; the models stay first (spec 4.3).
+            .menuOrder(.fixed)
             .accessibilityLabel(Text("\(modeName)：\(labels.mode)"))
             .accessibilityValue(Text(labels.plan ? "计划模式" : ""))
         }

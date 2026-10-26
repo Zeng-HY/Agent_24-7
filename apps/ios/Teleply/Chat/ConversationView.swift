@@ -32,7 +32,10 @@ struct ConversationView: View {
             record.action == "send" && record.label == "提交中" && !model.messages.contains { $0.request == record.request }
         }
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // A plain stack, not a lazy one: with LazyVStack the area above the input card went blank after the
+            // keyboard came up (0.3.0 screenshots on iOS 26.5, two runs of three). Pages hold 60 messages, the
+            // long demo 200; how that scrolls on a phone is T04.
+            VStack(alignment: .leading, spacing: 0) {
                 historyTools
                 ForEach(Array(zip(model.messages, roles)), id: \.0.id) { message, role in
                     TimelineItem(message: message, role: role, raw: control.raw, receipt: message.request.isEmpty ? nil : receipts[message.request],

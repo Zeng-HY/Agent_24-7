@@ -53,7 +53,9 @@ struct ChipLabel: View {
         .foregroundStyle(selected ? Palette.selectedInk : Palette.muted)
         .padding(.horizontal, 10)
         .frame(minHeight: 32)
-        .frame(maxWidth: 150)
+        // As wide as the words, at most 150 pt: a flexible width let the row stretch both chips apart.
+        .frame(maxWidth: 150, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
         .background(selected ? Palette.selectedFill : .clear, in: Capsule())
         .contentShape(Capsule())
     }

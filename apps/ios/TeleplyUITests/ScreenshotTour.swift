@@ -79,7 +79,8 @@ final class ScreenshotTour: XCTestCase {
             if focus(field), queue.waitForExistence(timeout: 5) {
                 field.typeText("one more")
                 queue.tap()
-                if app.buttons["立即补充"].firstMatch.waitForExistence(timeout: 5) {
+                let promote = app.buttons.containing(NSPredicate(format: "label BEGINSWITH %@", "立即补充")).firstMatch
+                if promote.waitForExistence(timeout: 5) {
                     app.swipeDown()
                     snap(app, page: "09-queued", variant: variant)
                 }
