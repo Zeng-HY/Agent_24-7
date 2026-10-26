@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI，0.4.2 待发 TestFlight）
+# 遥应 Teleply iOS 版（原生 SwiftUI，0.4.2 已发 TestFlight，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,7 +25,7 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.4.2：列表里的红色“[草稿]”（10-26，连同 0.4.1 的改动一起发）
+## 0.4.2：列表里的红色“[草稿]”（10-26 发 TestFlight 构建 7，连同 0.4.1 的改动，待真机验）
 
 用户 10-26 要求：输入框里有没发出去的字时，列表里这个对话像微信一样显示红色的“[草稿]”。
 
@@ -196,6 +196,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #22 `6adf3f7d…` | ios-native-check（shots，浅色） | 失败 | 9（排队 30） | 0.4.1 第一次全部编过；从一行上往右滑拉出侧栏，抬手时那一行也被当成点按，对话打开了，后面的步骤点不到 |
 | #23 `6adf4a6f…` | ios-native-check（shots，浅色和最大字号） | 失败 | 26（排队 47） | 0.4.2：文件页、电脑文件页、成果文件、草稿红字都看过；行仍会被打开（行先收到抬手，滑动还没报移动）；快速查看的关闭按钮在模拟器上是英文，浅色那轮之后走偏 |
 | #24 `6adf5cde…` | ios-native-check（shots，三种外观） | 失败（检查脚本误判） | 26（排队 23） | 行和侧栏按钮改成点后 0.1 秒再动作：右滑只拉出侧栏，下面仍是列表；浅色、深色几乎每步都截到，快速查看显示出 Word 内容；唯一的失败是用标题判断“对话被打开”误判（列表那一行的标题也算），已改 |
+| #25 `6adf690e…` | ios-native-testflight | 成功 | 6（排队 50） | 0.4.2（7）上传，Delivery UUID `07ae989f-ee9d-4d0d-9062-baa2648784d0`；截图存 `F:\Android-Dev\work\ios-042-screens`。构建在 Codemagic 上成功，这台电脑下载产物时连不上 Codemagic，重新拉取后核对了上传记录 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
