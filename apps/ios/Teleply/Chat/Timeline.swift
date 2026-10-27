@@ -83,6 +83,10 @@ struct MessageActions {
     var thread: (String) -> Void = { _ in }
     /// A picture sent with a message: its small copy, or the whole one (true), as a file on this phone.
     var picture: (SentPicture, Bool) async -> URL? = { _, _ in nil }
+    /// A message's whole words, read from the computer first when the page cut it short (复制 · 选择文字 · 分享).
+    var whole: (Message, @escaping (Message) -> Void) -> Void = { message, use in use(message) }
+    /// 分享 of words read just now: the system share sheet.
+    var share: (String) -> Void = { _ in }
     var busy: Bool
 }
 
@@ -288,13 +292,28 @@ struct UserBubble: View {
                 if !pictures.isEmpty {
                     SentPictureGrid(pictures: pictures, load: actions.picture)
                 }
+                // A long message the page cut short: 展开全文 inside the bubble (web .bub.user .message-actions).
+                if message.truncated {
+                    Button { actions.expand(message) } label: {
+                        Text(expandLabel(message))
+                            .captionFont()
+                            .foregroundStyle(Palette.onBubble)
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 44)
+                            .background(Palette.onBubble.opacity(0.18), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(actions.busy)
+                    .opacity(actions.busy ? 0.35 : 1)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(Palette.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.bubbleEdge, lineWidth: 1))
             .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .contextMenu { MessageMenu(text: message.text, message: message, actions: actions) }
+            .contextMenu { MessageMenu(message: message, actions: actions, shown: { $0 }) }
         }
     }
 }
@@ -383,7 +402,7 @@ private struct AnswerBlock: View {
                 .contentShape(Rectangle())
                 .contextMenu {
                     // Copied and shared as shown, without Codex's own notes.
-                    MessageMenu(text: MarkdownReader.tidy(message.text), message: message, actions: actions)
+                    MessageMenu(message: message, actions: actions, shown: { MarkdownReader.tidy($0) })
                 } preview: {
                     MarkdownView(source: message.text)
                         .foregroundStyle(Palette.ink)
@@ -420,7 +439,7 @@ private struct AnswerBlock: View {
                     .buttonStyle(PillStyle(kind: .text))
             }
             if message.truncated {
-                Button("展开完整消息") { actions.expand(message) }
+                Button(expandLabel(message)) { actions.expand(message) }
                     .buttonStyle(PillStyle(kind: .text))
                     .disabled(actions.busy)
             }
@@ -429,17 +448,26 @@ private struct AnswerBlock: View {
     }
 }
 
-/// 复制 · 选择文字 · 分享 (web message menu, static/reading-ui.js).
+/// 复制 · 选择文字 · 分享 (web message menu, static/reading-ui.js): a message the page cut short is read whole first.
 private struct MessageMenu: View {
-    let text: String
     let message: Message
     let actions: MessageActions
+    /// The words as copied and shared: an answer's without Codex's own notes.
+    let shown: (String) -> String
 
     var body: some View {
-        Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        Button("复制", systemImage: "doc.on.doc") {
+            actions.whole(message) { UIPasteboard.general.string = shown($0.text) }
+        }
         Button("选择文字", systemImage: "selection.pin.in.out") { actions.select(message) }
-        ShareLink(item: text) {
-            Label("分享", systemImage: "square.and.arrow.up")
+        if message.truncated {
+            Button("分享", systemImage: "square.and.arrow.up") {
+                actions.whole(message) { actions.share(shown($0.text)) }
+            }
+        } else {
+            ShareLink(item: shown(message.text)) {
+                Label("分享", systemImage: "square.and.arrow.up")
+            }
         }
     }
 }

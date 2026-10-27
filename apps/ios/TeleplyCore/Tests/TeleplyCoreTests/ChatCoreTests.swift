@@ -40,6 +40,16 @@ struct ChatCoreTests {
         #expect(mergeLive([first, live], [committed]).map(\.id) == ["first", "committed"])
     }
 
+    @Test func aMessageOpenedWholeStaysWholeUntilItGrows() {
+        var cut = Message(id: "u", role: "user", text: "前"); cut.truncated = true; cut.length = 3; cut.request = "r1"
+        var full = Message(id: "u", role: "user", text: "前后全"); full.length = 3
+        let kept = keepWhole([cut], ["u": full])[0]
+        #expect(kept.text == "前后全" && !kept.truncated && kept.request == "r1")
+        var grown = cut; grown.length = 5
+        #expect(keepWhole([grown], ["u": full]) == [grown])
+        #expect(expandLabel(cut) == "展开全文（3 字）" && expandLabel(Message(id: "a", role: "assistant", text: "")) == "展开全文")
+    }
+
     @Test func unknownAndQueuedAreNotDelivery() throws {
         #expect(receiptLabel(state: "unknown", result: [:], action: "send") == "送达状态待确认")
         #expect(receiptLabel(state: "queued", result: [:], action: "send") == "已排队")

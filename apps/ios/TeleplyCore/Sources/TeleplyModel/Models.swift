@@ -54,6 +54,8 @@ public struct Message: Sendable, Equatable, Identifiable {
     public var role: String
     public var text: String
     public var truncated: Bool = false
+    /// The whole message's length as the computer counts it; with [truncated], what 展开全文 says.
+    public var length: Int = 0
     public var kind: String = ""
     public var status: String = ""
     public var order: Double? = nil
@@ -154,6 +156,7 @@ let messageDetails = ["tool", "title", "changes", "activity_turn", "items", "too
 public func parseMessage(_ json: JSONValue) throws -> Message {
     var message = Message(id: try requiredString(json, "id"), role: json["role"].string(), text: json["text"].string())
     message.truncated = json["truncated"].bool()
+    message.length = json["length"].int()
     message.kind = json["kind"].string()
     message.status = json["tool_status"].string()
     message.order = json.has("order") ? json["order"].double() : nil
@@ -174,4 +177,22 @@ public func mergeMessages(_ old: [Message], _ incoming: [Message], prepend: Bool
     let fresh = incoming.filter { !seen.contains($0.id) && added.insert($0.id).inserted }
     let existing = old.map { replacements[$0.id] ?? $0 }
     return prepend ? fresh + existing : existing + fresh
+}
+
+/// Messages 展开全文 made whole stay whole when a later read brings them cut short again, unless one has grown
+/// since (web reading-ui.js merge).
+public func keepWhole(_ messages: [Message], _ whole: [String: Message]) -> [Message] {
+    guard !whole.isEmpty else { return messages }
+    return messages.map { message in
+        guard message.truncated, let full = whole[message.id], full.length >= message.length else { return message }
+        var kept = message
+        kept.text = full.text
+        kept.truncated = false
+        return kept
+    }
+}
+
+/// The words of 展开全文 (web reading-ui.js): with the whole length when the computer gave it.
+public func expandLabel(_ message: Message) -> String {
+    message.length > 0 ? "展开全文（\(message.length) 字）" : "展开全文"
 }

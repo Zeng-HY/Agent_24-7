@@ -13,8 +13,11 @@ data class Account(val devices: List<Computer>, val email: String)
 data class Chat(val id: String, val title: String, val folder: String = "", val preview: String = "", val status: String = "", val app: String = "", val updated: Long = 0,
                 val group: Boolean = false, val kind: String = "", val parent: String = "", val parentTitle: String = "",
                 val children: List<Chat> = emptyList(), val childCount: Int = 0, val childRunning: Int = 0)
-/** [phase] is commentary / final_answer / thinking for assistant text; [request] is a user message's client_request_id. */
-data class Message(val id: String, val role: String, val text: String, val truncated: Boolean = false, val kind: String = "", val status: String = "", val order: Double? = null, val aliases: List<String> = emptyList(),val details:String="{}",val phase:String="",val request:String="")
+/**
+ * [phase] is commentary / final_answer / thinking for assistant text; [request] is a user message's client_request_id;
+ * [length] is the whole message's length as the computer counts it, what 展开全文 says when [truncated].
+ */
+data class Message(val id: String, val role: String, val text: String, val truncated: Boolean = false, val kind: String = "", val status: String = "", val order: Double? = null, val aliases: List<String> = emptyList(),val details:String="{}",val phase:String="",val request:String="",val length:Int=0)
 /** [meta] carries page-level fields as JSON, e.g. a conversation's title, folder, status and runtime. */
 data class Page<T>(val items: List<T>, val cursor: String? = null, val hasMore: Boolean = false, val hasNewer: Boolean = false, val reset: Boolean = false, val meta: String = "{}")
 fun JSONObject.string(key: String) = if (isNull(key)) "" else optString(key, "")
@@ -32,7 +35,7 @@ fun parseChat(j: JSONObject): Chat = Chat(j.getString("id"), j.string("title").i
  * wrote it (time), which ties a Claude send's pictures to it (sentPictures).
  */
 private val MessageDetails = listOf("tool","title","changes","activity_turn","items","tool_id","recap","ask","actions","blocked","open","brief","offer","label","child","status","mode","origin","thinking","source_id","time")
-fun parseMessage(j: JSONObject) = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"))
+fun parseMessage(j: JSONObject) = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"),j.optInt("length"))
 fun mergeMessages(old: List<Message>, incoming: List<Message>, prepend: Boolean): List<Message> {
     // Server transcript order is authoritative. Never sort by arrival time or deduplicate by text.
     val replacements = incoming.associateBy { it.id }
@@ -41,6 +44,11 @@ fun mergeMessages(old: List<Message>, incoming: List<Message>, prepend: Boolean)
     val existing = old.map { replacements[it.id] ?: it }
     return if (prepend) fresh + existing else existing + fresh
 }
+/** Messages 展开全文 made whole stay whole when a later read brings them cut short again, unless one has grown since (web reading-ui.js merge). */
+fun keepWhole(messages: List<Message>, whole: Map<String, Message>): List<Message> =
+    if (whole.isEmpty()) messages else messages.map { m -> whole[m.id]?.takeIf { m.truncated && it.length >= m.length }?.let { m.copy(text = it.text, truncated = false) } ?: m }
+/** The words of 展开全文 (web reading-ui.js): with the whole length when the computer gave it. */
+fun expandLabel(message: Message) = if (message.length > 0) "展开全文（${message.length} 字）" else "展开全文"
 /** [draft] is the text found in Claude's box on the computer when that turned a send away (code desktop_draft). */
 class ServiceFailure(val status: Int, val code: String = "",detail:String="",val notSubmitted:Boolean=false,val draft:String="") : Exception(when {
     status == 401 -> "登录已失效，请重新登录；当前阅读位置已保留。"

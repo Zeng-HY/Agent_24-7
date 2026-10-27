@@ -178,6 +178,8 @@ public final class AppModel {
     /// The sign-in and computer [drafts] were read for, and the rows changed since that read began.
     @ObservationIgnored var draftsFor: String?
     @ObservationIgnored var draftsTouched: Set<String> = []
+    /// Messages of the open conversation that 展开全文 made whole, by id: a later read keeps them whole.
+    @ObservationIgnored var wholeMessages: [String: Message] = [:]
 
     public init(services: AppServices) {
         self.services = services
@@ -290,6 +292,7 @@ public final class AppModel {
     func clearReading() {
         chat = nil
         messages = []
+        wholeMessages = [:]
         cursor = nil
         olderAvailable = false
         newerAvailable = false

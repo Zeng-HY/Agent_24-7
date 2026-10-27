@@ -23,6 +23,21 @@ func makeApp(world: DemoWorld = DemoWorld(), store: LocalStore = LocalStore(fold
                                    pacer: IdlePacer(), newScope: { "scope-1" }))
 }
 
+/// The demo computer, with every conversation opening on a message cut short the way the computer cuts one over 6000
+/// characters (chat_history.public_message; the user's prompt of 7545, 10-27).
+struct CutMessageTransport: RelayTransport {
+    let demo = DemoTransport()
+
+    func send(_ request: RelayRequest) async throws -> RelayResponse {
+        let path = request.url.path
+        if path.hasSuffix("/api/chat/message") { return .json(#"{"id":"long","role":"user","text":"前半后半","length":4}"#) }
+        guard path.hasSuffix("/api/chat") else { return try await demo.send(request) }
+        let query = URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let value = { (name: String) in query.first { $0.name == name }?.value ?? "" }
+        return .json(#"{"app":"\#(value("app"))","id":"\#(value("id"))","messages":[{"id":"long","role":"user","text":"前半","truncated":true,"length":4}]}"#)
+    }
+}
+
 @MainActor
 struct AppModelTests {
     let a = String(repeating: "a", count: 32)
@@ -188,5 +203,30 @@ struct AppModelTests {
         model.back()
         await model.settle()
         #expect(!model.fixture && model.screen == .login && model.scope.isEmpty)
+    }
+
+    @Test func aLongMessageCopiesWholeAndStaysWholeOnceOpened() async {
+        let model = AppModel(services: AppServices(store: LocalStore(folder: temporaryFolder()), vault: MemoryCookieVault(),
+                                                   transport: CutMessageTransport(), demo: { DemoTransport() }, pacer: IdlePacer(),
+                                                   newScope: { "scope-1" }))
+        await signedInOnA(model)
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        let cut = model.messages.first { $0.id == "long" }!
+        #expect(cut.truncated && cut.length == 4 && cut.text == "前半")
+        // 复制 reads the whole words and leaves the bubble as it was.
+        var copied: String?
+        model.whole(cut) { copied = $0.text }
+        await model.settle()
+        #expect(copied == "前半后半")
+        #expect(model.messages.first { $0.id == "long" }?.truncated == true)
+        // 展开全文 opens it, and reading the page again keeps it open.
+        model.expand(cut)
+        await model.settle()
+        #expect(model.messages.first { $0.id == "long" }?.text == "前半后半")
+        model.latest()
+        await model.settle()
+        let again = model.messages.first { $0.id == "long" }
+        #expect(again?.text == "前半后半" && again?.truncated == false)
     }
 }

@@ -130,7 +130,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val scope = rememberCoroutineScope()
     var barHeight by remember { mutableStateOf(0.dp) }
     var inputHeight by remember { mutableStateOf(0.dp) }
-    val sheets = remember(key) { ChatSheets() }
+    val sheets = remember(key) { ChatSheets().apply { whole = vm::whole } }
     val folds = remember(key) { mutableStateMapOf<String, Boolean>() }
     val currentMessages by rememberUpdatedState(s.messages)
     val dragged by list.interactionSource.collectIsDraggedAsState()
@@ -268,6 +268,8 @@ class ChatSheets {
     var pending by mutableStateOf(false)
     var prompts by mutableStateOf(false)
     var select by mutableStateOf<Message?>(null)
+    /** Hands a message on whole: read from the computer first when the page cut it short (复制 · 选择文字 · 分享). */
+    var whole: (Message, (Message) -> Unit) -> Unit = { message, use -> use(message) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -386,7 +388,8 @@ private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, 
             val caches = remember(context) { context.cacheDir }
             Column(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalAlignment = Alignment.End) {
                 OriginLabel(message, Modifier.padding(end = 4.dp))
-                UserBubble(message.text, receipt = receipt, menus = LocalMenuHost.current, sheets = sheets, pictures = pictures) { picture, whole -> vm.workspace.sentPicture(caches, picture, whole) }
+                UserBubble(message.text, receipt = receipt, menus = LocalMenuHost.current, sheets = sheets, pictures = pictures, message = message,
+                    expand = { vm.expand(message) }, busy = s.busy) { picture, whole -> vm.workspace.sentPicture(caches, picture, whole) }
             }
         }
         message.role == "plan" -> ChecklistCard(message)
@@ -474,21 +477,23 @@ private class Anchor { var coordinates: LayoutCoordinates? = null }
 /**
  * User message bubble (web .bub.user): accent in light mode, #1E1E1E with a #333 edge in dark; long press for the menu,
  * which copies the message whole as written. [pictures] sent with it show under its words, without their [图片] mark
- * (web codex-ui.js renderImages); [load] fetches one from the computer, small or whole, to a file on this phone.
+ * (web codex-ui.js renderImages); [load] fetches one from the computer, small or whole, to a file on this phone. The
+ * timeline's [message], when the page cut it short, gets 展开全文 ([expand]) inside the bubble.
  */
 @Composable
 fun UserBubble(text: String, receipt: String? = null, sending: Boolean = false, menus: MenuHostState? = null, sheets: ChatSheets? = null,
-               pictures: List<SentPicture> = emptyList(), load: suspend (SentPicture, Boolean) -> String? = { _, _ -> null }) {
+               pictures: List<SentPicture> = emptyList(), message: Message? = null, expand: (() -> Unit)? = null, busy: Boolean = false,
+               load: suspend (SentPicture, Boolean) -> String? = { _, _ -> null }) {
     val p = LocalTeleply.current
     val haptic = LocalHapticFeedback.current
     val holder = remember { Anchor() }
-    val message = remember(text) { Message("bubble", "user", text) }
+    val shown = remember(text, message) { message ?: Message("bubble", "user", text) }
     val words = if (pictures.isEmpty()) text else picturedWords(text) ?: text
     val openMenu: (Offset?) -> Unit = { at ->
         val coords = holder.coordinates
         if (coords != null && menus != null && sheets != null) {
             val point = at?.let { coords.localToRoot(it) } ?: coords.boundsInRoot().center
-            menus.show(MenuRequest(Rect(point, point), MenuPlacement.AtPoint, "消息菜单", width = 220.dp) { MessageMenu(text, sheets, message) })
+            menus.show(MenuRequest(Rect(point, point), MenuPlacement.AtPoint, "消息菜单", width = 220.dp) { MessageMenu(sheets, shown) })
         }
     }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
@@ -508,12 +513,29 @@ fun UserBubble(text: String, receipt: String? = null, sending: Boolean = false, 
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (words.isNotBlank()) Markdown(words, linkColor = if (p.dark) p.accent else Color.White, codeBackground = if (p.dark) p.codeFill else Color.White.copy(alpha = 0.18f))
                         if (pictures.isNotEmpty()) SentPictureGrid(pictures, load, if (menus != null) ({ openMenu(null) }) else null)
+                        // A long message the page cut short: 展开全文 inside the bubble (web .bub.user .message-actions).
+                        if (message != null && message.truncated && expand != null) BubbleButton(expandLabel(message), expand, enabled = !busy)
                     }
                 }
             }
         }
         if (receipt != null) Text(receipt, style = MaterialTheme.typography.bodySmall, color = if (receipt == "送达状态待确认") p.amber else p.muted, modifier = Modifier.padding(top = 4.dp, end = 4.dp).semantics { liveRegion = LiveRegionMode.Polite })
     }
+}
+
+/** A button inside the user's bubble (web .bub.user .message-actions button): 12sp words on a light capsule, 44dp tall. */
+@Composable
+private fun BubbleButton(label: String, onClick: () -> Unit, enabled: Boolean) {
+    val p = LocalTeleply.current
+    Box(
+        Modifier.heightIn(min = 44.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.35f }
+            .clip(CircleShape)
+            .background(p.onBubble.copy(alpha = 0.18f))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, style = MaterialTheme.typography.bodySmall, color = p.onBubble) }
 }
 
 /**
@@ -565,7 +587,7 @@ private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, m
         val coords = holder.coordinates
         if (coords != null && menus != null) {
             val point = at?.let { coords.localToRoot(it) } ?: coords.boundsInRoot().topCenter
-            menus.show(MenuRequest(Rect(point, point), MenuPlacement.AtPoint, "消息菜单", width = 220.dp) { MessageMenu(message.text, sheets, message) })
+            menus.show(MenuRequest(Rect(point, point), MenuPlacement.AtPoint, "消息菜单", width = 220.dp) { MessageMenu(sheets, message) })
         }
     }
     Column(
@@ -582,7 +604,7 @@ private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, m
             else Text("新对话正在准备中", style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.padding(top = 8.dp))
         }
         if(message.kind=="deliverables") PillButton("查看成果文件",{ vm.workspace.panel("files");vm.workspace.refresh("files",message.id) },style=PillStyle.Text,leading=TeleplyIcons.File)
-        if (message.truncated) PillButton("展开完整消息", { vm.expand(message) }, enabled = !s.busy, style = PillStyle.Text)
+        if (message.truncated) PillButton(expandLabel(message), { vm.expand(message) }, enabled = !s.busy, style = PillStyle.Text)
     }
 }
 
@@ -605,16 +627,15 @@ private fun ThreadLink(enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 复制 · 选择文字 · 分享 (web message menu, static/reading-ui.js). */
+/** 复制 · 选择文字 · 分享 (web message menu, static/reading-ui.js): a message the page cut short is read whole first. */
 @Composable
-private fun MenuScope.MessageMenu(text: String, sheets: ChatSheets, message: Message) {
+private fun MenuScope.MessageMenu(sheets: ChatSheets, message: Message) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     // Copied and shared as shown: without Codex's own notes (tidyAnswer, 10-27).
-    val shown = remember(text) { tidyAnswer(text) }
-    MenuRow("复制", { clipboard.setText(AnnotatedString(shown)) }, icon = TeleplyIcons.Copy)
-    MenuRow("选择文字", { sheets.select = message.copy(text = shown) }, icon = TeleplyIcons.Text)
-    MenuRow("分享", { shareText(context, shown) }, icon = TeleplyIcons.Share)
+    MenuRow("复制", { sheets.whole(message) { clipboard.setText(AnnotatedString(tidyAnswer(it.text))) } }, icon = TeleplyIcons.Copy)
+    MenuRow("选择文字", { sheets.whole(message) { sheets.select = it.copy(text = tidyAnswer(it.text)) } }, icon = TeleplyIcons.Text)
+    MenuRow("分享", { sheets.whole(message) { shareText(context, tidyAnswer(it.text)) } }, icon = TeleplyIcons.Share)
 }
 
 private fun shareText(context: Context, text: String) {

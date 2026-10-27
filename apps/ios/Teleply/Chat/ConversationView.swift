@@ -15,6 +15,8 @@ struct ConversationView: View {
     @State private var runtimeShown = false
     @State private var searchShown = false
     @State private var selecting: Message?
+    /// A long message's whole words, read from the computer for 分享.
+    @State private var sharing: String?
     /// The first message before 加载更早消息, kept in view when the older ones arrive above it.
     @State private var keepTop: String?
     @State private var saveTick = 0
@@ -28,9 +30,10 @@ struct ConversationView: View {
     var body: some View {
         let control = model.conversation.control
         let roles = timelineRoles(model.messages, app: model.app, raw: control.raw, running: control.running, asking: control.questions)
-        let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, diff: { model.workspace.diff($0) },
-                                     files: { model.workspace.filesOf(message: $0) }, thread: { model.openCreated($0) },
-                                     picture: { await model.workspace.sentPicture($0, whole: $1) }, busy: model.busy)
+        let actions = MessageActions(select: { message in model.whole(message) { selecting = $0 } }, expand: { model.expand($0) },
+                                     diff: { model.workspace.diff($0) }, files: { model.workspace.filesOf(message: $0) },
+                                     thread: { model.openCreated($0) }, picture: { await model.workspace.sentPicture($0, whole: $1) },
+                                     whole: { model.whole($0, $1) }, share: { sharing = $0 }, busy: model.busy)
         // Pictures sent with messages, as the computer kept them (state `images`; web message-projection.js).
         let pictures = sentPictures(messages: model.messages, records: control.raw["images"].array)
         let submissions = model.conversation.submissions
@@ -126,6 +129,12 @@ struct ConversationView: View {
         .onChange(of: model.screen) { if model.screen != .reading { saveAnchor() } }
         .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
+        .sheet(isPresented: Binding(get: { sharing != nil }, set: { if !$0 { sharing = nil } })) {
+            if let sharing {
+                ShareSheet(items: [sharing]) { _ in }
+                    .presentationDetents([.medium, .large])
+            }
+        }
         // A file an answer links to opens its page, to look at or save (web: the link downloads it).
         .environment(\.openURL, OpenURLAction { url in
             guard let path = MarkdownReader.fileLinkPath(url) else { return .systemAction }

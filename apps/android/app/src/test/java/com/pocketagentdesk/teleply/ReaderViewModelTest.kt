@@ -59,6 +59,20 @@ class ReaderViewModelTest {
         val vm=ready();vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.older();advanceUntilIdle()
         assertEquals(listOf("m1","m2","m3"),vm.state.value.messages.map { it.id });assertEquals("updated",vm.state.value.messages[1].text)
     }
+    @Test fun longMessageCopiesWholeAndStaysWholeOnceOpened()=runTest(dispatcher) {
+        // The computer cuts a message over 6000 characters (the user's prompt of 7545, 10-27).
+        val api=object:TestApi() {
+            override suspend fun history(device:String,chat:String,before:String?,around:String?,count:Int)=Page(listOf(Message("long","user","前半",truncated=true,length=4)))
+            override suspend fun message(device:String,chat:String,message:String)=Message(message,"user","前半后半",length=4)
+        }
+        val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle()
+        val cut=vm.state.value.messages.single();assertTrue(cut.truncated)
+        var copied:String?=null;vm.whole(cut) { copied=it.text };advanceUntilIdle()
+        assertEquals("前半后半",copied);assertTrue(vm.state.value.messages.single().truncated)
+        vm.expand(cut);advanceUntilIdle();assertEquals("前半后半",vm.state.value.messages.single().text)
+        vm.latest();advanceUntilIdle()
+        val again=vm.state.value.messages.single();assertEquals("前半后半",again.text);assertFalse(again.truncated)
+    }
     @Test fun expiredLoginPreservesReadingAndSameOwnerRestores()=runTest(dispatcher) {
         val api=TestApi();val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.saveAnchor("m2",42);advanceUntilIdle()
         api.expired=true;vm.older();advanceUntilIdle()

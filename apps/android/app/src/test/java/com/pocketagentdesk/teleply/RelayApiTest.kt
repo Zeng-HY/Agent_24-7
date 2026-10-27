@@ -98,11 +98,12 @@ class RelayApiTest {
         assertTrue(page.hasMore);assertEquals("p2",page.cursor)
     }
     @Test fun historyRetainsIdentityAndOpaqueCursor()=runTest {
-        response("""{"id":"x/y","app":"codex","messages":[{"id":"m1","role":"assistant","text":"原文\n","truncated":true}],"next_cursor":"m1","has_more":true,"has_newer":true}""")
+        response("""{"id":"x/y","app":"codex","messages":[{"id":"m1","role":"assistant","text":"原文\n","truncated":true,"length":7545}],"next_cursor":"m1","has_more":true,"has_newer":true}""")
         val page=api.history(device,"x/y",before="opaque + / ?")
         val request=server.takeRequest()
         assertEquals("x/y",request.requestUrl!!.queryParameter("id"));assertEquals("opaque + / ?",request.requestUrl!!.queryParameter("before"))
         assertEquals("原文\n",page.items.single().text);assertTrue(page.items.single().truncated);assertTrue(page.hasNewer)
+        assertEquals(7545,page.items.single().length);assertEquals("展开全文（7545 字）",expandLabel(page.items.single()))
     }
     @Test fun selectRejectsMismatchedDevicePath()=runTest {
         response("""{"url":"/d/${"b".repeat(32)}/"}""")

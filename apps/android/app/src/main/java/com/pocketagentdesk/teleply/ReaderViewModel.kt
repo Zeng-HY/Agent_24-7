@@ -171,7 +171,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         composer.bind(key,api,foreground && !newPage,s.fixture) { frame ->
             mutable.update { current ->
                 if(current.screen==Screen.Reading && current.app==key?.app && current.scope==key.scope && current.device?.id==key.device && current.chat?.id==key.chat)
-                    current.copy(messages=mergeLive(current.messages,frame.messages)) else current
+                    current.copy(messages=kept(current,mergeLive(current.messages,frame.messages))) else current
             }
         }
     }
@@ -179,6 +179,12 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     private var generation = 0
     private var pendingRestore: Preferences? = null
     private val fixturePositions=mutableMapOf<ChatKey,ReadingPosition>()
+    /** Messages that 展开全文 made whole, by id, in the conversation [wholeIn]: a later read keeps them whole. */
+    private var wholeMessages=emptyMap<String,Message>()
+    private var wholeIn:ChatKey?=null
+    private fun openKey(s:ReaderState)=if(s.device!=null && s.chat!=null) ChatKey(s.scope,s.device.id,s.chat.id,s.app) else null
+    /** What the computer sent for the open conversation, with what 展开全文 made whole kept whole (web reading-ui.js merge). */
+    private fun kept(s:ReaderState,messages:List<Message>)=if(wholeIn!=null && openKey(s)==wholeIn) keepWhole(messages,wholeMessages) else messages
     private suspend fun persistSelection(scope:String,device:String,chat:String,title:String) {
         if(!state.value.fixture) store.selection(scope,device,chat,title)
     }
@@ -669,20 +675,35 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         val pos = if(!restorePosition) null else if(s.fixture) fixturePositions[ChatKey(s.scope,device.id,chat.id,s.app)] else store.positionFor(ChatKey(s.scope,device.id,chat.id,s.app))
         val page = requireNotNull(api).history(device.id,chat.id,around=pos?.message)
         currentCoroutineContext().ensureActive()
-        commit(g) { it.copy(messages=page.items,cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=pos,scrollRevision=it.scrollRevision+1,runtime=page.meta,chat=it.chat?.let { c -> pageTitle(page.meta)?.let { t -> c.copy(title=t) } ?: c }) }
+        commit(g) { it.copy(messages=kept(it,page.items),cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=pos,scrollRevision=it.scrollRevision+1,runtime=page.meta,chat=it.chat?.let { c -> pageTitle(page.meta)?.let { t -> c.copy(title=t) } ?: c }) }
         persistSelection(s.scope,device.id,chat.id,state.value.chat?.title ?: chat.title)
     }
     fun older() = operation { g ->
         val s = state.value; val cursor = s.cursor ?: return@operation
         val page = requireNotNull(api).history(requireNotNull(s.device).id,requireNotNull(s.chat).id,before=cursor)
         if(page.reset) { commit(g) { it.copy(error="历史位置已变化，请回到最新消息后重试。") }; return@operation }
-        commit(g) { it.copy(messages=mergeMessages(it.messages,page.items,true),cursor=page.cursor,older=page.hasMore) }
+        commit(g) { it.copy(messages=kept(it,mergeMessages(it.messages,page.items,true)),cursor=page.cursor,older=page.hasMore) }
     }
     fun latest() = operation { g -> state.value.chat?.let { readChat(g,it,false) } }
+    /** 展开全文: the whole of a message the page cut short, kept whole when the page is read again. */
     fun expand(message: Message) = operation { g ->
         val s=state.value
         val full=requireNotNull(api).message(requireNotNull(s.device).id,requireNotNull(s.chat).id,message.id)
-        commit(g) { it.copy(messages=mergeMessages(it.messages,listOf(full),false)) }
+        if(g!=generation) return@operation
+        val key=openKey(s);wholeMessages=(if(key==wholeIn) wholeMessages else emptyMap())+(full.id to full);wholeIn=key
+        commit(g) { it.copy(messages=kept(it,it.messages)) }
+    }
+    /**
+     * 复制 · 选择文字 · 分享 of a message: its whole words, read from the computer first when the page cut it short
+     * (web reading-ui.js fullText); [use] runs only when nothing newer was asked meanwhile.
+     */
+    fun whole(message: Message, use: (Message) -> Unit) {
+        if (!message.truncated) return use(message)
+        operation { g ->
+            val s=state.value
+            val full=requireNotNull(api).message(requireNotNull(s.device).id,requireNotNull(s.chat).id,message.id)
+            if(g==generation) use(full)
+        }
     }
     fun searchHistory(query: String, more: Boolean = false) = operation { g ->
         val s=state.value; require(query.isNotBlank()) { "请输入要查找的内容。" }
@@ -693,7 +714,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     fun jump(message: Message) = operation { g ->
         val s=state.value
         val page=requireNotNull(api).history(requireNotNull(s.device).id,requireNotNull(s.chat).id,around=message.id)
-        commit(g) { it.copy(messages=page.items,cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=ReadingPosition(s.scope,s.device.id,app=s.app,chat=s.chat.id,message=message.id,offset=0),scrollRevision=it.scrollRevision+1,hits=emptyList(),searched=false,runtime=page.meta) }
+        commit(g) { it.copy(messages=kept(it,page.items),cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=ReadingPosition(s.scope,s.device.id,app=s.app,chat=s.chat.id,message=message.id,offset=0),scrollRevision=it.scrollRevision+1,hits=emptyList(),searched=false,runtime=page.meta) }
     }
     fun saveAnchor(message: String, offset: Int, expectedScope: String = state.value.scope, expectedDevice: String? = state.value.device?.id, expectedChat: String? = state.value.chat?.id,expectedApp:String=state.value.app) {
         val s=state.value

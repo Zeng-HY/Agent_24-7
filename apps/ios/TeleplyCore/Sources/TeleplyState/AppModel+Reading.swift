@@ -56,6 +56,7 @@ extension AppModel {
         if let handoff, handoff.id != chat.id || handoff.app != app { self.handoff = nil }
         if !same {
             messages = []
+            wholeMessages = [:]
             cursor = nil
             olderAvailable = false
             newerAvailable = false
@@ -69,7 +70,7 @@ extension AppModel {
         let position = restorePosition ? await savedPosition(key) : nil
         let page = try await client.history(device: device.id, app: app, chat: chat.id, around: position?.message)
         guard current(g) else { return }
-        messages = page.items
+        messages = keepWhole(page.items, wholeMessages)
         cursor = page.cursor
         olderAvailable = page.hasMore
         newerAvailable = page.hasNewer
@@ -101,7 +102,7 @@ extension AppModel {
                 self.error = "历史位置已变化，请回到最新消息后重试。"
                 return
             }
-            self.messages = mergeMessages(self.messages, page.items, prepend: true)
+            self.messages = keepWhole(mergeMessages(self.messages, page.items, prepend: true), self.wholeMessages)
             self.cursor = page.cursor
             self.olderAvailable = page.hasMore
         }
@@ -115,13 +116,26 @@ extension AppModel {
         }
     }
 
-    /// 展开完整消息: the whole of a message the page cut short.
+    /// 展开全文: the whole of a message the page cut short, kept whole when the page is read again.
     public func expand(_ message: Message) {
         operation { [weak self] g in
             guard let self, let device = self.device, let chat = self.chat else { return }
             let full = try await self.client.message(device: device.id, app: self.app, chat: chat.id, message: message.id)
             guard self.current(g) else { return }
-            self.messages = mergeMessages(self.messages, [full], prepend: false)
+            self.wholeMessages[full.id] = full
+            self.messages = keepWhole(self.messages, self.wholeMessages)
+        }
+    }
+
+    /// 复制 · 选择文字 · 分享 of a message: its whole words, read from the computer first when the page cut it short
+    /// (web reading-ui.js fullText). [use] runs only when nothing newer was asked meanwhile.
+    public func whole(_ message: Message, _ use: @escaping (Message) -> Void) {
+        guard message.truncated else { return use(message) }
+        operation { [weak self] g in
+            guard let self, let device = self.device, let chat = self.chat else { return }
+            let full = try await self.client.message(device: device.id, app: self.app, chat: chat.id, message: message.id)
+            guard self.current(g) else { return }
+            use(full)
         }
     }
 
@@ -154,7 +168,7 @@ extension AppModel {
             guard let self, let device = self.device, let chat = self.chat else { return }
             let page = try await self.client.history(device: device.id, app: self.app, chat: chat.id, around: message.id)
             guard self.current(g) else { return }
-            self.messages = page.items
+            self.messages = keepWhole(page.items, self.wholeMessages)
             self.cursor = page.cursor
             self.olderAvailable = page.hasMore
             self.newerAvailable = page.hasNewer
@@ -183,6 +197,6 @@ extension AppModel {
     /// A live frame for the conversation on screen merges in; a frame for another one is dropped.
     func apply(_ frame: LiveFrame, for key: ChatKey) {
         guard screen == .reading, app == key.app, scope == key.scope, device?.id == key.device, chat?.id == key.chat else { return }
-        messages = mergeLive(messages, frame.messages)
+        messages = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
     }
 }
