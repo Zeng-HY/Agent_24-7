@@ -232,6 +232,28 @@ class WorkspaceControllerTest {
         assertTrue(stranger.exists())
         assertTrue(JSONObject(c.state.value.saved).rows("uploads") { it }.isEmpty())
     }
+    /**
+     * A picture sent with a message (10-27, as on the iPhone): its small copy and the whole one are fetched from the
+     * computer once and kept by its id; one gone from the computer leaves no file, and only the whole one says why.
+     */
+    @Test fun aSentPictureIsFetchedOnceAndKeptByItsId()=runTest {
+        val caches=java.nio.file.Files.createTempDirectory("tc").toFile()
+        val api=FixtureApi();val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        val picture=SentPicture("fixture-picture-1","截图.png")
+        val small=c.sentPicture(caches,picture,false)!!;val whole=c.sentPicture(caches,picture,true)!!
+        assertEquals(java.io.File(caches,"$SentPictureFolder/fixture-picture-1/small.png").path,small)
+        assertEquals(java.io.File(caches,"$SentPictureFolder/fixture-picture-1/whole.png").path,whole)
+        assertTrue(java.io.File(whole).length()>0);assertEquals(2,api.world.pictureReads)
+        assertEquals(small,c.sentPicture(caches,picture,false));assertEquals(whole,c.sentPicture(caches,picture,true))
+        assertEquals(2,api.world.pictureReads);assertNull(c.state.value.error)
+        val gone=object:ReadApi by FixtureApi() {
+            override suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) { output.write(1);throw ServiceFailure(404) }
+        }
+        c.bind(key.copy(chat="other"),gone,false);runCurrent()
+        assertNull(c.sentPicture(caches,SentPicture("gone","x.png"),false));assertNull(c.state.value.error)
+        assertNull(c.sentPicture(caches,SentPicture("gone","x.png"),true));assertEquals("电脑上已经没有这张图片了",c.state.value.error)
+        assertTrue(java.io.File(caches,"$SentPictureFolder/gone").listFiles().orEmpty().isEmpty())
+    }
     /** 0.8 (web savedCatalog): the menu shows the kept list at once and asks without fresh; 刷新 asks with it. */
     @Test fun claudeListShowsKeptCopyAndReadsTheDesktopOnlyOnRefresh()=runTest {
         val store=WorkspaceStore();val api=WorkspaceApi();val claude=key.copy(app="claude")

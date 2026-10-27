@@ -94,6 +94,71 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("计划与执行选项").assertDoesNotExist()
         compose.onNodeWithText("简洁要点 每条改动一行").assertDoesNotExist()
     }
+    /** Windows dev.24's question card (10-27, as on the iPhone 0.5.2): a tick marked once, 提交 only once one is ticked, Other's hint. */
+    @Test fun claudeQuestionReadsAsWindowsDev24LaysItOut() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        fun prompt()=org.json.JSONObject(vm.composer.state.value.control.raw).optJSONObject("prompt")
+        compose.waitUntil(10000) { prompt()!=null }
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.onNodeWithText("要自己写答案的话，请在电脑上点「Other」填写。").performScrollTo().assertExists()
+        // 跳过 goes on to the second question, which takes several; its first is ticked, "✓ " written before it.
+        compose.onNodeWithText("跳过").performScrollTo().performClick()
+        compose.waitUntil(10000) { prompt()?.string("progress")=="2 / 2" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { org.junit.Assert.assertEquals("✓ 升级步骤",prompt()!!.getJSONArray("choices").getJSONObject(0).string("label")) }
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.onNodeWithContentDescription("选择升级步骤").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("✓ 升级步骤").assertDoesNotExist()
+        compose.onNodeWithText("提交").assertIsEnabled()
+        compose.onNodeWithText("上一题").assertIsEnabled()
+        // Unticked, there is nothing to hand in: the computer gives 提交 no token.
+        compose.onNodeWithContentDescription("选择升级步骤").performClick()
+        compose.waitUntil(10000) { prompt()?.getJSONArray("choices")?.getJSONObject(0)?.optBoolean("pressed")==false && !vm.workspace.state.value.busy }
+        compose.onNodeWithContentDescription("选择升级步骤").assertIsNotSelected()
+        compose.onNodeWithText("提交").assertIsNotEnabled()
+        compose.onNodeWithText("要自己写答案的话，请在电脑上点「Other」填写。").assertExists()
+    }
+    /** 10-27 (as on the iPhone 0.5.2): Codex's line naming a conversation it made is a button that opens it; one still being made says so. */
+    @Test fun aConversationCodexMadeOpensFromItsButton() {
+        launch();fixtureList();openChat("原生阅读示例","demo")
+        compose.onNodeWithTag("messages").performScrollToKey("msg:m2b")
+        compose.onNodeWithText("发布清单另开了一个对话来整理",substring=true).assertExists()
+        compose.onNodeWithText("新对话正在准备中").assertExists()
+        compose.onAllNodesWithText("::created-thread{threadId=\"${FixtureWorld.MADE_THREAD}\"}",substring=true).assertCountEquals(0)
+        compose.onAllNodesWithText("clientThreadId",substring=true).assertCountEquals(0)
+        compose.onNodeWithText("打开新建对话").performScrollTo().performClick()
+        compose.waitUntil(10000) { vm.state.value.chat?.id==FixtureWorld.MADE_THREAD && !vm.state.value.busy }
+        compose.onNodeWithText("整理发布清单").assertExists()
+        compose.onNodeWithText("好的，这个对话只整理发布清单。").assertExists()
+        compose.runOnIdle { org.junit.Assert.assertEquals("codex",vm.state.value.app);org.junit.Assert.assertNull(vm.state.value.error) }
+    }
+    /** 10-27 (as on the iPhone 0.5.3): pictures sent with a message show in it without the [图片] mark, two to a row, and open whole. */
+    @Test fun picturesSentWithAMessageShowInItAndOpenWhole() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        // Claude's send goes by its words and time.
+        compose.onNodeWithTag("messages").performScrollToKey("msg:c1")
+        compose.onNodeWithText("帮我把这次的发布说明整理一下。").assertExists()
+        compose.onAllNodesWithText("[图片]",substring=true).assertCountEquals(0)
+        compose.onNodeWithContentDescription("查看 发布说明截图.png").assertWidthIsEqualTo(110.dp).assertHeightIsEqualTo(100.dp)
+        compose.waitUntil(10000) { vm.fixtureWorld!!.pictureReads==1 }
+        compose.onNodeWithContentDescription("查看 发布说明截图.png").performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithContentDescription("图片").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { org.junit.Assert.assertEquals(2,vm.fixtureWorld!!.pictureReads) }
+        compose.onNodeWithContentDescription("关闭").performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithContentDescription("图片").fetchSemanticsNodes().isEmpty() }
+        // The menu still has the message whole, its mark too.
+        compose.onNodeWithText("帮我把这次的发布说明整理一下。").performTouchInput { longClick() }
+        compose.onNodeWithText("选择文字").performClick()
+        compose.onNodeWithText("[图片] 帮我把这次的发布说明整理一下。").assertExists()
+        compose.onNodeWithText("复制全部").performClick()
+        // Codex's send goes by the request id on its message: three pictures, two to a row.
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Chats && !vm.state.value.busy }
+        openChat("Codex 计划示例","plan-demo")
+        compose.onNodeWithTag("messages").performScrollToKey("msg:p1")
+        compose.onNodeWithText("先给我一个计划，确认后再改。").assertExists()
+        val tops=listOf("界面草图.png","现有页面.png","参考.png").map { compose.onNodeWithContentDescription("查看 $it").fetchSemanticsNode().boundsInRoot.top }
+        org.junit.Assert.assertEquals(tops[0],tops[1],0.5f);org.junit.Assert.assertTrue(tops[2]>tops[0])
+    }
     @Test fun claudeModelMenuShowsTheKeptListAndReadsTheDesktopOnlyOnRefresh() {
         launch();fixtureList();openChat("Claude 选项示例","claude-demo")
         val world=vm.fixtureWorld!!

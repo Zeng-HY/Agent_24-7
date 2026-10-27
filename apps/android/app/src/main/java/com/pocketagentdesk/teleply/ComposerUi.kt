@@ -782,10 +782,13 @@ private fun Tile(icon: androidx.compose.ui.graphics.vector.ImageVector, name: St
     }
 }
 
-/** A picked picture large (the iPhone opens Quick Look): its preview over the whole window; a tap or 返回 closes it. */
+/**
+ * A picture large (the iPhone opens Quick Look): a picked one's preview, or the whole of one sent with a message, over
+ * the whole window; a tap or 返回 closes it.
+ */
 @Composable
-private fun PhotoViewer(path: String, onClose: () -> Unit) {
-    val picture by produceState<ImageBitmap?>(null, path) { value = withContext(Dispatchers.IO) { runCatching { android.graphics.BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() } }
+fun PhotoViewer(path: String, onClose: () -> Unit) {
+    val picture by produceState<ImageBitmap?>(null, path) { value = withContext(Dispatchers.IO) { photoLarge(path)?.asImageBitmap() } }
     Dialog(onClose, DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black).clickable(onClickLabel = "关闭", role = Role.Button, onClick = onClose), contentAlignment = Alignment.Center) {
             picture?.let { Image(it, contentDescription = "图片", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }

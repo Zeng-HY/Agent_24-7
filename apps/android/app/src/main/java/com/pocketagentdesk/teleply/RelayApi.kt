@@ -35,6 +35,8 @@ interface ReadApi {
     suspend fun uploadStream(device:String,chat:String,name:String,size:Long,image:Boolean,draft:Boolean=false,open:()->java.io.InputStream):JSONObject = error("流式上传不可用")
     suspend fun download(device:String,chat:String,file:String):ByteArray = error("下载不可用")
     suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream) { output.write(download(device,chat,file)) }
+    /** A picture the computer kept of a send (GET /api/codex/image by its id; [small]: its copy of at most 320 px). */
+    suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) { error("下载不可用") }
     fun events(device: String, chat: String): kotlinx.coroutines.flow.Flow<LiveFrame> = kotlinx.coroutines.flow.emptyFlow()
     /** [fresh]: read the desktop now; otherwise the computer may answer from its read of the last 4 s (web state polls). */
     suspend fun control(device: String, chat: String, fresh: Boolean = true): Control = Control()
@@ -57,7 +59,8 @@ interface ReadApi {
     /** The web list (spec 4.1): [app] is "all" or one source; [sort] updated / created; [status] all / running / waiting / done. */
     suspend fun chatList(device: String, app: String, query: String, cursor: String?, sort: String = "updated", status: String = "all"): Page<Chat> =
         chats(device, query, cursor).let { page -> page.copy(items=page.items.map { if(it.app.isBlank()) it.copy(app=if(app=="all") "codex" else app) else it }) }
-    suspend fun history(device: String, chat: String, before: String? = null, around: String? = null): Page<Message>
+    /** [count]: the latest messages to read (web: 60 for the page, 5 to see a conversation is there before opening it). */
+    suspend fun history(device: String, chat: String, before: String? = null, around: String? = null, count: Int = 60): Page<Message>
     suspend fun message(device: String, chat: String, message: String): Message
     suspend fun search(device: String, chat: String, query: String, cursor: String?): Page<Message>
     fun close()
@@ -160,8 +163,12 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         }
         return request(devicePath(device,if(image) "/api/codex/upload" else "/api/files/upload"),mapOf("app" to app,(if(draft) "draft" else "id") to chat,"name" to name),stream=body)
     }
-    override suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream):Unit = suspendCancellableCoroutine { continuation ->
-        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build()
+    override suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream) =
+        streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build(),output)
+    override suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) =
+        streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/codex/image")).apply { if(small) addQueryParameter("thumb","1") }.addQueryParameter("id",id).build(),output)
+    /** A file from the computer into [output], at most 100 MB, whole or with an error. */
+    private suspend fun streamTo(url:HttpUrl,output:java.io.OutputStream):Unit = suspendCancellableCoroutine { continuation ->
         val builder=Request.Builder().url(url)
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> builder.header("Cookie","${c.name}=${c.value}") } }
         val call=client.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
@@ -214,7 +221,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
             Page(j.rows("items") { val c=parseChat(it); require(c.app in setOf("codex","claude","deepseek") && (app=="all" || c.app==app)) { "来源应用不匹配" }; c }, j.string("next_cursor").ifBlank { null }, j.optBoolean("has_more"))
         }
     }
-    override suspend fun history(device: String, chat: String, before: String?, around: String?) = request(devicePath(device,"/api/chat"), mapOf("app" to app, "id" to chat, "n" to "60", "before" to before, "around" to around)).let { j ->
+    override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int) = request(devicePath(device,"/api/chat"), mapOf("app" to app, "id" to chat, "n" to "$count", "before" to before, "around" to around)).let { j ->
         require(j.string("id") == chat && j.string("app") == app) { "对话身份不匹配" }
         // Title, folder, status and runtime (context ring, 会话状态) travel with the page, not with each message.
         val meta=JSONObject().apply { listOf("title","folder","cwd","status","runtime").forEach { k -> if(j.has(k) && !j.isNull(k)) put(k,j.get(k)) } }

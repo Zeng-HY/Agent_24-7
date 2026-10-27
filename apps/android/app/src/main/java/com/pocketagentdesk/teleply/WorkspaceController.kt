@@ -538,6 +538,28 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             catch(e:Exception) { if(valid(k)) update(k) { it.copy(error=e.message ?: "没读到电脑上的对话文件，请稍后再试") } }
         }
     }
+    /**
+     * A picture sent with a message (state `images`; web codex-ui.js renderImages and previewImage): its small copy for
+     * the bubble, or the whole one to look at, fetched from the computer once and kept in [caches] by the picture's id
+     * (iPhone sentPicture). Its path, or null when it cannot be had; for the whole one the page says why.
+     */
+    suspend fun sentPicture(caches:java.io.File,picture:SentPicture,whole:Boolean):String? {
+        val k=key ?: return null;val service=api ?: return null
+        val folder=java.io.File(java.io.File(caches,SentPictureFolder),picture.id)
+        val kept=java.io.File(folder,if(whole) "whole.png" else "small.png")
+        if(kept.isFile) return kept.path
+        return try {
+            withContext(Dispatchers.IO) {
+                folder.mkdirs()
+                // Written aside first: a fetch cut short never passes for the picture.
+                val part=java.io.File.createTempFile(kept.name,".part",folder)
+                try { part.outputStream().use { service.sentPicture(k.device,picture.id,!whole,it) };check(part.renameTo(kept) || kept.isFile) { "图片没能存到手机上" } }
+                finally { part.delete() }
+            }
+            kept.path
+        } catch(e:CancellationException) { throw e }
+        catch(e:Exception) { if(whole) update(k) { it.copy(error=if(e is ServiceFailure && e.status==404) "电脑上已经没有这张图片了" else e.message ?: "没取到这张图片，请稍后再试") };null }
+    }
     fun cancelSave() { saveJob?.cancel() }
     fun openSaved(context:Context,uri:String,name:String) {
         try { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),shareMime(name)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"打开已保存的文件")) }

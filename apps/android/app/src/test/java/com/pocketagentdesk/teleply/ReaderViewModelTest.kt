@@ -26,7 +26,7 @@ open class TestApi:ReadApi {
         if(expired) throw ServiceFailure(401)
         return Page(listOf(Chat("chat-$device",if(query.isEmpty()) device else query)),if(cursor==null) "more" else null,cursor==null)
     }
-    override suspend fun history(device:String,chat:String,before:String?,around:String?):Page<Message> {
+    override suspend fun history(device:String,chat:String,before:String?,around:String?,count:Int):Page<Message> {
         if(expired) throw ServiceFailure(401)
         return if(before==null) Page(listOf(Message("m2","assistant","same"),Message("m3","assistant","same")),"m2",true) else Page(listOf(Message("m1","user","older"),Message("m2","assistant","updated")),reset=reset)
     }
@@ -122,6 +122,27 @@ class ReaderViewModelTest {
         assertEquals(Preferences(),store.prefs) // the demo saves nothing
         vm.back();advanceUntilIdle()
         assertFalse(vm.state.value.fixture);assertEquals(DefaultOrigin,vm.state.value.origin);assertEquals(Screen.Devices,vm.state.value.screen)
+    }
+    /** 打开新建对话 (web): the conversation Codex made is read first, five messages, then opened; one not there leaves the page with why. */
+    @Test fun aConversationCodexMadeIsReadThenOpened()=runTest(dispatcher) {
+        val reads=mutableListOf<Pair<String,Int>>()
+        val api=object:TestApi() {
+            override suspend fun history(device:String,chat:String,before:String?,around:String?,count:Int):Page<Message> {
+                reads+=chat to count
+                if(chat=="gone") throw ServiceFailure(404)
+                return super.history(device,chat,before,around,count)
+            }
+        }
+        val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle()
+        val page=vm.state.value.chat;reads.clear()
+        vm.openCreated("gone");advanceUntilIdle()
+        assertEquals(page,vm.state.value.chat);assertEquals(Screen.Reading,vm.state.value.screen)
+        assertEquals("暂时无法打开这个对话：记录或电脑已不可用，请刷新列表。",vm.state.value.error)
+        reads.clear()
+        vm.openCreated("made");advanceUntilIdle()
+        assertEquals(listOf("made" to 5,"made" to 60),reads)
+        assertEquals("made",vm.state.value.chat?.id);assertEquals("codex",vm.state.value.app);assertNull(vm.state.value.error)
+        assertEquals(listOf("m2","m3"),vm.state.value.messages.map { it.id })
     }
     @Test fun failedRefreshDoesNotEraseReadMessages()=runTest(dispatcher) {
         val api=TestApi();val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle()

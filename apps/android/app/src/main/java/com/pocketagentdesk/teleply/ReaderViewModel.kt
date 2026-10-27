@@ -386,6 +386,23 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         jobs.jobs.value.find { it.accepted && it.createdId==chat.id && (it.pendingJson().string("app").ifBlank { it.app })==chat.app }?.let(jobs::drop)
         useSource(chat.app);readChat(g,chat,true)
     }
+    /**
+     * 打开新建对话 under a Codex reply that made a conversation (web remote.html renderAssistantText): it is read first,
+     * five messages, and only then opened, since it may not be in the list yet. Not there: this page stays and says why.
+     */
+    fun openCreated(id:String) = operation { g ->
+        pendingNotification=null
+        val device=state.value.device ?: return@operation
+        try { requireNotNull(api).forSource("codex").history(device.id,id,count=5) }
+        catch(e:CancellationException) { throw e }
+        catch(e:Exception) {
+            if(e is ServiceFailure && e.status==401) throw e
+            val why=if(e is ServiceFailure || e is IllegalArgumentException) e.message else null
+            throw IllegalArgumentException("暂时无法打开这个对话："+(why ?: "连不上电脑，请稍后再试。"))
+        }
+        currentCoroutineContext().ensureActive()
+        useSource("codex");readChat(g,Chat(id,"新建对话",app="codex"),true)
+    }
     /** The "all" list and the sidebar mix sources: opening a row of another source switches source, not the list. */
     private suspend fun useSource(app:String) {
         if(!pointSource(app)) return

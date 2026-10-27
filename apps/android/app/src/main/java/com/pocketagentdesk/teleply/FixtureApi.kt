@@ -75,6 +75,9 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
 
     override suspend fun download(device: String, chat: String, file: String) = net().let { if (file == "fixture-png") java.util.Base64.getDecoder().decode(FixtureWorld.PNG) else "固定测试内容".toByteArray() }
 
+    // A picture sent with a message is the fixed picture too, small or whole.
+    override suspend fun sentPicture(device: String, id: String, small: Boolean, output: java.io.OutputStream) { net(); world.pictureReads++; output.write(java.util.Base64.getDecoder().decode(FixtureWorld.PNG)) }
+
     override suspend fun uploadStream(device: String, chat: String, name: String, size: Long, image: Boolean, draft: Boolean, open: () -> java.io.InputStream) =
         net().let { JSONObject() }.put("id", java.util.UUID.randomUUID().toString()).put("kind", "file").put("app", if (image) source else "pc").put("name", name).put("path", "D:/fixture/$name").put("original_size", size).put("size", size)
 
@@ -121,11 +124,11 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         else -> true
     }
 
-    override suspend fun history(device: String, chat: String, before: String?, around: String?): Page<Message> {
+    override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int): Page<Message> {
         net()
         if (chat == "performance") return Page((1..200).map { i -> Message("perf-$i", if (i % 4 == 0) "user" else "assistant", "## 固定消息 $i\n" + "这是用于滚动、锚点和字号检查的脱敏测试内容。".repeat(16) + "\n```kotlin\nval fixture = $i\n```", order = i.toDouble()) }, meta = world.meta(source, chat))
         if (before != null) return Page(listOf(Message("m0", "user", "更早的测试消息。")), meta = world.meta(source, chat))
-        if (world.isCreated(chat)) return Page(world.messages(source, chat), meta = world.meta(source, chat))
+        if (world.isCreated(chat) || chat == FixtureWorld.MADE_THREAD) return Page(world.messages(source, chat), meta = world.meta(source, chat))
         return Page(world.messages(source, chat), "m1", source == "codex", meta = world.meta(source, chat))
     }
 
@@ -156,6 +159,8 @@ class FixtureWorld {
     val stateReads = mutableListOf<Triple<String, String, Boolean>>()
     /** Times the demo computer "opened Claude's menus" to read the model list: a fresh read, or none kept yet. */
     var desktopMenuReads = 0
+    /** Pictures sent with messages the demo computer was asked for, small or whole: the phone keeps them after once. */
+    var pictureReads = 0
     private var claudeModel = "Opus 4.7"
     private var claudeEffort = "高"
     private var claudeMode = "default"
@@ -175,6 +180,8 @@ class FixtureWorld {
     private val queues = mutableMapOf<String, MutableMap<String, Queued>>()
     private var codexAnswered = false
     private var claudeStep = 0
+    /** What is ticked in Claude's second question, which takes several: its first option to begin with. */
+    private val claudePicked = mutableSetOf("t-choice-3")
     private var deepseekDecided = false
     private var running = mutableMapOf<String, Boolean>()
     private var turns = mutableMapOf<String, String>()
@@ -316,8 +323,8 @@ class FixtureWorld {
         if (chat == AWAY_CODEX) return if (chat in away) Control(false, false, "", false, emptyList(), emptyMap(), false, CODEX_AWAY)
             else Control(true, run, if (run) turn else "", true, queued, turnMap, false, JSONObject(CODEX_STATE).put("questions", JSONArray()).toString())
         if (chat == AWAY_CLAUDE) return awayClaude(chat !in away, run, turn, queued, turnMap)
-        // A conversation the demo just created has nothing waiting in it.
-        if (created.any { it.first.id == chat }) return when (app) {
+        // A conversation the demo just created, or Codex made from a reply, has nothing waiting in it.
+        if (created.any { it.first.id == chat } || chat == MADE_THREAD) return when (app) {
             "claude" -> Control(true, false, "", true, emptyList(), emptyMap(), false, JSONObject(CLAUDE_STATE).apply { remove("prompt") }.toString())
             "deepseek" -> Control(true, false, "", true, emptyList(), emptyMap(), false, JSONObject(DEEPSEEK_STATE).put("interactions", JSONArray()).toString())
             else -> Control(true, false, "", true, emptyList(), emptyMap(), false, JSONObject(CODEX_STATE).put("questions", JSONArray()).toString())
@@ -338,7 +345,7 @@ class FixtureWorld {
                 }
                 when (claudeStep) {
                     0 -> Unit
-                    1 -> raw.put("prompt", JSONObject(CLAUDE_SECOND))
+                    1 -> raw.put("prompt", claudeSecond())
                     else -> raw.remove("prompt")
                 }
                 // As computers before Windows dev.23 sent them: the question's buttons again, by their raw names. The app
@@ -355,6 +362,7 @@ class FixtureWorld {
                 val raw = JSONObject(CODEX_STATE)
                 if (chat == "plan-demo") {
                     raw.put("questions", JSONArray()).put("plan", JSONObject().put("id", "plan-item-1").put("turn_id", "plan-turn").put("text", PLAN).put("ready", !planDone && running["codex"] != true))
+                        .put("images", JSONArray(PLAN_PICTURES))
                     return Control(true, run, if (run) turn else "", true, queued, turnMap, false, raw.toString())
                 }
                 if (codexAnswered) raw.getJSONArray("questions").getJSONObject(0).put("status", "answered").put("editable", true)
@@ -414,13 +422,28 @@ class FixtureWorld {
         return JSONObject().put("ok", true).put("text", "本地示例：没有真的打开电脑上的窗口")
     }
 
+    /**
+     * A tap "on the computer". The first question takes one answer, so a pick goes on to the second; the second takes
+     * several: a pick ticks or unticks it, and 提交 or 跳过 ends the questions, 上一题 goes back.
+     */
     fun claudeChoose(token: String): JSONObject {
         when {
             token == "t-stop" -> running["claude"] = false
             token.startsWith("t-steer-") -> queues["claude"]?.remove(token.removePrefix("t-steer-"))
+            claudeStep == 1 && token.startsWith("t-choice-") -> if (!claudePicked.remove(token)) claudePicked += token
+            token == "t-nav-back" -> claudeStep = 0
             token.startsWith("t-choice-") || token.startsWith("t-nav-") -> claudeStep = (claudeStep + 1).coerceAtMost(2)
         }
         return JSONObject().put("ok", true).put("text", "本地示例：已在电脑上点选")
+    }
+
+    /** The second question with what is ticked: "✓ " before a ticked option's words, and 提交 only once one is. */
+    private fun claudeSecond() = JSONObject(CLAUDE_SECOND).apply {
+        rows("choices") { it }.forEach { choice ->
+            val on = choice.string("token") in claudePicked
+            choice.put("pressed", on).put("label", (if (on) "✓ " else "") + choice.string("name"))
+        }
+        rows("nav") { it }.find { it.string("name") == "Submit" }?.put("token", if (claudePicked.isEmpty()) JSONObject.NULL else "t-nav-submit")
     }
 
     fun claudeNext(label: String): JSONObject {
@@ -497,7 +520,7 @@ class FixtureWorld {
     }
 
     fun isCreated(chat: String) = created.any { it.first.id == chat }
-    fun meta(app: String, chat: String): String = JSONObject().put("title", firstPage().find { it.id == chat }?.title ?: "固定对话").put("folder", if (app == "deepseek") "固定测试项目" else "测试项目").put("runtime", JSONObject(
+    fun meta(app: String, chat: String): String = JSONObject().put("title", firstPage().find { it.id == chat }?.title ?: if (chat == MADE_THREAD) "整理发布清单" else "固定对话").put("folder", if (app == "deepseek") "固定测试项目" else "测试项目").put("runtime", JSONObject(
         when (app) {
             "deepseek" -> """{"model":"deepseek-v4","effort":"high","model_time":${NOW / 1000 - 300},"used_tokens":212000,"context_window":256000,"percent":83,"context_state":"available","usage_time":${NOW / 1000 - 120},"source":"session"}"""
             "claude" -> """{"model":"opus","effort":"high","model_time":${NOW / 1000 - 900},"used_tokens":61000,"context_window":200000,"percent":31,"context_state":"available","usage_time":${NOW / 1000 - 600},"source":"desktop"}"""
@@ -509,6 +532,7 @@ class FixtureWorld {
         created.any { it.first.id == chat } -> created.first { it.first.id == chat }.second.let { text ->
             listOf(Message("$chat-1", "user", text.ifBlank { "请查看这些图片或引用。" }), Message("$chat-2", "assistant", "本地示例：收到，这是固定的回复。"))
         }
+        chat == MADE_THREAD -> listOf(Message("made-1", "user", "把发布清单单独放到这个对话里整理。"), Message("made-2", "assistant", "好的，这个对话只整理发布清单。"))
         chat == AWAY_CODEX -> listOf(Message("w1", "user", "把上周的会议记录整理成要点。"), Message("w2", "assistant", AWAY_ANSWER))
         chat == AWAY_CLAUDE -> listOf(Message("w3", "user", "检查一下发布脚本。"), Message("w4", "assistant", "检查完了，脚本没有问题。"))
         app == "claude" && chat == "claude-next" -> listOfNotNull(
@@ -523,7 +547,8 @@ class FixtureWorld {
             Message("n8", "task", TASK_TITLE, details = JSONObject().put("tool_id", "task-1").put("title", TASK_TITLE).put("brief", "把这次改动整理成发布清单：列出新增的测试、受影响的页面、需要人工确认的地方，并附上每一项的验证方法。改完发给我看。").put("offer", false).toString()),
         )
         app == "claude" -> listOf(
-            Message("c1", "user", "帮我把这次的发布说明整理一下。"),
+            // Sent with a picture from the phone: the computer's record of that send is in the state (`images`).
+            Message("c1", "user", "[图片] 帮我把这次的发布说明整理一下。", details = """{"time":"2026-10-24T11:50:00.000Z"}"""),
             Message("c2", "assistant", "我先看一下现有的文档和最近的提交。", phase = "commentary"),
             Message("c3", "tool", "读取 docs/release.md", details = """{"tool":"read","title":"读取 docs/release.md"}""", status = "completed"),
             Message("c4", "assistant", "有两种写法，请在下面选一种。", kind = "question"),
@@ -534,15 +559,17 @@ class FixtureWorld {
             Message("subagent:sa-1", "subagent", "子智能体：检查日志", details = """{"child":"sa-1","label":"检查日志","status":"running"}"""),
         )
         chat == "plan-demo" -> listOf(
-            Message("p1", "user", "先给我一个计划，确认后再改。"),
+            // Sent from the phone with three pictures: Codex keeps the send's request id on the message.
+            Message("p1", "user", "先给我一个计划，确认后再改。", request = "fixture-send-plan"),
             Message("p2", "assistant", "我先读一下相关代码。", phase = "commentary"),
             Message("plan-item-1", "assistant", PLAN),
         )
-        else -> listOf(
+        else -> listOfNotNull(
             Message("m1", "user", "请展示原生 Markdown 阅读。"),
             Message("m1b", "assistant", "先读取示例文件，再整理成阅读示例。", phase = "commentary"),
             Message("m1c", "tool", "修改 测试.txt", details = """{"tool":"edit","title":"修改 测试.txt","changes":[{"path":"测试.txt","ref":"fixture-diff"}]}""", status = "completed"),
             Message("m2", "assistant", EXAMPLE),
+            if (chat == "demo") Message("m2b", "assistant", MADE_ANSWER) else null,
             Message("m3", "assistant", "请选择后续方案。", kind = "question"),
         )
     }
@@ -600,6 +627,22 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
 01a0bef3-b1d0-79d3-b7e4-4251056b2729
 </rollout_ids>
 </oai-mem-citation>
+""".trimIndent()
+        /** A conversation Codex made from a reply (10-27): the reply names it on a line of its own. */
+        const val MADE_THREAD = "fixture-made-1"
+        /**
+         * A reply as Codex writes it after making conversations: one made, which opens from its button, and one still
+         * being made; a line inside code stays as written.
+         */
+        val MADE_ANSWER = """
+发布清单另开了一个对话来整理；升级步骤的对话还在准备。
+
+::created-thread{threadId="$MADE_THREAD"}
+::created-thread{clientThreadId="fixture-making-2"}
+
+```text
+::created-thread{threadId="shown-as-code"}
+```
 """.trimIndent()
         /** codex_control's answer for a conversation no Codex window has open. */
         private const val CODEX_AWAY = """{"available":false,"reason":"电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试","settings":null}"""
@@ -672,9 +715,22 @@ val message = "A deliberately long line to verify horizontal scrolling without m
 
         private const val CODEX_STATE = """{"available":true,"settings":{"model":"fixture-model","effort":"medium","mode":"default","service_tier":null},"catalog":{"models":[{"id":"fixture-model","name":"测试模型","efforts":["low","medium"],"default_effort":"medium"}]},"questions":[{"id":"fixture-question","answer_revision":"v1","status":"pending","kind":"native","turn_id":"fixture-question-turn","questions":[{"id":"q1","header":"方案","question":"选择固定测试方案","options":[{"label":"方案A","description":"固定选项"},{"label":"方案B","description":"另一选项"}]}]}]}"""
 
-        private const val CLAUDE_STATE = """{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"Manual","mode_options":[{"name":"default","label":"Manual"},{"name":"acceptEdits","label":"Accept edits"},{"name":"plan","label":"Plan"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"""
+        /** The computer's record of a send with pictures (state `images`, codex_control.message_images), a picture a name. */
+        private fun pictures(request: String, text: String, created: Long, vararg names: String) = JSONObject().put("request_id", request).put("text", text).put("created", created).put("status", "accepted")
+            .put("images", JSONArray(names.mapIndexed { i, name -> val id = "fixture-picture-$request-$i"; JSONObject().put("id", id).put("name", name).put("original_size", 462).put("width", 96).put("height", 40).put("url", "/api/codex/image?id=$id").put("thumbnail", "/api/codex/image?thumb=1&id=$id") }))
 
-        private const val CLAUDE_SECOND = """{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3","pressed":true},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"""
+        /** The Codex plan's first message went with three pictures; Codex keeps the send's request id on it. */
+        private val PLAN_PICTURES = JSONArray().put(pictures("fixture-send-plan", "先给我一个计划，确认后再改。", NOW / 1000 - 10_900, "界面草图.png", "现有页面.png", "参考.png")).toString()
+
+        private val CLAUDE_STATE = JSONObject("""{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"Manual","mode_options":[{"name":"default","label":"Manual"},{"name":"acceptEdits","label":"Accept edits"},{"name":"plan","label":"Plan"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1 / 2","choices":[{"name":"简洁要点","label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"name":"完整段落","label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2","pressed":false}],"nav":[{"name":"Skip","label":"跳过","token":"t-nav-skip"}],"other":{"name":"Other"}}}""")
+            // The first message went with a picture, 5 s before Claude wrote it down (11:50); Claude keeps no request id.
+            .put("images", JSONArray().put(pictures("fixture-send-claude", "帮我把这次的发布说明整理一下。", NOW / 1000 - 605, "发布说明截图.png"))).toString()
+
+        /**
+         * Claude's second question as Windows dev.24 lays it out (claude_hooks.py prompt): it takes several, so a ticked
+         * option says "✓ " before its words and 提交 has no token until one is ticked ([claudeSecond] fills those in).
+         */
+        private const val CLAUDE_SECOND = """{"title":"发布说明里还要附上什么？","progress":"2 / 2","choices":[{"name":"升级步骤","label":"升级步骤","description":"在末尾列出升级步骤","token":"t-choice-3","pressed":false},{"name":"已知问题","label":"已知问题","description":"列出还没修好的问题","token":"t-choice-4","pressed":false}],"nav":[{"name":"Show previous question","label":"上一题","token":"t-nav-back"},{"name":"Skip","label":"跳过","token":"t-nav-skip"},{"name":"Submit","label":"提交","token":null}],"other":{"name":"Other"}}"""
 
         private const val DEEPSEEK_STATE = """{"available":true,"settings":{"provider":"deepseek","model":"deepseek-v4","reasoningEffort":"high"},"permission":"workspace","permission_name":"工作区内修改","interactions":[{"event":"approval/request","eventId":"e-approval-1","request":{"toolName":"shell","reason":"rm -rf build/","displayReason":"删除 build 目录（构建缓存）"}}],"questions":[]}"""
     }

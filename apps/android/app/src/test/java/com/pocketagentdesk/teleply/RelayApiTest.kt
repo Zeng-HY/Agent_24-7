@@ -23,6 +23,14 @@ class RelayApiTest {
         server.enqueue(MockResponse().setBody("fixture"));assertEquals("fixture",String(ds.download(device,"chat","file")))
         val download=server.takeRequest();assertEquals("/d/$device/api/file",download.requestUrl!!.encodedPath);assertEquals("deepseek",download.requestUrl!!.queryParameter("app"))
         server.enqueue(MockResponse().setBody("streamed-file"));val out=java.io.ByteArrayOutputStream();ds.downloadTo(device,"chat","file",out);assertEquals("streamed-file",out.toString());assertEquals("file",server.takeRequest().requestUrl!!.queryParameter("file"))
+        // A picture sent with a message (web renderImages): its small copy, then the whole one, by its id.
+        for(small in listOf(true,false)) {
+            server.enqueue(MockResponse().setBody("png"));val picture=java.io.ByteArrayOutputStream();ds.sentPicture(device,"a".repeat(32),small,picture);assertEquals("png",picture.toString())
+            val url=server.takeRequest().requestUrl!!;assertEquals("/d/$device/api/codex/image",url.encodedPath);assertEquals("a".repeat(32),url.queryParameter("id"));assertEquals(if(small) "1" else null,url.queryParameter("thumb"))
+        }
+        server.enqueue(MockResponse().setResponseCode(404))
+        try { ds.sentPicture(device,"gone",false,java.io.ByteArrayOutputStream());fail() } catch(e:ServiceFailure) { assertEquals(404,e.status) }
+        server.takeRequest()
         assertThrows(IllegalArgumentException::class.java) { serviceOrigin("https://example.invalid/private") }
     }
     @Test fun sseUsesBoundPathAndParsesSnapshot()=runTest {

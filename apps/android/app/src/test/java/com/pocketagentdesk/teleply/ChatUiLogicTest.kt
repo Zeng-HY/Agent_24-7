@@ -28,6 +28,19 @@ class ChatUiLogicTest {
         assertTrue(pendingCards("claude",JSONObject()).isEmpty())
         assertTrue(pendingCards("claude",JSONObject("""{"prompt":null,"actions":[]}""")).isEmpty())
     }
+    /**
+     * Windows dev.24 writes "✓ " before a ticked option of a question that takes several, for apps that do not show
+     * `pressed`; shown chosen here, it goes. The PC's Other is a part of its own or null, never true (iPhone 0.5.2).
+     */
+    @Test fun aTickedClaudeOptionIsMarkedOnceAndOtherIsAPart() {
+        assertEquals("要点",claudeChoiceLabel(JSONObject("""{"label":"✓ 要点","pressed":true}""")))
+        assertEquals("✓ 完成",claudeChoiceLabel(JSONObject("""{"label":"✓ 完成","pressed":false}""")))
+        assertEquals("段落",claudeChoiceLabel(JSONObject("""{"label":"段落","pressed":null}""")))
+        assertTrue(claudeTakesOther(JSONObject("""{"other":{"name":"Other","token":"t"}}""")))
+        assertTrue(claudeTakesOther(JSONObject("""{"other":true}""")))
+        assertFalse(claudeTakesOther(JSONObject("""{"other":null}""")))
+        assertFalse(claudeTakesOther(JSONObject()))
+    }
     @Test fun chipsShowNextMessageSettingsForCodex() {
         val raw=JSONObject("""{"settings":{"model":"m1","effort":"medium","mode":"default"},"catalog":{"models":[{"id":"m1","name":"模型一"},{"id":"m2","name":"模型二"}]}}""")
         assertEquals(Triple("模型一 · 中","普通执行",false),chipLabels("codex",raw,JSONObject()))

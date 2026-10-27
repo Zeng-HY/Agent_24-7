@@ -237,6 +237,9 @@ object TeleplyShape {
     val Thumb = RoundedCornerShape(12.dp)
     val Code = RoundedCornerShape(12.dp)
     val Bubble = RoundedCornerShape(20.dp)
+    /** 打开新建对话 under a Codex reply (.thread-link) and a picture sent with a message (.sent-images img). */
+    val ThreadLink = RoundedCornerShape(16.dp)
+    val SentPicture = RoundedCornerShape(14.dp)
     val Tray = RoundedCornerShape(18.dp)
     val Pill = CircleShape
 }

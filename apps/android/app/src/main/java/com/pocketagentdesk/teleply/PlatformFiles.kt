@@ -68,6 +68,21 @@ fun photoThumbnail(path:String,px:Int):Bitmap? = runCatching {
     BitmapFactory.decodeFile(path,BitmapFactory.Options().apply { inSampleSize=sample })
 }.getOrNull()
 
+/**
+ * A picture to look at over the whole window: sampled down until its longer side is under 4096 px, so a large photo
+ * neither runs the phone out of memory nor goes past what the screen can draw. Null once it is gone.
+ */
+fun photoLarge(path:String):Bitmap? = runCatching {
+    val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+    BitmapFactory.decodeFile(path,bounds)
+    var sample=1
+    while(maxOf(bounds.outWidth,bounds.outHeight)/sample>=4096) sample*=2
+    BitmapFactory.decodeFile(path,BitmapFactory.Options().apply { inSampleSize=sample })
+}.getOrNull()
+
+/** The folder of pictures sent with messages, fetched from the computer: one folder per picture, by its id. */
+const val SentPictureFolder="teleply-sent-pictures"
+
 /** A picture's preview goes with its row, removed or sent: only a file of ours, in the previews' folder. */
 fun dropPhotoPreview(path:String) {
     if(path.isBlank()) return

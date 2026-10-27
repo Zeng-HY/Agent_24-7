@@ -28,9 +28,10 @@ fun parseChat(j: JSONObject): Chat = Chat(j.getString("id"), j.string("title").i
 /**
  * Fields a message keeps besides its text: a tool step's title and changes; Claude's checklist (plan: items), next-step
  * box (next: tool_id, recap, ask, actions, open) and proposed task (task: title, brief, offer); a DeepSeek subagent
- * (subagent: child, label, status); a message from another conversation (origin) and thinking text.
+ * (subagent: child, label, status); a message from another conversation (origin) and thinking text; when the record
+ * wrote it (time), which ties a Claude send's pictures to it (sentPictures).
  */
-private val MessageDetails = listOf("tool","title","changes","activity_turn","items","tool_id","recap","ask","actions","blocked","open","brief","offer","label","child","status","mode","origin","thinking","source_id")
+private val MessageDetails = listOf("tool","title","changes","activity_turn","items","tool_id","recap","ask","actions","blocked","open","brief","offer","label","child","status","mode","origin","thinking","source_id","time")
 fun parseMessage(j: JSONObject) = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"))
 fun mergeMessages(old: List<Message>, incoming: List<Message>, prepend: Boolean): List<Message> {
     // Server transcript order is authoritative. Never sort by arrival time or deduplicate by text.

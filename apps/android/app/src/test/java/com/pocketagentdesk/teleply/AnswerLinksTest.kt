@@ -50,6 +50,27 @@ MEMORY.md:694-696|note=[used Windows Word rendering fallback workflow]
         assertEquals("a <oai-mem-citation>b", tidyAnswer("a <oai-mem-citation>b"))
     }
 
+    /**
+     * Codex names a conversation it made on a line of its own (user 10-27: it showed raw on the phone); the web draws
+     * 打开新建对话 under the text instead. Inside code the line stays; a clientThreadId one is not made yet (iPhone 0.5.2).
+     */
+    @Test fun aConversationCodexMadeIsAButtonNotALine() {
+        val answer = "已新建对话。\n\n::created-thread{threadId=\"0000-made-1\"}"
+        assertEquals("已新建对话。\n", tidyAnswer(answer))
+        assertEquals(listOf(CreatedThread("0000-made-1", true)), createdThreads(answer))
+        assertEquals(listOf(CreatedThread("c-1", false)), createdThreads("  ::created-thread{clientThreadId=\"c-1\"}\r"))
+        val code = "```text\n::created-thread{threadId=\"x\"}\n```"
+        assertEquals(code, tidyAnswer(code));assertTrue(createdThreads(code).isEmpty())
+        assertTrue(createdThreads("见 ::created-thread{threadId=\"x\"}").isEmpty())
+        assertTrue(createdThreads("::created-thread{threadId=\"a b\"}").isEmpty())
+        assertEquals("# 计划", tidyAnswer("<proposed_plan>\n# 计划\n</proposed_plan>"))
+        // The demo's reply: one made, one being made, and one inside code that stays as written.
+        assertEquals(listOf(CreatedThread(FixtureWorld.MADE_THREAD, true), CreatedThread("fixture-making-2", false)), createdThreads(FixtureWorld.MADE_ANSWER))
+        assertEquals(1, Regex("created-thread").findAll(tidyAnswer(FixtureWorld.MADE_ANSWER)).count())
+        // Shown: a paragraph only, the line gone.
+        assertEquals(listOf("已新建对话。"), children(markdownDocument(tidyAnswer(answer, shown = true))).map { plain(it) })
+    }
+
     @Test fun filesOnTheComputerAreLinkedWithoutLineNumbersOrEscapes() {
         assertEquals("D:\\Personal\\语言桥\\确认单.docx", localPath("D:\\Personal\\语言桥\\确认单.docx"))
         assertEquals("D:/a/说明.md", localPath("D:/a/%E8%AF%B4%E6%98%8E.md:3"))

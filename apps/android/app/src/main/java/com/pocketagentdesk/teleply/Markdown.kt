@@ -50,16 +50,50 @@ private val MemoryCitation=Regex("""\s*<oai-mem-citation>[\s\S]*?</oai-mem-citat
 /** Codex's file citation: :codex-file-citation{path="…" purpose="output"}. */
 private val FileCitation=Regex(""":codex-file-citation\{[^}]*?path="([^"]+)"[^}]*\}""")
 
+/** A conversation a Codex reply says it made (web remote.html assistantMarkdown): a threadId one opens; a clientThreadId one is still being made. */
+data class CreatedThread(val id: String, val ready: Boolean)
+/** Codex naming a conversation it made, on a line of its own: ::created-thread{threadId="…"} or clientThreadId. */
+private val CreatedThreadLine=Regex("""^::created-thread\{(threadId|clientThreadId)="([a-zA-Z0-9-]+)"\}$""")
+/** A code fence's line (web: three or more ` or ~ at the start, after any spaces); what is inside one stays as written. */
+private val FenceLine=Regex("""^\s*(`{3,}|~{3,})""")
+
+/**
+ * The lines Codex writes for its desktop, outside code (web remote.html assistantMarkdown; iPhone MarkdownReader
+ * directives): a line of its own naming a conversation it made, and its plan's <proposed_plan> tags, leave the text.
+ * The conversations come back in order, for a button each under the text ([createdThreads]).
+ */
+private fun answerDirectives(source: String): Pair<String,List<CreatedThread>> {
+    if("::created-thread{" !in source && "proposed_plan>" !in source) return source to emptyList()
+    val lines=mutableListOf<String>();val threads=mutableListOf<CreatedThread>();var fence:Char?=null
+    for(line in source.split('\n')) {
+        val marker=FenceLine.find(line)?.groupValues?.get(1)?.first()
+        if(marker!=null) { if(fence==null) fence=marker else if(fence==marker) fence=null;lines+=line;continue }
+        if(fence==null) {
+            val bare=line.trim()
+            val made=CreatedThreadLine.matchEntire(bare)
+            if(made!=null) { threads+=CreatedThread(made.groupValues[2],made.groupValues[1]=="threadId");continue }
+            if(bare=="<proposed_plan>" || bare=="</proposed_plan>") continue
+        }
+        lines+=line
+    }
+    return lines.joinToString("\n") to threads
+}
+
+/** The conversations a reply says it made: 打开新建对话 under the text for each (user 10-27: the line showed raw on the phone). */
+fun createdThreads(source: String): List<CreatedThread> = answerDirectives(source).second
+
 /**
  * What Codex writes for itself goes before an answer is shown, copied or shared (user 10-27: a phone user asked what
  * the lines at the bottom were; as on the iPhone, MarkdownReader.tidy): its memory citations go whole, and a file
- * citation becomes a link to the file, which opens like any file link. [shown] is for the reader, whose parser takes a
+ * citation becomes a link to the file, which opens like any file link. A conversation it made goes from the text too,
+ * to a button under it ([createdThreads]), and so do its plan's tags. [shown] is for the reader, whose parser takes a
  * backslash before a punctuation mark for an escape: the path's backslashes are doubled to come through whole
  * (D:\a\.claude); copied text keeps them single.
  */
 fun tidyAnswer(source: String, shown: Boolean=false): String {
-    if("oai-mem-citation" !in source && ":codex-file-citation" !in source) return source
-    return source.replace(MemoryCitation,"").replace(FileCitation) { m ->
+    val text=answerDirectives(source).first
+    if("oai-mem-citation" !in text && ":codex-file-citation" !in text) return text
+    return text.replace(MemoryCitation,"").replace(FileCitation) { m ->
         val path=m.groupValues[1]
         val name=path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path }
         "[$name](<${if(shown) path.replace("\\","\\\\") else path}>)"

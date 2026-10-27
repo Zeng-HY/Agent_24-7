@@ -3,9 +3,11 @@ package com.pocketagentdesk.teleply
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -38,6 +40,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +54,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -63,9 +67,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -77,6 +84,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
@@ -91,9 +99,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -128,6 +138,8 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val raw = remember(chat.control.raw) { runCatching { JSONObject(chat.control.raw) }.getOrDefault(JSONObject()) }
     val saved = remember(workspace.saved) { runCatching { JSONObject(workspace.saved) }.getOrDefault(JSONObject()) }
     val cards = remember(raw, s.app) { pendingCards(s.app, raw) }
+    // Pictures sent with messages, as the computer kept them (state `images`; web message-projection.js decorate).
+    val pictures = remember(s.messages, raw) { sentPictures(s.messages, raw.rows("images") { it }) }
     // A new conversation's page before it exists, and its first message after, until the record shows it (0.8).
     val newPage = isNewPage(s.chat)
     val jobs by vm.jobs.jobs.collectAsStateWithLifecycle()
@@ -192,7 +204,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                 if (handoff != null) item(key = "handoff") { Reading { NewFirstMessage(handoff.text, "", false) {} } }
                 itemsIndexed(s.messages, key = { _, m -> "msg:${m.id}" }, contentType = { _, m -> m.role + m.kind + m.phase }) { index, message ->
                     Reading {
-                        TimelineItem(s, vm, message, index, lastUser, chat, cards.isNotEmpty(), folds, sheets, raw, workspace)
+                        TimelineItem(s, vm, message, index, lastUser, chat, cards.isNotEmpty(), folds, sheets, raw, workspace, pictures[message.id].orEmpty())
                     }
                 }
                 item(key = "interactions") {
@@ -360,8 +372,9 @@ fun runtimeOf(s: ReaderState, raw: JSONObject): JSONObject? {
 
 private fun isProcess(m: Message) = m.role == "tool" || m.role == "assistant" && m.phase in setOf("commentary", "thinking") && !m.kind.contains("question") && !m.kind.contains("approval")
 
+/** [pictures]: those sent with a user message, as the computer kept them. */
 @Composable
-private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, index: Int, lastUser: Int, chat: ComposerState, asking: Boolean, folds: MutableMap<String, Boolean>, sheets: ChatSheets, raw: JSONObject, ws: WorkspaceState) {
+private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, index: Int, lastUser: Int, chat: ComposerState, asking: Boolean, folds: MutableMap<String, Boolean>, sheets: ChatSheets, raw: JSONObject, ws: WorkspaceState, pictures: List<SentPicture>) {
     val p = LocalTeleply.current
     val messages = s.messages
     val previous = messages.getOrNull(index - 1)
@@ -369,9 +382,11 @@ private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, 
     when {
         message.role == "user" -> {
             val receipt = chat.submissions.firstOrNull { it.request.isNotBlank() && it.request == message.request }?.label
+            val context = LocalContext.current
+            val caches = remember(context) { context.cacheDir }
             Column(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalAlignment = Alignment.End) {
                 OriginLabel(message, Modifier.padding(end = 4.dp))
-                UserBubble(message.text, receipt = receipt, menus = LocalMenuHost.current, sheets = sheets)
+                UserBubble(message.text, receipt = receipt, menus = LocalMenuHost.current, sheets = sheets, pictures = pictures) { picture, whole -> vm.workspace.sentPicture(caches, picture, whole) }
             }
         }
         message.role == "plan" -> ChecklistCard(message)
@@ -456,13 +471,19 @@ private fun ProcessStep(message: Message, vm: ReaderViewModel) {
 /** Long-press position in root coordinates, for menus that open at the finger. */
 private class Anchor { var coordinates: LayoutCoordinates? = null }
 
-/** User message bubble (web .bub.user): accent in light mode, #1E1E1E with a #333 edge in dark; long press for the menu. */
+/**
+ * User message bubble (web .bub.user): accent in light mode, #1E1E1E with a #333 edge in dark; long press for the menu,
+ * which copies the message whole as written. [pictures] sent with it show under its words, without their [图片] mark
+ * (web codex-ui.js renderImages); [load] fetches one from the computer, small or whole, to a file on this phone.
+ */
 @Composable
-fun UserBubble(text: String, receipt: String? = null, sending: Boolean = false, menus: MenuHostState? = null, sheets: ChatSheets? = null) {
+fun UserBubble(text: String, receipt: String? = null, sending: Boolean = false, menus: MenuHostState? = null, sheets: ChatSheets? = null,
+               pictures: List<SentPicture> = emptyList(), load: suspend (SentPicture, Boolean) -> String? = { _, _ -> null }) {
     val p = LocalTeleply.current
     val haptic = LocalHapticFeedback.current
     val holder = remember { Anchor() }
     val message = remember(text) { Message("bubble", "user", text) }
+    val words = if (pictures.isEmpty()) text else picturedWords(text) ?: text
     val openMenu: (Offset?) -> Unit = { at ->
         val coords = holder.coordinates
         if (coords != null && menus != null && sheets != null) {
@@ -484,11 +505,53 @@ fun UserBubble(text: String, receipt: String? = null, sending: Boolean = false, 
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 CompositionLocalProvider(LocalContentColor provides p.onBubble) {
-                    Markdown(text, linkColor = if (p.dark) p.accent else Color.White, codeBackground = if (p.dark) p.codeFill else Color.White.copy(alpha = 0.18f))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (words.isNotBlank()) Markdown(words, linkColor = if (p.dark) p.accent else Color.White, codeBackground = if (p.dark) p.codeFill else Color.White.copy(alpha = 0.18f))
+                        if (pictures.isNotEmpty()) SentPictureGrid(pictures, load, if (menus != null) ({ openMenu(null) }) else null)
+                    }
                 }
             }
         }
         if (receipt != null) Text(receipt, style = MaterialTheme.typography.bodySmall, color = if (receipt == "送达状态待确认") p.amber else p.muted, modifier = Modifier.padding(top = 4.dp, end = 4.dp).semantics { liveRegion = LiveRegionMode.Polite })
+    }
+}
+
+/**
+ * Pictures sent with a message, from the computer's copies (web .sent-images): 110 × 100 with 14dp corners, two to a
+ * row. A tap fetches the whole picture and shows it over the window; a long press opens the message's menu (the
+ * press itself ticks, as combinedClickable does).
+ */
+@Composable
+private fun SentPictureGrid(pictures: List<SentPicture>, load: suspend (SentPicture, Boolean) -> String?, onLongPress: (() -> Unit)?) {
+    var looking by remember { mutableStateOf<String?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        pictures.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { picture -> SentPictureTile(picture, load, onLongPress) { looking = it } } }
+        }
+    }
+    looking?.let { PhotoViewer(it) { looking = null } }
+}
+
+@Composable
+private fun SentPictureTile(picture: SentPicture, load: suspend (SentPicture, Boolean) -> String?, onLongPress: (() -> Unit)?, open: (String) -> Unit) {
+    val p = LocalTeleply.current
+    val scope = rememberCoroutineScope()
+    var opening by remember(picture.id) { mutableStateOf(false) }
+    // Drawn from the computer's small copy, read off the main thread.
+    val small by produceState<ImageBitmap?>(null, picture.id) { value = load(picture, false)?.let { withContext(Dispatchers.IO) { photoThumbnail(it, 200)?.asImageBitmap() } } }
+    Box(
+        Modifier.size(110.dp, 100.dp).clip(TeleplyShape.SentPicture).background(p.onBubble.copy(alpha = 0.18f))
+            .combinedClickable(enabled = !opening, role = Role.Button, onLongClick = onLongPress) {
+                opening = true
+                scope.launch { try { load(picture, true)?.let(open) } finally { opening = false } }
+            }
+            .semantics { contentDescription = "查看 ${picture.name}" },
+        contentAlignment = Alignment.Center,
+    ) {
+        val bitmap = small
+        if (bitmap != null) Image(bitmap, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        else Icon(TeleplyIcons.Image, contentDescription = null, tint = p.onBubble.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+        if (opening) CircularProgressIndicator(Modifier.size(24.dp), color = p.onBubble, strokeWidth = 2.dp, trackColor = Color.Transparent)
     }
 }
 
@@ -513,8 +576,32 @@ private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, m
     ) {
         OriginLabel(message)
         Markdown(message.text, Modifier.fillMaxWidth())
+        // A conversation the reply made (web remote.html renderAssistantText): a button each under the text.
+        remember(message.text) { createdThreads(message.text) }.forEach { thread ->
+            if (thread.ready) ThreadLink(enabled = !s.busy) { vm.openCreated(thread.id) }
+            else Text("新对话正在准备中", style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.padding(top = 8.dp))
+        }
         if(message.kind=="deliverables") PillButton("查看成果文件",{ vm.workspace.panel("files");vm.workspace.refresh("files",message.id) },style=PillStyle.Text,leading=TeleplyIcons.File)
         if (message.truncated) PillButton("展开完整消息", { vm.expand(message) }, enabled = !s.busy, style = PillStyle.Text)
+    }
+}
+
+/** 打开新建对话 under a Codex reply (web .thread-link): as wide as the reply, the selected fill and ink, the chat mark first. */
+@Composable
+private fun ThreadLink(enabled: Boolean, onClick: () -> Unit) {
+    val p = LocalTeleply.current
+    Row(
+        Modifier.padding(top = 12.dp).fillMaxWidth().heightIn(min = 44.dp)
+            .graphicsLayer { alpha = if (enabled) 1f else 0.35f }
+            .clip(TeleplyShape.ThreadLink)
+            .background(p.selected)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(TeleplyIcons.Chat, contentDescription = null, tint = p.onSelected, modifier = Modifier.size(18.dp))
+        Text("打开新建对话", style = MaterialTheme.typography.labelLarge, color = p.onSelected)
     }
 }
 
@@ -547,6 +634,25 @@ data class PendingCard(val kind: String, val summary: String, val progress: Stri
  * dev.23 the computer sent both, and a second card of raw button names showed under the question).
  */
 fun claudeAsks(raw: JSONObject): Boolean = raw.optJSONObject("prompt")?.let { it.rows("choices") { c -> c }.isNotEmpty() || it.rows("nav") { n -> n }.isNotEmpty() } == true
+
+/**
+ * An option's words on Claude's question card. Since Windows dev.24 a ticked option of a question that takes several
+ * says "✓ " in its label, for the apps that did not show `pressed` (claude_hooks.py; iPhone claudeChoiceLabel); shown
+ * chosen here, it goes without.
+ */
+fun claudeChoiceLabel(choice: JSONObject): String {
+    val label = choice.string("label")
+    return if (choice.optBoolean("pressed") && label.startsWith("✓ ")) label.removePrefix("✓ ") else label
+}
+
+/**
+ * Whether Claude's question also takes an answer of one's own, written on the computer (web `p.other`): the PC sends
+ * its Other button as a part of its own, or null; never true, which was all the app took, so the hint never showed.
+ */
+fun claudeTakesOther(prompt: JSONObject): Boolean = prompt.optJSONObject("other") != null || prompt.optBoolean("other")
+
+/** The computer's 下一题 and 提交, by the names it gives them (claude_hooks.py NAV), drawn strong as on the web. */
+private val ClaudeGoOn = setOf("Next", "Submit")
 
 fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
     "claude" -> {
@@ -685,7 +791,9 @@ private fun CodexCards(raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, 
  * Claude's question as its desktop shows it, or else its plan options (web askParts): never both, since the options
  * are the question's own buttons. An option Claude shows as chosen shows chosen here (its `pressed`, null when the
  * computer could not read it; web claude-ui.js): a question of one choice starts with its first, and since Windows
- * dev.23 a tap there goes on by itself; a question of several shows each tap's pick until 提交 (user 10-27).
+ * dev.23 a tap there goes on by itself; a question of several shows each tap's pick until 提交 (user 10-27). Since
+ * dev.24 the PC may hold the question for Claude Code (its hook) and lay it out the same way, a command's or file
+ * change's permission too; 下一题 and 提交 have no token until something is ticked.
  */
 @Composable
 private fun ClaudeCards(raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
@@ -698,17 +806,18 @@ private fun ClaudeCards(raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState
             CardTitle(prompt.string("title").ifBlank { "Claude 想问你" } + if (progress.isNotBlank()) "（$progress）" else "")
             prompt.rows("choices") { it }.forEach { choice ->
                 val token = choice.string("token")
+                val label = claudeChoiceLabel(choice)
                 // A tap clicks the same choice on the computer straight away (web: 正在电脑上点选…).
-                OptionCard(choice.string("label"), choice.string("description"), choice.optBoolean("pressed"), enabled = !ws.busy && token.isNotBlank(), description = "选择${choice.string("label")}") {
+                OptionCard(label, choice.string("description"), choice.optBoolean("pressed"), enabled = !ws.busy && token.isNotBlank(), description = "选择$label") {
                     c.action("claude/choose", JSONObject().put("token", token))
                 }
             }
             if (busy) CardStatus("正在电脑上点选…")
             val nav = prompt.rows("nav") { it }
             if (nav.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                nav.forEach { item -> PillButton(item.string("label").ifBlank { item.string("name") }, { c.action("claude/choose", JSONObject().put("token", item.string("token"))) }, enabled = !ws.busy && item.string("token").isNotBlank(), style = if (item.string("name") == "submit") PillStyle.Primary else PillStyle.Secondary) }
+                nav.forEach { item -> PillButton(item.string("label").ifBlank { item.string("name") }, { c.action("claude/choose", JSONObject().put("token", item.string("token"))) }, enabled = !ws.busy && item.string("token").isNotBlank(), style = if (item.string("name") in ClaudeGoOn) PillStyle.Primary else PillStyle.Secondary) }
             }
-            if (prompt.optBoolean("other")) Text("要自己写答案的话，请在电脑上点「Other」填写。", style = MaterialTheme.typography.note, color = p.muted)
+            if (claudeTakesOther(prompt)) Text("要自己写答案的话，请在电脑上点「Other」填写。", style = MaterialTheme.typography.note, color = p.muted)
         }
         return
     }
