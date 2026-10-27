@@ -341,6 +341,9 @@ class FixtureWorld {
                     1 -> raw.put("prompt", JSONObject(CLAUDE_SECOND))
                     else -> raw.remove("prompt")
                 }
+                // As computers before Windows dev.23 sent them: the question's buttons again, by their raw names. The app
+                // shows only the question (web askParts).
+                raw.optJSONObject("prompt")?.let { prompt -> raw.put("actions", JSONArray(prompt.rows("choices") { JSONObject().put("name", it.string("label") + " " + it.string("description")).put("token", it.string("token")) })) }
                 Control(true, run, turn, true, queued, turnMap, claudeStep < 2, raw.toString())
             }
             "deepseek" -> {
@@ -669,9 +672,9 @@ val message = "A deliberately long line to verify horizontal scrolling without m
 
         private const val CODEX_STATE = """{"available":true,"settings":{"model":"fixture-model","effort":"medium","mode":"default","service_tier":null},"catalog":{"models":[{"id":"fixture-model","name":"测试模型","efforts":["low","medium"],"default_effort":"medium"}]},"questions":[{"id":"fixture-question","answer_revision":"v1","status":"pending","kind":"native","turn_id":"fixture-question-turn","questions":[{"id":"q1","header":"方案","question":"选择固定测试方案","options":[{"label":"方案A","description":"固定选项"},{"label":"方案B","description":"另一选项"}]}]}]}"""
 
-        private const val CLAUDE_STATE = """{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"Manual","mode_options":[{"name":"default","label":"Manual"},{"name":"acceptEdits","label":"Accept edits"},{"name":"plan","label":"Plan"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1"},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"""
+        private const val CLAUDE_STATE = """{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"Manual","mode_options":[{"name":"default","label":"Manual"},{"name":"acceptEdits","label":"Accept edits"},{"name":"plan","label":"Plan"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"""
 
-        private const val CLAUDE_SECOND = """{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3"},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"""
+        private const val CLAUDE_SECOND = """{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3","pressed":true},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"""
 
         private const val DEEPSEEK_STATE = """{"available":true,"settings":{"provider":"deepseek","model":"deepseek-v4","reasoningEffort":"high"},"permission":"workspace","permission_name":"工作区内修改","interactions":[{"event":"approval/request","eventId":"e-approval-1","request":{"toolName":"shell","reason":"rm -rf build/","displayReason":"删除 build 目录（构建缓存）"}}],"questions":[]}"""
     }

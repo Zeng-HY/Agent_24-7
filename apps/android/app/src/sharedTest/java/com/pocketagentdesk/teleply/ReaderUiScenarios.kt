@@ -83,6 +83,17 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { vm.workspace.state.value.pane=="new" && org.json.JSONObject(vm.workspace.state.value.saved).string("first_message")=="测试失败" }
         compose.runOnIdle { org.junit.Assert.assertTrue(vm.jobs.jobs.value.isEmpty()) }
     }
+    /** 10-27: Claude's question shows the option chosen on the computer, and no second card of its own buttons. */
+    @Test fun claudeQuestionShowsTheChosenOptionAndNoPlanOptions() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("actions") }
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.onNodeWithContentDescription("选择简洁要点").performScrollTo().assertIsSelected()
+        compose.onNodeWithContentDescription("选择完整段落").assertIsNotSelected()
+        // The demo sends the buttons again as actions, as computers before dev.23 did: only the question shows.
+        compose.onNodeWithText("计划与执行选项").assertDoesNotExist()
+        compose.onNodeWithText("简洁要点 每条改动一行").assertDoesNotExist()
+    }
     @Test fun claudeModelMenuShowsTheKeptListAndReadsTheDesktopOnlyOnRefresh() {
         launch();fixtureList();openChat("Claude 选项示例","claude-demo")
         val world=vm.fixtureWorld!!

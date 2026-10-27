@@ -541,10 +541,21 @@ private fun shareText(context: Context, text: String) {
 /** What is waiting for an answer, as short prompts for the ask bar; empty when nothing is pending. */
 data class PendingCard(val kind: String, val summary: String, val progress: String = "", val count: Int = 1)
 
+/**
+ * Whether Claude's desktop shows a question laid out for the phone (web claude-ui.js askParts): a prompt with choices
+ * or navigation. Its buttons are also the plan options, so those show only without one (user 10-27: before Windows
+ * dev.23 the computer sent both, and a second card of raw button names showed under the question).
+ */
+fun claudeAsks(raw: JSONObject): Boolean = raw.optJSONObject("prompt")?.let { it.rows("choices") { c -> c }.isNotEmpty() || it.rows("nav") { n -> n }.isNotEmpty() } == true
+
 fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
-    "claude" -> buildList {
-        raw.optJSONObject("prompt")?.let { add(PendingCard("choice", it.string("title"), it.string("progress"))) }
-        if (raw.rows("actions") { it }.isNotEmpty()) add(PendingCard("actions", "计划与执行选项"))
+    "claude" -> {
+        val prompt = raw.optJSONObject("prompt")
+        when {
+            prompt != null && claudeAsks(raw) -> listOf(PendingCard("choice", prompt.string("title"), prompt.string("progress")))
+            raw.rows("actions") { it }.isNotEmpty() -> listOf(PendingCard("actions", "计划与执行选项"))
+            else -> emptyList()
+        }
     }
     "deepseek" -> {
         val approvals = raw.rows("interactions") { it }.filter { it.string("event") == "approval/request" }
@@ -670,19 +681,25 @@ private fun CodexCards(raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, 
     }
 }
 
+/**
+ * Claude's question as its desktop shows it, or else its plan options (web askParts): never both, since the options
+ * are the question's own buttons. An option Claude shows as chosen shows chosen here (its `pressed`, null when the
+ * computer could not read it; web claude-ui.js): a question of one choice starts with its first, and since Windows
+ * dev.23 a tap there goes on by itself; a question of several shows each tap's pick until 提交 (user 10-27).
+ */
 @Composable
 private fun ClaudeCards(raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
     val p = LocalTeleply.current
     val c = vm.workspace
     val busy = ws.busy && pendingRoute(JSONObject(ws.saved), "claude/choose") != null
-    raw.optJSONObject("prompt")?.let { prompt ->
+    raw.optJSONObject("prompt")?.takeIf { claudeAsks(raw) }?.let { prompt ->
         QuestionCard {
             val progress = prompt.string("progress")
             CardTitle(prompt.string("title").ifBlank { "Claude 想问你" } + if (progress.isNotBlank()) "（$progress）" else "")
             prompt.rows("choices") { it }.forEach { choice ->
                 val token = choice.string("token")
                 // A tap clicks the same choice on the computer straight away (web: 正在电脑上点选…).
-                OptionCard(choice.string("label"), choice.string("description"), false, enabled = !ws.busy && token.isNotBlank(), description = "选择${choice.string("label")}") {
+                OptionCard(choice.string("label"), choice.string("description"), choice.optBoolean("pressed"), enabled = !ws.busy && token.isNotBlank(), description = "选择${choice.string("label")}") {
                     c.action("claude/choose", JSONObject().put("token", token))
                 }
             }
@@ -693,6 +710,7 @@ private fun ClaudeCards(raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState
             }
             if (prompt.optBoolean("other")) Text("要自己写答案的话，请在电脑上点「Other」填写。", style = MaterialTheme.typography.note, color = p.muted)
         }
+        return
     }
     val actions = raw.rows("actions") { it }
     if (actions.isNotEmpty()) QuestionCard {
