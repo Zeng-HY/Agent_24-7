@@ -142,7 +142,7 @@ extension AppModel {
             chat.folder = folder.isEmpty ? job.label : folder
             chat.status = "running"
             chat.app = app
-            try await self.readChat(g, chat, restorePosition: false)
+            try await self.readChat(g, chat)
         }
     }
 

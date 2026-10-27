@@ -1,7 +1,10 @@
 import Foundation
 import TeleplyModel
 
-/// Reading one conversation (spec 4.3; Android ReaderViewModel readChat, older, search, anchors).
+/// Reading one conversation (spec 4.3; Android ReaderViewModel readChat, older, search). However it is opened (a row,
+/// a relaunch, a notification, 回到最新), a conversation shows its latest page from the bottom (user 10-27: "保持每次
+/// 点开对话都在最新的地方"); only a found message moves the page elsewhere, until it is opened again. Reading places
+/// are no longer kept.
 extension AppModel {
     /// Opens a row: the list and the sidebar mix sources, so opening another source's row switches source.
     public func open(_ chat: Chat) {
@@ -14,7 +17,7 @@ extension AppModel {
         operation { [weak self] g in
             guard let self else { return }
             await self.useSource(chat.app)
-            try await self.readChat(g, chat, restorePosition: true)
+            try await self.readChat(g, chat)
         }
     }
 
@@ -36,7 +39,7 @@ extension AppModel {
             var chat = Chat(id: id, title: "新建对话")
             chat.app = "codex"
             await self.useSource(chat.app)
-            try await self.readChat(g, chat, restorePosition: true)
+            try await self.readChat(g, chat)
         }
     }
 
@@ -48,7 +51,8 @@ extension AppModel {
         if !fixture { await services.store.setSource(source) }
     }
 
-    func readChat(_ g: Int, _ chat: Chat, restorePosition: Bool) async throws {
+    /// The conversation's latest page, shown from the bottom (no [anchor]).
+    func readChat(_ g: Int, _ chat: Chat) async throws {
         guard let device else { return }
         let same = self.chat?.id == chat.id
         screen = .reading
@@ -66,15 +70,13 @@ extension AppModel {
         hits = []
         searched = false
         searchQuery = ""
-        let key = ChatKey(scope: scope, device: device.id, app: app, chat: chat.id)
-        let position = restorePosition ? await savedPosition(key) : nil
-        let page = try await client.history(device: device.id, app: app, chat: chat.id, around: position?.message)
+        let page = try await client.history(device: device.id, app: app, chat: chat.id)
         guard current(g) else { return }
         messages = keepWhole(page.items, wholeMessages)
         cursor = page.cursor
         olderAvailable = page.hasMore
         newerAvailable = page.hasNewer
-        anchor = position
+        anchor = nil
         scrollRevision += 1
         pageMeta = page.meta
         if let title = Self.pageTitle(page.meta) { self.chat?.title = title }
@@ -85,11 +87,6 @@ extension AppModel {
     static func pageTitle(_ meta: JSONValue) -> String? {
         let title = meta["title"].string()
         return title.isEmpty ? nil : title
-    }
-
-    func savedPosition(_ key: ChatKey) async -> ChatRecord.Position? {
-        if fixture { return demoPositions[key] }
-        return await services.store.record(scope: key.scope, device: key.device, app: key.app, chat: key.chat).position
     }
 
     /// 加载更早消息.
@@ -112,7 +109,7 @@ extension AppModel {
     public func latest() {
         operation { [weak self] g in
             guard let self, let chat = self.chat else { return }
-            try await self.readChat(g, chat, restorePosition: false)
+            try await self.readChat(g, chat)
         }
     }
 
@@ -162,7 +159,7 @@ extension AppModel {
         }
     }
 
-    /// Opens the conversation around a found message.
+    /// Opens the conversation around a found message: the page goes to it, until the conversation is opened again.
     public func jump(to message: Message) {
         operation { [weak self] g in
             guard let self, let device = self.device, let chat = self.chat else { return }
@@ -177,20 +174,6 @@ extension AppModel {
             self.hits = []
             self.searched = false
             self.pageMeta = page.meta
-        }
-    }
-
-    /// The reading position, kept 400 ms after scrolling stops and when leaving (Android saveAnchor). Only for
-    /// the conversation it was taken in.
-    public func saveAnchor(message: String, offset: Int) {
-        guard let device, let chat, !scope.isEmpty, messages.contains(where: { $0.id == message }) else { return }
-        let key = ChatKey(scope: scope, device: device.id, app: app, chat: chat.id)
-        let position = ChatRecord.Position(message: message, offset: offset)
-        anchor = position
-        if fixture {
-            demoPositions[key] = position
-        } else {
-            Task { await services.store.update(scope: key.scope, device: key.device, app: key.app, chat: key.chat) { $0.position = position } }
         }
     }
 

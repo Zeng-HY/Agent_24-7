@@ -118,6 +118,7 @@ public final class AppModel {
     public internal(set) var cursor: String?
     public internal(set) var olderAvailable = false
     public internal(set) var newerAvailable = false
+    /// A found message the page goes to (查找消息); nil: the bottom.
     public internal(set) var anchor: ChatRecord.Position?
     /// Goes up when the page should scroll to [anchor] (or the bottom) again.
     public internal(set) var scrollRevision = 0
@@ -163,7 +164,6 @@ public final class AppModel {
     @ObservationIgnored var treeToken = 0
     @ObservationIgnored var treeMore: [String: Int] = [:]
     @ObservationIgnored var treeAt: Date?
-    @ObservationIgnored var demoPositions: [ChatKey: ChatRecord.Position] = [:]
     /// Clears the page just left once its slide-out is over.
     @ObservationIgnored var leaving: Task<Void, Never>?
     @ObservationIgnored var undoSerial = 0
@@ -389,7 +389,7 @@ public final class AppModel {
             sources = SourceInfo(device: found.id, apps: known, loading: true, cached: known != nil)
             loadTree(force: true)
             if found.id == wanted, let saved = place?.chat, !saved.isEmpty {
-                try await readChat(g, Chat(id: saved, title: (place?.title ?? "").isEmpty ? "对话" : place?.title ?? ""), restorePosition: true)
+                try await readChat(g, Chat(id: saved, title: (place?.title ?? "").isEmpty ? "对话" : place?.title ?? ""))
             } else {
                 try await loadChats(g)
             }
@@ -426,7 +426,7 @@ public final class AppModel {
                     sources = SourceInfo(device: verified.id, apps: known, loading: true, cached: known != nil)
                 }
                 if knownApps == nil || sources.failed != nil { loadTree(force: true) }
-                if let previousChat { try await readChat(g, previousChat, restorePosition: true) } else { try await loadChats(g) }
+                if let previousChat { try await readChat(g, previousChat) } else { try await loadChats(g) }
             }
         } else {
             clearAll()
@@ -617,7 +617,6 @@ public final class AppModel {
         scope = "fixture"
         serverVersion = "fixture"
         emailEnabled = false
-        demoPositions = [:]
         useClient(RelayClient(origin: services.defaultOrigin, transport: services.demo(), vault: MemoryCookieVault()))
         screen = .login
         live()

@@ -3,8 +3,9 @@ import TeleplyModel
 import TeleplyState
 
 /// The conversation page (spec 4.3; Android ChatScreen): the title with project and source, 停止这一轮, the context
-/// ring and ⋯ in the title bar; the messages scroll under it and under the glass input card. Following the bottom
-/// only while the reader is there; reading above keeps its place and "有新消息 ↓" appears (B09).
+/// ring and ⋯ in the title bar; the messages scroll under it and under the glass input card. It always opens at the
+/// latest messages (user 10-27). Following the bottom only while the reader is there; reading above keeps its place
+/// and "有新消息 ↓" appears (B09).
 struct ConversationView: View {
     let model: AppModel
     @State private var position = ScrollPosition(idType: String.self)
@@ -19,7 +20,6 @@ struct ConversationView: View {
     @State private var sharing: String?
     /// The first message before 加载更早消息, kept in view when the older ones arrive above it.
     @State private var keepTop: String?
-    @State private var saveTick = 0
     @State private var pendingShown = false
     @State private var promptsShown = false
     /// 从电脑选择文件 was tapped in an empty 对话文件: the picker opens when that sheet has gone.
@@ -100,14 +100,6 @@ struct ConversationView: View {
             atBottom = bottom
             if bottom { unseen = false }
         }
-        .onScrollPhaseChange { _, phase in
-            if phase == .idle { saveTick += 1 }
-        }
-        .task(id: saveTick) {
-            guard saveTick > 0 else { return }
-            try? await Task.sleep(for: .milliseconds(400))
-            if !Task.isCancelled { saveAnchor() }
-        }
         .background(Palette.page)
         .safeAreaBar(edge: .top) { notes(control: control) }
         .safeAreaBar(edge: .bottom) {
@@ -126,7 +118,6 @@ struct ConversationView: View {
         .onChange(of: model.scrollRevision, initial: true) { restore() }
         .onChange(of: model.conversation.revision) { follow() }
         .onChange(of: model.messages.first?.id) { keepPlace() }
-        .onChange(of: model.screen) { if model.screen != .reading { saveAnchor() } }
         .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
         .sheet(isPresented: Binding(get: { sharing != nil }, set: { if !$0 { sharing = nil } })) {
@@ -354,7 +345,7 @@ struct ConversationView: View {
 
     // MARK: Reading position (B09)
 
-    /// Opening (or 回到最新, a found message): to the saved place when there is one, otherwise the bottom.
+    /// Opening (or 回到最新): the bottom. A found message (查找消息): that message at the top.
     private func restore() {
         guard !model.messages.isEmpty else { return }
         if let anchor = model.anchor, model.messages.contains(where: { $0.id == anchor.message }) {
@@ -383,11 +374,6 @@ struct ConversationView: View {
         guard let keep = keepTop, model.messages.first?.id != keep else { return }
         keepTop = nil
         position.scrollTo(id: keep, anchor: .top)
-    }
-
-    private func saveAnchor() {
-        guard restored, let id = position.viewID(type: String.self) else { return }
-        model.saveAnchor(message: id, offset: 0)
     }
 }
 

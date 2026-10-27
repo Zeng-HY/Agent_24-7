@@ -76,6 +76,8 @@ public struct ChatRecord: Codable, Sendable, Equatable {
 
     public var version = 1
     public var draft = ""
+    /// Where reading stopped, as builds before 10-27 kept it. Every conversation now opens at its latest messages,
+    /// so nothing writes or reads it; it stays so those files still read.
     public var position: Position?
     /// JSON values by kind (Android interaction_draft): sources, new_jobs, claude_catalog, workspace…
     public var details: [String: String] = [:]

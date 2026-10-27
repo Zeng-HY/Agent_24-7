@@ -169,6 +169,47 @@ struct AppModelTests {
         #expect(model.anchor?.message == "m2" && model.hits.isEmpty)
     }
 
+    /// Every conversation opens at its latest messages (user 10-27: "保持每次点开对话都在最新的地方"): from the list, after
+    /// a found message, after a relaunch and from a notification. A place an older build kept is not read.
+    @Test func everyOpeningReadsTheLatestPageFromTheBottom() async throws {
+        let world = DemoWorld()
+        let store = LocalStore(folder: temporaryFolder())
+        let vault = MemoryCookieVault()
+        let transport = WatchedTransport(world: world)
+        func app() -> AppModel {
+            AppModel(services: AppServices(store: store, vault: vault, transport: transport, demo: { DemoTransport() }, pacer: IdlePacer(),
+                                           newScope: { "scope-1" }))
+        }
+        let model = app()
+        await signedInOnA(model)
+        await store.update(scope: "scope-1", device: a, app: "codex", chat: "demo") { $0.position = .init(message: "m2", offset: 0) }
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        #expect(model.anchor == nil && model.messages.last?.id == "m3")
+        model.searchHistory("原生")
+        await model.settle()
+        model.jump(to: model.hits[0])
+        await model.settle()
+        #expect(model.anchor?.message == "m2")
+        model.back()
+        await model.settle()
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        #expect(model.anchor == nil)
+        // Opened again after the app was closed, then from a notification.
+        let again = app()
+        again.start()
+        await again.settle()
+        #expect(again.screen == .reading && again.chat?.id == "demo" && again.anchor == nil)
+        again.openNotification(try #require(PushTarget(device: a, app: "codex", chat: "demo")))
+        await again.settle()
+        #expect(again.screen == .reading && again.anchor == nil)
+        let reads = await transport.log.items.filter { $0.url.path.hasSuffix("/api/chat") }
+        #expect(reads.map { queryValue($0, "around") } == [nil, "m2", nil, nil, nil])
+        // Nothing was written over the old place either; it is simply not read.
+        #expect(await store.record(scope: "scope-1", device: a, app: "codex", chat: "demo").position == .init(message: "m2", offset: 0))
+    }
+
     @Test func theLiveConnectionReadsStateFreshOnEntering() async {
         let world = DemoWorld()
         let model = makeApp(world: world)

@@ -1,4 +1,5 @@
 import Foundation
+import TeleplyDemo
 import TeleplyModel
 
 actor RequestLog {
@@ -6,6 +7,31 @@ actor RequestLog {
 
     func add(_ request: RelayRequest) {
         items.append(request)
+    }
+}
+
+/// The value of [name] in a request's address, nil when it has none.
+func queryValue(_ request: RelayRequest, _ name: String) -> String? {
+    URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
+}
+
+/// The demo computer, keeping every request and download as it was asked for.
+struct WatchedTransport: RelayFileTransport {
+    let demo: DemoTransport
+    let log = RequestLog()
+
+    init(world: DemoWorld = DemoWorld()) {
+        demo = DemoTransport(world: world)
+    }
+
+    func send(_ request: RelayRequest) async throws -> RelayResponse {
+        await log.add(request)
+        return try await demo.send(request)
+    }
+
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
+        await log.add(request)
+        return try await demo.download(request, limit: limit, progress: progress)
     }
 }
 

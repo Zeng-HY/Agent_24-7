@@ -203,6 +203,6 @@ extension AppModel {
             guard current(g) else { return }
         }
         await useSource(target.app)
-        try await readChat(g, Chat(id: target.chat, title: "对话"), restorePosition: true)
+        try await readChat(g, Chat(id: target.chat, title: "对话"))
     }
 }
