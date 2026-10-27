@@ -6,17 +6,16 @@ import org.junit.*
 import org.junit.Assert.*
 
 class TestStore(var prefs:Preferences=Preferences()):ReaderStore {
-    val positions=mutableMapOf<Triple<String,String,String>,ReadingPosition>()
     override suspend fun preferences()=prefs
     override suspend fun setOrigin(origin:String) { prefs=Preferences(origin=origin) }
     override suspend fun appearance(theme:String,dynamic:Boolean) { prefs=prefs.copy(theme=theme,dynamic=dynamic) }
     override suspend fun selection(scope:String,device:String,chat:String,title:String) { prefs=prefs.copy(scope=scope,device=device,chat=chat,title=title) }
-    override suspend fun position(scope:String,device:String,chat:String)=positions[Triple(scope,device,chat)]
-    override suspend fun save(position:ReadingPosition) { positions[Triple(position.scope,position.device,position.chat)]=position }
 }
 open class TestApi:ReadApi {
     val a=Computer("a".repeat(32),"A",true);val b=Computer("b".repeat(32),"B",true)
     var ownerDevices=listOf(a,b);var expired=false;var reset=false;var delayA=false
+    /** The pages read, as (conversation, message the page was read around): null around is the latest page. */
+    val pages=mutableListOf<Pair<String,String?>>()
     override suspend fun config()="test"
     override suspend fun login(name:String,password:String) { expired=false }
     override suspend fun account():Account { if(expired) throw ServiceFailure(401); return Account(ownerDevices,"") }
@@ -28,6 +27,7 @@ open class TestApi:ReadApi {
     }
     override suspend fun history(device:String,chat:String,before:String?,around:String?,count:Int):Page<Message> {
         if(expired) throw ServiceFailure(401)
+        if(before==null) pages+=chat to around
         return if(before==null) Page(listOf(Message("m2","assistant","same"),Message("m3","assistant","same")),"m2",true) else Page(listOf(Message("m1","user","older"),Message("m2","assistant","updated")),reset=reset)
     }
     override suspend fun message(device:String,chat:String,message:String)=Message(message,"assistant","full")
@@ -43,6 +43,8 @@ class ReaderViewModelTest {
         assertEquals(Screen.Login,vm.state.value.screen)
         vm.login("same","test");advanceUntilIdle()
         assertEquals(api.b.id,vm.state.value.device!!.id);assertEquals("notification-chat",vm.state.value.chat!!.id)
+        // Opened at its latest messages, as every conversation (10-27).
+        assertEquals("notification-chat" to null,api.pages.last());assertNull(vm.state.value.anchor)
     }
     @Test fun notificationCannotSwitchServiceOrAccountScope()=runTest(dispatcher) {
         val vm=ready();val origin=vm.state.value.origin
@@ -74,10 +76,15 @@ class ReaderViewModelTest {
         val again=vm.state.value.messages.single();assertEquals("前半后半",again.text);assertFalse(again.truncated)
     }
     @Test fun expiredLoginPreservesReadingAndSameOwnerRestores()=runTest(dispatcher) {
-        val api=TestApi();val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.saveAnchor("m2",42);advanceUntilIdle()
+        val api=TestApi();val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle()
+        // The page taken down for 登录 kept where it stood, in memory, for this same read.
+        val key=ChatKey(vm.state.value.scope,api.a.id,vm.state.value.chat!!.id);val read=vm.state.value.scrollRevision
+        vm.keepPlace(ReadingPlace(key,read,2,"m3",42))
         api.expired=true;vm.older();advanceUntilIdle()
-        assertEquals(Screen.Login,vm.state.value.screen);assertEquals(42,vm.state.value.anchor?.offset);assertEquals(2,vm.state.value.messages.size)
-        vm.login("same","test");advanceUntilIdle();assertEquals(Screen.Reading,vm.state.value.screen);assertEquals(42,vm.state.value.anchor?.offset)
+        assertEquals(Screen.Login,vm.state.value.screen);assertEquals(2,vm.state.value.messages.size)
+        api.pages.clear();vm.login("same","test");advanceUntilIdle();assertEquals(Screen.Reading,vm.state.value.screen)
+        // Back on the same read: nothing read again, so the page goes back where it stood.
+        assertTrue(api.pages.isEmpty());assertEquals(read,vm.state.value.scrollRevision);assertEquals(42,vm.placeFor(key,read)?.offset)
     }
     @Test fun differentOwnerCannotReadPreviousSnapshot()=runTest(dispatcher) {
         val api=TestApi();val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle();val scope=vm.state.value.scope
@@ -95,26 +102,43 @@ class ReaderViewModelTest {
     @Test fun returnGoesToListAndDoesNotIssueCommands()=runTest(dispatcher) {
         val vm=ready();vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.back();advanceUntilIdle();assertEquals(Screen.Chats,vm.state.value.screen);assertNull(vm.state.value.chat)
     }
-    @Test fun anchorScopedToAccountComputerAppAndChat()=runTest(dispatcher) {
-        val store=TestStore();val vm=ready(store=store);vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.saveAnchor("m2",17);advanceUntilIdle()
-        val pos=store.positions.values.single();assertEquals(vm.state.value.scope,pos.scope);assertEquals("codex",pos.app);assertEquals(vm.state.value.device!!.id,pos.device)
+    /** 10-27 ("保持每次点开对话都在最新的地方"): every opening reads the latest page; a place is kept for the same read only. */
+    @Test fun everyOpeningReadsTheLatestPageAndKeepsNoPlaceAcrossOpenings()=runTest(dispatcher) {
+        val api=TestApi();val vm=ready(api);val chat=vm.state.value.chats.first()
+        vm.open(chat);advanceUntilIdle()
+        val key=ChatKey(vm.state.value.scope,api.a.id,chat.id);val first=vm.state.value.scrollRevision
+        vm.keepPlace(ReadingPlace(key,first,2,"m3",40))
+        assertEquals(40,vm.placeFor(key,first)?.offset);assertNull(vm.placeFor(key.copy(chat="other"),first))
+        vm.back();advanceUntilIdle();vm.open(chat);advanceUntilIdle()
+        assertTrue(vm.state.value.scrollRevision>first);assertNull(vm.state.value.anchor)
+        assertNull(vm.placeFor(key,vm.state.value.scrollRevision))
+        vm.latest();advanceUntilIdle()
+        assertEquals(3,api.pages.size);assertTrue(api.pages.all { it==chat.id to null })
+    }
+    /** A search hit is still read around the message found and shown there (web jump). */
+    @Test fun aSearchHitIsStillShownWhereItIs()=runTest(dispatcher) {
+        val api=TestApi();val vm=ready(api);vm.open(vm.state.value.chats.first());advanceUntilIdle()
+        val read=vm.state.value.scrollRevision
+        vm.jump(Message("m2","assistant","same"));advanceUntilIdle()
+        assertEquals("chat-${api.a.id}" to "m2",api.pages.last());assertEquals("m2",vm.state.value.anchor?.message);assertEquals(read+1,vm.state.value.scrollRevision)
+        vm.latest();advanceUntilIdle()
+        assertEquals("chat-${api.a.id}" to null,api.pages.last());assertNull(vm.state.value.anchor)
     }
     @Test fun emptySearchIsAnEmptyResultNotAnError()=runTest(dispatcher) {
         val vm=ready();vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.searchHistory("missing");advanceUntilIdle();assertTrue(vm.state.value.searched);assertTrue(vm.state.value.hits.isEmpty());assertNull(vm.state.value.error)
     }
-    @Test fun processRestartRestoresOnlyVerifiedComputerAndStoredAnchor()=runTest(dispatcher) {
+    @Test fun processRestartOpensOnlyTheVerifiedComputerAndAtTheLatest()=runTest(dispatcher) {
         val api=TestApi();val store=TestStore(Preferences(origin="https://example.invalid/",scope="stored",device=api.a.id,chat="restored"))
-        store.save(ReadingPosition("stored",api.a.id,chat="restored",message="m2",offset=81))
         val vm=ReaderViewModel(store) { api };advanceUntilIdle()
-        assertEquals(Screen.Reading,vm.state.value.screen);assertEquals(81,vm.state.value.anchor?.offset)
+        assertEquals(Screen.Reading,vm.state.value.screen);assertEquals("restored",vm.state.value.chat?.id)
+        assertNull(vm.state.value.anchor);assertEquals(listOf("restored" to null),api.pages)
     }
     @Test fun expiredSessionAfterProcessRestartCanResumeVerifiedReading()=runTest(dispatcher) {
         val api=TestApi();api.expired=true
         val store=TestStore(Preferences(origin="https://example.invalid/",scope="stored",device=api.a.id,chat="restored"))
-        store.save(ReadingPosition("stored",api.a.id,chat="restored",message="m2",offset=63))
         val vm=ReaderViewModel(store) { api };advanceUntilIdle();assertEquals(Screen.Login,vm.state.value.screen)
         vm.login("fixture","test");advanceUntilIdle()
-        assertEquals(Screen.Reading,vm.state.value.screen);assertEquals(63,vm.state.value.anchor?.offset)
+        assertEquals(Screen.Reading,vm.state.value.screen);assertNull(vm.state.value.anchor);assertEquals(listOf("restored" to null),api.pages)
     }
     @Test fun serviceThatDoesNotAnswerKeepsTheAddressPageAndTheSavedPlace()=runTest(dispatcher) {
         val api=TestApi();val store=TestStore()
@@ -168,8 +192,8 @@ class ReaderViewModelTest {
         val api=TestApi();val store=TestStore();val vm=ready(api,store);val original=store.prefs
         vm.fixture();vm.login("fixture","fixture");advanceUntilIdle()
         vm.select(vm.state.value.account!!.devices.first());advanceUntilIdle()
-        vm.open(vm.state.value.chats.first());advanceUntilIdle();vm.saveAnchor("m2",22);advanceUntilIdle()
-        assertEquals(original,store.prefs);assertTrue(store.positions.isEmpty())
+        vm.open(vm.state.value.chats.first());advanceUntilIdle()
+        assertEquals(original,store.prefs)
     }
 
 }

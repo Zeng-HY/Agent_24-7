@@ -16,8 +16,6 @@ private class SourceStore(var prefs: Preferences = Preferences()) : ReaderStore 
     override suspend fun setOrigin(origin: String) { prefs = Preferences(origin = origin) }
     override suspend fun appearance(theme: String, dynamic: Boolean) = Unit
     override suspend fun selection(scope: String, device: String, chat: String, title: String) { prefs = prefs.copy(scope = scope, device = device, chat = chat, title = title) }
-    override suspend fun position(scope: String, device: String, chat: String): ReadingPosition? = null
-    override suspend fun save(position: ReadingPosition) = Unit
 }
 
 /** Two computers: A has all three apps, B only Codex and DeepSeek (like a tester's). The tree can be slow or fail. */

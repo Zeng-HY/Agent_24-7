@@ -16,8 +16,6 @@ class UiMemoryStore:ReaderStore {
     override suspend fun setOrigin(origin:String)=Unit
     override suspend fun appearance(theme:String,dynamic:Boolean)=Unit
     override suspend fun selection(scope:String,device:String,chat:String,title:String)=Unit
-    override suspend fun position(scope:String,device:String,chat:String):ReadingPosition?=null
-    override suspend fun save(position:ReadingPosition)=Unit
 }
 
 /** UI scenarios on the local fixture, shared by the Robolectric (JVM) and device runs. No real service is contacted. */
@@ -486,6 +484,42 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { vm.composer.state.value.control.questions }
         compose.onNodeWithText("批准这一步吗？").assertExists()
         compose.runOnIdle { org.junit.Assert.assertTrue(vm.state.value.messages.none { it.id=="m1" }) }
+    }
+    /** 10-27 ("保持每次点开对话都在最新的地方"): a conversation opens at its latest messages, also after reading higher up. */
+    @Test fun conversationsOpenAtTheLatestMessages() {
+        launch();fixtureList()
+        compose.onNodeWithTag("chat-search").performTextInput("performance")
+        compose.onNodeWithTag("chat-search").performImeAction()
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.singleOrNull()?.id=="performance" }
+        repeat(2) {
+            listRow("长会话性能示例").performClick()
+            compose.waitUntil(10000) { vm.state.value.chat?.id=="performance" && vm.state.value.messages.size==200 && !vm.state.value.busy }
+            compose.waitForIdle()
+            org.junit.Assert.assertTrue("opens at the bottom",atBottom())
+            compose.onNodeWithText("固定消息 200").assertExists()
+            // Read higher up, then leave: the next opening is at the bottom again, not here.
+            compose.onNodeWithTag("messages").performScrollToIndex(3)
+            compose.onNodeWithText("固定消息 3").assertIsDisplayed()
+            org.junit.Assert.assertFalse(atBottom())
+            compose.onNodeWithContentDescription("返回").performClick()
+            compose.waitUntil(10000) { vm.state.value.screen==Screen.Chats && !vm.state.value.busy }
+        }
+    }
+    /** 加载更早消息 (web scroll-anchor.js): the message at the top stays where it was; the older ones come in above it. */
+    @Test fun olderMessagesComeInAboveWithoutMovingThePage() {
+        launch();fixtureList();openChat("原生阅读示例","demo")
+        compose.onNodeWithTag("messages").performScrollToIndex(0)
+        val first=compose.onNodeWithText("请展示原生 Markdown 阅读。")
+        val top=first.fetchSemanticsNode().boundsInRoot.top
+        compose.onNodeWithText("加载更早消息").performClick()
+        compose.waitUntil(10000) { vm.state.value.messages.firstOrNull()?.id=="m0" && !vm.state.value.busy }
+        compose.waitForIdle()
+        org.junit.Assert.assertEquals(top,first.fetchSemanticsNode().boundsInRoot.top,2f)
+    }
+    /** The conversation can scroll no further down: the latest messages are on screen (the list's own reading of its end). */
+    protected fun atBottom():Boolean {
+        val range=compose.onNodeWithTag("messages").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange]
+        return range.value()>=range.maxValue()
     }
     @Test fun composerKeepsDraftAcrossBackAndShowsReceipt() {
         launch();fixtureList()

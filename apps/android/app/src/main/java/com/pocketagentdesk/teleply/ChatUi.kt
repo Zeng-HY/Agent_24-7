@@ -49,6 +49,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -100,8 +101,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -115,7 +114,6 @@ private val ReadingWidth = 820.dp
  * The conversation page (spec 4.3). Messages scroll under the glass title bar and, since 0.4, under the glass input
  * card; the question and approval cards of all three sources sit in the timeline (user decision, differs from the web).
  */
-@OptIn(FlowPreview::class)
 @Composable
 fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val p = LocalTeleply.current
@@ -126,6 +124,8 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     var follow by remember(key) { mutableStateOf(true) }
     var unseen by remember(key) { mutableStateOf(false) }
     var restored by remember(key) { mutableStateOf(false) }
+    // 加载更早消息 pressed: the message then at the top, to keep in place once the older ones are in.
+    var hold by remember(key) { mutableStateOf<OlderHold?>(null) }
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var barHeight by remember { mutableStateOf(0.dp) }
@@ -145,6 +145,12 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val jobs by vm.jobs.jobs.collectAsStateWithLifecycle()
     val job = if (newPage) jobs.find { it.preview == s.chat?.id } else null
     val handoff = s.handoff?.takeIf { h -> h.id == s.chat?.id && h.app == s.app && s.messages.none { it.role == "user" } }
+    // The rows above the messages: the history tools, and on a new conversation's page its first message.
+    val lead = 1 + (if (newPage) 1 else 0) + (if (handoff != null) 1 else 0)
+    val openKey = if (s.device != null && s.chat != null) ChatKey(s.scope, s.device.id, s.chat.id, s.app) else null
+    val currentKey by rememberUpdatedState(openKey)
+    val currentLead by rememberUpdatedState(lead)
+    val currentRevision by rememberUpdatedState(s.scrollRevision)
 
     // Reading position (B09): follow the bottom only when the reader is at the bottom.
     LaunchedEffect(list) {
@@ -158,23 +164,48 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
             if (follow && !s.newer) scrollToEnd(list) else unseen = true
         }
     }
+    // Where the page opens (user 10-27): every opening at the latest messages, at the bottom; a search hit where it is.
+    // The same read drawn anew (the phone turned, the window resized, back from 设置) goes back where it stood.
     LaunchedEffect(s.app, s.device?.id, s.chat?.id, s.scrollRevision) {
+        hold = null
         if (s.messages.isNotEmpty()) {
-            val index = s.anchor?.let { a -> s.messages.indexOfFirst { it.id == a.message }.takeIf { it >= 0 } }
+            val kept = openKey?.let { vm.placeFor(it, s.scrollRevision) }
+            val target = if (kept != null) kept.message else s.anchor?.message
+            val index = target?.let { id -> s.messages.indexOfFirst { it.id == id }.takeIf { it >= 0 } }?.plus(lead) ?: kept?.item
             follow = index == null && !s.newer
-            if (index != null) list.scrollToItem(index + 1, s.anchor?.offset ?: 0) else scrollToEnd(list)
+            if (index != null) list.scrollToItem(index, kept?.offset ?: 0) else scrollToEnd(list)
             restored = true
         }
     }
+    // 加载更早消息 keeps the reader's place (web scroll-anchor.js): the message at the top stays where it was and the
+    // older ones come in above it. The list alone keeps its first row in place, the button's, and the page jumped back.
+    LaunchedEffect(s.messages.firstOrNull()?.id) {
+        val held = hold ?: return@LaunchedEffect
+        if (held.first == s.messages.firstOrNull()?.id) return@LaunchedEffect
+        hold = null
+        val index = s.messages.indexOfFirst { it.id == held.message }
+        // Not when the page was moved meanwhile, nor when the list kept a message in place by itself.
+        if (index < 0 || list.firstVisibleItemIndex != held.item || list.firstVisibleItemScrollOffset != held.scroll) return@LaunchedEffect
+        list.scrollToItem(index + lead, 0)
+        list.scrollBy(-held.offset.toFloat())
+    }
     // The input area grows (queue, prompt bar, multi-line draft) or the keyboard opens: stay at the bottom if there.
     LaunchedEffect(inputHeight) { if (restored && follow && !s.newer) scrollToEnd(list) }
-    LaunchedEffect(list, s.app, s.device?.id, s.chat?.id, restored) {
-        if (restored) snapshotFlow { list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset }.debounce(400).collect { (index, offset) ->
-            currentMessages.getOrNull(index - 1)?.let { vm.saveAnchor(it.id, offset, s.scope, s.device?.id, s.chat?.id, s.app) }
+    // Taken down with the conversation still open: where the page stood, in memory for this read only (not on the phone).
+    DisposableEffect(openKey) {
+        val opened = openKey
+        onDispose {
+            val messages = currentMessages
+            if (opened != null && currentKey == opened && restored && messages.isNotEmpty()) {
+                val item = list.firstVisibleItemIndex
+                vm.keepPlace(ReadingPlace(opened, currentRevision, item, messages.getOrNull(item - currentLead)?.id, list.firstVisibleItemScrollOffset))
+            }
         }
     }
-    androidx.compose.runtime.DisposableEffect(s.app, s.device?.id, s.chat?.id) {
-        onDispose { currentMessages.getOrNull(list.firstVisibleItemIndex - 1)?.let { vm.saveAnchor(it.id, list.firstVisibleItemScrollOffset, s.scope, s.device?.id, s.chat?.id, s.app) } }
+    val loadOlder: () -> Unit = {
+        val top = list.layoutInfo.visibleItemsInfo.firstOrNull { item -> (item.key as? String)?.startsWith("msg:") == true && item.offset + item.size > 0 }
+        hold = top?.let { OlderHold(s.messages.firstOrNull()?.id, (it.key as String).removePrefix("msg:"), it.offset, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
+        vm.older()
     }
     val lastUser = s.messages.indexOfLast { it.role == "user" }
     GlassScreen(
@@ -189,7 +220,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
             ) {
                 item(key = "history-tools") {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (s.older) PillButton("加载更早消息", vm::older, enabled = !s.busy, style = PillStyle.Text)
+                        if (s.older) PillButton("加载更早消息", loadOlder, enabled = !s.busy, style = PillStyle.Text)
                         if (s.newer) InfoNote("这里是历史位置，后面还有更新的消息。", Modifier.padding(vertical = 8.dp))
                         if (!s.busy && s.messages.isEmpty() && !newPage && handoff == null) Text("暂无消息", style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.padding(24.dp))
                     }
@@ -240,13 +271,19 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                     GlassPill("有新消息", { follow = true; unseen = false; if (s.newer) vm.latest() else scope.launch { scrollToEnd(list) } }, Modifier.padding(bottom = 8.dp), leading = TeleplyIcons.Down, description = "有新消息，回到底部")
                 }
                 InputArea(s, vm, chat, workspace, raw, cards) {
-                    scope.launch { list.animateScrollToItem(s.messages.size + 1) }
+                    scope.launch { list.animateScrollToItem(s.messages.size + lead) }
                 }
             }
         },
     )
     ChatSheetsHost(s, vm, chat, raw, sheets)
 }
+
+/**
+ * 加载更早消息 pressed: the first message on screen then ([message], [offset] px below the top of the reading area), the
+ * page's first message ([first], to see the older ones came in) and where the list itself stood ([item], [scroll]).
+ */
+private class OlderHold(val first: String?, val message: String, val offset: Int, val item: Int, val scroll: Int)
 
 private suspend fun scrollToEnd(list: androidx.compose.foundation.lazy.LazyListState) {
     val count = list.layoutInfo.totalItemsCount

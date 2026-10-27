@@ -6,11 +6,14 @@ import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
+/**
+ * What the app keeps on this phone. Reading positions are no longer kept (10-27: every conversation opens at its latest
+ * messages); the table that held them stays in the database as it was, so nothing stored before is lost or misread.
+ */
 interface ReaderStore {
     suspend fun source(app:String) {}
     suspend fun detail(key:ChatKey,kind:String):String? = null
     suspend fun detail(key:ChatKey,kind:String,value:String) {}
-    suspend fun positionFor(key:ChatKey):ReadingPosition? = if(key.app=="codex") position(key.scope,key.device,key.chat) else null
     suspend fun draft(key:ChatKey):String = ""
     suspend fun draft(key:ChatKey,text:String) {}
     suspend fun submissions(key:ChatKey):List<Submission> = emptyList()
@@ -20,12 +23,9 @@ interface ReaderStore {
     suspend fun setOrigin(origin: String)
     suspend fun appearance(theme: String, dynamic: Boolean)
     suspend fun selection(scope: String, device: String, chat: String, title: String)
-    suspend fun position(scope: String, device: String, chat: String): ReadingPosition?
-    suspend fun save(position: ReadingPosition)
 }
 class NativeReaderStore(private val settings: SettingsStore, private val dao: ReadingDao) : ReaderStore {
     override suspend fun source(app:String)=settings.source(app)
-    override suspend fun positionFor(key:ChatKey)=dao.find(key.scope,key.device,key.chat,key.app)
     override suspend fun detail(key:ChatKey,kind:String)=dao.detail(key.scope,key.device,key.app,key.chat,kind)
     override suspend fun detail(key:ChatKey,kind:String,value:String)=dao.detail(InteractionDraft(key.scope,key.device,key.app,key.chat,kind,value))
     override suspend fun draft(key:ChatKey)=dao.draft(key.scope,key.device,key.chat,key.app)?.text.orEmpty()
@@ -37,8 +37,6 @@ class NativeReaderStore(private val settings: SettingsStore, private val dao: Re
     override suspend fun setOrigin(origin: String) = settings.origin(origin)
     override suspend fun appearance(theme: String, dynamic: Boolean) = settings.appearance(theme, dynamic)
     override suspend fun selection(scope: String, device: String, chat: String, title: String) = settings.selection(scope,device,chat,title)
-    override suspend fun position(scope: String, device: String, chat: String) = dao.find(scope,device,chat)
-    override suspend fun save(position: ReadingPosition) = dao.save(position)
 }
 /** [Launch]: the Teleply mark while the app finds out where it stands (0.9, web account page while booting). */
 /** [Developer]: 开发者选项 under 设置 (0.9: the service address, the local demo and diagnostics, off the main pages). */
@@ -55,6 +53,10 @@ data class ReaderState(
     val hits: List<Message> = emptyList(), val hitCursor: String? = null, val hitMore: Boolean = false, val searched: Boolean = false,
     val busy: Boolean = false, val error: String? = null, val expired: Boolean = false,
     val theme: String = "system", val dynamic: Boolean = false, val serverVersion: String = "",
+    /**
+     * [anchor]: the message the page shows first after the read numbered [scrollRevision], a search hit (jump); null
+     * for every opening, which shows the latest messages at the bottom (user 10-27).
+     */
     val anchor: ReadingPosition? = null, val scrollRevision: Int = 0, val fixture: Boolean = false,
     /** Web list display (spec 4.1): source "all" or one app; sort updated / created; status all / running / waiting / done; group none / project / app. */
     val listSource: String = "all", val listSort: String = "updated", val listStatus: String = "all", val listGroup: String = "none",
@@ -101,6 +103,11 @@ fun ReaderState.newApp(wanted: String): String = knownApps()?.let { apps -> if (
 /** The apps of a sidebar tree (/api/chat/projects), each group one app this computer has. */
 fun treeApps(tree: org.json.JSONObject): List<String> = tree.rows("apps") { it.string("app") }.filter { it in SourceOrder }.distinct().sortedBy { SourceOrder.indexOf(it) }
 data class NewHandoff(val app: String, val id: String, val text: String)
+/**
+ * Where a conversation's page stood (B09): its first item on screen ([item]; [message] when that is a message) and how
+ * far it was scrolled past ([offset]), in the read numbered [revision] ([ReaderState.scrollRevision]).
+ */
+data class ReadingPlace(val key: ChatKey, val revision: Int, val item: Int, val message: String?, val offset: Int)
 /** A new conversation's page before it exists (web preview id new:…). */
 fun isNewPage(chat: Chat?) = chat?.id?.startsWith("new:") == true
 data class ArchiveUndo(val chat: Chat, val index: Int, val waiting: Boolean, val serial: Long)
@@ -153,7 +160,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             sources=SourceInfo(device.id,known,loading=true,cached=known!=null)) }
         service.select(device.id)
         loadTree(true)
-        readChat(g,Chat(key.chat,"通知对应会话"),true)
+        readChat(g,Chat(key.chat,"通知对应会话"))
         pendingNotification=null
     } }
     fun live(foreground:Boolean) {
@@ -178,7 +185,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     private var work: Job? = null
     private var generation = 0
     private var pendingRestore: Preferences? = null
-    private val fixturePositions=mutableMapOf<ChatKey,ReadingPosition>()
+    /** Where the open conversation's page stood when it was last taken down ([keepPlace]); memory only. */
+    private var place: ReadingPlace? = null
     /** Messages that 展开全文 made whole, by id, in the conversation [wholeIn]: a later read keeps them whole. */
     private var wholeMessages=emptyMap<String,Message>()
     private var wholeIn:ChatKey?=null
@@ -236,7 +244,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             val known = cachedSources(scope, device.id)
             commit(g) { it.copy(device=device,screen=Screen.Chats,sources=SourceInfo(device.id,known,loading=true,cached=known!=null)) }
             loadTree(true)
-            if (device.id == p?.device && !p.chat.isNullOrBlank()) readChat(g, Chat(p.chat,p.title.ifBlank { "对话" }), restorePosition=true) else loadChats(g)
+            if (device.id == p?.device && !p.chat.isNullOrBlank()) readChat(g, Chat(p.chat,p.title.ifBlank { "对话" })) else loadChats(g)
             if (device.id != p?.device) persistSelection(scope,device.id,"","")
         }
         pendingRestore = null
@@ -317,7 +325,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
                 service.select(verified.id)
                 if(state.value.sources.device!=verified.id) { val known=cachedSources(scope,verified.id);commit(g) { it.copy(sources=SourceInfo(verified.id,known,loading=true,cached=known!=null)) } }
                 if(state.value.knownApps()==null || state.value.sources.failed!=null) loadTree(true)
-                if(previous.chat!=null) readChat(g,previous.chat,true) else loadChats(g)
+                if(previous.chat!=null) readChat(g,previous.chat) else loadChats(g)
             }
         } else {
             commit(g) { ReaderState(app=previous.app,origin=previous.origin,scope=scope,account=account,screen=Screen.Devices,theme=previous.theme,dynamic=previous.dynamic,serverVersion=previous.serverVersion,busy=true,fixture=previous.fixture) }
@@ -390,7 +398,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         pendingNotification=null
         // Opened from the list: a job that made it is done with (web route).
         jobs.jobs.value.find { it.accepted && it.createdId==chat.id && (it.pendingJson().string("app").ifBlank { it.app })==chat.app }?.let(jobs::drop)
-        useSource(chat.app);readChat(g,chat,true)
+        useSource(chat.app);readChat(g,chat)
     }
     /**
      * 打开新建对话 under a Codex reply that made a conversation (web remote.html renderAssistantText): it is read first,
@@ -407,7 +415,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             throw IllegalArgumentException("暂时无法打开这个对话："+(why ?: "连不上电脑，请稍后再试。"))
         }
         currentCoroutineContext().ensureActive()
-        useSource("codex");readChat(g,Chat(id,"新建对话",app="codex"),true)
+        useSource("codex");readChat(g,Chat(id,"新建对话",app="codex"))
     }
     /** The "all" list and the sidebar mix sources: opening a row of another source switches source, not the list. */
     private suspend fun useSource(app:String) {
@@ -496,7 +504,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         jobs.drop(job)
         useSource(app)
         commit(g) { it.copy(jobSheet=null,handoff=NewHandoff(app,id,job.text)) }
-        readChat(g,Chat(id,r.string("title").ifBlank { job.text.replace(Regex("\\s+")," ").trim().take(50).ifBlank { "新对话" } },r.string("folder").ifBlank { job.label },"","running",app),false)
+        readChat(g,Chat(id,r.string("title").ifBlank { job.text.replace(Regex("\\s+")," ").trim().take(50).ifBlank { "新对话" } },r.string("folder").ifBlank { job.label },"","running",app))
     }
     fun closeJobSheet() { mutable.update { it.copy(jobSheet=null) } }
     fun checkJob(job:NewJob) { jobs.current(job.request)?.let { jobs.check(it.copy(note="")) } }
@@ -669,13 +677,17 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     }
     /** "显示更多": 30 more rows of one project (spec 4.2). */
     fun moreTree(app:String,key:String) { treeMore[app to key]=(treeMore[app to key] ?: 10)+30;loadTree(true) }
-    private suspend fun readChat(g: Int, chat: Chat, restorePosition: Boolean) {
+    /**
+     * Opens [chat] at its latest messages, however it is opened (list, sidebar, a new conversation, a notification, the
+     * app starting again): the newest page, shown at the bottom (user 10-27, "保持每次点开对话都在最新的地方"). It used to
+     * read the page around where the reader last stood and open there, at the top of that page.
+     */
+    private suspend fun readChat(g: Int, chat: Chat) {
         val s = state.value; val device = requireNotNull(s.device)
-        commit(g) { it.copy(screen=Screen.Reading,chat=chat,messages=if(it.chat?.id==chat.id) it.messages else emptyList(),cursor=if(it.chat?.id==chat.id) it.cursor else null,older=it.chat?.id==chat.id && it.older,newer=it.chat?.id==chat.id && it.newer,anchor=if(it.chat?.id==chat.id) it.anchor else null,hits=emptyList(),searched=false,searchQuery="",handoff=it.handoff?.takeIf { h -> h.id==chat.id && h.app==chat.app }) }
-        val pos = if(!restorePosition) null else if(s.fixture) fixturePositions[ChatKey(s.scope,device.id,chat.id,s.app)] else store.positionFor(ChatKey(s.scope,device.id,chat.id,s.app))
-        val page = requireNotNull(api).history(device.id,chat.id,around=pos?.message)
+        commit(g) { it.copy(screen=Screen.Reading,chat=chat,messages=if(it.chat?.id==chat.id) it.messages else emptyList(),cursor=if(it.chat?.id==chat.id) it.cursor else null,older=it.chat?.id==chat.id && it.older,newer=it.chat?.id==chat.id && it.newer,hits=emptyList(),searched=false,searchQuery="",handoff=it.handoff?.takeIf { h -> h.id==chat.id && h.app==chat.app }) }
+        val page = requireNotNull(api).history(device.id,chat.id)
         currentCoroutineContext().ensureActive()
-        commit(g) { it.copy(messages=kept(it,page.items),cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=pos,scrollRevision=it.scrollRevision+1,runtime=page.meta,chat=it.chat?.let { c -> pageTitle(page.meta)?.let { t -> c.copy(title=t) } ?: c }) }
+        commit(g) { it.copy(messages=kept(it,page.items),cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=null,scrollRevision=it.scrollRevision+1,runtime=page.meta,chat=it.chat?.let { c -> pageTitle(page.meta)?.let { t -> c.copy(title=t) } ?: c }) }
         persistSelection(s.scope,device.id,chat.id,state.value.chat?.title ?: chat.title)
     }
     fun older() = operation { g ->
@@ -684,7 +696,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         if(page.reset) { commit(g) { it.copy(error="历史位置已变化，请回到最新消息后重试。") }; return@operation }
         commit(g) { it.copy(messages=kept(it,mergeMessages(it.messages,page.items,true)),cursor=page.cursor,older=page.hasMore) }
     }
-    fun latest() = operation { g -> state.value.chat?.let { readChat(g,it,false) } }
+    fun latest() = operation { g -> state.value.chat?.let { readChat(g,it) } }
     /** 展开全文: the whole of a message the page cut short, kept whole when the page is read again. */
     fun expand(message: Message) = operation { g ->
         val s=state.value
@@ -716,13 +728,14 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         val page=requireNotNull(api).history(requireNotNull(s.device).id,requireNotNull(s.chat).id,around=message.id)
         commit(g) { it.copy(messages=kept(it,page.items),cursor=page.cursor,older=page.hasMore,newer=page.hasNewer,anchor=ReadingPosition(s.scope,s.device.id,app=s.app,chat=s.chat.id,message=message.id,offset=0),scrollRevision=it.scrollRevision+1,hits=emptyList(),searched=false,runtime=page.meta) }
     }
-    fun saveAnchor(message: String, offset: Int, expectedScope: String = state.value.scope, expectedDevice: String? = state.value.device?.id, expectedChat: String? = state.value.chat?.id,expectedApp:String=state.value.app) {
-        val s=state.value
-        if(expectedScope.isBlank() || expectedDevice==null || expectedChat==null) return
-        val position=ReadingPosition(expectedScope,expectedDevice,app=expectedApp,chat=expectedChat,message=message,offset=offset)
-        if(s.app==expectedApp && s.scope==expectedScope && s.device?.id==expectedDevice && s.chat?.id==expectedChat && s.messages.any { it.id==message }) mutable.update { it.copy(anchor=position) }
-        if(s.fixture) fixturePositions[ChatKey(expectedScope,expectedDevice,expectedChat,expectedApp)]=position else viewModelScope.launch { store.save(position) }
-    }
+    /**
+     * Where the page stood as it was taken down (the phone turned, the window resized, 设置 opened): kept in memory
+     * only, for the same read of the same conversation ([placeFor]). Nothing is written to the phone any more, and no
+     * opening goes back to it (user 10-27).
+     */
+    fun keepPlace(value: ReadingPlace) { place = value }
+    /** The place kept for [key] in the read numbered [revision]; null once the conversation was opened or read again. */
+    fun placeFor(key: ChatKey, revision: Int): ReadingPlace? = place?.takeIf { it.key==key && it.revision==revision }
 
     fun settings() { work?.cancel(); generation++; mutable.update { it.copy(settingsReturn=if(it.screen in listOf(Screen.Settings,Screen.Developer,Screen.Service)) it.settingsReturn else it.screen,screen=Screen.Settings,busy=false,error=null) } }
     fun developer() { work?.cancel(); generation++; mutable.update { it.copy(screen=Screen.Developer,busy=false,error=null) } }

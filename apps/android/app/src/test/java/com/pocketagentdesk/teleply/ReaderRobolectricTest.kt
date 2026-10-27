@@ -13,12 +13,13 @@ import androidx.compose.ui.unit.dp
 @Config(sdk=[35],qualifiers="w412dp-h892dp-xxhdpi",application=android.app.Application::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ReaderRobolectricTest:ReaderUiScenarios() {
-    @Test @Config(qualifiers="w1200dp-h800dp-xhdpi") fun resizingMovesReaderWithoutDiscardingDraftOrAnchor() {
+    /** The page drawn anew for another window width goes back where it stood (in memory, for the same read). */
+    @Test @Config(qualifiers="w1200dp-h800dp-xhdpi") fun resizingMovesReaderWithoutDiscardingDraftOrPlace() {
         val width=mutableStateOf(1200.dp);launch(windowWidth=width);fixtureList()
         compose.onNodeWithText("原生阅读示例").performClick();compose.waitUntil(10000) { !vm.state.value.busy && vm.composer.state.value.ready }
         compose.onNodeWithTag("composer").performTextInput("窗口切换草稿")
         compose.onNodeWithTag("messages").performScrollToIndex(1)
-        compose.runOnIdle { vm.saveAnchor("m1",0);width.value=700.dp }
+        compose.runOnIdle { width.value=700.dp }
         compose.onNodeWithTag("two-pane").assertDoesNotExist()
         compose.onNodeWithText("请展示原生 Markdown 阅读。").assertIsDisplayed()
         org.junit.Assert.assertEquals("窗口切换草稿",vm.composer.state.value.draft)
