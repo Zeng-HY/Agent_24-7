@@ -426,7 +426,9 @@ class Bridge:
         if before:req['beforeSeq']=int(before)
         return self.client.call('session/page',{'request':req}),p
     def conversation(self,sid,limit=60,before='',around=''):
-        if around:before=str(int(str(around).split(':',1)[0])+1)
+        # A row's id starts with its event's seq ("12", "12:thinking"); a tool call or a subagent ("tool:…",
+        # "subagent:…") carries none, so around one of those the latest page is read (10-27: int('tool') failed).
+        if around and (seq:=re.match(r'\d+(?=:|$)',str(around))):before=str(int(seq.group())+1)
         item=self.find(sid);page,p=self.records(sid,before,limit);rows=public_messages(page['records'],sid)
         seqs=[r['event']['seq'] for r in page['records'] if r.get('event')]
         v=p['values'];selection=(v.get('modelSelection') or {}).get('next') or {}

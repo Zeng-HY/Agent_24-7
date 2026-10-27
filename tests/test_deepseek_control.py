@@ -147,6 +147,18 @@ class AdapterTests(unittest.TestCase):
         out=self.bridge.conversation(SID)
         self.assertEqual(out['messages'][0]['role'],'subagent');self.assertEqual(out['messages'][0]['status'],'done')
         self.assertEqual(out['subagents'][0]['label'],'答 quote-0001 至 0010')
+    def test_conversation_around_a_row_without_a_seq_reads_the_latest_page(self):
+        asked=[]
+        def call(method,args):
+            if method=='session/page':asked.append(args['request'].get('beforeSeq'))
+            return {'session/list':{'items':[]},
+                'session/projections':{'kind':'sequenced','asOfSeq':20,'values':{'title':'parent','workingDirectory':'D:/p'}},
+                'session/page':{'records':[],'hasMore':False}}[method]
+        self.client.call.side_effect=call
+        for around in ('tool:call_abc','subagent:22222222-2222-2222-2222-222222222222','12:thinking','12'):
+            out=self.bridge.conversation(SID,around=around)
+            self.assertEqual(out['has_newer'],around[0].isdigit())
+        self.assertEqual(asked,[None,None,13,13])
     def test_workspaces_are_the_sidebar_table_newest_first(self):
         home=Path(self.tmp.name);(home/'storages').mkdir(exist_ok=True)
         (home/'storages'/'workspace.json').write_text(json.dumps({'tables':{'workspaces':{
