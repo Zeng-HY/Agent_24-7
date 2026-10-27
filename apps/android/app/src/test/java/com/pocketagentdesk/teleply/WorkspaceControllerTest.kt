@@ -104,6 +104,34 @@ class WorkspaceControllerTest {
         assertEquals("这条消息已经不在电脑上排队了，上次的立即补充已处理。",found(claudePress("steer","q1"),"""{"queued":[]}"""))
         assertEquals("电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。",claudePressFound(JSONObject(),parseControl(JSONObject("""{"actions":[{"name":"Yes","token":"t"}]}"""))))
     }
+    /** 10-27: a Word file the computer's Office can turn into PDF shows as that PDF; the page and its buttons are there meanwhile. */
+    @Test fun anOfficeFileShowsAsThePdfTheComputerMakes()=runTest {
+        val gate=CompletableDeferred<Unit>();val asked=mutableListOf<String>();var fails:Exception?=null
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                assertEquals("file/meta",route)
+                return JSONObject().put("kind","download").put("size",12).put("state","current").apply { if(query["file"]!="plain") put("preview","pdf") }
+            }
+            override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray {
+                asked+=file;assertEquals(PreviewLimit,limit);gate.await();fails?.let { throw it };return "%PDF".toByteArray()
+            }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.file(JSONObject().put("id","doc").put("name","报告.docx"));runCurrent()
+        assertTrue(c.state.value.converting);assertFalse(c.state.value.busy);assertNull(c.state.value.preview)
+        assertEquals("pdf",JSONObject(c.state.value.data).string("preview"));assertEquals("download",JSONObject(c.state.value.data).string("kind"))
+        gate.complete(Unit);runCurrent()
+        assertFalse(c.state.value.converting);assertEquals("%PDF",String(c.state.value.preview!!));assertEquals("",c.state.value.previewNote)
+        // The computer cannot: its words, no preview, and nothing else held up.
+        fails=ServiceFailure(500,detail="电脑上的 Excel 没有响应");c.file(JSONObject().put("id","sheet").put("name","预算.xlsx"));runCurrent()
+        assertEquals("没能转成 PDF：电脑上的 Excel 没有响应",c.state.value.previewNote);assertNull(c.state.value.preview)
+        assertNull(c.state.value.error);assertFalse(c.state.value.converting);assertFalse(c.state.value.busy)
+        // Leaving the page drops what it said.
+        c.close();assertEquals("",c.state.value.previewNote)
+        // No "preview": as before, no PDF asked for.
+        c.file(JSONObject().put("id","plain").put("name","数据.bin"));runCurrent()
+        assertEquals(listOf("doc","sheet"),asked);assertFalse(JSONObject(c.state.value.data).has("preview"));assertFalse(c.state.value.converting)
+    }
     /** 核对上次操作 with nothing open left the page busy for good: every later action and state poll waited on it. */
     @Test fun checkingTheLastActionLeavesThePageFree()=runTest {
         val api=WorkspaceApi().apply { uncertain=true };val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()

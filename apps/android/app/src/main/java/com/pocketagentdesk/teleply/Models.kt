@@ -49,8 +49,11 @@ fun keepWhole(messages: List<Message>, whole: Map<String, Message>): List<Messag
     if (whole.isEmpty()) messages else messages.map { m -> whole[m.id]?.takeIf { m.truncated && it.length >= m.length }?.let { m.copy(text = it.text, truncated = false) } ?: m }
 /** The words of 展开全文 (web reading-ui.js): with the whole length when the computer gave it. */
 fun expandLabel(message: Message) = if (message.length > 0) "展开全文（${message.length} 字）" else "展开全文"
-/** [draft] is the text found in Claude's box on the computer when that turned a send away (code desktop_draft). */
-class ServiceFailure(val status: Int, val code: String = "",detail:String="",val notSubmitted:Boolean=false,val draft:String="") : Exception(when {
+/**
+ * [detail] is the computer's own words ({"error": …}), shown where a fixed sentence would say less (a file preview);
+ * [draft] is the text found in Claude's box on the computer when that turned a send away (code desktop_draft).
+ */
+class ServiceFailure(val status: Int, val code: String = "",val detail:String="",val notSubmitted:Boolean=false,val draft:String="") : Exception(when {
     status == 401 -> "登录已失效，请重新登录；当前阅读位置已保留。"
     status == 409 && code == "device_offline" || status == 503 -> "电脑已离线，请稍后刷新电脑列表。"
     status == 403 -> "服务拒绝访问，请核对服务地址或账号权限。"

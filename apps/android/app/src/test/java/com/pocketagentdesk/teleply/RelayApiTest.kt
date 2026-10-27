@@ -33,6 +33,25 @@ class RelayApiTest {
         server.takeRequest()
         assertThrows(IllegalArgumentException::class.java) { serviceOrigin("https://example.invalid/private") }
     }
+    /** 10-27: Word, Excel and PowerPoint as PDF: the device-bound route, the computer's own words when it cannot, 20 MB at most. */
+    @Test fun officeFilesComeAsPdfWithTheComputersWords()=runTest {
+        val claude=api.forSource("claude")
+        server.enqueue(MockResponse().setHeader("Content-Type","application/pdf").setBody("%PDF-1.4 fixture"))
+        assertEquals("%PDF-1.4 fixture",String(claude.filePdf(device,"chat","file-1",1024)))
+        val url=server.takeRequest().requestUrl!!
+        assertEquals("/d/$device/api/file/pdf",url.encodedPath);assertEquals("claude",url.queryParameter("app"))
+        assertEquals("chat",url.queryParameter("id"));assertEquals("file-1",url.queryParameter("file"))
+        for(status in listOf(404,500)) {
+            response("""{"error":"电脑上没有可用的 Word"}""",status)
+            try { claude.filePdf(device,"chat","file-1",1024);fail() } catch(e:ServiceFailure) { assertEquals(status,e.status);assertEquals("电脑上没有可用的 Word",e.detail) }
+            server.takeRequest()
+            assertEquals("没能转成 PDF：电脑上没有可用的 Word",pdfFailure(ServiceFailure(status,detail="电脑上没有可用的 Word")))
+        }
+        server.enqueue(MockResponse().setHeader("Content-Type","application/pdf").setBody("x".repeat(2048)))
+        try { claude.filePdf(device,"chat","file-1",1024);fail() } catch(e:PreviewTooLarge) { assertEquals(1024L,e.limit) }
+        server.takeRequest()
+        assertEquals("转成的 PDF 超过20MB预览上限，可保存后使用系统应用打开。",pdfFailure(PreviewTooLarge(PreviewLimit)))
+    }
     @Test fun sseUsesBoundPathAndParsesSnapshot()=runTest {
         server.enqueue(MockResponse().setHeader("Content-Type","text/event-stream").setBody("event: update\ndata: {\"protocol\":1,\"seq\":1,\"type\":\"snapshot\",\"app\":\"codex\",\"id\":\"chat\",\"chat\":{\"app\":\"codex\",\"id\":\"chat\",\"messages\":[{\"id\":\"m\",\"role\":\"assistant\",\"text\":\"stream\",\"order\":1}]}}\n\n"))
         val frame=api.events(device,"chat").first()

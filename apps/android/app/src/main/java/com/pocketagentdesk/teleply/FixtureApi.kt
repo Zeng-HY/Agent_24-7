@@ -35,7 +35,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "files/places" -> JSONObject("""{"items":[{"name":"固定目录","path":"D:/fixture","kind":"conversation"}]}""")
         "files/list" -> JSONObject("""{"path":"D:/fixture","items":[{"kind":"file","app":"pc","id":"fixture-file-ref","download_id":"fixture-download","name":"遥应下载测试-${System.currentTimeMillis()}.txt","path":"D:/fixture/测试.txt"}]}""")
         "chat/files" -> JSONObject().put("items", JSONArray(FixtureWorld.FILES))
-        "file/meta" -> if(query["file"]=="fixture-download") JSONObject().put("kind","download").put("size","固定测试内容".toByteArray().size).put("state","current") else FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")) } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
+        "file/meta" -> if(query["file"]=="fixture-download") JSONObject().put("kind","download").put("size","固定测试内容".toByteArray().size).put("state","current") else FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")).apply { if (it.has("preview")) put("preview", it.string("preview")) } } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
         "file/text" -> JSONObject().put("text", if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
         "chat/diff" -> JSONObject("""{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}""")
         "chat/projects" -> world.tree(query["more"], device)
@@ -77,6 +77,17 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
 
     // A picture sent with a message is the fixed picture too, small or whole.
     override suspend fun sentPicture(device: String, id: String, small: Boolean, output: java.io.OutputStream) { net(); world.pictureReads++; output.write(java.util.Base64.getDecoder().decode(FixtureWorld.PNG)) }
+
+    // Word, Excel and PowerPoint as the computer's Office turns them into PDF (10-27): the Word file after a moment
+    // (Office starting), the Excel one not at all, in the computer's words.
+    override suspend fun filePdf(device: String, chat: String, file: String, limit: Long): ByteArray {
+        net()
+        world.pdfReads++
+        world.pdfGate?.await() ?: run { if (world.pdfDelay > 0) kotlinx.coroutines.delay(world.pdfDelay) }
+        if (file == "fixture-xlsx") throw ServiceFailure(500, detail = "本地示例：电脑上的 Excel 没有响应，没能转成 PDF")
+        if (file != "fixture-docx") throw ServiceFailure(404, detail = "这个文件不能转成 PDF")
+        return java.util.Base64.getDecoder().decode(FixtureWorld.PDF)
+    }
 
     override suspend fun uploadStream(device: String, chat: String, name: String, size: Long, image: Boolean, draft: Boolean, open: () -> java.io.InputStream) =
         net().let { JSONObject() }.put("id", java.util.UUID.randomUUID().toString()).put("kind", "file").put("app", if (image) source else "pc").put("name", name).put("path", "D:/fixture/$name").put("original_size", size).put("size", size)
@@ -161,6 +172,10 @@ class FixtureWorld {
     var desktopMenuReads = 0
     /** Pictures sent with messages the demo computer was asked for, small or whole: the phone keeps them after once. */
     var pictureReads = 0
+    /** Office files the demo computer was asked to turn into PDF; how long it takes (Office starting), or what it waits for (tests). */
+    var pdfReads = 0
+    @Volatile var pdfDelay = 1_500L
+    @Volatile var pdfGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     private var claudeModel = "Opus 4.7"
     private var claudeEffort = "高"
     private var claudeMode = "default"
@@ -670,7 +685,12 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
             JSONObject().put("id", "fixture-html").put("name", "安全预览.html").put("path", "D:\\fixture\\安全预览.html").put("kind", "text").put("state", "current").put("size", 900),
             JSONObject().put("id", "fixture-png").put("name", "logo.png").put("path", "D:\\fixture\\images\\logo.png").put("kind", "image").put("state", "current").put("size", 462),
             JSONObject().put("id", "fixture-md").put("name", "说明.md").put("path", "D:\\fixture\\说明.md").put("kind", "text").put("state", "current").put("size", 200),
+            // Office files the computer can show as PDF (10-27): the Word one converts, the Excel one fails.
+            JSONObject().put("id", "fixture-docx").put("name", "发布说明.docx").put("path", "D:\\fixture\\发布说明.docx").put("kind", "download").put("state", "current").put("size", 18_432).put("preview", "pdf"),
+            JSONObject().put("id", "fixture-xlsx").put("name", "预算表.xlsx").put("path", "D:\\fixture\\预算表.xlsx").put("kind", "download").put("state", "current").put("size", 9_216).put("preview", "pdf"),
         )
+        /** What the demo computer's Office makes of 发布说明.docx: a valid one-page PDF (1,010 bytes). */
+        const val PDF = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MDAgNDIwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0NjAgPj4Kc3RyZWFtCjAuOTMgMC45NSAxIHJnIDI0IDI0IDU1MiAzNzIgcmUgZgowLjE1IDAuMzkgMC45MiByZyAyNCAzNDAgNTUyIDU2IHJlIGYKQlQgL0YxIDIyIFRmIDEgMSAxIHJnIDQ0IDM2MCBUZCAoUmVsZWFzZSBub3RlcyAtIGRlbW8pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMzAwIFRkIChDb252ZXJ0ZWQgZnJvbSBXb3JkIG9uIHRoZSBjb21wdXRlci4pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMjcwIFRkICgxLiBPcGVuIGEgY29udmVyc2F0aW9uIGF0IHRoZSBsYXRlc3QgbWVzc2FnZXMuKSBUaiBFVApCVCAvRjEgMTUgVGYgMC4xIDAuMSAwLjEyIHJnIDQ0IDI0NSBUZCAoMi4gT2ZmaWNlIGZpbGVzIHNob3cgaW5saW5lIGFzIFBERi4pIFRqIEVUCkJUIC9GMSAxMSBUZiAwLjQ1IDAuNDcgMC41MiByZyA0NCA2MCBUZCAoVGVsZXBseSBsb2NhbCBkZW1vKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2NCAwMDAwMCBuIAowMDAwMDAwMTIxIDAwMDAwIG4gCjAwMDAwMDAyNDcgMDAwMDAgbiAKMDAwMDAwMDc1NyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjgyNwolJUVPRgo="
 
         val HTML_FILE = """
 <script>fetch('https://example.invalid/secret').catch(() => {})</script>

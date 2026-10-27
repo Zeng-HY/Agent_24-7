@@ -23,6 +23,8 @@ class MemoryCookieVault : CookieVault {
     @Synchronized override fun read(origin: String) = values[origin]
     @Synchronized override fun write(origin: String, cookie: String?) { if (cookie == null) values.remove(origin) else values[origin] = cookie }
 }
+/** A preview past what the phone draws ([limit], 20 MB): the file itself can still be saved and opened elsewhere. */
+class PreviewTooLarge(val limit: Long) : Exception("转成的 PDF 超过${limit / (1024 * 1024)}MB预览上限，可保存后使用系统应用打开。")
 fun serviceOrigin(value: String): HttpUrl {
     val url = value.trim().toHttpUrl()
     require(url.scheme == "https" && url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null && url.encodedPath == "/") { "请输入 HTTPS 服务根地址，不含账号、路径或参数。" }
@@ -37,6 +39,8 @@ interface ReadApi {
     suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream) { output.write(download(device,chat,file)) }
     /** A picture the computer kept of a send (GET /api/codex/image by its id; [small]: its copy of at most 320 px). */
     suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) { error("下载不可用") }
+    /** A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (GET /api/file/pdf, 10-27), at most [limit] bytes. */
+    suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray = throw ServiceFailure(404,detail="这里不能把文件转成 PDF")
     fun events(device: String, chat: String): kotlinx.coroutines.flow.Flow<LiveFrame> = kotlinx.coroutines.flow.emptyFlow()
     /** [fresh]: read the desktop now; otherwise the computer may answer from its read of the last 4 s (web state polls). */
     suspend fun control(device: String, chat: String, fresh: Boolean = true): Control = Control()
@@ -167,6 +171,39 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build(),output)
     override suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) =
         streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/codex/image")).apply { if(small) addQueryParameter("thumb","1") }.addQueryParameter("id",id).build(),output)
+    /**
+     * A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (10-27). The first time a version is
+     * asked for, Office may take 5-30 s to start before a byte comes, so this waits much longer than other requests;
+     * later the computer answers from its copy. The computer's own words when it cannot ({"error": …}).
+     */
+    override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray {
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file/pdf")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build()
+        val timer=Diagnostics.start(Diagnostics.Labels["/api/file/pdf"])
+        return try { fetch(url,limit,client.newBuilder().readTimeout(90,TimeUnit.SECONDS).callTimeout(150,TimeUnit.SECONDS).build()).also { Diagnostics.finish(timer,it.size.toLong(),"请求完成") } }
+        catch(e:Exception) { Diagnostics.finish(timer,0,when(e) { is ServiceFailure -> "HTTP ${e.status}"; is kotlinx.coroutines.CancellationException,is java.io.InterruptedIOException -> "已取消或超时"; else -> "网络失败" });throw e }
+    }
+    /** The bytes of a GET, at most [limit] ([PreviewTooLarge] past it); a refusal carries the computer's words, as the JSON routes do. */
+    private suspend fun fetch(url:HttpUrl,limit:Long,caller:OkHttpClient):ByteArray = suspendCancellableCoroutine { continuation ->
+        val builder=Request.Builder().url(url)
+        vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> builder.header("Cookie","${c.name}=${c.value}") } }
+        val call=caller.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object:Callback {
+            override fun onFailure(call:Call,e:IOException) { if(continuation.isActive) continuation.resumeWithException(e) }
+            override fun onResponse(call:Call,response:Response) {
+                try { response.use { r ->
+                    val source=r.body?.source() ?: throw IOException("电脑没有返回内容")
+                    if(!r.isSuccessful) {
+                        val raw=if(source.request(64L*1024+1)) "" else source.readUtf8()
+                        val error=runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+                        throw ServiceFailure(r.code,error.string("code"),error.string("error"))
+                    }
+                    if((r.body?.contentLength() ?: -1L)>limit || source.request(limit+1)) throw PreviewTooLarge(limit)
+                    val bytes=source.readByteArray()
+                    if(continuation.isActive) continuation.resume(bytes)
+                } } catch(e:Exception) { if(continuation.isActive) continuation.resumeWithException(e) }
+            }
+        })
+    }
     /** A file from the computer into [output], at most 100 MB, whole or with an error. */
     private suspend fun streamTo(url:HttpUrl,output:java.io.OutputStream):Unit = suspendCancellableCoroutine { continuation ->
         val builder=Request.Builder().url(url)

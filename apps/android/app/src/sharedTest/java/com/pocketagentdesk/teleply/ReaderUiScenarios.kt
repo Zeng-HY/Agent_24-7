@@ -330,6 +330,33 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("<script>fetch(",substring=true).assertExists()
         compose.onNodeWithText("保存到手机").performScrollTo().assertHasClickAction()
     }
+    /** 10-27: Word, Excel and PowerPoint show as the PDF the computer's Office makes; the buttons still take the file itself. */
+    @Test fun officeFilesShowAsPdfAndTheButtonsTakeTheFile() {
+        launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.ready && !vm.state.value.busy }
+        val world=vm.fixtureWorld!!;val office=kotlinx.coroutines.CompletableDeferred<Unit>();world.pdfGate=office
+        compose.onNodeWithContentDescription("对话菜单").performClick()
+        compose.onNodeWithText("对话文件").performClick();compose.waitUntil(10000) { !vm.workspace.state.value.busy }
+        compose.onNodeWithText("发布说明.docx").performScrollTo().performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.converting }
+        // While Office works on the computer: a short note, and the buttons already work on the file itself.
+        compose.onNodeWithText("正在用电脑上的 Office 转成 PDF…").assertExists()
+        compose.onNodeWithText("保存到手机").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("这类文件不提供内嵌预览，可保存后使用系统应用打开。").assertDoesNotExist()
+        compose.runOnIdle { office.complete(Unit) }
+        compose.waitUntil(10000) { vm.workspace.state.value.preview!=null }
+        compose.onNodeWithText("正在用电脑上的 Office 转成 PDF…").assertDoesNotExist()
+        compose.onNodeWithText("1/1").assertExists()
+        compose.onNodeWithText("系统分享").assertIsEnabled();compose.onNodeWithText("用其他应用打开").assertIsEnabled()
+        compose.runOnIdle { org.junit.Assert.assertEquals("pdf",org.json.JSONObject(vm.workspace.state.value.data).string("preview")) }
+        // One the computer cannot turn into PDF says so in its words, and keeps the buttons.
+        compose.runOnIdle { vm.workspace.panel("files") };compose.waitUntil(10000) { !vm.workspace.state.value.busy }
+        compose.onNodeWithText("预算表.xlsx").performScrollTo().performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.previewNote.isNotBlank() }
+        compose.onNodeWithText("没能转成 PDF：本地示例：电脑上的 Excel 没有响应，没能转成 PDF").assertExists()
+        compose.onNodeWithText("保存到手机").performScrollTo().assertIsEnabled()
+        compose.runOnIdle { org.junit.Assert.assertEquals(2,world.pdfReads) }
+    }
     @Test fun claudeSendIsConfirmedFromItsRecord() {
         launch();fixtureList();openChat("Claude 下一步示例","claude-next")
         compose.onNodeWithTag("composer").performTextInput("再跑一遍测试")

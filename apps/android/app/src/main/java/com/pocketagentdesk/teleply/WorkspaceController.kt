@@ -19,7 +19,9 @@ import org.json.JSONObject
  */
 data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null,
                           /** 核对上次操作 reading the computer: the button waits; nothing else does. */
-                          val checking:Boolean=false) {
+                          val checking:Boolean=false,
+                          /** A Word, Excel or PowerPoint file being turned into PDF on the computer, and why there is none ([previewNote]). */
+                          val converting:Boolean=false,val previewNote:String="") {
     /** One Claude button at a time: its click waits for the computer's window. */
     val pressing:Boolean get() = cards.values.any { it.startsWith("pressing:") }
 }
@@ -29,6 +31,17 @@ data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane
  * 120 s). A press whose reply was lost cannot land after that.
  */
 const val ClaudePressLife=120_000L
+
+/** The most a picture or PDF drawn on a file's page may be, the converted PDF of a Word, Excel or PowerPoint file too. */
+const val PreviewLimit=20L*1024*1024
+
+/** Why the computer's Office gave no PDF: in its own words when it gave some (10-27). */
+fun pdfFailure(e:Exception):String = when(e) {
+    is PreviewTooLarge -> e.message.orEmpty()
+    is ServiceFailure -> "没能转成 PDF："+e.detail.ifBlank { e.message.orEmpty() }
+    is java.io.InterruptedIOException -> "没能转成 PDF：等了太久，电脑还没转好，请稍后再打开。"
+    else -> "没能转成 PDF：连不上电脑，请稍后再打开。"
+}
 
 /** What a Claude press was, kept with it on this phone only (never sent): an option or button of its card ("choice"), 停止这一轮 ("stop"), or 立即补充 of a queued message ([item]). */
 fun claudePress(what:String,item:String="")=JSONObject().put("what",what).apply { if(item.isNotBlank()) put("item",item) }
@@ -124,10 +137,10 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         launchSafe { try { mutex.withLock { if(synthetic) demo[k]=j.toString() else store.detail(k,"workspace",j.toString()) } } catch(_:Exception) { update(k) { it.copy(ready=false,error="交互草稿保存失败") } } }
     }
     /** A file page keeps the file's text in [WorkspaceState.result]: it goes with the page, not into the status line. */
-    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null,result=if(it.pane=="file") "" else it.result) } }
+    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null,result=if(it.pane=="file") "" else it.result,converting=false,previewNote="") } }
     fun panel(name:String) {
         saveJob?.cancel();read?.cancel();generation++
-        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote,result=if(it.pane=="file") "" else it.result) }
+        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote,result=if(it.pane=="file") "" else it.result,converting=false,previewNote="") }
         if(name=="new") openNew() else refresh(name)
     }
     /**
@@ -652,20 +665,36 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         try { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),shareMime(name)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"打开已保存的文件")) }
         catch(_:Exception) { key?.let { k -> update(k) { it.copy(transfer="文件已保存，手机上暂时没有可用的打开应用") } } }
     }
+    /**
+     * A file's page: its words, its picture or PDF drawn here, and since 10-27 a Word, Excel or PowerPoint file as the
+     * PDF the computer's Office makes of it ("preview": "pdf" in the list or meta). 保存到手机, 系统分享 and 用其他应用打开
+     * still take the file itself, and work while the PDF is being made.
+     */
     fun file(file:JSONObject) {
         val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
-        update(k) { it.copy(pane="file",busy=true,data=file.toString(),error=null,preview=null,result="",transfer="",savedUri=null,savingFile=false) }
+        update(k) { it.copy(pane="file",busy=true,data=file.toString(),error=null,preview=null,result="",transfer="",savedUri=null,savingFile=false,converting=false,previewNote="") }
         read=launchSafe { try {
             val q=mapOf("app" to k.app,"id" to k.chat,"file" to file.getString("id"))
             val meta=service.detail(k.device,"file/meta",q)
             val kind=meta.string("kind")
+            val office=kind=="download" && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
+            val data=JSONObject(file.toString()).put("kind",kind).put("meta",meta).apply { if(office) put("preview","pdf") else remove("preview") }.toString()
+            if(office) {
+                // The page and its buttons at once; the PDF when Office on the computer has made it (5-30 s the first time).
+                if(g==generation) update(k) { it.copy(data=data,busy=false,converting=true) }
+                val pdf=try { service.filePdf(k.device,k.chat,file.getString("id"),PreviewLimit) }
+                    catch(e:CancellationException) { throw e }
+                    catch(e:Exception) { if(g==generation) update(k) { it.copy(converting=false,previewNote=pdfFailure(e)) };null }
+                if(pdf!=null && g==generation) update(k) { it.copy(converting=false,preview=pdf) }
+                return@launchSafe
+            }
             var text="";var bytes:ByteArray?=null;var note=""
             try {
                 if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
-                if(kind in listOf("image","pdf") && meta.optLong("size")<=20L*1024*1024) bytes=service.download(k.device,k.chat,file.getString("id"))
+                if(kind in listOf("image","pdf") && meta.optLong("size")<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
             } catch(e:CancellationException) { throw e } catch(_:Exception) { note="预览未能加载，仍可尝试保存原文件。" }
-            if(g==generation) update(k) { it.copy(data=JSONObject(file.toString()).put("kind",kind).put("meta",meta).toString(),result=text,preview=bytes,busy=false,transfer=note) }
-        } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false) } } }
+            if(g==generation) update(k) { it.copy(data=data,result=text,preview=bytes,busy=false,transfer=note) }
+        } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false,converting=false) } } }
     }
     @Volatile private var listing:Pair<ChatKey,JSONObject>?=null
     /**
@@ -683,7 +712,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     fun diff(ref:String,offset:Int=0) {
         val k=key ?: return;val service=api ?: return;read?.cancel();val g=++generation
-        update(k) { it.copy(pane="diff",busy=true,error=null,preview=null) }
+        update(k) { it.copy(pane="diff",busy=true,error=null,preview=null,converting=false,previewNote="") }
         read=launchSafe { try { val r=service.detail(k.device,"chat/diff",mapOf("app" to k.app,"id" to k.chat,"ref" to ref,"offset" to "$offset"));if(g==generation) update(k) { it.copy(data=r.toString(),busy=false) } } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false) } } }
     }
     fun saveFile(context:Context,uri:Uri,file:JSONObject) {

@@ -12,8 +12,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -411,6 +413,8 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
         val lower=data.string("name").lowercase()
         val html=lower.endsWith(".html") || lower.endsWith(".htm")
         val markdown=lower.endsWith(".md") || lower.endsWith(".markdown")
+        // Word, Excel and PowerPoint as the PDF the computer's Office makes (10-27); the buttons below take the file itself.
+        val office=data.string("preview")=="pdf"
         if(s.result.isNotBlank()) {
             // HTML shows as a page and Markdown as text to read, with 查看源码 beside (web artifact-preview).
             if(html || markdown) {
@@ -421,8 +425,14 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
                 else Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
             } else CodePanel(data.string("name").ifBlank { "文本" },s.result,"复制文件内容")
         }
-        s.preview?.let { bytes -> NativePreview(bytes,data.string("kind")) }
-        if((data.optJSONObject("meta")?.optLong("size") ?: 0)>20L*1024*1024) InfoNote("文件超过20MB预览上限，可保存后使用系统应用打开。")
+        s.preview?.let { bytes -> NativePreview(bytes,if(office) "pdf" else data.string("kind")) }
+        if(s.converting) Row(Modifier.fillMaxWidth().semantics { liveRegion=LiveRegionMode.Polite },verticalAlignment=Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(16.dp),color=p.accent,strokeWidth=2.dp)
+            Spacer(Modifier.width(8.dp))
+            Text("正在用电脑上的 Office 转成 PDF…",style=MaterialTheme.typography.note,color=p.muted)
+        }
+        if(s.previewNote.isNotBlank()) InfoNote(s.previewNote)
+        if(!office && (data.optJSONObject("meta")?.optLong("size") ?: 0)>PreviewLimit) InfoNote("文件超过20MB预览上限，可保存后使用系统应用打开。")
         if(s.transfer.isNotBlank()) Text(s.transfer,style=MaterialTheme.typography.note)
         if(s.savingFile) PillButton("取消保存",c::cancelSave,style=PillStyle.Text)
         s.savedUri?.let { uri -> PillButton("打开已保存的文件",{ c.openSaved(context,uri,data.string("name")) },style=PillStyle.Text) }
@@ -432,7 +442,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
             PillButton("系统分享",{ c.shareFile(context,JSONObject(s.data),false) },enabled=!s.busy && !s.savingFile && s.error==null,leading=TeleplyIcons.Share,modifier=Modifier.weight(1f))
             PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && !s.savingFile && s.error==null,leading=TeleplyIcons.Open,modifier=Modifier.weight(1f))
         }
-        if(data.string("kind")=="download") InfoNote("这类文件不提供内嵌预览，可保存后使用系统应用打开。")
+        if(data.string("kind")=="download" && !office) InfoNote("这类文件不提供内嵌预览，可保存后使用系统应用打开。")
     }
 }
 
@@ -471,7 +481,9 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
                 val temp=java.io.File.createTempFile("preview-",".pdf",context.cacheDir)
                 try { temp.writeBytes(bytes);android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(temp,android.os.ParcelFileDescriptor.MODE_READ_ONLY)).use { renderer -> pages=renderer.pageCount;renderer.openPage(page.coerceIn(0,renderer.pageCount-1)).use { pg -> android.graphics.Bitmap.createBitmap(1000,(1000f*pg.height/pg.width).toInt().coerceIn(1,4096),android.graphics.Bitmap.Config.ARGB_8888).also { it.eraseColor(android.graphics.Color.WHITE);pg.render(it,null,null,android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) } } } } finally { temp.delete() }
             } else { val info=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true };android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,info);require(info.outWidth>0 && info.outHeight>0);val opts=android.graphics.BitmapFactory.Options().apply { inSampleSize=maxOf(1,maxOf(info.outWidth,info.outHeight)/2048) };android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,opts) ?: throw IllegalArgumentException("图片格式不支持") }
-        } } catch(e:Exception) { error="无法原生预览，可保存后使用系统应用打开。" }
+        } } catch(e:kotlinx.coroutines.CancellationException) { throw e }
+        // Not only a broken file: a page too big for memory, or no PDF renderer here at all, says the same and keeps the page.
+        catch(e:Throwable) { error="无法原生预览，可保存后使用系统应用打开。" }
     }
     bitmap?.let { Image(it.asImageBitmap(),contentDescription="文件预览",modifier=Modifier.fillMaxWidth()) }
     error?.let { Text(it,style=MaterialTheme.typography.note,color=LocalTeleply.current.muted) }

@@ -43,6 +43,8 @@ object Diagnostics {
         "/api/codex/upload" to "图片上传", "/api/files/upload" to "文件上传", "/api/files/image" to "电脑图片读取",
         "/api/codex/send" to "消息提交", "/api/chat/send" to "消息提交", "/api/claude/steer" to "补充指令提交", "/api/deepseek/send" to "消息提交",
         "/api/chat/new" to "新对话提交", "/api/chat/new/retry" to "新对话重试",
+        // Word, Excel and PowerPoint as PDF (10-27): the first time, Office on the computer may take half a minute.
+        "/api/file/pdf" to "文件预览",
     )
 
     class Timer internal constructor(val label: String, val start: Long, val generation: Int, val hidden: Int)
