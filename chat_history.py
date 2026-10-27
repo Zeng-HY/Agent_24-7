@@ -21,8 +21,8 @@ def decode(value):
     except Exception:raise HistoryError('分页位置无效，请刷新') from None
 
 class Transcript:
-    def __init__(self,path,app):
-        self.path=path;self.app=app;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
+    def __init__(self,path,app,cwd=''):
+        self.path=path;self.app=app;self.cwd=cwd;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
         self.context={}  # what a line needs to know of earlier ones (Claude's next-step boxes, 10-16)
     def refresh(self):
         with self.lock:
@@ -64,6 +64,9 @@ class Transcript:
                         m['id']=m.get('source_id') or digest+':'+str(self.duplicates[digest])
                         m['order']=self.offset
                         if self.app=='codex' and self.state.get('current_turn_id'):m['turn_id']=self.state['current_turn_id']
+                        if self.app=='claude' and m.get('role')=='assistant':
+                            from message_files import absolute_links
+                            m['text']=absolute_links(m['text'],self.cwd)  # its links relative to the working folder
                         if m['id'] in self.by_id:
                             m['order']=self.by_id[m['id']]['order'];self.by_id[m['id']].update(m)
                         else:self.messages.append(m);self.by_id[m['id']]=m
@@ -86,7 +89,7 @@ class History:
         key=(app,tid,str(path))
         with self.lock:
             entry=self.entries.get(key)
-            if entry is None:entry=Transcript(path,app);self.entries[key]=entry
+            if entry is None:entry=Transcript(path,app,item.get('cwd') or '');self.entries[key]=entry
             self.entries.move_to_end(key)
             while len(self.entries)>8:self.entries.popitem(last=False)
         return item,entry.refresh()
@@ -258,6 +261,7 @@ class History:
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
     def list_files(self,app,tid,message_id=None):
         from message_files import references
+        import office_preview  # Word, Excel and PowerPoint files the computer can show as PDF
         item,entry=self.transcript(app,tid)
         out=[];seen_paths=set()
         with entry.lock:
@@ -294,7 +298,8 @@ class History:
                     identity_path=str(p).casefold()
                     if identity_path in seen_paths:continue
                     seen_paths.add(identity_path)
-                    out.append({'id':fid,'name':p.name,'path':str(p),'size':size,'modified':st.st_mtime_ns//1000000 if st else None,'kind':kind,'message_id':m['id'],'index':index,'state':'missing' if not st else 'updated' if self.files[(app,tid,fid)]['updated'] else 'current'})
+                    out.append({'id':fid,'name':p.name,'path':str(p),'size':size,'modified':st.st_mtime_ns//1000000 if st else None,'kind':kind,'message_id':m['id'],'index':index,'state':'missing' if not st else 'updated' if self.files[(app,tid,fid)]['updated'] else 'current'}
+                               |({'preview':'pdf'} if kind=='download' and st and office_preview.offers(p) else {}))
         return {'items':out,'scope':'当前会话明确引用的具体文件；打开当前内容，不保存历史副本'}
 
     def file(self,app,tid,fid):

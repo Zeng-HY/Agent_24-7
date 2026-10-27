@@ -58,13 +58,14 @@
     const body=doc.querySelector('body')||doc,head=doc.querySelector('head');
     return {html:'<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+CSP+'"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html{overflow-wrap:anywhere}img{max-width:100%;height:auto}body{margin:16px}pre,table{max-width:100%;overflow:auto}</style>'+(head?.innerHTML||'')+'</head>'+body.outerHTML+'</html>',missing};
   }
-  async function request(url,parentSignal,limit,json=false){
+  // told: the computer's own words on a failure ({error}) are shown instead of the status's (the PDF of an Office file)
+  async function request(url,parentSignal,limit,json=false,wait=60000,told=false){
     const controller=new AbortController(),signal=controller.signal;
     const abort=()=>controller.abort();parentSignal.addEventListener('abort',abort,{once:true});if(parentSignal.aborted)abort();
-    const timeout=setTimeout(abort,60000);
+    const timeout=setTimeout(abort,wait);
     try{
     let r;try{r=await fetch(url,{credentials:'same-origin',cache:'no-store',signal,redirect:'error'});}catch(e){if(signal.aborted)throw e;throw Error('连接中断或电脑离线，请重试');}
-    if(!r.ok)throw fail(r.status);
+    if(!r.ok){const said=told&&r.status!==401?await r.json().then(j=>String(j.error||''),()=>''):'';throw said?Error(said):fail(r.status);}
     if(Number(r.headers.get('Content-Length'))>limit){r.body?.cancel();throw Error('文件超过读取上限，请下载原文件');}
     const reader=r.body?.getReader();if(!reader)throw Error('浏览器不支持此读取方式');
     const parts=[];let size=0;try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit)throw Error('文件超过读取上限，请下载原文件');parts.push(value);}}catch(e){await reader.cancel().catch(()=>{});throw e;}finally{reader.releaseLock();}
@@ -78,6 +79,7 @@
     const q=new URLSearchParams({app:target.app,id:target.id,file:file.id});
     const url='/api/file?'+q+'&download=1';
     return {meta:s=>request('/api/file/meta?'+q,s,65536,true),bytes:(s,l)=>request(url,s,l),url,
+      pdf:(s,l)=>request('/api/file/pdf?'+q,s,l,false,120000,true),  // Office starts first: up to a minute
       resource:async(path,signal,limit)=>{
         if(!relative(path)||!file.path)throw Error('unprovided');
         // Match only server-listed exact files. Normalization grants no directory authority.
@@ -125,10 +127,14 @@
       const name=m.name||file.name||'',ext=name.toLowerCase().split('.').pop();
       heading.firstChild.textContent=name;full.lastChild.textContent=name+' · '+m.size+' 字节';
       status.textContent=(m.updated||m.state==='updated'||file.state==='updated'?'文件已更新 · ':'')+'当前文件';
-      const kind=['html','htm'].includes(ext)?'html':['md','markdown'].includes(ext)?'markdown':['png','jpg','jpeg','webp'].includes(ext)?'image':ext==='pdf'?'pdf':m.kind==='text'||/^(txt|json|csv|tsv|py|js|css|ts|tsx|jsx|ps1|sh|yaml|yml|sql|xml|log|c|h|cpp|rs|go)$/.test(ext)?'text':'download';
+      // Word, Excel and PowerPoint: this computer's Office turns them into a PDF to look at; 下载 keeps the original (10-27)
+      const office=m.kind==='download'&&m.preview==='pdf'&&!!a.pdf&&!options.downloadOnly;
+      const kind=office?'pdf':['html','htm'].includes(ext)?'html':['md','markdown'].includes(ext)?'markdown':['png','jpg','jpeg','webp'].includes(ext)?'image':ext==='pdf'?'pdf':m.kind==='text'||/^(txt|json|csv|tsv|py|js|css|ts|tsx|jsx|ps1|sh|yaml|yml|sql|xml|log|c|h|cpp|rs|go)$/.test(ext)?'text':'download';
       if(kind==='download'||options.downloadOnly){const card=el('p','artifact-file');card.innerHTML='<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 3H5v18h14V8zM14 3v5h5"/></svg>';card.append(document.createTextNode(' '+name));body.append(card,el('p','','此文件可下载后使用相应应用打开。'));return;}
-      if(m.size>(['html','markdown','text'].includes(kind)?LIMIT.text:LIMIT.binary)){body.append(el('p','','文件超过预览上限，请下载原文件。'));return;}
-      const bytes=await a.bytes(signal,['html','markdown','text'].includes(kind)?LIMIT.text:LIMIT.binary);if(!valid())return;
+      if(!office&&m.size>(['html','markdown','text'].includes(kind)?LIMIT.text:LIMIT.binary)){body.append(el('p','','文件超过预览上限，请下载原文件。'));return;}
+      if(office){status.textContent+=' · 正在用电脑上的 Office 转成 PDF…';clearTimeout(s.timer);s.timer=setTimeout(()=>{if(valid()){status.textContent='转换超时，请下载原文件';s.controller.abort();}},125000);}
+      const bytes=await (office?a.pdf(signal,LIMIT.binary):a.bytes(signal,['html','markdown','text'].includes(kind)?LIMIT.text:LIMIT.binary));if(!valid())return;
+      if(office)status.textContent=status.textContent.replace('正在用电脑上的 Office 转成 PDF…','电脑上的 Office 转成的 PDF');
       if(!bytes.length){body.append(el('p','','这是一个空文件。'));return;}
       if(kind==='image'){
         const d=dimensions(new Uint8Array(bytes)),img=el('img','artifact-image');img.alt=name;img.width=d.w;img.height=d.h;img.src=object(new Blob([bytes],{type:d.mime}));img.onerror=()=>error(Error('图片无法显示，请下载原文件'));body.append(img);return;

@@ -482,7 +482,7 @@ class Handler(BaseHTTPRequestHandler):
             try:self._json(self.server.new_chats.options(self._query().get('app','')))
             except chats.ChatError as exc:self._json({'error':str(exc)},400)
             return
-        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta"):
+        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta", "/api/file/pdf"):
             self._reading_get(path)
             return
         if path.startswith("/api/chat") and chats is None:
@@ -756,7 +756,14 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/chat/diff':self._json(self.history.diff(app,tid,q.get('ref',''),q.get('offset',0)))
             else:
                 meta=self.server.files.download_meta(q['file']) if q.get('file','').startswith('pc.') else self.history.file(app,tid,q.get('file',''))
-                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime')})
+                import office_preview
+                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime')}
+                                                     |({'preview':'pdf'} if meta['kind']=='download' and office_preview.offers(meta['path']) else {}))
+                elif path=='/api/file/pdf':
+                    # Word, Excel and PowerPoint as PDF, made by this computer's Office (10-27); the original stays at /api/file
+                    if meta['kind']!='download' or not office_preview.offers(meta['path']):raise chat_history.HistoryError('这个文件不提供 PDF 预览')
+                    made=office_preview.pdf(meta['path']);st=made.stat()
+                    self._serve_result_file({'path':made,'size':st.st_size,'mtime':st.st_mtime_ns,'kind':'pdf','mime':'application/pdf','name':meta['path'].stem+'.pdf'})
                 elif path=='/api/file/text':
                     if meta['kind']!='text':raise chat_history.HistoryError('这个文件不提供文本预览')
                     with meta['path'].open('rb') as source:raw=source.read((1<<20)+1)
@@ -786,7 +793,7 @@ class Handler(BaseHTTPRequestHandler):
             if opened.st_size!=size or (meta.get('mtime') is not None and opened.st_mtime_ns!=meta['mtime']):
                 self._json({'error':'文件已变化，请重新打开后下载'},409);return
             self.send_response(status);self.send_header('Content-Type',meta['mime']);self.send_header('Content-Length',str(length));self.send_header('Accept-Ranges','bytes');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
-            self.send_header('Content-Disposition',('attachment' if download or meta['kind']=='download' else 'inline')+"; filename*=UTF-8''"+quote(meta['path'].name))
+            self.send_header('Content-Disposition',('attachment' if download or meta['kind']=='download' else 'inline')+"; filename*=UTF-8''"+quote(meta.get('name') or meta['path'].name))
             if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
             self.end_headers();f.seek(start)
             try:

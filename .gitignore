@@ -2,6 +2,8 @@
 remote_config.json
 attachments/
 logs/
+# Word, Excel and PowerPoint files converted to PDF for the phones (office_preview.py)
+previews/
 # each user's own voice dictionary, edited on the phone (voice_terms.py starts it from its default list)
 voice_terms.txt
 # environment and caches
