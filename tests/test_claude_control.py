@@ -246,21 +246,94 @@ class Tests(unittest.TestCase):
             for kind,revision in [('action','old'),('stop','old-turn')]:
                 token=c._ticket('s',kind,{'name':'Execute'},revision)
                 with self.assertRaises(chats.ChatError):c.choose('s',token)
-    def test_an_answer_is_pressed_in_the_question_card_even_out_of_view(self):
-        # 10-26: Claude's new window asks in a card among the messages, which the PC may show scrolled away
-        card=SimpleNamespace(ClassName='epitaxy-approval-card relative isolate flex flex-col')
-        option={'type':'ButtonControl','name':'选项甲 随便选'}
-        target=SimpleNamespace(ControlTypeName='ButtonControl',Name='选项甲 随便选',IsOffscreen=True)
-        c=Controller(Desktop());asked=[];pressed=[]
+    def card_choice(self,target,option):
+        """A Controller whose desktop shows a question card holding target; returns it and a press via choose."""
+        card=SimpleNamespace(ClassName='epitaxy-approval-card relative isolate flex flex-col',Name='Q')
+        c=Controller(Desktop());asked=[];logged=[]
         c.desktop._claude_ask=lambda root,doc=None:asked.append((root,doc)) or card
-        c.desktop._claude_show=lambda hwnd:None
+        c.desktop._claude_show=lambda hwnd:None;c.desktop.log=logged.append
         c.desktop.auto=SimpleNamespace(WalkControl=lambda node,maxDepth=30:iter([(target,2)]))
-        c._document=lambda item:(1,'root','doc');c._dock_read=lambda box:([option],None)
-        c._invoke=pressed.append;c._read=lambda item:{}
-        with patch('claude_control.chats.find',return_value={'id':'s'}),patch('claude_control.chats.conv_path',return_value=None),patch('claude_control.time.sleep'):
-            revision,box=c._action_state({'id':'s'})
-            self.assertIs(box,card)
-            c.choose('s',c._ticket('s','action',option,revision))
+        c._document=lambda item:(1,'root','doc');c._dock_read=lambda box:([option],None);c._read=lambda item:{}
+        def press():
+            with patch('claude_control.chats.find',return_value={'id':'s','title':'t'}),patch('claude_control.chats.conv_path',return_value=None),patch('claude_control.time.sleep'):
+                revision,box=c._action_state({'id':'s'})
+                self.assertIs(box,card)
+                return c.choose('s',c._ticket('s','action',option,revision))
+        return c,card,asked,logged,press
+    def test_a_card_button_is_pressed_even_out_of_view(self):
+        # 10-26: Claude's new window asks in a card among the messages, which the PC may show scrolled away
+        option={'type':'ButtonControl','name':'Next'}
+        target=SimpleNamespace(ControlTypeName='ButtonControl',Name='Next',IsOffscreen=True,ClassName='cds-reset group/btn')
+        c,card,asked,logged,press=self.card_choice(target,option);pressed=[];c._invoke=pressed.append
+        press()
         self.assertEqual(pressed,[target]);self.assertEqual(asked,[('root','doc')]*2)
+    def test_an_answer_option_is_picked_with_a_click_and_logged(self):
+        # 10-27 08:19: UI Automation's press only moved the focus to an option, so Next sent Claude's first option
+        option={'type':'ButtonControl','name':'选项乙 随便选'}
+        target=SimpleNamespace(ControlTypeName='ButtonControl',Name='选项乙 随便选',IsOffscreen=False,ClassName='epitaxy-answer-option flex w-full')
+        c,card,asked,logged,press=self.card_choice(target,option)
+        c._invoke=lambda ctrl:self.fail('an answer option is never pressed through UI Automation');picked=[]
+        c._pick=lambda item,box,ctrl:picked.append((box,ctrl)) or 'Next'
+        self.assertEqual(press()['text'],'已在电脑上选好，并点了「下一题」')
+        self.assertEqual(picked,[(card,target)]);self.assertIn('手机上选了「选项乙 随便选」，并点了「下一题」',logged[-1])
+        def refuse(item,box,ctrl):raise chats.ChatError('电脑上没有选上这一项，没有往下走；请在电脑上选')
+        c._pick=refuse
+        with self.assertRaises(chats.ChatError):press()
+        self.assertIn('没选上',logged[-1])
+    def test_one_choice_goes_on_by_itself_and_several_do_not(self):
+        class Option:
+            ClassName='epitaxy-answer-option flex';Name='选项乙 随便选'
+            def __init__(self,states):self.states=list(states)
+            def GetTogglePattern(self):return SimpleNamespace(ToggleState=self.states.pop(0) if len(self.states)>1 else self.states[0])
+        nxt=SimpleNamespace(ControlTypeName='ButtonControl',Name='Next',IsEnabled=True)
+        card=SimpleNamespace(ClassName='epitaxy-approval-card relative',Name='选哪个？')
+        def run(multi,states):
+            c=Controller(Desktop());clicked=[];pressed=[];given=[]
+            c._document=lambda item:(7,'root','doc')
+            c.desktop._keyboard_owner=lambda:'notepad';c.desktop._give_back_keyboard=given.append
+            c.desktop._click_control=lambda hwnd,ctrl:clicked.append((hwnd,ctrl))
+            c.desktop.auto=SimpleNamespace(WalkControl=lambda node,maxDepth=30:iter([(nxt,2)]))
+            def invoke(ctrl):pressed.append(ctrl);card.Name='下一题的问题'
+            c._invoke=invoke;card.Name='选哪个？';option=Option(states[:1])  # the one found before the click keeps its state
+            current=Option(states[1:] or states)  # 10-27 09:39: the pick showed when the option was read anew
+            c.desktop._find=lambda scope,kind,name=None:[current] if scope is card else []
+            questions=[{'question':'选哪个？','multiSelect':multi,'options':[]}]
+            with patch('claude_control.pending_questions',return_value=questions),patch('claude_control.chats.conv_path',return_value=None),\
+                 patch('claude_control.time.sleep'),patch('claude_control.time.monotonic',side_effect=iter(range(0,1000,1)).__next__):
+                try:went=c._pick({'id':'s'},card,option)
+                except chats.ChatError:went='refused'
+            self.assertEqual((clicked,given),([(7,option)],['notepad']))  # the keyboard goes back however it ends
+            return went,pressed
+        self.assertEqual(run(False,[0,0,1]),('Next',[nxt]))  # one choice: picked, then Next
+        self.assertEqual(run(True,[0,1]),('',[]))           # several: each tap picks one more, Submit stays the phone's
+        self.assertEqual(run(False,[0]),('refused',[]))     # never shown as picked: nothing goes on
+    def test_the_open_question_comes_from_the_record(self):
+        import tempfile
+        from claude_control import pending_questions
+        ask={'type':'assistant','message':{'content':[{'type':'tool_use','id':'t1','name':'AskUserQuestion','input':{'questions':[
+            {'question':'选哪个？','multiSelect':False},{'question':'还要哪些？','multiSelect':True}]}}]}}
+        done={'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':'t1','content':'answered'}]}}
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'r.jsonl';path.write_text(json.dumps(ask,ensure_ascii=False)+'\nnot json\n',encoding='utf-8')
+            self.assertEqual([q['multiSelect'] for q in pending_questions(path)],[False,True])
+            with path.open('a',encoding='utf-8') as f:f.write(json.dumps(done)+'\n')
+            self.assertIsNone(pending_questions(path))
+        self.assertIsNone(pending_questions(None))
+    def test_the_actions_list_is_left_out_while_a_question_shows(self):
+        # 10-26 23:09: the phone apps drew the actions as a second card of raw button names under the question
+        options=[{'type':'ButtonControl','name':'选项甲 随便选'},{'type':'ButtonControl','name':'Next'}]
+        prompt={'title':'Q','progress':None,'choices':[{'name':'选项甲 随便选','label':'选项甲','description':'','pressed':True}],
+                'nav':[{'name':'Next','label':'下一题'}],'other':None}
+        c=Controller(Desktop())
+        model=SimpleNamespace(Name='Model: Opus 5.5 High',IsOffscreen=False,IsEnabled=True)
+        c.desktop._find=lambda scope,kind,name=None:[model] if kind=='ButtonControl' else [];c.desktop._claude_unminimize=lambda:None
+        c.desktop._claude_ask=lambda root,doc=None:'card';c.desktop._claude_dock=lambda root:None
+        c._document=lambda item:(1,'root','doc');c._dock_read=lambda box:(options,json.loads(json.dumps(prompt)))
+        with patch('claude_control.settings',return_value={}),patch('claude_control.chats.conv_path',return_value=None),\
+             patch('claude_control.chats.summary',return_value={'status':'idle'}):
+            state=c._read_once({'id':'s','title':'t'})
+        self.assertEqual(state['actions'],[])
+        tokens=[part['token'] for part in state['prompt']['choices']+state['prompt']['nav']]
+        self.assertTrue(all(t in c.choices for t in tokens))  # the question's own parts carry the tokens
 
 if __name__=='__main__':unittest.main()

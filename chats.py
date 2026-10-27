@@ -37,6 +37,7 @@ from datetime import datetime
 from urllib.parse import quote, urlsplit
 from _ctypes import COMError  # what UI Automation raises through comtypes
 
+import win32api
 import win32con
 import win32gui
 import win32process
@@ -93,8 +94,10 @@ CLAUDE_FIXED_PREFIXES = ("Model:", "Effort:", "Usage:", "Usage,", "Permission", 
                          "Folder:", "Claude thinks longer with Max effort", "Scroll ", "Jump to", "Remove ")
 OPTION_TYPES = ("ButtonControl", "RadioButtonControl", "CheckBoxControl", "ListItemControl", "MenuItemControl",
                 "HyperlinkControl", "TabItemControl", "EditControl", "ComboBoxControl")
-# Claude's new window asks a question (AskUserQuestion) in a card of this class among the messages, not in the dock (10-26)
+# Claude's new window asks a question (AskUserQuestion) in a card of this class among the messages, not in the dock (10-26);
+# each of its options is a button of the second class, which takes a real click only (10-27)
 CLAUDE_QUESTION_CARD = "epitaxy-approval-card"
+CLAUDE_ANSWER_OPTION = "epitaxy-answer-option"
 
 
 def in_notice(kinds: list[str]) -> bool:
@@ -104,9 +107,18 @@ def in_notice(kinds: list[str]) -> bool:
 
 
 def question_card(ctrl) -> bool:
-    """Whether this is one of the question cards of Claude's new window rather than the dock."""
+    """Whether this is one of the question cards of Claude's new window rather than the dock. The class must be there as a
+    word of its own: the dock's classes hold '[&_.epitaxy-approval-card]:shrink' (10-27), and the dock was taken for a card."""
     try:
-        return CLAUDE_QUESTION_CARD in (ctrl.ClassName or "")
+        return CLAUDE_QUESTION_CARD in (ctrl.ClassName or "").split()
+    except Exception:
+        return False
+
+
+def answer_option(ctrl) -> bool:
+    """Whether this is an option of such a question card (not Other, Skip, Next or Submit)."""
+    try:
+        return CLAUDE_ANSWER_OPTION in (ctrl.ClassName or "").split()
     except Exception:
         return False
 
@@ -1596,11 +1608,50 @@ class Desktop:
         doc: the conversation, to look in it alone (one question to Windows) rather than the whole window."""
         try:
             for card in reversed(self._find_class(doc if doc is not None else root, CLAUDE_QUESTION_CARD)):
-                if any(button.IsEnabled for button in self._find(card, "ButtonControl")):
+                if question_card(card) and any(button.IsEnabled for button in self._find(card, "ButtonControl")):
                     return card
         except Exception:
             pass
         return self._claude_dock(root)
+
+    def _click_control(self, hwnd, ctrl):
+        """A real left click in the middle of ctrl, for a control that takes a click but not UI Automation's press: an
+        option of Claude's question card (10-27 08:19: DoDefaultAction and Toggle both answered done, only the focus moved
+        to it, and Next then sent the option Claude had chosen first). Scrolled into view first; not done where another
+        window covers that spot. Claude comes to the front for it (a click reaches only the front window); the pointer
+        goes back where it was, and the caller gives the keyboard back (_give_back_keyboard)."""
+        try:
+            if ctrl.IsOffscreen:
+                ctrl.GetScrollItemPattern().ScrollIntoView()
+                time.sleep(0.3)
+        except Exception:
+            pass
+        rect = ctrl.BoundingRectangle
+        if rect.width() <= 2 or rect.height() <= 2:
+            raise ChatError("这个选项在电脑上没显示出来，没有点；请在电脑上选")
+        x, y = (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+        if not winctl.input_desktop_ready():
+            raise ChatError("电脑已锁屏，没有点；解锁后再选")
+        with self.input_lock:
+            pointer = win32gui.GetCursorPos()
+            try:
+                winctl.focus(hwnd)
+                if win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), 2) != hwnd:  # 2: GA_ROOT
+                    raise ChatError("电脑上 Claude 的这个选项被别的窗口挡住了，没有点")
+                # As a hand does it: the pointer there first, then press and release apart. So it picked the option at
+                # once on 10-27 09:39; at 09:09 winctl.click_screen (press and release at one go) was not seen to.
+                win32api.SetCursorPos((x, y))
+                time.sleep(0.15)
+                winctl._send([winctl._mouse_input(winctl.MOUSEEVENTF_LEFTDOWN)])
+                time.sleep(0.06)
+                winctl._send([winctl._mouse_input(winctl.MOUSEEVENTF_LEFTUP)])
+            except winctl.WinError as exc:
+                raise ChatError(f"{exc}，没有点") from exc
+            finally:
+                try:
+                    win32api.SetCursorPos(pointer)
+                except Exception:
+                    pass
 
     # -- actions (run on the worker thread)
 
