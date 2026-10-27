@@ -44,9 +44,9 @@
   - 每隔几秒读到的状态、列表、电脑列表，和手上的一样时不写进去。（这台电脑上的 Swift 6.4 本来就会跳过相同的值，这里写明白，换编译器也一样。）
   - 消息区仍是普通的 VStack，没改成懒加载（原因见 0.3.0）。
 
-检查情况：本机 `TeleplyCore` 的 `swift build` 通过，`swift test` 160 项全部通过（新加 12 项：打开位置 1、Claude 待确认 5、Office 转 PDF 5、相同状态不写入 1；另有 2 项改了对话文件的个数）。界面代码这台电脑编不了，要等云端编译。其中消息视图的相等比较（Swift 6 的隔离写法）、解析结果的记法、重算的记法，先在这台电脑上用一个仿写的小包、照应用的编译设置（默认主线程、Approachable Concurrency）编过、跑过。示例 PDF 用 pypdf（严格模式）和 PyMuPDF 读过、画过。没跑 Codemagic，没截图，没上真机。
+检查情况：本机 `TeleplyCore` 的 `swift build` 通过，`swift test` 160 项全部通过（新加 12 项：打开位置 1、Claude 待确认 5、Office 转 PDF 5、相同状态不写入 1；另有 2 项改了对话文件的个数）。界面代码这台电脑编不了，要等云端编译。其中消息视图的相等比较（Swift 6 的隔离写法）、解析结果的记法、重算的记法，先在这台电脑上用一个仿写的小包、照应用的编译设置（默认主线程、Approachable Concurrency）编过、跑过。示例 PDF 用 pypdf（严格模式）和 PyMuPDF 读过、画过。10-28 云端编译通过（Codemagic #29，只编译）：应用和测试包都编过，Mac 上 `TeleplyCore` 160 项全部通过；没截图，没上真机。
 
-云端编译时要看的写法（这台电脑验不了）：`PDFPreview`（PDFKit 的 `PDFView` 包成 `UIViewRepresentable`）；`nonisolated struct` / `nonisolated enum`（`ProcessGroup`、`TimelineRole`）；`TimelineItem` 的 `nonisolated static func ==` 和 `.equatable()`；三个面板的 `.sheet` 挂在标题栏 ⋯ 那一项里（会话状态的弹出框本来就挂在那里）。
+这几处写法这台电脑验不了，#29 在云端编过：`PDFPreview`（PDFKit 的 `PDFView` 包成 `UIViewRepresentable`）；`nonisolated struct` / `nonisolated enum`（`ProcessGroup`、`TimelineRole`）；`TimelineItem` 的 `nonisolated static func ==` 和 `.equatable()`；三个面板的 `.sheet` 挂在标题栏 ⋯ 那一项里（会话状态的弹出框本来就挂在那里）。
 
 ### 留给你在真机上验（下一版）
 
@@ -320,6 +320,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #26 `6adfef34…` | ios-native-testflight | 成功 | 7（排队 1） | 0.5.1（7）上传，Delivery UUID `9e2087f0-6519-4b26-9487-6b605cc8a218`；版本 0.5.1 下的 7 号，和 0.4.2 的 7 号不冲突。从合进 main 的 `ios-native`（f8de8e6）构建，带遥应通知；按用户的意思没跑截图检查。推送会话的两次构建（6adf45f8 编译检查、6adf5a61 上传 0.5.0（6））记在 0.5.0 一节 |
 | #27 `6ae02140…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.2（8）上传，Delivery UUID `258fe14a-9a73-4881-b857-db8a655a680e`；第一次从 `main` 构建（4da3398，含 Windows dev.24）；按用户的意思没跑截图 |
 | #28 `6ae02b92…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.3（9）上传，Delivery UUID `37de98d6-f594-4f71-84ab-e401290c0409`；从 `main` 的 b01c835 构建；唯一的编译警告在原有的 `ChatModel.swift:578`；没跑截图 |
+| #29 `6ae0c0de…` | ios-native-check（compile） | 成功 | 3（排队 60） | 打开在最新处、Claude 待确认、Office 转 PDF、长对话四处，界面第一次编译就通过；Mac 上 `TeleplyCore` 160 项通过。唯一的警告是 #28 那一处（现在在 590 行）：10-26 的旧代码，`began` 在那里恒为真，后面的分支走不到 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
