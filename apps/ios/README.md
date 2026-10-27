@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.3 构建 9 已发 TestFlight：发出去的图片显示出来，待真机验）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.4 构建 10 已发 TestFlight：打开就在最新处、Office 文件显示成 PDF，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,9 +25,9 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `main` 分支，先推送（10-27 起只留 `main`，`ios-native` 已合进去并删掉）。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 下一版：打开就在最新处，Claude 的待确认不再挂着，Office 文件显示成 PDF，长对话变快（2026-10-27，还没发；版本号发版时再改）
+## 0.5.4：打开就在最新处，Claude 的待确认不再挂着，Office 文件显示成 PDF，长对话变快（10-28 发 TestFlight 构建 10，待真机验）
 
-用户 10-27 在 iPhone 上报了四个问题，都在这一版改。
+用户 10-27 在 iPhone 上报了四个问题，都在这一版改。10-28 从 `main` 的 0e86c8f 构建并上传（Codemagic #30，构建 6 分钟，没排队），Delivery UUID `839f3b8e-5c67-45a6-bd11-d511f1fc6764`。这一版也带上 8fe2cde：自己发的长消息显示「展开全文（N 字）」，复制、选择文字、分享先向电脑要全文。Office 预览要电脑端 0.27.0-dev.26（同一天发布）。
 
 做了什么：
 
@@ -48,7 +48,7 @@
 
 这几处写法这台电脑验不了，#29 在云端编过：`PDFPreview`（PDFKit 的 `PDFView` 包成 `UIViewRepresentable`）；`nonisolated struct` / `nonisolated enum`（`ProcessGroup`、`TimelineRole`）；`TimelineItem` 的 `nonisolated static func ==` 和 `.equatable()`；三个面板的 `.sheet` 挂在标题栏 ⋯ 那一项里（会话状态的弹出框本来就挂在那里）。
 
-### 留给你在真机上验（下一版）
+### 留给你在真机上验（0.5.4）
 
 1. **打开位置**：打开一个长对话，往上翻一段，返回列表再打开：停在最新一条。从后台划掉再打开应用、点一条遥应通知，也停在最新一条。查找消息点一条结果，跳到那一条；再返回打开，又在最新处。
 2. **Claude 待确认**：现在挂着“上次操作的结果还没确认”的那个 Claude 对话，打开后几秒内这一行自己消失（旧版本留下的，没记时间）。以后再遇到，点“核对上次操作”，会写“还在等你选”或“已经没有在等的选项”，这一行随之结束。
@@ -321,6 +321,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #27 `6ae02140…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.2（8）上传，Delivery UUID `258fe14a-9a73-4881-b857-db8a655a680e`；第一次从 `main` 构建（4da3398，含 Windows dev.24）；按用户的意思没跑截图 |
 | #28 `6ae02b92…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.3（9）上传，Delivery UUID `37de98d6-f594-4f71-84ab-e401290c0409`；从 `main` 的 b01c835 构建；唯一的编译警告在原有的 `ChatModel.swift:578`；没跑截图 |
 | #29 `6ae0c0de…` | ios-native-check（compile） | 成功 | 3（排队 60） | 打开在最新处、Claude 待确认、Office 转 PDF、长对话四处，界面第一次编译就通过；Mac 上 `TeleplyCore` 160 项通过。唯一的警告是 #28 那一处（现在在 590 行）：10-26 的旧代码，`began` 在那里恒为真，后面的分支走不到 |
+| #30 `6ae12840…` | ios-native-testflight | 成功 | 6（排队 0） | 0.5.4（10）上传，Delivery UUID `839f3b8e-5c67-45a6-bd11-d511f1fc6764`；从 `main` 的 0e86c8f 构建；没跑截图 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
