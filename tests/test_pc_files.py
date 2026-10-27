@@ -31,7 +31,7 @@ class DownloadTests(FilesTestCase):
         with self.assertRaises(pc_files.FileError):self.files.download_meta(row['download_id']+'0')
         other=pc_files.Files('other',inbox=self.inbox,registry=self.root/'other.json',drives=self.files.drives)
         with self.assertRaises(pc_files.FileError):other.download_meta(row['download_id'])
-        p.write_bytes(b'changed')
+        p.write_bytes(b'changed, longer')  # another size: a rewrite within one timer tick may keep the time (10-27)
         with self.assertRaises(pc_files.FileError):self.files.download_meta(row['download_id'])
         p.unlink()
         with self.assertRaises(pc_files.FileError):self.files.download_meta(row['download_id'])
