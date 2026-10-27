@@ -64,6 +64,30 @@ struct DemoServiceTests {
         #expect(world.stateReads.map(\.fresh) == [true, false])
     }
 
+    /// The PDF the demo computer's Office makes is a real one: every object, and the page's text, where the
+    /// cross-reference table and the lengths say.
+    @Test func theDemoPDFIsWellFormed() throws {
+        let bytes = Array(DemoData.pdf)
+        let text = String(decoding: bytes, as: UTF8.self)
+        #expect(text.hasPrefix("%PDF-1.4\n") && text.hasSuffix("%%EOF\n"))
+        let written = try #require(text.components(separatedBy: "startxref\n").last?.split(separator: "\n").first)
+        let start = try #require(Int(written))
+        let table = String(decoding: bytes[start...], as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+        #expect(table[0] == "xref" && table[1] == "0 7" && table[2] == "0000000000 65535 f ")
+        for index in 1...6 {
+            let entry = table[2 + index]
+            #expect(entry.utf8.count == 19 && entry.hasSuffix(" 00000 n "))
+            let offset = try #require(Int(entry.prefix(10)))
+            let head = Array("\(index) 0 obj\n".utf8)
+            #expect(Array(bytes[offset..<offset + head.count]) == head)
+        }
+        let stream = try #require(text.range(of: "stream\n"))
+        let end = try #require(text.range(of: "\nendstream"))
+        let length = text[stream.upperBound..<end.lowerBound].utf8.count
+        #expect(text.contains("<< /Length \(length) >>"))
+        #expect(text.contains("(Release notes) Tj"))
+    }
+
     @Test func aBrokenDemoNetworkFailsComputerCallsOnly() async throws {
         let world = DemoWorld()
         world.network = .offline

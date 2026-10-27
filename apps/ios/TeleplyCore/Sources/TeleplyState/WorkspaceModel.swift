@@ -60,6 +60,13 @@ public final class WorkspaceModel {
     public internal(set) var preview: URL?
     /// Why a file page shows less than it could (its preview did not load); the file can still be saved.
     public internal(set) var fileNote = ""
+    /// A Word, Excel or PowerPoint file's page whose facts say "preview": "pdf" (Windows dev.26): the computer's Office
+    /// turns it into a PDF shown in the page, [officePDF] its copy on this phone. [converting] while the computer works
+    /// on it (the first time can take half a minute); [convertNote] the computer's words when it could not. Saving,
+    /// sharing and Quick Look still take the file itself.
+    public internal(set) var officePDF: URL?
+    public internal(set) var converting = false
+    public internal(set) var convertNote = ""
     /// A copy for 保存到文件, 分享 or 快速查看 being downloaded, and how far it got (正在下载 37%).
     public internal(set) var transferring = false
     public internal(set) var transfer = ""

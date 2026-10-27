@@ -41,18 +41,29 @@ public struct DemoTransport: RelayFileTransport {
     }
 
     /// A conversation's file as the demo computer has it: the fixed picture, the Word file, or a line of text. A picture
-    /// sent with a message (/api/codex/image) is the fixed picture too.
+    /// sent with a message (/api/codex/image) is the fixed picture too. Its Office turns 发布说明.docx into a PDF
+    /// (/api/file/pdf) and cannot open any other file.
     public func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
         if delay > .zero { try await Task.sleep(for: delay) }
         let network = world.network
         if network == .offline { throw Offline() }
         if network.delay > .zero { try await Task.sleep(for: network.delay) }
-        let file = request.url.path.hasSuffix("/api/codex/image") ? "fixture-png" : Self.query(request.url)["file"] ?? ""
-        let bytes = switch file {
-        case "fixture-png": Data(base64Encoded: DemoData.png) ?? Data()
-        case "fixture-docx": DemoData.docx
-        case "fixture-download": Data(DemoData.computerFile.utf8)
-        default: Data(DemoData.textFile(file).utf8)
+        let path = request.url.path
+        let file = path.hasSuffix("/api/codex/image") ? "fixture-png" : Self.query(request.url)["file"] ?? ""
+        let bytes: Data
+        if path.hasSuffix("/api/file/pdf") {
+            guard file == "fixture-report" else {
+                let refusal: JSONValue = ["error": "电脑上的 Word 打不开这个文件，没能转成 PDF"]
+                return RelayDownload(status: 500, body: (try? refusal.encoded()) ?? Data())
+            }
+            bytes = DemoData.pdf
+        } else {
+            bytes = switch file {
+            case "fixture-png": Data(base64Encoded: DemoData.png) ?? Data()
+            case "fixture-docx", "fixture-report": DemoData.docx
+            case "fixture-download": Data(DemoData.computerFile.utf8)
+            default: Data(DemoData.textFile(file).utf8)
+            }
         }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-demo-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -216,8 +227,14 @@ public struct DemoTransport: RelayFileTransport {
             if query["file"] == "fixture-download" {
                 return Self.json(["kind": "download", "name": "遥应下载测试.txt", "state": "current", "size": .number(Double(Data(DemoData.computerFile.utf8).count))])
             }
+            // A Word file the computer's Office cannot open (its PDF fails; the file itself still saves), not listed.
+            if query["file"] == "fixture-office-broken" {
+                return Self.json(["kind": "download", "name": "旧格式报告.doc", "state": "current", "size": 2_048, "preview": "pdf"])
+            }
             let file = (DemoData.files + [DemoData.deliverable]).first { $0["id"].string() == query["file"] }
-            return Self.json(["kind": file?["kind"] ?? "text", "name": file?["name"] ?? "安全预览.html", "state": "current", "size": file?["size"] ?? 60])
+            var meta: [String: JSONValue] = ["kind": file?["kind"] ?? "text", "name": file?["name"] ?? "安全预览.html", "state": "current", "size": file?["size"] ?? 60]
+            if let preview = file?["preview"], !preview.isNull { meta["preview"] = preview }
+            return Self.json(.object(meta))
         case "/api/file/text":
             // A text file the computer cannot read as text (its preview fails; the file can still be saved).
             if query["file"] == "fixture-broken" { return Self.json(["error": "无法按 UTF-8 或 UTF-16 预览，请下载原文件"], status: 400) }

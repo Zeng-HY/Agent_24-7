@@ -174,7 +174,9 @@ extension WorkspaceModel {
     }
 
     /// Reads a file page: its facts first, then its text or picture. A preview that does not load leaves the file to
-    /// be saved all the same (Android 1.0.2), with a line saying so.
+    /// be saved all the same (Android 1.0.2), with a line saying so. A Word, Excel or PowerPoint file the computer's
+    /// Office can show (its list row or facts say "preview": "pdf") then comes as a PDF, while the page already offers
+    /// the file itself.
     func load(_ file: JSONValue) {
         guard let key, let client else { return }
         paneRead?.cancel()
@@ -191,12 +193,13 @@ extension WorkspaceModel {
                 let ids: [(String, String?)] = [("app", key.app), ("id", key.chat), ("file", id)]
                 let meta = try await client.detail(device: key.device, route: "file/meta", query: ids)
                 let kind = meta["kind"].string()
+                let office = kind == "download" && (meta["preview"].string() == "pdf" || file["preview"].string() == "pdf")
                 var text = ""
                 var copy: URL?
                 var note = ""
                 do {
                     if kind == "text" { text = try await client.detail(device: key.device, route: "file/text", query: ids)["text"].string() }
-                    if ["image", "pdf"].contains(kind) && meta["size"].int64() <= 20 * 1024 * 1024 {
+                    if ["image", "pdf"].contains(kind) && meta["size"].int64() <= RelayClient.previewLimit {
                         let name = file["name"].string().isEmpty ? meta["name"].string() : file["name"].string()
                         copy = renamed(try await client.download(device: key.device, app: key.app, chat: key.chat, file: id), to: name)
                     }
@@ -217,7 +220,9 @@ extension WorkspaceModel {
                 self.fileText = text
                 self.preview = copy
                 self.fileNote = note
+                self.converting = office
                 self.paneBusy = false
+                if office { await self.convert(id, key, client, g) }
             } catch is CancellationError {
             } catch {
                 guard let self, g == self.paneGeneration else { return }
@@ -225,6 +230,30 @@ extension WorkspaceModel {
                 self.paneBusy = false
             }
         }
+    }
+
+    /// The computer's PDF of an Office file for the page of generation [g]; on failure the computer's own words. A
+    /// page left meanwhile drops it.
+    func convert(_ id: String, _ key: ChatKey, _ client: RelayClient, _ g: Int) async {
+        do {
+            let pdf = try await client.pdfPreview(device: key.device, app: key.app, chat: key.chat, file: id)
+            guard g == paneGeneration else {
+                try? FileManager.default.removeItem(at: pdf)
+                return
+            }
+            officePDF = pdf
+        } catch {
+            guard g == paneGeneration else { return }
+            convertNote = convertFailure(error)
+        }
+        converting = false
+    }
+
+    /// The computer's error text when it gave one; otherwise the phone's words, saying what did not work.
+    func convertFailure(_ error: any Error) -> String {
+        if let failure = error as? ServiceFailure, failure.status != 401, !failure.detail.isEmpty { return String(failure.detail.prefix(500)) }
+        if error is ReadFailure { return describe(error) }
+        return "没能转成 PDF：" + describe(error)
     }
 
     /// 本轮差异 (spec 4.5, B12): what the source's record says the turn changed, a page at a time; never guessed from
@@ -316,12 +345,16 @@ extension WorkspaceModel {
         transfer = ""
     }
 
-    /// A file page's own things go with it: its text, its preview's copy, a copy under way.
+    /// A file page's own things go with it: its text, its preview's copy, its PDF, a copy under way.
     func dropFile() {
         cancelCopy()
         fileText = ""
         fileNote = ""
         dropPreview()
+        if let officePDF { try? FileManager.default.removeItem(at: officePDF) }
+        officePDF = nil
+        converting = false
+        convertNote = ""
     }
 
     /// A file an HTML page names beside itself (web artifact-preview resource): only one this conversation lists,

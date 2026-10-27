@@ -113,10 +113,12 @@ struct FilesSheet: View {
 
 /// A file's page (spec 4.5; web artifact-preview.js; Android FilePage): the system back and a centred title, the
 /// file as it is now. HTML opens as a page with 查看源码 beside it, Markdown as text to read; other text in a code
-/// panel; pictures and PDFs in Quick Look. 保存到文件 and 分享 hand a copy to the system. A file the page cannot
-/// show (a Word file, a file from the computer) has them in the page too, with Quick Look for what the system can
-/// show (Android 1.0.2). A download shows how far it got and can be stopped; a saved file can be opened from where
-/// it went. A computer file's page also adds it to the message.
+/// panel; pictures and PDFs in the page and in Quick Look. 保存到文件 and 分享 hand a copy to the system. A file the
+/// page cannot show (a Word file, a file from the computer) has them in the page too, with Quick Look for what the
+/// system can show (Android 1.0.2); a Word, Excel or PowerPoint file the computer's Office can open shows above them
+/// as the PDF it makes (Windows dev.26), while the buttons keep taking the file itself. A download shows how far it
+/// got and can be stopped; a saved file can be opened from where it went. A computer file's page also adds it to the
+/// message.
 struct FilePage: View {
     let model: AppModel
     @State private var rendered = true
@@ -187,6 +189,9 @@ struct FilePage: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel(Text("图片：\(name)，点按放大"))
                     }
+                    if meta["kind"].string() == "pdf" {
+                        pdfBox(preview)
+                    }
                     Button("用快速查看打开", systemImage: "eye") { quickLook = preview }
                         .buttonStyle(PillStyle())
                 }
@@ -199,6 +204,22 @@ struct FilePage: View {
                     Text(workspace.fileNote)
                         .noteFont()
                         .foregroundStyle(Palette.muted)
+                }
+                // A Word, Excel or PowerPoint file as the computer's Office makes it a PDF.
+                if workspace.converting {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("正在用电脑上的 Office 转成 PDF…")
+                            .noteFont()
+                            .foregroundStyle(Palette.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if let pdf = workspace.officePDF {
+                    pdfBox(pdf)
+                } else if !workspace.convertNote.isEmpty {
+                    Text(workspace.convertNote)
+                        .noteFont()
+                        .foregroundStyle(Palette.danger)
                 }
                 if loaded && text.isEmpty && workspace.preview == nil {
                     unshown(lower)
@@ -249,11 +270,21 @@ struct FilePage: View {
         }
     }
 
-    /// A file the page cannot show: what can be done with it, in the page and not only in the bar above.
+    /// A PDF in the page, as tall as the HTML preview.
+    private func pdfBox(_ file: URL) -> some View {
+        PDFPreview(url: file)
+            .frame(height: 520)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
+    }
+
+    /// A file the page cannot show: what can be done with it, in the page and not only in the bar above. Shown as
+    /// the computer's PDF, the buttons still take the file itself.
     @ViewBuilder
     private func unshown(_ lower: String) -> some View {
         let workspace = model.workspace
         let looks = Self.quickLooks(lower)
+        let asPDF = workspace.converting || workspace.officePDF != nil
         Button("保存到文件", systemImage: "square.and.arrow.down") { copy { saving = $0 } }
             .buttonStyle(PillStyle(kind: .primary, wide: true))
             .disabled(workspace.transferring)
@@ -262,7 +293,8 @@ struct FilePage: View {
                 .buttonStyle(PillStyle(wide: true))
                 .disabled(workspace.transferring)
         }
-        Text(looks ? "这类文件不在页面里显示；可以用快速查看打开，或保存到文件、分享给其他应用。" : "这类文件不在页面里显示；可以保存到文件，或分享给其他应用打开。")
+        Text(asPDF ? "PDF 只用来看；保存到文件、快速查看和分享的是原文件。"
+             : looks ? "这类文件不在页面里显示；可以用快速查看打开，或保存到文件、分享给其他应用。" : "这类文件不在页面里显示；可以保存到文件，或分享给其他应用打开。")
             .noteFont()
             .foregroundStyle(Palette.muted)
     }

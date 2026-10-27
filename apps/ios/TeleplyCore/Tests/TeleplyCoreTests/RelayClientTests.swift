@@ -47,6 +47,31 @@ struct RelayClientTests {
         #expect(ServiceFailure(status: 500).message == "请求失败（HTTP 500），请核对后重试。")
     }
 
+    /// GET /api/file/pdf (Windows dev.26): the long deadline of a download; the computer's refusal keeps its words; what
+    /// is not a PDF, or more than 20 MB of one, is refused here.
+    @Test func anOfficeFilesPDFIsAskedForOnceAndChecked() async throws {
+        let device = String(repeating: "a", count: 32)
+        let pdf = FileAnswerTransport(status: 200, bytes: Data("%PDF-1.4\n%%EOF\n".utf8))
+        let file = try await RelayClient(origin: .default, transport: pdf).pdfPreview(device: device, app: "deepseek", chat: "c1", file: "f1")
+        #expect(try Data(contentsOf: file) == Data("%PDF-1.4\n%%EOF\n".utf8))
+        let asked = await pdf.log.items
+        #expect(asked.count == 1)
+        #expect(asked.first?.method == .get && asked.first?.url.path == "/d/\(device)/api/file/pdf" && asked.first?.deadline == 300)
+        #expect(asked.first.map { [queryValue($0, "app"), queryValue($0, "id"), queryValue($0, "file")] } == ["deepseek", "c1", "f1"])
+        let refused = FileAnswerTransport(status: 503, bytes: Data(#"{"error":"这台电脑没有装 Office，不能转成 PDF"}"#.utf8))
+        await #expect(throws: ServiceFailure(status: 503, detail: "这台电脑没有装 Office，不能转成 PDF")) {
+            _ = try await RelayClient(origin: .default, transport: refused).pdfPreview(device: device, app: "codex", chat: "c1", file: "f1")
+        }
+        let page = FileAnswerTransport(status: 200, bytes: Data("<html>".utf8))
+        await #expect(throws: ReadFailure("电脑转出来的不是 PDF，可以保存原文件后打开。")) {
+            _ = try await RelayClient(origin: .default, transport: page).pdfPreview(device: device, app: "codex", chat: "c1", file: "f1")
+        }
+        let big = FileAnswerTransport(status: 200, bytes: Data("%PDF-".utf8) + Data(count: Int(RelayClient.previewLimit)))
+        await #expect(throws: ReadFailure("转成的 PDF 超过 20MB，页面里不显示；可以保存原文件后打开。")) {
+            _ = try await RelayClient(origin: .default, transport: big).pdfPreview(device: device, app: "codex", chat: "c1", file: "f1")
+        }
+    }
+
     @Test func refusesOversizedOrUnreadableAnswers() async {
         let big = RelayClient(origin: .default, transport: RecordingTransport { _ in
             RelayResponse(status: 200, body: Data(count: RelayClient.jsonLimit + 1))

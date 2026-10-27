@@ -46,6 +46,26 @@ struct RecordingTransport: RelayTransport {
     }
 }
 
+/// Answers every download with [status] and [bytes] (a file for a 2xx, the body otherwise) and keeps what was asked.
+struct FileAnswerTransport: RelayFileTransport {
+    let log = RequestLog()
+    let status: Int
+    let bytes: Data
+
+    func send(_ request: RelayRequest) async throws -> RelayResponse {
+        await log.add(request)
+        return RelayResponse(status: 404)
+    }
+
+    func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
+        await log.add(request)
+        guard (200..<300).contains(status) else { return RelayDownload(status: status, body: bytes) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-answer-\(UUID().uuidString)")
+        try bytes.write(to: file)
+        return RelayDownload(status: status, file: file)
+    }
+}
+
 /// Plays a live stream: the given status, then the chunks as they would arrive.
 struct StreamingTransport: RelayStreamingTransport {
     let log = RequestLog()
