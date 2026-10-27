@@ -21,8 +21,9 @@ struct DocumentPreview: UIViewRepresentable {
         configuration.allowsInlineMediaPlayback = true
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
+        // On white, as a document is printed and as HtmlPreview shows a page.
         view.isOpaque = false
-        view.backgroundColor = UIColor(named: "Panel") ?? .secondarySystemBackground
+        view.backgroundColor = .white
         view.loadFileURL(url, allowingReadAccessTo: url)
         return view
     }
