@@ -351,6 +351,18 @@ class Notifier:
                 continue
             self._tell(found, item, end)
 
+    def asking(self, item: dict, text: str) -> None:
+        """Claude waits on a question or a permission in the middle of a turn, as Claude Code's hook tells it
+        (claude_hooks.py): sent as a turn that ends with a question is. The record reads as running then, so such a
+        wait was never sent before 10-27."""
+        found = self.address()
+        if found is None and not self.ntfy_on() and not self.relay_on():
+            return
+        try:
+            self._tell(found, item, {"state": "done", "key": "", "time": "", "text": text, "asks": True})
+        except Exception:
+            self.log("通知：Claude 在等回答，没推出去\n" + traceback.format_exc())
+
     def _count_from_now(self) -> None:
         self.since = self.clock()
         self.sizes.clear()

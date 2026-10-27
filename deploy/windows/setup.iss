@@ -69,6 +69,9 @@ StatusRollback=正在撤销…
 ConfirmUninstall=卸载 %1？
 UninstallStatusLabel=正在卸载 %1…
 UninstalledAll=%1 已卸载。
+[UninstallRun]
+; Claude's settings as they were: the service put a hook to itself there (claude_hooks.py)
+Filename: "{app}\AgentRemote.exe"; Parameters: "--remove-claude-hook"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveClaudeHook"
 [UninstallDelete]
 Type: files; Name: "{userstartup}\Agent Remote 027.lnk"
 [Code]

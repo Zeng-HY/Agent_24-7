@@ -153,6 +153,7 @@ class Controller:
         # itself is opened only to apply a pick.
         self.modes_path=self.catalog_path.with_name('claude-modes.json')
         self.modes=load_modes(self.modes_path)
+        self.hooks=None  # claude_hooks.Bridge, set by remote.py: questions and permissions Claude Code holds open (10-27)
     def _document(self,item,open_first=False):
         d=self.desktop
         if open_first:
@@ -489,13 +490,28 @@ class Controller:
     def state(self,tid,fresh=False):
         with self.lock:
             old=self.cache.get(tid)
-            if not fresh and old and time.monotonic()-old[0]<4:return old[1]
+            if not fresh and old and time.monotonic()-old[0]<4:return self._held(tid,old[1])
             item=chats.find('claude',tid)
             try:data=self.desktop.run(self._read,item,timeout=12)
             except Exception as exc:data={'available':False,'reason':plain_error(exc),'settings':settings(item),'actions':[]}
             self.cache[tid]=(time.monotonic(),data)
             if len(self.cache)>20:self.cache.pop(next(iter(self.cache)))
-            return data
+            return self._held(tid,data)
+    def _held(self,tid,data):
+        """data with the question or permission Claude Code holds open for this conversation (claude_hooks.py) as its
+        prompt, in place of what was read off the desktop's card: answered from here, nothing on the desktop is clicked,
+        and shown whichever conversation the PC shows (10-27)."""
+        hooks=self.hooks
+        if hooks is None:return data
+        held=hooks.layout(tid)
+        if held is None:
+            # the desktop may still draw the card a phone answer has just closed: not offered as a question again
+            return {**data,'prompt':None,'actions':[]} if hooks.just_answered(tid) and (data.get('prompt') or data.get('actions')) else data
+        ask_id,prompt,stamp=held
+        for part in prompt['choices']+prompt['nav']:
+            do=part.pop('do');ready=part.pop('ready',True)
+            part['token']=self._ticket(tid,'hook',{'ask':ask_id,'do':do},stamp) if ready else None
+        return {**data,'prompt':prompt,'actions':[]}
     def _ticket(self,tid,kind,option,revision):
         now=time.monotonic()
         self.choices={k:v for k,v in self.choices.items() if now-v['created']<120}
@@ -834,6 +850,12 @@ class Controller:
         with self.lock:
             ticket=self.choices.pop(token,None)
             if not ticket or ticket['id']!=tid or time.monotonic()-ticket['created']>=120:raise chats.ChatError('选项已过期，请重新打开面板')
+            if ticket['kind']=='hook':  # answered through the request Claude Code holds open; the desktop is not touched
+                if self.hooks is None:raise chats.ChatError('选项已过期，请重新打开面板')
+                text=self.hooks.press(tid,ticket['option']['ask'],ticket['option']['do'],ticket['revision'])
+                self.cache.pop(tid,None)
+                try:return {'ok':True,'text':text,'state':self.state(tid,True)}
+                except Exception:return {'ok':True,'text':text}  # the answer went; the phone reads the state again itself
             item=chats.find('claude',tid)
             def run():
                 dock=None;went=None;started=time.monotonic()
@@ -876,7 +898,7 @@ class Controller:
                     if ticket['kind'] in ('model','effort','mode','fast'):self._dismiss_popup(item)
                 self.menu_context=None;time.sleep(.3)
                 text={'Next':'已在电脑上选好，并点了「下一题」','Submit':'已在电脑上选好并提交'}.get(went,'已在电脑上选好' if went=='' else None)
-                return {'ok':True,'text':text or ('已请求立即补充，等待 Claude 读取' if ticket['kind']=='steer_queued' else '已操作，下面显示重新读取的桌面状态'),'state':self._read(item)}
+                return {'ok':True,'text':text or ('已请求立即补充，等待 Claude 读取' if ticket['kind']=='steer_queued' else '已操作，下面显示重新读取的桌面状态'),'state':self._held(tid,self._read(item))}
             try:return self.desktop.run(run,timeout=40)
             finally:self.cache.pop(tid,None)
     def _next_box(self,doc,box):

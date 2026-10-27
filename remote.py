@@ -18,6 +18,9 @@ The token lives in remote_config.json next to this file, with "name" (this compu
 Android phone gets them from this service (ntfy_feed.py), turned on on the page. 遥应's own notifications are set
 on the phone: the relay reads /api/notify/push while the account has such a phone (relay_push.py). "phone_files":
 the folder files sent up from the phone go into (pc_files.py; 下载\\手机传来的文件 when not set).
+Claude Code asks this service before a question card or a permission prompt (claude_hooks.py, 10-27): a hook in
+Claude's user settings, put there at start; "claude_hook_key" is the key in its address, "claude_hooks": false takes
+the hook out again.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ import ipaddress
 import json
 import os
 import secrets
+import select
 import socket
 import subprocess
 import sys
@@ -60,6 +64,7 @@ import chat_history
 import chat_projects  # the sidebar: conversations by app and project, as the desktop apps group them
 import live_events
 import claude_control
+import claude_hooks  # Claude Code asks this service first before a question card or a permission prompt (10-27)
 import composer_references
 import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
 import archives  # a left swipe archives a conversation; 设置 → 已归档对话 restores or deletes (10-20)
@@ -340,6 +345,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {"_bad": "请求体不是合法的 UTF-8 JSON"}
 
+    def _hung_up(self) -> bool:
+        """Whether the other side closed this connection while its request waits (Claude Code: Stop, its timeout, or
+        it ended). It sends nothing more on it before an answer, so anything to read is the end."""
+        try:
+            ready, _, _ = select.select([self.connection], [], [], 0)
+            return bool(ready) and not self.connection.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return True
+
+    def _claude_hook(self, path: str) -> None:
+        """A hook request from Claude Code on this computer (claude_hooks.py). Let in by the hook key in the address
+        (remote_config.json "claude_hook_key"), never through Tailscale; held open until the phone answers. Anything
+        else than a decision is an empty 200, which Claude Code reads as no decision."""
+        key = str(self.cfg.get("claude_hook_key") or "")
+        if not key or not secrets.compare_digest(path[len(claude_hooks.PATH):], key) or self.headers.get("Tailscale-User-Login"):
+            self.close_connection = True
+            self._json({"error": "口令不对"}, 403)
+            return
+        body = self._body()
+        reply = None
+        if not body.get("_bad"):
+            try:
+                reply = self.server.claude_hooks.handle(body, self._hung_up)  # type: ignore[attr-defined]
+            except Exception:
+                self.log.write(traceback.format_exc())
+        self._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
+
     # -- GET
 
     def do_GET(self) -> None:
@@ -504,6 +536,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
+        if path.startswith(claude_hooks.PATH):  # Claude Code itself, with the hook key instead of the token
+            self._claude_hook(path)
+            return
         if not self._authorized():
             self.close_connection = True
             self._refuse()
@@ -989,6 +1024,21 @@ def machine_facts(cfg: dict) -> dict:
             "voice": cfg.get("voice") is not False}
 
 
+def hook_settings(cfg: dict, claude: bool, log) -> None:
+    """Claude Code's hook to this service in Claude's user settings (claude_hooks.py), kept to this port and key; taken
+    out again with "claude_hooks": false in remote_config.json. A computer without Claude is left alone."""
+    try:
+        if cfg.get("claude_hooks") is False:
+            claude_hooks.remove(log)
+        elif claude:
+            if not cfg.get("claude_hook_key"):
+                cfg["claude_hook_key"] = secrets.token_urlsafe(18)
+                save_config(cfg)
+            claude_hooks.install(f"http://127.0.0.1:{cfg['port']}{claude_hooks.PATH}{cfg['claude_hook_key']}", log)
+    except Exception:
+        log("Claude 的 hook 设置没改成\n" + traceback.format_exc())
+
+
 class Server(ThreadingHTTPServer):
     # Through Tailscale (https) every file of the page arrives on its own connection, all at once. Python's
     # default queue of 5 waiting connections turned the rest away, Tailscale answered those with 502, and that
@@ -1044,6 +1094,10 @@ def main(argv: list[str] | None = None) -> int:
     server.computers.spawn(server.computers.look)  # the first tap on the computer's name need not wait for it
     server.notifier = notify.Notifier(cfg, server.machine["name"], log, lambda: save_config(cfg))  # type: ignore[attr-defined]
     server.notifier.start()
+    server.claude_hooks = claude_hooks.Bridge(log.write, notify=server.notifier.asking,  # type: ignore[attr-defined]
+                                              changed=lambda tid: server.claude.cache.pop(tid, None))
+    server.claude.hooks = server.claude_hooks
+    hook_settings(cfg, "claude" in server.machine["apps"], log.write)
     if server.machine["voice"]:
         server.voice = voice.Voice(cfg, log)  # type: ignore[attr-defined]
         server.local_asr = voice_local.LocalASR(cfg, log)  # type: ignore[attr-defined]  (loads in the background)
