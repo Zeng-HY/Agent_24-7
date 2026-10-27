@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.2 构建 8 已发 TestFlight：Claude 问题卡跟上电脑 dev.24，Codex 新建对话的按钮，待真机验）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.3 发 TestFlight：发出去的图片显示出来，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,12 +25,19 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `main` 分支，先推送（10-27 起只留 `main`，`ios-native` 已合进去并删掉）。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 下个构建带上的改动（还没发）
+## 0.5.3：发出去的图片显示出来（10-27 构建，待真机验）
 
 - **发出去的图片显示出来**（用户 10-27：发出去的消息只显示“[图片]”，要照网页做）：从手机发给 Codex 或 Claude 的图片，在那条消息里显示成小图（110×100，两张一排），点一下用快速查看看大图。和网页一样，图片取自电脑的记录：从手机或网页发图时，电脑都会记下图片和一张小图，放在对话状态的 `images` 里。Codex 的消息带着发送编号，按编号对上；Claude 的记录里没有编号，按发送时的文字和时间对上，网页这一步对不上 Claude。图片显示出来后，文字前的“[图片]”就不再显示。在电脑上直接发的图片电脑没有记录，仍只显示“[图片]”。
 - 本地示例“Claude 选项示例”的第一条消息带一张图。
 
-检查情况：本机 `TeleplyCore` 146 项通过（新加 4 项）；界面代码要到下次云端构建才编译。
+检查情况：本机 `TeleplyCore` 146 项通过（新加 4 项）；界面代码在云端构建时编译；按用户的意思不跑截图。
+
+### 留给你在真机上验（0.5.3）
+
+1. **Claude 对话**：发一张图（带不带字都行），等消息出现在对话里：消息里是这张图的小图，文字前没有“[图片]”；点小图看到大图。
+2. **Codex 对话**：同样发一张图，消息里也显示小图。
+3. **两张以上**：一次发两三张，小图两张一排，各自点开是各自的大图。
+4. **以前发过的**：打开以前从手机发过图的对话，那些消息里也显示出图（电脑还记着的那些）。
 
 ## 0.5.2：Claude 问题卡跟上电脑 dev.23、dev.24，Codex 新建的对话变成按钮（10-27 发 TestFlight 构建 8，待真机验）
 
