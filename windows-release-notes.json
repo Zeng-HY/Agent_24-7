@@ -172,5 +172,13 @@
       "上次公开发布的是 dev.21，这一版也包含 dev.22–24：Claude 的提问和权限确认在手机上直接回答，Codex 的回答不再重复，人在电脑前也照常推送。"
     ],
     "details": "阿里云更新\n以前电脑端只从 GitHub 检查更新，国内很多网络连不上 GitHub，一直收不到更新。从这一版起，电脑端先到阿里云看有没有新版本；阿里云连不上或核对不过，再去 GitHub 看。更新清单带签名，电脑端先核对签名，下载完再核对安装包的大小和 SHA-256 指纹，对不上就不装。所以即使有人动了阿里云或 GitHub 上的文件，也换不了安装包。\n\nClaude 补发的消息\nClaude 正在运行时从手机补发一条消息，Claude 会在这条消息前面加一段它自己的说明，比如和这个对话相连的其他会话现在的状态。电脑端原来连这段说明一起核对，对不上，手机上一直显示「上一条送达状态待确认」，消息气泡里也露出这段说明。现在先去掉说明，再核对和显示。\n\n手机网页\n侧栏里 Codex 的标志换成和遥应 iPhone、安卓 App 一样的样子。\n\n包含 dev.22–dev.24（这三版没有公开发布）\nClaude 的提问和权限确认：电脑端在 Claude 的设置（~/.claude/settings.json）里加一条 hook，Claude 要问你问题、要运行命令或改文件之前，先把原题交给电脑端；你在手机上答了，电脑上那张卡片自己关掉，Claude 窗口不再被点、不再被调到前台。原来的设置文件另存为 settings.json.before-teleply，卸载遥应时会去掉这条 hook。Claude 一轮中间停下来等你回答时，手机也会收到「在等你选」的通知。\nCodex 的回答在手机上只显示一次，末尾不再带记忆引用；Codex 做好的文件能在手机上下载。\n人在电脑前也照常推送，只有手机正开着这个对话时不推。\n\n安装\nWindows 0.27.0-dev.25 / build 25，继续预发布渠道。这是第一个从阿里云取更新的版本：dev.24 及以前的电脑只会去 GitHub 检查更新，连不上 GitHub 的要手动装一次这一版，下载地址 https://teleply-updates.oss-cn-guangzhou.aliyuncs.com/windows/AgentRemote-0.27.0-dev.25-Setup.exe 。手机 App 不用为这一版更新；安卓 1.0.3 同时发布。"
+  },
+  "0.27.0-dev.26": {
+    "summary": [
+      "手机和网页能直接看 Word、Excel、PowerPoint 文件了：电脑用自己装的 Office 转成 PDF 显示，第一次几秒，之后马上出来；设了打开密码的文件不转。",
+      "Claude 回答里用相对路径写的文件链接（比如 dist/x.exe），手机和网页现在都能点开，不再显示「链接未开放」。",
+      "修复手机打开 DeepSeek 对话时报错「invalid literal for int() with base 10: 'tool'」。"
+    ],
+    "details": "Office 文件预览\n电脑装了 Word、Excel 或 PowerPoint 时，对话文件里的 .docx、.xlsx、.pptx 等文件，在手机和网页的文件页直接显示内容。电脑用自己的 Office 把文件转成 PDF：只读打开，不运行宏，另开一个 Office，不碰你正开着的文档，转完就关掉。同一个文件转一次就记住，第一次几秒到半分钟，之后马上出来；文件改了会重新转。设了打开密码的文件电脑不转，直接说明原因。保存、分享拿到的仍是原文件。网页随这一版就能看；手机要 iPhone 0.5.4、安卓 1.0.4。\n\nClaude 的相对路径链接\nClaude 桌面版让 Claude 用相对路径写文件链接，比如 [安装包](dist/x.exe)；手机和网页以前只认 D:\\… 这样的完整路径，网页显示成普通文字，手机写「链接未开放」。现在电脑读 Claude 的对话记录时，把指向实际存在的文件的相对链接补成完整路径，代码块里的不动。旧版手机也能直接点开。\n\nDeepSeek 报错\n手机打开 DeepSeek 对话时，如果上次停在一条工具调用上，电脑会报「invalid literal for int() with base 10: 'tool'」，整页读不出来。现在遇到这种消息就给最新的消息。\n\n安装\nWindows 0.27.0-dev.26 / build 26，继续预发布渠道。dev.25 的电脑在托盘里点「检查更新」，先从阿里云取；dev.24 及以前只问 GitHub，连不上 GitHub 的手动下载：https://teleply-updates.oss-cn-guangzhou.aliyuncs.com/windows/AgentRemote-0.27.0-dev.26-Setup.exe 。安卓 1.0.4、iPhone 0.5.4 同时发布：每次打开对话都在最新消息处，Claude 的「上次操作的结果还没确认」不再一直挂着，长对话更顺。"
   }
 }
