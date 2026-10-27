@@ -42,8 +42,45 @@ public indirect enum MarkdownBlock: Sendable, Equatable {
 public enum MarkdownReader {
     /// Smart punctuation stays off: straight quotes and dashes keep the original text (spec B16).
     public static func blocks(_ source: String) -> [MarkdownBlock] {
-        let document = Document(parsing: source, options: [.disableSmartOpts])
+        let document = Document(parsing: tidy(source), options: [.disableSmartOpts])
         return document.children.compactMap(block)
+    }
+
+    /// What Codex writes for itself goes before an answer is shown, copied or shared (user 10-27, a phone user asked
+    /// what the lines at the bottom were): its memory citations go whole, and a file citation becomes a link to the
+    /// file, which opens like any file link.
+    public static func tidy(_ source: String) -> String {
+        guard source.contains("oai-mem-citation") || source.contains(":codex-file-citation") else { return source }
+        var text = source.replacingOccurrences(of: #"\s*<oai-mem-citation>[\s\S]*?</oai-mem-citation>"#, with: "", options: .regularExpression)
+        guard let directive = try? NSRegularExpression(pattern: #":codex-file-citation\{[^}]*?path="([^"]+)"[^}]*\}"#) else { return text }
+        for match in directive.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let whole = Range(match.range, in: text), let found = Range(match.range(at: 1), in: text) else { continue }
+            let path = String(text[found])
+            let name = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? path
+            text.replaceSubrange(whole, with: "[\(name)](<\(path)>)")
+        }
+        return text
+    }
+
+    /// A Windows path an answer links to (web markdown-ui.js local): the drive letter and a slash, after any %-escapes.
+    public static func localPath(_ destination: String?) -> String? {
+        guard let destination else { return nil }
+        let path = destination.removingPercentEncoding ?? destination
+        guard path.range(of: #"^[A-Za-z]:[\\/]"#, options: .regularExpression) != nil else { return nil }
+        // A line number after the file (report.md:12 or :12-20) names the same file (message_files.references).
+        return path.replacingOccurrences(of: #":\d+(?:-\d+)?$"#, with: "", options: .regularExpression)
+    }
+
+    /// The link a file in an answer carries on screen; the conversation page opens its file page (fileLinkPath).
+    public static func fileLink(_ path: String) -> String {
+        "teleply-file:" + (path.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
+    }
+
+    /// The path behind a file link drawn by [fileLink]; nil for any other address.
+    public static func fileLinkPath(_ url: URL) -> String? {
+        let text = url.absoluteString
+        guard text.hasPrefix("teleply-file:") else { return nil }
+        return String(text.dropFirst("teleply-file:".count)).removingPercentEncoding
     }
 
     static func block(_ markup: any Markup) -> MarkdownBlock? {
@@ -100,13 +137,22 @@ public enum MarkdownReader {
             case let code as InlineCode:
                 return [InlineRun(code.code, code: true, link: look.link)]
             case let link as Link:
+                // A file on the computer opens its page, to look at or save (web: a local link downloads).
+                if let path = localPath(link.destination) {
+                    var inner = look; inner.link = fileLink(path)
+                    return runs(link.children, inner)
+                }
                 guard let safe = safeWebLink(link.destination) else {
                     return runs(link.children, look) + [InlineRun("（链接未开放）")]
                 }
                 var inner = look; inner.link = safe
                 return runs(link.children, inner)
             case let image as Image:
-                return [InlineRun("[图片：\(image.plainText.isEmpty ? (image.source ?? "") : image.plainText) · 可在当前文件中查看已授权资源]")]
+                let label = image.plainText.isEmpty ? (image.source ?? "") : image.plainText
+                if let path = localPath(image.source) {
+                    return [InlineRun("[图片：\(label)]", link: fileLink(path))]
+                }
+                return [InlineRun("[图片：\(label) · 可在当前文件中查看已授权资源]")]
             case let html as InlineHTML:
                 return [InlineRun(html.rawHTML)]
             default:

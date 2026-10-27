@@ -1,5 +1,7 @@
 import AVFoundation
+import ImageIO
 import PhotosUI
+import QuickLook
 import SwiftUI
 import TeleplyModel
 import TeleplyState
@@ -102,7 +104,7 @@ struct AttachButton: View {
         for item in picked {
             do {
                 guard let photo = try await item.loadTransferable(type: StagedPhoto.self) else { continue }
-                hand(photo.url, image: true)
+                await hand(photo.url, image: true)
             } catch {
                 model.workspace.error = "这张照片没读出来，请换一张或从手机文件里选"
             }
@@ -122,7 +124,7 @@ struct AttachButton: View {
             }
             let image = UTType(filenameExtension: copy.pathExtension)?.conforms(to: .image) == true
                 && ["jpg", "jpeg", "png", "heic", "heif", "gif", "webp"].contains(copy.pathExtension.lowercased())
-            hand(copy, image: image)
+            await hand(copy, image: image)
         }
     }
 
@@ -134,19 +136,27 @@ struct AttachButton: View {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let file = folder.appendingPathComponent("拍照-\(stamp).jpg")
             try data.write(to: file)
-            hand(file, image: true)
+            await hand(file, image: true)
         } catch {
             model.workspace.error = "照片没存下来，请再拍一次"
         }
     }
 
-    /// The staged copy goes to the draft the picker was opened for, or away.
-    private func hand(_ file: URL, image: Bool) {
+    /// The staged copy goes to the draft the picker was opened for, or away. A picture first gets its preview for the
+    /// tile (made away from the screen: a large photo takes a moment).
+    private func hand(_ file: URL, image: Bool) async {
         guard model.workspace.key == openedFor else {
             try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
             return
         }
-        model.workspace.importFile(file, name: file.lastPathComponent, image: image)
+        var preview: String?
+        if image { preview = await Task.detached { photoPreview(of: file) }.value }
+        guard model.workspace.key == openedFor else {
+            try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
+            if let preview { try? FileManager.default.removeItem(at: WorkspaceModel.photoFolder.appendingPathComponent(preview)) }
+            return
+        }
+        model.workspace.importFile(file, name: file.lastPathComponent, image: image, preview: preview)
     }
 }
 
@@ -190,10 +200,11 @@ struct CameraPicker: UIViewControllerRepresentable {
 }
 
 /// The attachments and references inside a card (spec 8.1, 8.2): each removable; one going up says so, one that
-/// failed says why.
+/// failed says why. A picture shows itself and opens large when tapped (user 10-27).
 struct AttachmentTiles: View {
     let workspace: WorkspaceModel
     let saved: JSONValue
+    @State private var looking: URL?
 
     var body: some View {
         let uploads = saved["uploads"].array
@@ -204,9 +215,10 @@ struct AttachmentTiles: View {
                     ForEach(Array(uploads.enumerated()), id: \.offset) { _, row in
                         let status = row["status"].string()
                         let failed = status != "ready" && status != "uploading" && status != "checking"
+                        let preview = row["preview"].string().isEmpty ? nil : WorkspaceModel.photoFolder.appendingPathComponent(row["preview"].string())
                         Tile(symbol: row["image"].bool() ? "photo" : "doc", name: row["name"].string(),
                              status: status == "ready" ? nil : failed ? (row["error"].string().isEmpty ? "上传失败" : row["error"].string()) : "上传中",
-                             failed: failed, removeLabel: "移除附件 " + row["name"].string()) {
+                             failed: failed, removeLabel: "移除附件 " + row["name"].string(), preview: preview, look: { looking = $0 }) {
                             workspace.removeUpload(row["local"].string())
                         }
                     }
@@ -222,6 +234,7 @@ struct AttachmentTiles: View {
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
             }
+            .quickLookPreview($looking)
         }
     }
 }
@@ -232,19 +245,38 @@ private struct Tile: View {
     let status: String?
     let failed: Bool
     let removeLabel: String
+    /// A picture's preview: shown in place of its icon and name, opened large when tapped.
+    var preview: URL?
+    var look: (URL) -> Void = { _ in }
     let remove: () -> Void
+    @State private var thumbnail: UIImage?
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(failed ? Palette.danger : Palette.muted)
-                .accessibilityHidden(true)
+            if let preview, let thumbnail {
+                Button { look(preview) } label: {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 4)
+                .accessibilityLabel(Text("放大看 " + name))
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(failed ? Palette.danger : Palette.muted)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 0) {
-                Text(name)
-                    .captionFont()
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
+                if thumbnail == nil {
+                    Text(name)
+                        .captionFont()
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                }
                 if let status {
                     Text(status)
                         .scaledFont(11, relativeTo: .caption2)
@@ -262,12 +294,34 @@ private struct Tile: View {
             .buttonStyle(.plain)
             .accessibilityLabel(Text(removeLabel))
         }
-        .padding(.leading, 10)
+        .padding(.leading, thumbnail == nil ? 10 : 4)
         .frame(maxWidth: 200, alignment: .leading)
         .background(failed ? Palette.stopFill : Palette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(name + (status.map { "，" + $0 } ?? "")))
+        // Drawn small from the preview, away from the screen.
+        .task(id: preview) {
+            guard let preview else { return }
+            thumbnail = await UIImage(contentsOfFile: preview.path)?.byPreparingThumbnail(ofSize: CGSize(width: 120, height: 120))
+        }
     }
+}
+
+/// A picture's preview for its tile and Quick Look: at most 1600 px, written to WorkspaceModel.photoFolder. Its file
+/// name, or nil when the picture cannot be read (the tile then shows its icon).
+nonisolated func photoPreview(of file: URL) -> String? {
+    guard let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return nil }
+    let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                    kCGImageSourceThumbnailMaxPixelSize: 1600]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+    let folder = WorkspaceModel.photoFolder
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let name = UUID().uuidString + ".jpg"
+    guard let target = CGImageDestinationCreateWithURL(folder.appendingPathComponent(name) as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+        return nil
+    }
+    CGImageDestinationAddImage(target, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+    return CGImageDestinationFinalize(target) ? name : nil
 }
 
 /// The one page a picker pushes: the computer file the workspace holds.

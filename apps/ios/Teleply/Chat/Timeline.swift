@@ -291,7 +291,8 @@ private struct AnswerBlock: View {
             MarkdownView(source: message.text)
                 .contentShape(Rectangle())
                 .contextMenu {
-                    MessageMenu(text: message.text, message: message, actions: actions)
+                    // Copied and shared as shown, without Codex's own notes.
+                    MessageMenu(text: MarkdownReader.tidy(message.text), message: message, actions: actions)
                 } preview: {
                     MarkdownView(source: message.text)
                         .foregroundStyle(Palette.ink)

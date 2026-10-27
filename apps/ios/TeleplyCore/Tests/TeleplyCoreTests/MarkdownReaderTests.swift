@@ -55,4 +55,42 @@ struct MarkdownReaderTests {
         #expect(runs.contains(InlineRun("（链接未开放）")))
         #expect(runs.plain.contains("[图片：图 · 可在当前文件中查看已授权资源]"))
     }
+
+    /// A file on the computer that an answer links to opens its page (web markdown-ui.js local links), line numbers
+    /// and %-escapes aside; a picture on the computer too.
+    @Test func filesOnTheComputerOpenTheirPage() {
+        let blocks = MarkdownReader.blocks(#"[确认单](D:\Personal\语言桥\确认单.docx) [第 3 行](D:/a/%E8%AF%B4%E6%98%8E.md:3) ![图](C:\pics\a.png)"#)
+        guard case .paragraph(let runs) = blocks.first else { Issue.record("expected a paragraph"); return }
+        let links = runs.compactMap(\.link).compactMap(URL.init(string:)).compactMap(MarkdownReader.fileLinkPath)
+        #expect(links == [#"D:\Personal\语言桥\确认单.docx"#, "D:/a/说明.md", #"C:\pics\a.png"#])
+        #expect(runs.first { $0.text == "确认单" }?.link?.hasPrefix("teleply-file:") == true)
+        #expect(!runs.plain.contains("链接未开放"))
+        #expect(MarkdownReader.fileLinkPath(URL(string: "https://example.com")!) == nil)
+    }
+
+    /// Codex's own notes (user 10-27): memory citations go; a file citation becomes a link to its file.
+    @Test func codexCitationsBecomeNothingOrAFileLink() {
+        let answer = """
+        已合并为一份。
+
+        :codex-file-citation{path="D:\\Personal\\语言桥\\合并稿.docx" purpose="output"}
+
+        <oai-mem-citation>
+        <citation_entries>
+        MEMORY.md:694-696|note=[used Windows Word rendering fallback workflow]
+        </citation_entries>
+        <rollout_ids>
+        01a0bef3-b1d0-79d3-b7e4-4251056b2729
+        </rollout_ids>
+        </oai-mem-citation>
+        """
+        let tidy = MarkdownReader.tidy(answer)
+        #expect(!tidy.contains("oai-mem-citation") && !tidy.contains("MEMORY.md") && !tidy.contains("codex-file-citation"))
+        #expect(tidy.contains(#"[合并稿.docx](<D:\Personal\语言桥\合并稿.docx>)"#))
+        let blocks = MarkdownReader.blocks(answer)
+        #expect(blocks.count == 2)
+        guard case .paragraph(let runs) = blocks.last else { Issue.record("expected the file's paragraph"); return }
+        #expect(runs.first.flatMap { $0.link }.flatMap(URL.init(string:)).flatMap(MarkdownReader.fileLinkPath) == #"D:\Personal\语言桥\合并稿.docx"#)
+        #expect(MarkdownReader.tidy("没有注记") == "没有注记")
+    }
 }

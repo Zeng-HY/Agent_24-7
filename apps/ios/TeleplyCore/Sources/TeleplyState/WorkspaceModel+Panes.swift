@@ -61,6 +61,34 @@ extension WorkspaceModel {
         }
     }
 
+    /// A file an answer links to (web reading-ui.js referencedFile): its page, found among the files the computer lists
+    /// for this conversation by its exact path; the computer lists only files an answer names (message_files).
+    public func openLinkedFile(_ path: String) {
+        guard let key, let client else { return }
+        let target = normalizePath(path)
+        error = nil
+        linkRead?.cancel()
+        linkRead = Task { [weak self] in
+            do {
+                let listed = try await client.detail(device: key.device, route: "chat/files", query: [("app", key.app), ("id", key.chat)])
+                guard let self, self.key == key else { return }
+                guard let match = listed["items"].array.first(where: { normalizePath($0["path"].string()) == target }) else {
+                    self.error = "这个文件不在电脑列出的对话文件里，现在打不开；电脑端更新后再试"
+                    return
+                }
+                if match["state"].string() == "missing" {
+                    self.error = "文件已移动或删除"
+                    return
+                }
+                self.file(match)
+            } catch is CancellationError {
+            } catch {
+                guard let self, self.key == key else { return }
+                self.error = describe(error)
+            }
+        }
+    }
+
     /// 查看成果文件 under a DeepSeek deliverables message: 对话文件 with only the files that message presented.
     public func filesOf(message: String) {
         dropFile()

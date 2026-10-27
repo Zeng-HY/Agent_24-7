@@ -218,6 +218,20 @@ struct AttachmentTests {
         #expect(!workspace.transferring && workspace.transfer.isEmpty)
     }
 
+    @Test func aFileLinkInAnAnswerOpensThePageOfTheListedFileOnly() async {
+        let model = await demoConversation("原生阅读示例")
+        let workspace = model.workspace
+        workspace.openLinkedFile("d:/FIXTURE/说明.md")
+        await workspace.settle()
+        #expect(workspace.pane == "file")
+        #expect(workspace.data["id"].string() == "fixture-md")
+        workspace.close()
+        workspace.openLinkedFile(#"D:\fixture\secret.txt"#)
+        await workspace.settle()
+        #expect(workspace.pane == nil)
+        #expect(workspace.error?.contains("不在电脑列出的对话文件里") == true)
+    }
+
     @Test func anHTMLPageGetsOnlyTheListedFileBesideIt() async {
         let model = await demoConversation("原生阅读示例")
         let page = DemoData.files[0]

@@ -65,6 +65,8 @@ public final class WorkspaceModel {
     @ObservationIgnored var paneRead: Task<Void, Never>?
     @ObservationIgnored var paneGeneration = 0
     @ObservationIgnored var copyTask: Task<URL, any Error>?
+    /// A file link in an answer being looked up among the conversation's files.
+    @ObservationIgnored var linkRead: Task<Void, Never>?
     /// The sheet's lists by its workspace (kept on this phone as "new_lists").
     @ObservationIgnored var lists: [ChatKey: JSONValue] = [:]
     @ObservationIgnored var newReads: [String: Task<Void, Never>] = [:]
@@ -114,6 +116,8 @@ public final class WorkspaceModel {
         await read?.value
         await choiceRead?.value
         await work?.value
+        await paneRead?.value
+        await linkRead?.value
         await paneRead?.value
         await newIDRead?.value
         for list in Array(newReads.values) { await list.value }
@@ -278,6 +282,7 @@ public final class WorkspaceModel {
     func clearSent(_ key: ChatKey, _ extras: JSONValue) {
         let saved = current(key)
         let sent = Set(extras["attachments"].array.map { $0.string() } + extras["references"].array.map { $0["id"].string() })
+        for row in saved["uploads"].array where sent.contains(row["meta"]["id"].string()) { dropPreview(row["preview"].string()) }
         var next = saved.object
         next["uploads"] = .array(saved["uploads"].array.filter { !sent.contains($0["meta"]["id"].string()) })
         next["references"] = .array(saved["references"].array.filter { !sent.contains($0["id"].string()) })

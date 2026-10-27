@@ -121,7 +121,13 @@ struct ConversationView: View {
         .onChange(of: model.messages.first?.id) { keepPlace() }
         .onChange(of: model.screen) { if model.screen != .reading { saveAnchor() } }
         .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
-        .sheet(item: $selecting) { message in SelectTextSheet(text: message.text) }
+        .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
+        // A file an answer links to opens its page, to look at or save (web: the link downloads it).
+        .environment(\.openURL, OpenURLAction { url in
+            guard let path = MarkdownReader.fileLinkPath(url) else { return .systemAction }
+            model.workspace.openLinkedFile(path)
+            return .handled
+        })
         .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
         .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
         .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } }),
