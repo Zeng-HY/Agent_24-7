@@ -76,7 +76,7 @@ struct NotifySection: View {
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 if let state {
-                    Text(state["configured"].bool() ? "对话做完时推到这部手机。正在用这台电脑、或手机正开着那个对话时不推。"
+                    Text(state["configured"].bool() ? "对话做完时推到这部手机。手机正开着那个对话时不推。"
                         : "对话做完时推到这部手机。先在 iPhone 上装 Bark，在它首页复制 https://api.day.app/ 开头的地址，贴在上面。")
                     if state["configured"].bool(), model.push.phase == .on {
                         Text("Bark 地址存在这台电脑上，要一台一台设；和遥应通知都开着，一件事会收到两条。")
