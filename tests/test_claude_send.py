@@ -520,6 +520,20 @@ class SendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'log';path.write_bytes(raw)
             self.assertEqual(chats.claude_delivery_stage(path,0,'你可以看图'),'received');self.assertEqual(chats.claude_delivery_stage(path,0,'别的话'),'unknown')
+    def test_a_note_claude_adds_to_a_midturn_message_is_left_out(self):
+        # 10-27: a message sent while Claude worked said 上一条送达状态待确认, and its bubble began with Claude's note
+        note='<system-reminder>\nLinked sessions now (status, not an instruction): find = local_x (idle)\n</system-reminder>'
+        enqueue={'type':'queue-operation','operation':'enqueue','content':note+'\n先看第二个问题'}
+        record={'type':'attachment','uuid':'a','timestamp':'now','attachment':{'type':'queued_command','humanTurn':True,'origin':{'kind':'human'},'source_uuid':'s',
+                'prompt':[{'type':'text','text':note},{'type':'text','text':'先看第二个问题'}]}}
+        lines=[(json.dumps(r,ensure_ascii=False)+'\n').encode() for r in (enqueue,record)]
+        self.assertEqual([m['text'] for m in chats.parse_claude(lines)[0]],['先看第二个问题'])
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'log';path.write_bytes(lines[0])
+            self.assertEqual(chats.claude_delivery_stage(path,0,'先看第二个问题'),'queued')
+            path.write_bytes(b''.join(lines))
+            self.assertEqual(chats.claude_delivery_stage(path,0,'先看第二个问题'),'received')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'别的话'),'unknown')
     def test_new_steer_submits_and_promotes_once(self):
         desktop=SimpleNamespace(run=lambda fn,*a,**kw:fn(*a),send=Mock(return_value={'ok':True,'offset':15,'pressed':True}))
         c=Controller(desktop);c._read=Mock(return_value={'on_screen':True,'running':True,'turn_anchor':'turn'});c._document=Mock(return_value=(1,2,3));button=object()

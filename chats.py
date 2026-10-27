@@ -709,7 +709,9 @@ def _claude_steer_message(rec):
         return None
     # With pictures the prompt is a list (the pictures, then the text) and the queue's enqueue line holds no text.
     # Read only as a string, such a message was never found: the phone said 没确认送达 for both of them (10-12).
-    text=_join_text(prompt).strip()
+    # 10-27: Claude puts its own note (<system-reminder>Linked sessions now …) before the words; kept, the phone said
+    # 上一条送达状态待确认 and showed the note in the bubble
+    text=clean_claude_user(_join_text(prompt))
     if isinstance(prompt,list) and any(isinstance(b,dict) and b.get('type')=='image' for b in prompt):text=('[图片] '+text).strip()
     if not text:return None
     return {'role':'user','text':text,'time':rec.get('timestamp') or data.get('timestamp'),
@@ -1086,7 +1088,7 @@ def claude_delivery_stage(path,offset,text):
             # 10-26: Claude writes its own notes (<system-reminder>Linked sessions now …) into the user's record
             if want and want in (norm(actual),norm(clean_claude_user(actual)),norm(claude_command(actual))):return 'received'
         elif rec.get('type')=='queue-operation' and rec.get('operation')=='enqueue':
-            if want and norm(_join_text(rec.get('content')))==want:stage='queued'
+            if want and norm(clean_claude_user(_join_text(rec.get('content'))))==want:stage='queued'
     return stage
 
 
