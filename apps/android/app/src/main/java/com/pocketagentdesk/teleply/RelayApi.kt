@@ -149,6 +149,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     private companion object {
         val DevicePrefix=Regex("^/d/[0-9a-f]{32}")
+        /** Fields of DeepSeek's state that change on every read while it works and that the phone does not show. */
+        val DeepSeekUnshown=listOf("seq","subagents","inbox")
         val DetailRoutes=setOf("chat/new/options","chat/folders","chat/new/draft","chat/new","chat/new/state","chat/new/retry","chat/new/references","composer/references","files/places","files/list","files/image","files/remove","codex/remove-attachment","codex/attachments","chat/files","chat/diff","file/text","file/meta","deepseek/models","deepseek/permissions","deepseek/model","deepseek/permission","deepseek/answer","deepseek/approval","claude/catalog","claude/setting","claude/choose","claude/menu","claude/close-menu","chat/projects","chat/open","chat/resolve",
             "claude/next","claude/task","chat/check","chat/archive","chat/unarchive","chat/delete","chat/archived","chats/children","notify","notify/ntfy","notify/test","voice/status","voice/terms","voice/tidy","status")
         /** Seconds the computer may take: Claude's buttons wait for its window (web 65 s), archiving for its records. */
@@ -270,7 +272,13 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     override suspend fun search(device: String, chat: String, query: String, cursor: String?) = request(devicePath(device,"/api/chat/search"), mapOf("app" to app, "id" to chat, "query" to query, "cursor" to cursor)).let { j ->
         Page(j.rows("items") { Message(it.getString("id"), it.string("role"), it.string("snippet")) }, j.string("next_cursor").ifBlank { null }, j.optBoolean("has_more"))
     }
-    override suspend fun control(device: String, chat: String, fresh: Boolean) = parseControl(request(devicePath(device,"/api/$app/state"),mapOf("id" to chat,"fresh" to if(fresh) "1" else null),timeout=if(app=="claude") 20 else 0).apply { if(app=="deepseek") put("queue_available",true) })
+    /**
+     * The conversation's state. DeepSeek's carries its record's sequence number, its subagents' times and its raw inbox:
+     * they change on every read while it works and the phone shows none of them (it uses `queued`). Left out, a poll
+     * that finds nothing new is the same state, and the page is not drawn again (10-27, every 2.5 s).
+     */
+    override suspend fun control(device: String, chat: String, fresh: Boolean) = parseControl(request(devicePath(device,"/api/$app/state"),mapOf("id" to chat,"fresh" to if(fresh) "1" else null),timeout=if(app=="claude") 20 else 0)
+        .apply { if(app=="deepseek") { put("queue_available",true);DeepSeekUnshown.forEach { remove(it) } } })
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
         require(route in setOf("send","stop","queue-action","answer"))
         if(app=="deepseek") {

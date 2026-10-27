@@ -25,19 +25,28 @@ import org.commonmark.parser.Parser
 
 private val markdownParser = Parser.builder().extensions(listOf(TablesExtension.create())).build()
 fun markdownDocument(source: String): Node = markdownParser.parse(source)
-class MarkdownCache(private val limit:Int=32,private val maxChars:Int=256000) {
-    private val entries=object:LinkedHashMap<String,Node>(16,0.75f,true) {}
+/**
+ * Parsed Markdown by its source, the least recently used going first. Bounded by characters, and with room for whole
+ * pages: 60 messages of the most the computer sends whole (6,000 characters) are 360,000 (10-27: 32 entries were
+ * fewer than a page, so a page scrolled back and forth was parsed again and again).
+ */
+class MarkdownCache(private val limit:Int=1500,private val maxChars:Int=800_000) {
+    private val entries=LinkedHashMap<String,Node>(64,0.75f,true)
+    private var chars=0L
     @Synchronized fun document(source:String):Node {
         entries[source]?.let { return it }
         val node=markdownDocument(source)
         if(source.length<=maxChars) {
-            entries[source]=node
-            while(entries.size>limit || entries.keys.sumOf { it.length }>maxChars) entries.remove(entries.keys.first())
+            entries[source]=node;chars+=source.length
+            val eldest=entries.entries.iterator()
+            while((entries.size>limit || chars>maxChars) && eldest.hasNext()) { chars-=eldest.next().key.length;eldest.remove() }
         }
         return node
     }
-    @Synchronized fun clear()=entries.clear()
+    @Synchronized fun clear() { entries.clear();chars=0 }
     @Synchronized fun size()=entries.size
+    /** Characters kept, for tests. */
+    @Synchronized fun characters()=chars
 }
 private val renderCache=MarkdownCache()
 fun clearMarkdownCache()=renderCache.clear()

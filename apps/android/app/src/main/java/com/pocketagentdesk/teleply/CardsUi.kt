@@ -272,13 +272,17 @@ fun OriginLabel(message: Message, modifier: Modifier = Modifier) {
     Text("来自其他对话", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = LocalTeleply.current.muted, modifier = modifier.padding(bottom = 4.dp))
 }
 
-/** The plan Codex keeps in its state, when [message] is the plan's own record. */
-fun codexPlanFor(raw: JSONObject, message: Message): JSONObject? {
-    val plan = raw.optJSONObject("plan") ?: return null
+/** The plan Codex keeps in its state, when it has one with its words. */
+fun codexPlan(raw: JSONObject): JSONObject? = raw.optJSONObject("plan")?.takeIf { it.string("id").isNotBlank() && it.string("text").isNotBlank() }
+
+/** Whether [message] is [plan]'s own record (its id, or the record it came from). */
+fun codexPlanIs(plan: JSONObject, message: Message): Boolean {
     val id = plan.string("id")
-    if (id.isBlank() || plan.string("text").isBlank()) return null
-    return plan.takeIf { message.id == id || details(message).string("source_id") == id }
+    return message.id == id || "source_id" in message.details && details(message).string("source_id") == id
 }
+
+/** The plan Codex keeps in its state, when [message] is the plan's own record. */
+fun codexPlanFor(raw: JSONObject, message: Message): JSONObject? = codexPlan(raw)?.takeIf { codexPlanIs(it, message) }
 
 /**
  * A plan Codex made in plan mode (web codex-ui.js renderCard plan): 计划 · 待确认 with a preview; 执行计划 carries it

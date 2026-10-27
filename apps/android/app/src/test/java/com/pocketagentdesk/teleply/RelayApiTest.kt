@@ -83,6 +83,16 @@ class RelayApiTest {
         assertEquals("标题",meta.string("title"));assertEquals(46,meta.getJSONObject("runtime").getInt("percent"))
         assertEquals("commentary",page.items.first().phase);assertEquals("r1",page.items.last().request)
     }
+    /** 10-27: DeepSeek's state without what changes on every read and shows nowhere, so a poll with nothing new is the same state. */
+    @Test fun deepSeekStateLeavesOutWhatChangesOnEveryRead()=runTest {
+        val ds=api.forSource("deepseek")
+        response("""{"available":true,"running":true,"seq":41,"subagents":[{"id":"s","updated":1}],"inbox":{"items":[]},"queued":[{"id":"q","text":"排队"}],"interactions":[]}""")
+        val first=ds.control(device,"chat",false);server.takeRequest()
+        response("""{"available":true,"running":true,"seq":42,"subagents":[{"id":"s","updated":2}],"inbox":{"items":[],"at":2},"queued":[{"id":"q","text":"排队"}],"interactions":[]}""")
+        val second=ds.control(device,"chat",false);server.takeRequest()
+        assertEquals(first,second);assertFalse(JSONObject(first.raw).has("seq"))
+        assertEquals("q",first.queued.single().id);assertTrue(first.queueAvailable);assertTrue(first.running)
+    }
     @Test fun deepSeekPromoteIsSteerAndCancelIsRemove()=runTest {
         val ds=api.forSource("deepseek")
         response("""{"ok":true}""");ds.command(device,"queue-action",JSONObject().put("id","chat").put("request_id","r").put("message_id","q1").put("action","promote"))

@@ -53,6 +53,41 @@ class ChatUiLogicTest {
         assertEquals("刚刚",agoLabel(now-30_000,now));assertEquals("5 分钟前",agoLabel(now-300_000,now));assertEquals("",agoLabel(0,now))
         assertEquals("● 运行中",statusLabel("running"));assertEquals("等待你处理",statusLabel("waiting"));assertEquals("状态不明",statusLabel(""))
     }
+    /**
+     * 10-27: what each row needs from the rows around it, worked out once per page (each row used to walk the page on
+     * every redraw): runs of steps share one fold whose first step has the header, and only the run after your latest
+     * message, with nothing but steps and events after it, is the one at work.
+     */
+    @Test fun timelineRowsKnowTheirRunOfStepsOnce() {
+        val messages=listOf(
+            Message("u1","user","先读代码"),
+            Message("s1","tool","读取"),Message("s2","assistant","想一想",phase="commentary"),
+            Message("a1","assistant","读完了"),
+            Message("u2","user","再改"),
+            Message("s3","tool","修改"),Message("e1","event","已停止"),Message("s4","assistant","接着想",phase="thinking"),
+        )
+        val rows=timelineRows(messages)
+        assertEquals(messages.size,rows.size)
+        assertEquals(TimelineRow("user","s1",true,2,false),rows[1]);assertEquals(TimelineRow("tool","s1",false,2,false),rows[2])
+        assertEquals("assistant",rows[3].previousRole);assertEquals("",rows[0].previousRole)
+        // After the latest message of yours: s3 alone (an event ends a run), then s4, the last thing on the page.
+        assertEquals(TimelineRow("user","s3",true,1,true),rows[5]);assertEquals(TimelineRow("event","s4",true,1,true),rows[7])
+        // An answer after the steps: they are done.
+        assertFalse(timelineRows(messages+Message("a2","assistant","改好了"))[7].lastGroup)
+        assertTrue(timelineRows(emptyList()).isEmpty())
+    }
+    /** 10-27: the parsed Markdown is kept for whole pages, bounded by characters, the least recently used going first. */
+    @Test fun markdownCacheHoldsAWholePageAndLetsTheOldestGo() {
+        val cache=MarkdownCache()
+        val page=(1..60).map { i -> "## 消息 $i\n"+"字".repeat(5_990) }
+        val parsed=page.map(cache::document)
+        assertEquals(60,cache.size());page.forEachIndexed { i,source -> assertSame(parsed[i],cache.document(source)) }
+        val small=MarkdownCache(10,100)
+        val a=small.document("a".repeat(40));small.document("b".repeat(40));small.document("a".repeat(40))
+        small.document("c".repeat(40))
+        // b was the least recently used: it went, a stayed.
+        assertEquals(2,small.size());assertEquals(80L,small.characters());assertSame(a,small.document("a".repeat(40)))
+    }
     @Test fun runtimeCountsReadInWan() {
         // 会话状态 (spec 0.4 §4.3): from ten thousand on, 万 with one decimal, no trailing .0.
         assertEquals("9999",wan(9_999));assertEquals("16.9万",wan(169_421));assertEquals("82.8万",wan(828_400));assertEquals("20万",wan(200_000))

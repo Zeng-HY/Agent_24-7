@@ -52,6 +52,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -118,8 +119,10 @@ private val ReadingWidth = 820.dp
 fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val p = LocalTeleply.current
     val density = LocalDensity.current
-    val chat by vm.composer.state.collectAsStateWithLifecycle()
-    val workspace by vm.workspace.state.collectAsStateWithLifecycle()
+    val chatState = vm.composer.state.collectAsStateWithLifecycle()
+    val chat by chatState
+    val workspaceState = vm.workspace.state.collectAsStateWithLifecycle()
+    val workspace by workspaceState
     val key = Triple(s.app, s.device?.id, s.chat?.id)
     var follow by remember(key) { mutableStateOf(true) }
     var unseen by remember(key) { mutableStateOf(false) }
@@ -207,7 +210,17 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
         hold = top?.let { OlderHold(s.messages.firstOrNull()?.id, (it.key as String).removePrefix("msg:"), it.offset, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
         vm.older()
     }
-    val lastUser = s.messages.indexOfLast { it.role == "user" }
+    // What each timeline row needs, worked out once per change here, so that a row is drawn again only when what it
+    // shows changed: a state poll or a streamed message no longer redraws every row on screen (10-27, a long DeepSeek
+    // conversation on the iPhone). The few rows that act on the state (next step, task, Codex plan) read it themselves.
+    val rows = remember(s.messages) { timelineRows(s.messages) }
+    val receipts = remember(chat.submissions) { chat.submissions.filter { it.request.isNotBlank() }.associateBy({ it.request }, { it.label }) }
+    val plan = remember(raw, s.app) { if (s.app == "codex") codexPlan(raw) else null }
+    val planRow = remember(plan, s.messages) { plan?.let { found -> s.messages.firstOrNull { codexPlanIs(found, it) }?.id } }
+    val rawState = rememberUpdatedState(raw)
+    val live = remember(chatState, workspaceState, rawState) { TimelineLive(chatState, workspaceState, rawState) }
+    val running = chat.control.running
+    val asking = cards.isNotEmpty()
     GlassScreen(
         Modifier.fillMaxSize().background(p.page),
         topEdge = barHeight + 12.dp,
@@ -234,9 +247,15 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                 }
                 if (handoff != null) item(key = "handoff") { Reading { NewFirstMessage(handoff.text, "", false) {} } }
                 itemsIndexed(s.messages, key = { _, m -> "msg:${m.id}" }, contentType = { _, m -> m.role + m.kind + m.phase }) { index, message ->
-                    Reading {
-                        TimelineItem(s, vm, message, index, lastUser, chat, cards.isNotEmpty(), folds, sheets, raw, workspace, pictures[message.id].orEmpty())
-                    }
+                    // Taken out here, so the row below is the same as before when none of these changed.
+                    val row = rows[index]
+                    val busy = s.busy
+                    val receipt = receipts[message.request]
+                    val working = running && row.lastGroup
+                    val waiting = asking && row.lastGroup
+                    val itsPlan = plan?.takeIf { message.id == planRow }
+                    val sent = pictures[message.id].orEmpty()
+                    Reading { TimelineItem(message, row, busy, receipt, working, waiting, itsPlan, sent, vm, folds, sheets, live) }
                 }
                 item(key = "interactions") {
                     Reading {
@@ -411,44 +430,67 @@ fun runtimeOf(s: ReaderState, raw: JSONObject): JSONObject? {
 
 private fun isProcess(m: Message) = m.role == "tool" || m.role == "assistant" && m.phase in setOf("commentary", "thinking") && !m.kind.contains("question") && !m.kind.contains("approval")
 
-/** [pictures]: those sent with a user message, as the computer kept them. */
+/**
+ * What a timeline row takes from the rows around it, worked out once per page ([timelineRows]) instead of by each row
+ * on every redraw: the role before it, and for a process step its run of steps ([groupKey] the run's fold, [first]
+ * carries the header, [steps] in all) and whether the run is the last thing after the latest message of yours.
+ */
+data class TimelineRow(val previousRole: String = "", val groupKey: String = "", val first: Boolean = false, val steps: Int = 0, val lastGroup: Boolean = false)
+
+fun timelineRows(messages: List<Message>): List<TimelineRow> {
+    val lastUser = messages.indexOfLast { it.role == "user" }
+    // Whether only process steps and events come after each row.
+    val quietAfter = BooleanArray(messages.size)
+    var quiet = true
+    for (i in messages.indices.reversed()) { quietAfter[i] = quiet; quiet = quiet && (isProcess(messages[i]) || messages[i].role == "event") }
+    val rows = ArrayList<TimelineRow>(messages.size)
+    var start = 0
+    while (start < messages.size) {
+        if (!isProcess(messages[start])) { rows += TimelineRow(messages.getOrNull(start - 1)?.role.orEmpty()); start++; continue }
+        var end = start
+        while (end < messages.lastIndex && isProcess(messages[end + 1])) end++
+        val last = start > lastUser && quietAfter[end]
+        for (i in start..end) rows += TimelineRow(messages.getOrNull(i - 1)?.role.orEmpty(), messages[start].id, i == start, end - start + 1, last)
+        start = end + 1
+    }
+    return rows
+}
+
+/** The conversation's live state, for the few rows that act on it (next step, task, Codex plan): read there only. */
+@Stable
+private class TimelineLive(val chat: State<ComposerState>, val workspace: State<WorkspaceState>, val raw: State<JSONObject>)
+
+/**
+ * One row of the timeline, given only what it shows, so that it is drawn again only when that changed: [receipt] of a
+ * message of yours, [working] and [waiting] for the last run of steps, [plan] when it is Codex's plan, [pictures] sent
+ * with a message of yours, as the computer kept them.
+ */
 @Composable
-private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, index: Int, lastUser: Int, chat: ComposerState, asking: Boolean, folds: MutableMap<String, Boolean>, sheets: ChatSheets, raw: JSONObject, ws: WorkspaceState, pictures: List<SentPicture>) {
+private fun TimelineItem(message: Message, row: TimelineRow, busy: Boolean, receipt: String?, working: Boolean, waiting: Boolean, plan: JSONObject?, pictures: List<SentPicture>,
+                         vm: ReaderViewModel, folds: MutableMap<String, Boolean>, sheets: ChatSheets, live: TimelineLive) {
     val p = LocalTeleply.current
-    val messages = s.messages
-    val previous = messages.getOrNull(index - 1)
-    val plan = if (s.app == "codex") codexPlanFor(raw, message) else null
     when {
         message.role == "user" -> {
-            val receipt = chat.submissions.firstOrNull { it.request.isNotBlank() && it.request == message.request }?.label
             val context = LocalContext.current
             val caches = remember(context) { context.cacheDir }
             Column(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalAlignment = Alignment.End) {
                 OriginLabel(message, Modifier.padding(end = 4.dp))
                 UserBubble(message.text, receipt = receipt, menus = LocalMenuHost.current, sheets = sheets, pictures = pictures, message = message,
-                    expand = { vm.expand(message) }, busy = s.busy) { picture, whole -> vm.workspace.sentPicture(caches, picture, whole) }
+                    expand = { vm.expand(message) }, busy = busy) { picture, whole -> vm.workspace.sentPicture(caches, picture, whole) }
             }
         }
         message.role == "plan" -> ChecklistCard(message)
-        message.role == "next" -> NextStepCard(message, vm, ws)
-        message.role == "task" -> TaskCard(message, raw, vm, ws)
+        message.role == "next" -> NextStepCard(message, vm, live.workspace.value)
+        message.role == "task" -> TaskCard(message, live.raw.value, vm, live.workspace.value)
         message.role == "subagent" -> SubagentCard(message)
-        plan != null -> CodexPlanCard(plan, chat, vm, ws)
+        plan != null -> CodexPlanCard(plan, live.chat.value, vm, live.workspace.value)
         isProcess(message) -> {
             // A run of process steps shares one fold; the first step carries the header.
-            var start = index
-            while (start > 0 && isProcess(messages[start - 1])) start--
-            var end = index
-            while (end < messages.lastIndex && isProcess(messages[end + 1])) end++
-            val groupKey = messages[start].id
-            val last = start > lastUser && messages.drop(end + 1).none { !isProcess(it) && it.role != "event" }
-            val live = chat.control.running && last
-            val waiting = asking && last
+            val groupKey = row.groupKey
             // Running groups start open, finished ones folded; the reader's own choice wins (design language §8).
-            val open = folds[groupKey] ?: live
-            Column(Modifier.fillMaxWidth().padding(top = if (index == start) 16.dp else 0.dp)) {
-                if (index == start) {
-                    val steps = end - start + 1
+            val open = folds[groupKey] ?: working
+            Column(Modifier.fillMaxWidth().padding(top = if (row.first) 16.dp else 0.dp)) {
+                if (row.first) {
                     Row(
                         Modifier.clip(RoundedCornerShape(8.dp)).clickable { folds[groupKey] = !open }
                             .semantics { stateDescription = if (open) "已展开" else "已收起" }
@@ -457,7 +499,7 @@ private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, 
                     ) {
                         Icon(if (open) TeleplyIcons.ChevronDown else TeleplyIcons.ChevronRight, contentDescription = null, tint = p.muted, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text((if (waiting) "需要你回答" else if (live) "正在处理" else "处理过程") + " · $steps 步", style = MaterialTheme.typography.process, color = if (waiting) p.askGo else p.muted)
+                        Text((if (waiting) "需要你回答" else if (working) "正在处理" else "处理过程") + " · ${row.steps} 步", style = MaterialTheme.typography.process, color = if (waiting) p.askGo else p.muted)
                     }
                 }
                 if (open) {
@@ -479,7 +521,7 @@ private fun TimelineItem(s: ReaderState, vm: ReaderViewModel, message: Message, 
         }
         else -> {
             val menus = LocalMenuHost.current
-            AnswerBlock(message, s, vm, menus, sheets, top = if (previous?.role == "user") 20.dp else 16.dp)
+            AnswerBlock(message, busy, vm, menus, sheets, top = if (row.previousRole == "user") 20.dp else 16.dp)
         }
     }
 }
@@ -614,9 +656,12 @@ private fun SentPictureTile(picture: SentPicture, load: suspend (SentPicture, Bo
     }
 }
 
-/** An answer: open text, no card (web .bub.assistant); long press opens the message menu. */
+/**
+ * An answer: open text, no card (web .bub.assistant); long press opens the message menu. It takes [busy] rather than the
+ * whole page state, so it is not drawn again each time another message streams in (10-27).
+ */
 @Composable
-private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, menus: MenuHostState?, sheets: ChatSheets, top: androidx.compose.ui.unit.Dp) {
+private fun AnswerBlock(message: Message, busy: Boolean, vm: ReaderViewModel, menus: MenuHostState?, sheets: ChatSheets, top: androidx.compose.ui.unit.Dp) {
     val p = LocalTeleply.current
     val haptic = LocalHapticFeedback.current
     val holder = remember { Anchor() }
@@ -627,21 +672,24 @@ private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, m
             menus.show(MenuRequest(Rect(point, point), MenuPlacement.AtPoint, "消息菜单", width = 220.dp) { MessageMenu(sheets, message) })
         }
     }
+    // The press handler lives as long as the message's id: it opens the menu on the message as it is now, not as it was
+    // when it started streaming (复制 used to take the words of that moment).
+    val currentOpen by rememberUpdatedState(openMenu)
     Column(
         Modifier.fillMaxWidth().padding(top = top)
             .onGloballyPositioned { holder.coordinates = it }
-            .pointerInput(message.id) { detectTapGestures(onLongPress = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); openMenu(it) }) }
+            .pointerInput(message.id) { detectTapGestures(onLongPress = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); currentOpen(it) }) }
             .semantics { customActions = listOf(CustomAccessibilityAction("更多操作") { openMenu(null); true }) },
     ) {
         OriginLabel(message)
         Markdown(message.text, Modifier.fillMaxWidth())
         // A conversation the reply made (web remote.html renderAssistantText): a button each under the text.
         remember(message.text) { createdThreads(message.text) }.forEach { thread ->
-            if (thread.ready) ThreadLink(enabled = !s.busy) { vm.openCreated(thread.id) }
+            if (thread.ready) ThreadLink(enabled = !busy) { vm.openCreated(thread.id) }
             else Text("新对话正在准备中", style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.padding(top = 8.dp))
         }
         if(message.kind=="deliverables") PillButton("查看成果文件",{ vm.workspace.panel("files");vm.workspace.refresh("files",message.id) },style=PillStyle.Text,leading=TeleplyIcons.File)
-        if (message.truncated) PillButton(expandLabel(message), { vm.expand(message) }, enabled = !s.busy, style = PillStyle.Text)
+        if (message.truncated) PillButton(expandLabel(message), { vm.expand(message) }, enabled = !busy, style = PillStyle.Text)
     }
 }
 
