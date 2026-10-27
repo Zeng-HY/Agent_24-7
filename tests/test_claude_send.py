@@ -390,11 +390,14 @@ class SendTests(unittest.TestCase):
     def test_a_question_card_among_the_messages_is_where_claude_asks(self):
         # 10-26: Claude's new window asks in a card among the messages; read in the dock alone, the phone showed nothing
         button=lambda enabled=True:SimpleNamespace(IsEnabled=enabled)
-        old,new,answered=SimpleNamespace(name='old'),SimpleNamespace(name='new'),SimpleNamespace(name='answered')
-        presses={'old':[button()],'new':[button(False),button()],'answered':[button(False)]}
+        card=lambda name:SimpleNamespace(name=name,ClassName='epitaxy-approval-card relative isolate flex flex-col')
+        old,new,answered=card('old'),card('new'),card('answered')
+        # 10-27: the dock's classes hold '[&_.epitaxy-approval-card]:shrink'; a search within the class names finds it too
+        dock_like=SimpleNamespace(name='dock_like',ClassName='group/approval-dock pointer-events-auto [&_.epitaxy-approval-card]:shrink')
+        presses={'old':[button()],'new':[button(False),button()],'answered':[button(False)],'dock_like':[button()]}
         d=object.__new__(chats.Desktop);d._claude_dock=Mock(return_value='dock')
         d._find=Mock(side_effect=lambda scope,kind,name=None:presses[scope.name])
-        d._find_class=Mock(return_value=[old,new])
+        d._find_class=Mock(return_value=[old,new,dock_like])
         self.assertIs(d._claude_ask('root','doc'),new);d._find_class.assert_called_once_with('doc',chats.CLAUDE_QUESTION_CARD)
         d._find_class=Mock(return_value=[old,answered])  # nothing left to press in the newest: an older card that still asks
         self.assertIs(d._claude_ask('root'),old);d._find_class.assert_called_once_with('root',chats.CLAUDE_QUESTION_CARD)
@@ -403,7 +406,44 @@ class SendTests(unittest.TestCase):
         d._find_class=Mock(side_effect=RuntimeError('COM'));self.assertEqual(d._claude_ask('root','doc'),'dock')
         self.assertTrue(chats.question_card(SimpleNamespace(ClassName='epitaxy-approval-card relative isolate')))
         self.assertFalse(chats.question_card(SimpleNamespace(ClassName='group/approval-dock pointer-events-auto')))
-        self.assertFalse(chats.question_card(object()))
+        self.assertFalse(chats.question_card(dock_like));self.assertFalse(chats.question_card(object()))
+        self.assertTrue(chats.answer_option(SimpleNamespace(ClassName='epitaxy-answer-option flex w-full items-start')))
+        self.assertFalse(chats.answer_option(SimpleNamespace(ClassName='absolute inset-0 focus-visible:outline-hidden')))  # Other
+        self.assertFalse(chats.answer_option(object()))
+    def test_an_option_is_clicked_for_real_where_nothing_covers_it(self):
+        # 10-27 08:19: UI Automation's press only moved the focus to a card's option; a click picks it
+        class Rect:
+            def __init__(self,l,t,r,b):self.left,self.top,self.right,self.bottom=l,t,r,b
+            def width(self):return self.right-self.left
+            def height(self):return self.bottom-self.top
+        scrolled=[];option=SimpleNamespace(IsOffscreen=True,BoundingRectangle=Rect(100,200,300,240),
+                                           GetScrollItemPattern=lambda:SimpleNamespace(ScrollIntoView=lambda:scrolled.append(1)))
+        d=object.__new__(chats.Desktop);d.input_lock=threading.Lock()
+        down,up=chats.winctl.MOUSEEVENTF_LEFTDOWN,chats.winctl.MOUSEEVENTF_LEFTUP
+        with patch('chats.winctl.input_desktop_ready',return_value=True),patch('chats.winctl.focus') as focus,\
+             patch('chats.winctl._send') as send,patch('chats.winctl._mouse_input',side_effect=lambda flags:flags),\
+             patch('chats.win32gui.GetCursorPos',return_value=(5,6)),patch('chats.win32gui.WindowFromPoint',return_value=11),\
+             patch('chats.win32gui.GetAncestor',return_value=7) as root,patch('chats.win32api.SetCursorPos') as pointer,patch('chats.time.sleep'),\
+             patch('chats.time.monotonic',side_effect=(i/5 for i in range(10**6)).__next__),\
+             patch('chats.win32gui.GetClassName',return_value='tooltips_class32'),patch('chats._process_of',return_value='claude.exe'):
+            d._click_control(7,option)
+            self.assertEqual(scrolled,[1]);focus.assert_called_once_with(7)
+            self.assertEqual(send.call_args_list,[call([down]),call([up])])  # pressed and released apart, as a hand does
+            self.assertEqual(pointer.call_args_list,[call((200,220)),call((5,6))])  # there, then back where it was
+            root.side_effect=[8,8,7];send.reset_mock()  # 10-27 09:55: something over that spot for a moment
+            d._click_control(7,option);self.assertEqual(send.call_count,2)
+            root.side_effect=None;root.return_value=8;send.reset_mock();pointer.reset_mock()  # and one that stays
+            with self.assertRaises(chats.ChatError) as refused:d._click_control(7,option)
+            self.assertIn('tooltips_class32，claude.exe',str(refused.exception))  # named for the log
+            send.assert_not_called();pointer.assert_called_once_with((5,6))
+            root.return_value=7;focus.side_effect=chats.winctl.WinError('没能把窗口拉到前台')
+            with self.assertRaises(chats.ChatError):d._click_control(7,option)
+            focus.side_effect=None;option.BoundingRectangle=Rect(0,0,0,0)  # not drawn at all
+            with self.assertRaises(chats.ChatError):d._click_control(7,option)
+        with patch('chats.winctl.input_desktop_ready',return_value=False),patch('chats.winctl._send') as send:
+            option.BoundingRectangle=Rect(100,200,300,240)
+            with self.assertRaises(chats.ChatError):d._click_control(7,option)  # locked
+            send.assert_not_called()
     def test_a_class_is_found_within_the_class_names_in_one_question(self):
         asked=[]
         class Found:

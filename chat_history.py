@@ -51,10 +51,10 @@ class Transcript:
                                 if m.get('native_plan'):peer.update(native_plan=True,source_id=m.get('source_id'))
                                 if m.get('source_id'):self.by_id[m['source_id']]=peer
                                 continue
-                        # Dual log representations may share a source ID, or exact
-                        # timestamp/turn/phase/content evidence. Never drop all legacy rows.
+                        # Dual log representations may share a source ID, or turn/phase/content evidence
+                        # milliseconds apart (chats.codex_twins). Never drop all legacy rows.
                         if self.app=='codex':
-                            peer=next((v for v in reversed(self.messages[-4:]) if v['role']==m['role'] and v.get('time')==m.get('time') and v.get('phase','')==m.get('phase','') and v['text']==m['text'] and v.get('turn_id')==self.state.get('current_turn_id') and bool(v.get('public_response'))!=bool(m.get('public_response'))),None)
+                            peer=next((v for v in reversed(self.messages[-4:]) if v.get('turn_id')==self.state.get('current_turn_id') and chats.codex_twins(v,m)),None)
                             if peer:
                                 if m.get('source_id'):peer['source_id']=m['source_id'];self.by_id[m['source_id']]=peer
                                 continue
@@ -213,11 +213,11 @@ class History:
         with entry.lock:
             rows=entry.messages;end=len(rows)
             if before:
-                at=next((i for i,m in enumerate(rows) if m['id']==before),None)
+                at=self._at(entry,before)
                 if at is None:reset=True
                 else:end=at
             if around:
-                at=next((i for i,m in enumerate(rows) if m['id']==around),None)
+                at=self._at(entry,around)
                 if at is not None:end=min(len(rows),at+limit//2+1)
             start=max(0,end-limit);page=rows[start:end]
             return chats.public(item)|{'messages':[self.public_message(m) for m in page], 'status':chats._status(entry.state,entry.mtime/1e9),
@@ -225,6 +225,12 @@ class History:
                 'activity_turns':{k:v for k,v in entry.context.get('activity_turns',{}).items() if k == entry.context.get('activity_turn') or k in {m.get('activity_turn') for m in page}},
                 'activity_current':entry.context.get('activity_turn'),
                 'has_more':start>0,'next_cursor':page[0]['id'] if start>0 and page else None,'has_newer':end<len(rows),'reset':reset,'total':len(rows)}
+    @staticmethod
+    def _at(entry,mid):
+        """Where a message is, found also by the id of a copy merged into it: a phone may have kept that id (10-27, the
+        second copy of each Codex answer, chats.codex_twins)."""
+        row=entry.by_id.get(mid)
+        return next((i for i,m in enumerate(entry.messages) if m is row),None) if row is not None else None
     def message(self,app,tid,mid):
         _,entry=self.transcript(app,tid)
         with entry.lock:
@@ -255,6 +261,7 @@ class History:
         item,entry=self.transcript(app,tid)
         out=[];seen_paths=set()
         with entry.lock:
+            if message_id:message_id=(getattr(entry,'by_id',{}).get(message_id) or {}).get('id',message_id)  # a merged copy's id too
             messages=[m for m in entry.messages if (m['role']=='assistant' or (m.get('current_file') and m.get('tool_status')=='completed')) and (not message_id or m['id']==message_id)]
             for m in reversed(messages):
                 paths=references(m['text']) if m['role']=='assistant' else [m['current_file']]

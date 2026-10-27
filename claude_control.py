@@ -122,6 +122,25 @@ def turn_anchor(path):
     return None
 
 
+def pending_questions(path):
+    """The questions of the AskUserQuestion Claude waits on, as its call gave them (each with its 'multiSelect'): the
+    newest such call in the record with no result yet. None when none waits or the record does not say."""
+    if not path:return None
+    asked=None
+    for raw in chats.read_tail(path,2<<20)[0]:
+        if b'AskUserQuestion' not in raw and b'tool_result' not in raw:continue
+        try:data=json.loads(raw)
+        except ValueError:continue
+        content=(data.get('message') or {}).get('content') if isinstance(data,dict) else None
+        for block in content if isinstance(content,list) else []:
+            if not isinstance(block,dict):continue
+            if block.get('type')=='tool_use' and block.get('name')=='AskUserQuestion':
+                asked=(block.get('id'),(block.get('input') or {}).get('questions'))
+            elif block.get('type')=='tool_result' and asked and block.get('tool_use_id')==asked[0]:
+                asked=None
+    return asked[1] if asked and isinstance(asked[1],list) else None
+
+
 class Controller:
     def __init__(self,desktop):
         self.desktop=desktop;self.cache={};self.choices={};self.lock=threading.RLock();self.menu_context=None;self.steer_submissions={}
@@ -261,6 +280,53 @@ class Controller:
         options,_=self._dock_read(dock) if dock else ([],None)
         path=chats.conv_path(item);stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
         return signature([item['id'],options,stamp]),dock
+    @staticmethod
+    def _toggled(ctrl):
+        try:return ctrl.GetTogglePattern().ToggleState
+        except Exception:return None
+    def _single_choice(self,item,card):
+        """Whether the question on this card takes one choice: True, False for several, None when the record's pending
+        AskUserQuestion has no question of the card's text."""
+        try:title=chats.norm(card.Name or '')
+        except Exception:return None
+        for question in pending_questions(chats.conv_path(item)) or []:
+            if isinstance(question,dict) and chats.norm(question.get('question') or '')==title:
+                return not question.get('multiSelect')
+        return None
+    def _pick(self,item,card,option):
+        """An option of a question card in Claude's new window, picked with a real click (chats.Desktop._click_control):
+        UI Automation's press only moved the focus to it (10-27 08:19). A question that takes one choice then goes on
+        with the card's Next, or Submit on the last question, as one tap on an option did in Claude's old window and as
+        the phone apps expect; with several choices each tap picks one more, and Submit stays the phone's to tap.
+        Returns the name of the button pressed after the pick, or ''."""
+        d=self.desktop;hwnd=self._document(item)[0];name=(option.Name or '').strip()
+        single=self._single_choice(item,card);was=self._toggled(option)
+        before=d._keyboard_owner()
+        def fresh():  # read anew each time: so the pick showed within 0.08 s on 10-27 09:39
+            try:return next((c for c in d._find(card,'ButtonControl') if (c.Name or '').strip()==name),option)
+            except Exception:return option
+        try:
+            d._click_control(hwnd,option)
+            deadline=time.monotonic()+1.5
+            while True:  # Claude marks the pick a moment later; nothing goes on before it shows
+                now=self._toggled(fresh())
+                if (now==1) if single else (now!=was or (single is None and now==1)):break
+                if time.monotonic()>=deadline:raise chats.ChatError('电脑上没有选上这一项，没有往下走；请在电脑上选')
+                time.sleep(.1)
+            if not single:return ''
+            go=next((c for c in self._walk(card,30,offscreen=True) if c.ControlTypeName=='ButtonControl'
+                     and (c.Name or '').strip() in ('Next','Submit') and self._enabled(c)),None)
+            if go is None:return ''
+            went=(go.Name or '').strip();shown=card.Name
+            self._invoke(go)
+            deadline=time.monotonic()+1.5
+            while time.monotonic()<deadline:  # the next question, or the card gone, before the state is read again
+                try:
+                    if card.Name!=shown:break
+                except Exception:break
+                time.sleep(.1)
+            return went
+        finally:d._give_back_keyboard(before)
     def _dock_read(self,dock):
         """One pass over the dock below the conversation. Returns the clickable options exactly as before (their list
         and the transcript stamp make the action revision) and, for the phone, the prompt above the message box laid
@@ -406,6 +472,10 @@ class Controller:
                 tokens={a['name']:a['token'] for a in result['actions']}
                 for part in prompt['choices']+prompt['nav']+([prompt['other']] if prompt['other'] else []):part['token']=tokens.get(part['name'])
                 result['prompt']=prompt
+                # and only so: both phone apps drew the actions too, as a second card of raw button names under the
+                # question (iPhone 10-26 23:09: 计划与执行选项, Show previous question, 选项丙 随便选…); the web shows
+                # actions only when there is no prompt
+                result['actions']=[]
         except chats.ChatError as exc:result['reason']=str(exc)
         return result
     def _model_name(self,model_id):
@@ -766,6 +836,7 @@ class Controller:
             if not ticket or ticket['id']!=tid or time.monotonic()-ticket['created']>=120:raise chats.ChatError('选项已过期，请重新打开面板')
             item=chats.find('claude',tid)
             def run():
+                dock=None;went=None;started=time.monotonic()
                 if ticket['kind'] in ('steer_queued','stop','action'):  # what is clicked must be what Claude shows now
                     try:self.desktop._claude_show(self._document(item)[0])
                     except Exception:pass  # not on screen, or no window: the checks below say so
@@ -792,11 +863,20 @@ class Controller:
                     if pattern.Value!=bounds['value'] or pattern.Minimum!=bounds['min'] or pattern.Maximum!=bounds['max']:raise chats.ChatError('强度已经变化，请刷新后重选')
                     if pattern.SetValue(value) is False:raise chats.ChatError('强度操作结果未确认，请刷新查看')
                     time.sleep(.2);self._dismiss_popup(item)
+                elif chats.question_card(dock) and chats.answer_option(targets[0]):
+                    label=chats.one_line(ticket['option']['name'],30)
+                    try:went=self._pick(item,dock,targets[0])
+                    except chats.ChatError as exc:
+                        self.desktop.log(f"Claude「{item['title']}」：手机上选「{label}」没选上（{time.monotonic()-started:.1f} 秒）：{exc}")
+                        raise
+                    after={'Next':'，并点了「下一题」','Submit':'，并点了「提交」'}.get(went,'')
+                    self.desktop.log(f"Claude「{item['title']}」：手机上选了「{label}」{after}（{time.monotonic()-started:.1f} 秒）")
                 else:
                     self._invoke(targets[0])
                     if ticket['kind'] in ('model','effort','mode','fast'):self._dismiss_popup(item)
                 self.menu_context=None;time.sleep(.3)
-                return {'ok':True,'text':'已请求立即补充，等待 Claude 读取' if ticket['kind']=='steer_queued' else '已操作，下面显示重新读取的桌面状态','state':self._read(item)}
+                text={'Next':'已在电脑上选好，并点了「下一题」','Submit':'已在电脑上选好并提交'}.get(went,'已在电脑上选好' if went=='' else None)
+                return {'ok':True,'text':text or ('已请求立即补充，等待 Claude 读取' if ticket['kind']=='steer_queued' else '已操作，下面显示重新读取的桌面状态'),'state':self._read(item)}
             try:return self.desktop.run(run,timeout=40)
             finally:self.cache.pop(tid,None)
     def _next_box(self,doc,box):

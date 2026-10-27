@@ -37,6 +37,7 @@ from datetime import datetime
 from urllib.parse import quote, urlsplit
 from _ctypes import COMError  # what UI Automation raises through comtypes
 
+import win32api
 import win32con
 import win32gui
 import win32process
@@ -93,8 +94,10 @@ CLAUDE_FIXED_PREFIXES = ("Model:", "Effort:", "Usage:", "Usage,", "Permission", 
                          "Folder:", "Claude thinks longer with Max effort", "Scroll ", "Jump to", "Remove ")
 OPTION_TYPES = ("ButtonControl", "RadioButtonControl", "CheckBoxControl", "ListItemControl", "MenuItemControl",
                 "HyperlinkControl", "TabItemControl", "EditControl", "ComboBoxControl")
-# Claude's new window asks a question (AskUserQuestion) in a card of this class among the messages, not in the dock (10-26)
+# Claude's new window asks a question (AskUserQuestion) in a card of this class among the messages, not in the dock (10-26);
+# each of its options is a button of the second class, which takes a real click only (10-27)
 CLAUDE_QUESTION_CARD = "epitaxy-approval-card"
+CLAUDE_ANSWER_OPTION = "epitaxy-answer-option"
 
 
 def in_notice(kinds: list[str]) -> bool:
@@ -104,9 +107,18 @@ def in_notice(kinds: list[str]) -> bool:
 
 
 def question_card(ctrl) -> bool:
-    """Whether this is one of the question cards of Claude's new window rather than the dock."""
+    """Whether this is one of the question cards of Claude's new window rather than the dock. The class must be there as a
+    word of its own: the dock's classes hold '[&_.epitaxy-approval-card]:shrink' (10-27), and the dock was taken for a card."""
     try:
-        return CLAUDE_QUESTION_CARD in (ctrl.ClassName or "")
+        return CLAUDE_QUESTION_CARD in (ctrl.ClassName or "").split()
+    except Exception:
+        return False
+
+
+def answer_option(ctrl) -> bool:
+    """Whether this is an option of such a question card (not Other, Skip, Next or Submit)."""
+    try:
+        return CLAUDE_ANSWER_OPTION in (ctrl.ClassName or "").split()
     except Exception:
         return False
 
@@ -161,7 +173,30 @@ def plain(text: str) -> str:
     """Markdown marks out, for one-line previews."""
     text = re.sub(r"```[a-zA-Z0-9_-]*", " ", text or "")
     text = re.sub(r"\*\*|__|`|^#+\s*|^\s*[-*]\s+|\|", " ", text, flags=re.M)
-    return re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    return re.sub(r"\[([^\]]+)\]\((?:<[^>\n]*>|[^)]+)\)", r"\1", text)
+
+
+_MEM_CITATION = re.compile(r"\s*<oai-mem-citation>[\s\S]*?(?:</oai-mem-citation>|$)")
+_FILE_CITATION = re.compile(r':codex-file-citation\{((?:[^{}"]|"[^"]*")*)\}')
+
+
+def codex_answer(text: str) -> str:
+    """A Codex answer as the phone shows it (10-27). Codex ends some answers with the memory notes it used
+    (<oai-mem-citation>…</oai-mem-citation>), which its desktop does not show: left out. It names a file it made as
+    :codex-file-citation{path="D:\\…\\x.docx" purpose="output"}, which its desktop draws as a file card: made a link to
+    that file, so the phone lists it with the conversation's files (message_files.references) and can fetch it."""
+    if "<oai-mem-citation>" in text:
+        text = _MEM_CITATION.sub("", text).rstrip()
+    return _FILE_CITATION.sub(_file_link, text) if ":codex-file-citation{" in text else text
+
+
+def _file_link(match: re.Match) -> str:
+    path = dict(re.findall(r'(\w+)="([^"]*)"', match[1])).get("path", "").strip()
+    if not re.match(r"[A-Za-z]:[\\/]", path):
+        return f"`{path}`" if path else ""
+    path = path.replace("\\", "/")  # in a link a backslash before . or _ reads as an escape and is dropped
+    name = re.sub(r"([`\[\]])", r"\\\1", path.rsplit("/", 1)[-1])  # what a file name may hold that would end the label
+    return f"[{name}](<{path}>)"
 
 
 def clean_text(text: str) -> str:
@@ -517,7 +552,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
         ts = rec.get("timestamp") or ""
         if rec.get('type')=='response_item':
             if kind=='message' and payload.get('role')=='assistant' and payload.get('phase') in ('commentary','final_answer'):
-                text=_join_text(payload.get('content')).strip()
+                text=codex_answer(_join_text(payload.get('content')).strip())
                 if text:msgs.append({'role':'assistant','text':text,'time':ts,'phase':payload['phase'],'source_id':payload.get('id'),'public_response':True})
             continue
         if ts:
@@ -531,7 +566,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
                              "client_request_id": item.get("client_id"), "source_id": item.get("id")})
             elif t == "AgentMessage":
                 saw_items = True
-                text = _join_text(item.get("content")).strip()
+                text = codex_answer(_join_text(item.get("content")).strip())
                 if text and item.get('phase') in (None, 'commentary', 'final_answer'):
                     msgs.append({"role": "assistant", "text": text, "time": ts, "phase": item.get("phase") or "", "source_id": item.get("id")})
             elif t == 'Plan' and isinstance(item.get('text'),str):
@@ -560,13 +595,41 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
                          "source_id": payload.get("id"), "client_request_id": payload.get("client_id")})
         elif kind == "agent_message":
             if payload.get("phase") in (None, "commentary", "final_answer"):
-                msgs.append({"role": "assistant", "text": payload.get("message") or "", "time": ts, "legacy": True,
+                msgs.append({"role": "assistant", "text": codex_answer(payload.get("message") or ""), "time": ts, "legacy": True,
                              "phase": payload.get("phase") or "", "source_id": payload.get("id")})
     if saw_items:
         msgs = [m for m in msgs if not (m.get('legacy') and m.get('time') and any(
             not v.get('legacy') and v.get('time')==m['time'] and v['role']==m['role']
             and v.get('phase','')==m.get('phase','') and v['text']==m['text'] for v in msgs))]
-    return msgs, state
+    kept: list[dict] = []
+    for m in msgs:  # the second copy of an answer goes, as in chat_history.Transcript
+        if not any(codex_twins(v, m) for v in kept[-4:]):
+            kept.append(m)
+    return kept, state
+
+
+TWIN_SECONDS = 5
+
+
+def codex_twins(a: dict, b: dict) -> bool:
+    """Whether two rows are one Codex message. Codex writes each answer twice: as an event (agent_message; an
+    item_completed item in older versions) and as a response item (public_response), on neighbouring lines. Until 10-27
+    they were taken for one only with the very same timestamp; newer Codex writes them milliseconds apart (at most
+    0.128 s in 80 conversations), so every answer showed twice."""
+    if a["role"] != b["role"] or bool(a.get("public_response")) == bool(b.get("public_response")):
+        return False
+    if (a.get("phase") or "") != (b.get("phase") or "") or a["text"].strip() != b["text"].strip():
+        return False
+    if a.get("time") == b.get("time"):
+        return True
+    try:
+        return abs(_seconds(a["time"]) - _seconds(b["time"])) <= TWIN_SECONDS
+    except (KeyError, AttributeError, ValueError):
+        return False
+
+
+def _seconds(ts: str) -> float:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
 
 
 def _claude_tool(block: dict) -> str:
@@ -1596,11 +1659,60 @@ class Desktop:
         doc: the conversation, to look in it alone (one question to Windows) rather than the whole window."""
         try:
             for card in reversed(self._find_class(doc if doc is not None else root, CLAUDE_QUESTION_CARD)):
-                if any(button.IsEnabled for button in self._find(card, "ButtonControl")):
+                if question_card(card) and any(button.IsEnabled for button in self._find(card, "ButtonControl")):
                     return card
         except Exception:
             pass
         return self._claude_dock(root)
+
+    def _click_control(self, hwnd, ctrl):
+        """A real left click in the middle of ctrl, for a control that takes a click but not UI Automation's press: an
+        option of Claude's question card (10-27 08:19: DoDefaultAction and Toggle both answered done, only the focus moved
+        to it, and Next then sent the option Claude had chosen first). Scrolled into view first; not done where another
+        window covers that spot. Claude comes to the front for it (a click reaches only the front window); the pointer
+        goes back where it was, and the caller gives the keyboard back (_give_back_keyboard)."""
+        try:
+            if ctrl.IsOffscreen:
+                ctrl.GetScrollItemPattern().ScrollIntoView()
+                time.sleep(0.3)
+        except Exception:
+            pass
+        rect = ctrl.BoundingRectangle
+        if rect.width() <= 2 or rect.height() <= 2:
+            raise ChatError("这个选项在电脑上没显示出来，没有点；请在电脑上选")
+        x, y = (rect.left + rect.right) // 2, (rect.top + rect.bottom) // 2
+        if not winctl.input_desktop_ready():
+            raise ChatError("电脑已锁屏，没有点；解锁后再选")
+        with self.input_lock:
+            pointer = win32gui.GetCursorPos()
+            try:
+                winctl.focus(hwnd)
+                # Something can be over that spot for a moment: on 10-27 at 09:55 a tap was refused so, and the same tap
+                # 46 s later went through (no screen saver is set on that PC). Looked at again for 2 s; the window still
+                # there then is named, for the log.
+                deadline = time.monotonic() + 2
+                while (top := win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), 2)) != hwnd:  # 2: GA_ROOT
+                    if time.monotonic() >= deadline:
+                        try:
+                            cover = f"{win32gui.GetClassName(top)}，{_process_of(top) or '?'}"
+                        except Exception:
+                            cover = "?"
+                        raise ChatError(f"电脑上 Claude 的这个选项被别的窗口挡住了（{cover}），没有点")
+                    time.sleep(0.2)
+                # As a hand does it: the pointer there first, then press and release apart. So it picked the option at
+                # once on 10-27 09:39; at 09:09 winctl.click_screen (press and release at one go) was not seen to.
+                win32api.SetCursorPos((x, y))
+                time.sleep(0.15)
+                winctl._send([winctl._mouse_input(winctl.MOUSEEVENTF_LEFTDOWN)])
+                time.sleep(0.06)
+                winctl._send([winctl._mouse_input(winctl.MOUSEEVENTF_LEFTUP)])
+            except winctl.WinError as exc:
+                raise ChatError(f"{exc}，没有点") from exc
+            finally:
+                try:
+                    win32api.SetCursorPos(pointer)
+                except Exception:
+                    pass
 
     # -- actions (run on the worker thread)
 
