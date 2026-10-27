@@ -70,10 +70,12 @@ extension AppModel {
         guard self.device?.id == device.id, (listSource, query, listSort, listStatus) == asked else { return }
         let fresh = Set(page.items.map(rowKey))
         let beyond = chats.contains { !fresh.contains(rowKey($0)) }
-        chats = (page.items + chats.filter { !fresh.contains(rowKey($0)) }).filter { !hidden.contains(rowKey($0)) }
+        // The 10 s read mostly brings the same rows: equal values are not written again (as ChatModel.take).
+        let merged = (page.items + chats.filter { !fresh.contains(rowKey($0)) }).filter { !hidden.contains(rowKey($0)) }
+        if merged != chats { chats = merged }
         if !beyond {
-            listCursor = page.cursor
-            listMore = page.hasMore
+            if listCursor != page.cursor { listCursor = page.cursor }
+            if listMore != page.hasMore { listMore = page.hasMore }
         }
     }
 

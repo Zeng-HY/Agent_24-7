@@ -244,7 +244,7 @@ public final class ChatModel {
         for try await frame in try client.events(device: key.device, app: key.app, chat: key.chat) {
             guard t == token else { return }
             onFrame(frame, key)
-            connection = "实时连接正常"
+            if connection != "实时连接正常" { connection = "实时连接正常" }
             if let incoming = frame.control {
                 take(incoming, key)
                 // A stop waiting on its turn, or a queued send that left the queue: its receipt says what happened.
@@ -295,9 +295,12 @@ public final class ChatModel {
         take(parseControl(raw), key)
     }
 
-    /// A state read for the conversation on screen ([key]) is kept and handed on.
+    /// A state read for the conversation on screen ([key]) is kept and handed on. A read that brings nothing new (most
+    /// of the polls, DeepSeek's every 2.5 s) writes nothing, so the page is not told of it: a long page is costly to
+    /// redraw. (@Observable as Swift 6.4 expands it already skips an equal value; this keeps it so whatever compiles it.)
     func take(_ incoming: Control, _ key: ChatKey) {
-        control = mergeControl(previous: control, incoming: incoming)
+        let merged = mergeControl(previous: control, incoming: incoming)
+        if merged != control { control = merged }
         controlRead(key)
     }
 

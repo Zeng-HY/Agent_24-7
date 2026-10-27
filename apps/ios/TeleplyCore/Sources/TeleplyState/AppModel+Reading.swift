@@ -177,9 +177,11 @@ extension AppModel {
         }
     }
 
-    /// A live frame for the conversation on screen merges in; a frame for another one is dropped.
+    /// A live frame for the conversation on screen merges in; a frame for another one is dropped. One that changes no
+    /// message writes nothing (as ChatModel.take).
     func apply(_ frame: LiveFrame, for key: ChatKey) {
         guard screen == .reading, app == key.app, scope == key.scope, device?.id == key.device, chat?.id == key.chat else { return }
-        messages = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
+        let merged = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
+        if merged != messages { messages = merged }
     }
 }

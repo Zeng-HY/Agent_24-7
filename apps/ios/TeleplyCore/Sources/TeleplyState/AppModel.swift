@@ -550,7 +550,7 @@ public final class AppModel {
                 guard let self, !self.busy, self.screen == .devices, self.account != nil else { continue }
                 let origin = self.origin
                 guard let account = try? await self.client.account(), self.screen == .devices, self.origin == origin else { continue }
-                self.account = account
+                if self.account != account { self.account = account }
             }
         }
     }

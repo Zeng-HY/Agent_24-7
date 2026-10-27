@@ -5,7 +5,8 @@ import TeleplyState
 import UIKit
 
 /// A run of process steps that folds under its first step's header (design language §8; Android TimelineItem).
-struct ProcessGroup: Equatable {
+/// Plain data, compared by TimelineItem from any isolation.
+nonisolated struct ProcessGroup: Equatable, Sendable {
     let key: String
     let steps: Int
     /// The run is the current turn's and the source is working on it: it starts open.
@@ -15,7 +16,7 @@ struct ProcessGroup: Equatable {
 }
 
 /// What a message is in the timeline, in the order Android decides it.
-enum TimelineRole {
+nonisolated enum TimelineRole: Equatable, Sendable {
     case user
     case checklist
     case next
@@ -26,6 +27,29 @@ enum TimelineRole {
     case question(approval: Bool)
     case event
     case answer(afterUser: Bool)
+
+    /// Only a task card reads the source's state (whether the computer dealt with it); the others get none, so a
+    /// state that changes elsewhere leaves them alone.
+    var readsState: Bool {
+        if case .task = self { return true }
+        return false
+    }
+
+    /// A run of steps is open as the reader left it, otherwise while the source works on it.
+    func isOpen(_ folds: [String: Bool]) -> Bool {
+        guard case .process(let group, _) = self else { return false }
+        return folds[group.key] ?? group.live
+    }
+
+    /// Only an answer (展开全文, 打开新建对话) and a long message of the user's (展开全文) have buttons that wait while
+    /// the page is busy; the others need not be drawn again when that changes.
+    func waitsWhileBusy(_ message: Message) -> Bool {
+        switch self {
+        case .answer: return true
+        case .user: return message.truncated
+        default: return false
+        }
+    }
 }
 
 /// Process steps: tool records, and commentary or thinking that is not a question or an approval.
@@ -71,6 +95,43 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
     }
 }
 
+/// What the page works out from its messages and the source's state: each message's role, the pictures sent with
+/// messages, the cards waiting for an answer. Worked out again only when what each rests on changed; the state polls
+/// (DeepSeek every 2.5 s), the ⋯ menu and the page's own taps redraw the page far more often (a long DeepSeek
+/// conversation was slow to open and to use, 10-27). An unchanged array or state compares in no time.
+final class TimelineMemo {
+    struct Result {
+        var roles: [TimelineRole] = []
+        var pictures: [String: [SentPicture]] = [:]
+        var cards: [InlineCard] = []
+    }
+
+    private var rolesFor: (messages: [Message], app: String, plan: JSONValue, running: Bool, asking: Bool)?
+    private var picturesFor: (messages: [Message], records: JSONValue)?
+    private var cardsFor: (app: String, raw: JSONValue)?
+    private var result = Result()
+
+    /// [app] is the source in use (roles read its plan), [cardsApp] the conversation's own (its cards).
+    func update(messages: [Message], app: String, cardsApp: String, raw: JSONValue, running: Bool, asking: Bool) -> Result {
+        // The roles read only Codex's plan from the state.
+        let plan = app == "codex" ? raw["plan"] : .null
+        if !(rolesFor.map { $0.messages == messages && $0.app == app && $0.plan == plan && $0.running == running && $0.asking == asking } ?? false) {
+            result.roles = timelineRoles(messages, app: app, raw: raw, running: running, asking: asking)
+            rolesFor = (messages, app, plan, running, asking)
+        }
+        let records = raw["images"]
+        if !(picturesFor.map { $0.messages == messages && $0.records == records } ?? false) {
+            result.pictures = sentPictures(messages: messages, records: records.array)
+            picturesFor = (messages, records)
+        }
+        if !(cardsFor.map { $0.app == cardsApp && $0.raw == raw } ?? false) {
+            result.cards = inlineCards(app: cardsApp, raw: raw)
+            cardsFor = (cardsApp, raw)
+        }
+        return result
+    }
+}
+
 /// What a message's long press and buttons can do on the page.
 struct MessageActions {
     var select: (Message) -> Void
@@ -90,18 +151,32 @@ struct MessageActions {
     var busy: Bool
 }
 
-/// One message in the timeline (spec 4.3; Android TimelineItem).
-struct TimelineItem: View {
+/// One message in the timeline (spec 4.3; Android TimelineItem). Equatable, used with .equatable(): a redraw of the
+/// page leaves a message alone unless what it shows changed (10-27). [actions] and [fold] are left out of the
+/// comparison; they do the same each time. Cards that read the model (next step, task, plan) follow it themselves.
+struct TimelineItem: View, Equatable {
     let model: AppModel
     let message: Message
     let role: TimelineRole
+    /// The source's state, for a role that reads it (TimelineRole.readsState); empty for the others.
     let raw: JSONValue
     /// The label of the send from this phone that became this message (已送达…), shown under the bubble.
     var receipt: String?
     /// Pictures sent with a user message, as the computer kept them.
     var pictures: [SentPicture] = []
-    @Binding var folds: [String: Bool]
+    /// A run of steps: whether it is open (TimelineRole.isOpen); [fold] opens or closes a run by its key.
+    var open = false
+    /// model.busy for an item whose buttons wait while it is set (TimelineRole.waitsWhileBusy), else false: compared,
+    /// so such an item is drawn again with [actions] as they are now.
+    var busy = false
+    var fold: (String, Bool) -> Void = { _, _ in }
     let actions: MessageActions
+
+    /// Only the Sendable fields, so it may be called from any isolation (SwiftUI's own EquatableView).
+    nonisolated static func == (lhs: TimelineItem, rhs: TimelineItem) -> Bool {
+        lhs.message == rhs.message && lhs.role == rhs.role && lhs.raw == rhs.raw && lhs.receipt == rhs.receipt
+            && lhs.pictures == rhs.pictures && lhs.open == rhs.open && lhs.busy == rhs.busy
+    }
 
     var body: some View {
         switch role {
@@ -124,11 +199,10 @@ struct TimelineItem: View {
         case .codexPlan(let plan):
             CodexPlanCard(plan: plan, model: model)
         case .process(let group, let first):
-            let open = folds[group.key] ?? group.live
             VStack(alignment: .leading, spacing: 0) {
                 if first {
                     ProcessHeader(group: group, open: open) {
-                        withAnimation(.easeOut(duration: 0.2)) { folds[group.key] = !open }
+                        withAnimation(.easeOut(duration: 0.2)) { fold(group.key, !open) }
                     }
                 }
                 if open {

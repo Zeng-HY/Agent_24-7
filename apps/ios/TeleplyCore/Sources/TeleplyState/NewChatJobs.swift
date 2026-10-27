@@ -250,6 +250,8 @@ public final class NewChatJobs {
 
     func put(_ job: NewJob) {
         if let index = jobs.firstIndex(where: { $0.request == job.request }) {
+            // A look that changes nothing writes nothing (as ChatModel.take).
+            guard jobs[index] != job else { return }
             jobs[index] = job
         } else {
             jobs.append(job)

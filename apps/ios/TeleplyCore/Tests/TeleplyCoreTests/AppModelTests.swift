@@ -1,8 +1,21 @@
 import Foundation
+import Observation
+import Synchronization
 import Testing
 @testable import TeleplyDemo
 import TeleplyModel
 @testable import TeleplyState
+
+/// Whether an observed value was set (Observation's onChange runs on any thread).
+final class Seen: Sendable {
+    private let value = Mutex(false)
+
+    var marked: Bool { value.withLock { $0 } }
+
+    func mark() {
+        value.withLock { $0 = true }
+    }
+}
 
 /// Never lets time pass: polls and reconnects wait until the test ends.
 struct IdlePacer: Pacer {
@@ -208,6 +221,40 @@ struct AppModelTests {
         #expect(reads.map { queryValue($0, "around") } == [nil, "m2", nil, nil, nil])
         // Nothing was written over the old place either; it is simply not read.
         #expect(await store.record(scope: "scope-1", device: a, app: "codex", chat: "demo").position == .init(message: "m2", offset: 0))
+    }
+
+    /// A poll that brings nothing new tells no page anything: a long conversation's page is costly to redraw (10-27).
+    @Test func pollsThatBringNothingNewLeaveThePagesAlone() async throws {
+        let model = makeApp()
+        model.openDemo()
+        model.login(name: "x", password: "y")
+        await model.settle()
+        model.select(model.account!.devices[0])
+        await model.settle()
+        let list = Seen()
+        withObservationTracking {
+            _ = model.chats
+            _ = model.listCursor
+            _ = model.listMore
+        } onChange: { list.mark() }
+        try await model.mergeFirstPage()
+        #expect(!list.marked)
+        model.open(model.chats.first { $0.title == "DeepSeek 批准示例" }!)
+        await model.settle()
+        await model.conversation.settle()
+        let state = Seen()
+        withObservationTracking {
+            _ = model.conversation.control
+            _ = model.conversation.connection
+        } onChange: { state.mark() }
+        model.conversation.refreshControl()
+        await model.conversation.settle()
+        #expect(!state.marked)
+        // A state that did change is still shown.
+        model.workspace.action("deepseek/approval", ["event_id": "e-approval-1", "choice": "allowed-once"])
+        await model.workspace.settle()
+        await model.conversation.settle()
+        #expect(state.marked && model.conversation.control.running)
     }
 
     @Test func theLiveConnectionReadsStateFreshOnEntering() async {

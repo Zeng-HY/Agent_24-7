@@ -5,7 +5,8 @@ import TeleplyState
 /// The conversation page (spec 4.3; Android ChatScreen): the title with project and source, 停止这一轮, the context
 /// ring and ⋯ in the title bar; the messages scroll under it and under the glass input card. It always opens at the
 /// latest messages (user 10-27). Following the bottom only while the reader is there; reading above keeps its place
-/// and "有新消息 ↓" appears (B09).
+/// and "有新消息 ↓" appears (B09). A redraw leaves unchanged messages alone (TimelineItem, TimelineMemo), and the ⋯
+/// menu keeps what it opens to itself (ConversationMenu): a long conversation stays quick (10-27).
 struct ConversationView: View {
     let model: AppModel
     @State private var position = ScrollPosition(idType: String.self)
@@ -13,36 +14,36 @@ struct ConversationView: View {
     @State private var unseen = false
     @State private var restored = false
     @State private var folds: [String: Bool] = [:]
-    @State private var runtimeShown = false
-    @State private var searchShown = false
     @State private var selecting: Message?
     /// A long message's whole words, read from the computer for 分享.
     @State private var sharing: String?
     /// The first message before 加载更早消息, kept in view when the older ones arrive above it.
     @State private var keepTop: String?
-    @State private var pendingShown = false
-    @State private var promptsShown = false
     /// 从电脑选择文件 was tapped in an empty 对话文件: the picker opens when that sheet has gone.
     @State private var pickAfterFiles = false
+    /// The messages' roles, the pictures sent with them and the waiting cards, kept between redraws.
+    @State private var memo = TimelineMemo()
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
 
     var body: some View {
         let control = model.conversation.control
-        let roles = timelineRoles(model.messages, app: model.app, raw: control.raw, running: control.running, asking: control.questions)
+        // The roles, the pictures sent with messages as the computer kept them (state `images`; web
+        // message-projection.js) and the waiting cards, worked out again only when they change.
+        let timeline = memo.update(messages: model.messages, app: model.app, cardsApp: model.conversation.key?.app ?? model.app,
+                                   raw: control.raw, running: control.running, asking: control.questions)
+        let busy = model.busy
         let actions = MessageActions(select: { message in model.whole(message) { selecting = $0 } }, expand: { model.expand($0) },
                                      diff: { model.workspace.diff($0) }, files: { model.workspace.filesOf(message: $0) },
                                      thread: { model.openCreated($0) }, picture: { await model.workspace.sentPicture($0, whole: $1) },
-                                     whole: { model.whole($0, $1) }, share: { sharing = $0 }, busy: model.busy)
-        // Pictures sent with messages, as the computer kept them (state `images`; web message-projection.js).
-        let pictures = sentPictures(messages: model.messages, records: control.raw["images"].array)
+                                     whole: { model.whole($0, $1) }, share: { sharing = $0 }, busy: busy)
         let submissions = model.conversation.submissions
         let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
         // Sends still on their way that the record does not show yet (Android outbox).
         let outbox = submissions.filter { record in
             record.action == "send" && record.label == "提交中" && !model.messages.contains { $0.request == record.request }
         }
-        let cards = inlineCards(app: model.conversation.key?.app ?? model.app, raw: control.raw)
+        let cards = timeline.cards
         ScrollView {
             // A plain stack, not a lazy one: with LazyVStack the area above the input card went blank after the
             // keyboard came up (0.3.0 screenshots on iOS 26.5, two runs of three). Pages hold 60 messages, the
@@ -50,10 +51,12 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: 0) {
                 historyTools
                 newFirst
-                ForEach(Array(zip(model.messages, roles)), id: \.0.id) { message, role in
-                    TimelineItem(model: model, message: message, role: role, raw: control.raw,
-                                 receipt: message.request.isEmpty ? nil : receipts[message.request], pictures: pictures[message.id] ?? [],
-                                 folds: $folds, actions: actions)
+                ForEach(Array(zip(model.messages, timeline.roles)), id: \.0.id) { message, role in
+                    TimelineItem(model: model, message: message, role: role, raw: role.readsState ? control.raw : [:],
+                                 receipt: message.request.isEmpty ? nil : receipts[message.request], pictures: timeline.pictures[message.id] ?? [],
+                                 open: role.isOpen(folds), busy: role.waitsWhileBusy(message) && busy,
+                                 fold: { key, open in folds[key] = open }, actions: actions)
+                        .equatable()
                 }
                 // Questions and approvals where the source asked: at the end of its turn (spec 4.3).
                 if !cards.isEmpty {
@@ -118,7 +121,6 @@ struct ConversationView: View {
         .onChange(of: model.scrollRevision, initial: true) { restore() }
         .onChange(of: model.conversation.revision) { follow() }
         .onChange(of: model.messages.first?.id) { keepPlace() }
-        .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
         .sheet(isPresented: Binding(get: { sharing != nil }, set: { if !$0 { sharing = nil } })) {
             if let sharing {
@@ -132,8 +134,6 @@ struct ConversationView: View {
             model.workspace.openLinkedFile(path)
             return .handled
         })
-        .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
-        .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
         .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } }),
                onDismiss: {
                    // 从电脑选择文件 from an empty 对话文件: its sheet comes once this one has gone.
@@ -186,64 +186,13 @@ struct ConversationView: View {
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
         }
         ToolbarItem(placement: .topBarTrailing) {
-            let runtime = runtimeOf(app: model.app, control: control.raw, page: model.runtime)
-            HStack(spacing: 0) {
-                if let percent = contextPercent(runtime) {
-                    ContextRing(percent: percent) { runtimeShown = true }
-                }
-                Menu {
-                    Button("电脑上打开", systemImage: "arrow.up.forward.app") { model.workspace.openOnComputer() }
-                        .disabled(model.workspace.busy)
-                    Button("会话状态", systemImage: "info.circle") {
-                        // The menu closes first; the panel then opens from the ring.
-                        Task {
-                            try? await Task.sleep(for: .milliseconds(350))
-                            runtimeShown = true
-                        }
-                    }
-                    Button("查找消息", systemImage: "magnifyingglass") { searchShown = true }
-                    Button("对话文件", systemImage: "doc.on.doc") { model.workspace.panel("files") }
-                    Button("常用提示语", systemImage: "text.quote") { promptsShown = true }
-                    let unconfirmed = model.conversation.submissions.filter { ["提交中", "送达状态待确认"].contains($0.label) }.count
-                    if unconfirmed > 0 {
-                        Button {
-                            pendingShown = true
-                        } label: {
-                            Label("待核对发送记录（\(unconfirmed)）", systemImage: "clock")
-                        }
-                    }
-                    let folder = folderLine
-                    if !folder.isEmpty {
-                        Section {
-                            Text(folder)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .frame(width: 32, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel(Text("对话菜单"))
-            }
-            .popover(isPresented: $runtimeShown) {
-                RuntimePanel(app: model.app, control: control.raw, runtime: runtime)
-                    .presentationCompactAdaptation(.popover)
-            }
+            ConversationMenu(model: model)
         }
     }
 
     /// 停止这一轮 shows while the source runs; Claude stops with the token its desktop gives.
     private func canStop(_ control: Control) -> Bool {
         control.running && (model.app != "claude" || !control.raw["stop_token"].string().isEmpty)
-    }
-
-    /// The folder the conversation runs in, grey at the menu's bottom (the web has it after the first two rows).
-    private var folderLine: String {
-        let meta = model.pageMeta
-        let cwd = meta["cwd"].string()
-        if !cwd.isEmpty { return cwd }
-        let folder = meta["folder"].string()
-        return folder.isEmpty ? model.chat?.folder ?? "" : folder
     }
 
     @ViewBuilder
@@ -374,6 +323,76 @@ struct ConversationView: View {
         guard let keep = keepTop, model.messages.first?.id != keep else { return }
         keepTop = nil
         position.scrollTo(id: keep, anchor: .top)
+    }
+}
+
+/// The context ring and ⋯ in the title bar, with what they open: 会话状态 (from the ring), 查找消息, 常用提示语 and
+/// 待核对发送记录. A view of its own with its own state, so that opening one redraws this, not the page with its
+/// messages (the ⋯ of a long DeepSeek conversation answered slowly, 10-27).
+private struct ConversationMenu: View {
+    let model: AppModel
+    @State private var runtimeShown = false
+    @State private var searchShown = false
+    @State private var pendingShown = false
+    @State private var promptsShown = false
+
+    var body: some View {
+        let control = model.conversation.control
+        let runtime = runtimeOf(app: model.app, control: control.raw, page: model.runtime)
+        HStack(spacing: 0) {
+            if let percent = contextPercent(runtime) {
+                ContextRing(percent: percent) { runtimeShown = true }
+            }
+            Menu {
+                Button("电脑上打开", systemImage: "arrow.up.forward.app") { model.workspace.openOnComputer() }
+                    .disabled(model.workspace.busy)
+                Button("会话状态", systemImage: "info.circle") {
+                    // The menu closes first; the panel then opens from the ring.
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        runtimeShown = true
+                    }
+                }
+                Button("查找消息", systemImage: "magnifyingglass") { searchShown = true }
+                Button("对话文件", systemImage: "doc.on.doc") { model.workspace.panel("files") }
+                Button("常用提示语", systemImage: "text.quote") { promptsShown = true }
+                let unconfirmed = model.conversation.submissions.filter { ["提交中", "送达状态待确认"].contains($0.label) }.count
+                if unconfirmed > 0 {
+                    Button {
+                        pendingShown = true
+                    } label: {
+                        Label("待核对发送记录（\(unconfirmed)）", systemImage: "clock")
+                    }
+                }
+                let folder = folderLine
+                if !folder.isEmpty {
+                    Section {
+                        Text(folder)
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 32, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(Text("对话菜单"))
+        }
+        .popover(isPresented: $runtimeShown) {
+            RuntimePanel(app: model.app, control: control.raw, runtime: runtime)
+                .presentationCompactAdaptation(.popover)
+        }
+        .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
+        .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
+        .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
+    }
+
+    /// The folder the conversation runs in, grey at the menu's bottom (the web has it after the first two rows).
+    private var folderLine: String {
+        let meta = model.pageMeta
+        let cwd = meta["cwd"].string()
+        if !cwd.isEmpty { return cwd }
+        let folder = meta["folder"].string()
+        return folder.isEmpty ? model.chat?.folder ?? "" : folder
     }
 }
 

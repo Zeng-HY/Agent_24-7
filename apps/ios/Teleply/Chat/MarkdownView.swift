@@ -1,20 +1,39 @@
 import SwiftUI
 import TeleplyModel
 
-/// Parsed messages, kept for the last 64 texts so scrolling back does not parse again (Android MarkdownCache).
+/// Parsed texts, so that a redraw or scrolling back does not parse again (Android MarkdownCache). Bounded by the
+/// text kept, about 4 MB, not by a count: a long page (60 records with many steps) is more than the 64 texts kept
+/// before, and with the oldest going first every redraw parsed the whole page again (10-27). The least recently used
+/// go first.
 @MainActor
 private enum MarkdownCache {
-    private static var entries: [String: [MarkdownBlock]] = [:]
-    private static var order: [String] = []
+    private static let room = 4 * 1024 * 1024
+    private static var entries: [String: (blocks: [MarkdownBlock], used: Int)] = [:]
+    private static var kept = 0
+    private static var clock = 0
 
     static func blocks(_ source: String) -> [MarkdownBlock] {
-        if let hit = entries[source] { return hit }
+        clock += 1
+        if let hit = entries[source] {
+            entries[source]?.used = clock
+            return hit.blocks
+        }
         let parsed = MarkdownReader.blocks(source)
-        guard source.count <= 256_000 else { return parsed }
-        entries[source] = parsed
-        order.append(source)
-        if order.count > 64 { entries[order.removeFirst()] = nil }
+        let size = source.utf8.count
+        guard size <= room / 4 else { return parsed }
+        entries[source] = (parsed, clock)
+        kept += size
+        if kept > room { trim() }
         return parsed
+    }
+
+    /// Drops the least recently used texts until a quarter of the room is free, so this runs once in many misses.
+    private static func trim() {
+        for (source, _) in entries.sorted(by: { $0.value.used < $1.value.used }) {
+            guard kept > room * 3 / 4 else { break }
+            entries[source] = nil
+            kept -= source.utf8.count
+        }
     }
 }
 
