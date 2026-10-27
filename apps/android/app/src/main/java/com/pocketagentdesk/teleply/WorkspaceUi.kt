@@ -66,9 +66,9 @@ fun JSONObject.strings(name:String)=optJSONArray(name)?.let { a -> (0 until a.le
     when(pane) {
         "new" -> Unit
         "chat","skill" -> TeleplySheet(if(pane=="chat") "引用对话" else "引用技能",back) { PaneStatus(s,j,c);ReferencesPane(pane,k,data,c,s.busy,s.error!=null) }
-        "remote" -> TeleplySheet("电脑上的文件",back) { PaneStatus(s,j,c);RemotePane(k,data,c) }
+        "remote" -> TeleplySheet("从电脑选择文件",back) { PaneStatus(s,j,c);RemotePane(k,data,c) }
         "files" -> TeleplySheet("对话文件",c::close) { PaneStatus(s,j,c);FilesPane(data,c) }
-        "file" -> DetailPage(data.string("name").ifBlank { "文件" },{ c.panel("files") }) { FilePage(vm,k,data,s) }
+        "file" -> DetailPage(data.string("name").ifBlank { "文件" },{ c.panel(if(data.has("reference")) "remote" else "files") }) { FilePage(vm,k,data,s) }
         "diff" -> DetailPage("本轮差异",c::close) { DiffPage(data,c,s) }
         else -> LaunchedEffect(pane) { c.close() }
     }
@@ -376,7 +376,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
         items.forEachIndexed { index,row ->
             if(index>0) CardDivider()
             val file=row.string("kind")=="file"
-            CardRow(row.string("name"),{ if(file) { c.addReference(row);if(k.chat=="@new") c.panel("new") else c.close() } else c.refresh("remote",row.string("path")) },icon=if(file) TeleplyIcons.File else TeleplyIcons.Folder,chevron=!file)
+            CardRow(row.string("name"),{ if(file) { c.computerFile(row) } else c.refresh("remote",row.string("path")) },icon=if(file) TeleplyIcons.File else TeleplyIcons.Folder,chevron=!file)
         }
     }
     if(data.optBoolean("has_more")) PillButton("下一页",{ c.refresh("remote",data.string("path"),data.string("next_offset")) },style=PillStyle.Text)
@@ -386,7 +386,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     val p=LocalTeleply.current
     InfoNote("这里打开的是文件现在的样子；某一轮改了什么，请从时间线里那一步的「本轮差异」进入。")
     val items=data.rows("items") { it }
-    if(items.isEmpty()) Text("这个对话没有明确授权的文件引用。",style=MaterialTheme.typography.note,color=p.muted)
+    if(items.isEmpty()) Column { Text("暂未识别到本对话的成果文件，可从电脑目录选择并保存到手机。",style=MaterialTheme.typography.note,color=p.muted);PillButton("从电脑选择文件",{ c.panel("remote") },style=PillStyle.Text) }
     else CardSection {
         items.forEachIndexed { index,f ->
             if(index>0) CardDivider()
@@ -402,7 +402,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     var pickerKey by remember { mutableStateOf<ChatKey?>(null) }
     var saving by remember { mutableStateOf<JSONObject?>(null) }
     val save=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> if(uri!=null && c.state.value.key==pickerKey) saving?.let { c.saveFile(context,uri,it) } }
-    PageFrame(data.string("name").ifBlank { "文件" },"当前文件 · ${operationLabel(data.optJSONObject("meta")?.string("state").orEmpty())}",{ c.panel("files") }) {
+    PageFrame(data.string("name").ifBlank { "文件" },"当前文件 · ${operationLabel(data.optJSONObject("meta")?.string("state").orEmpty())}",{ c.panel(if(data.has("reference")) "remote" else "files") }) {
         ProgressLine(s.busy,p.line)
         s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
         val lower=data.string("name").lowercase()
@@ -420,10 +420,14 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
         }
         s.preview?.let { bytes -> NativePreview(bytes,data.string("kind")) }
         if((data.optJSONObject("meta")?.optLong("size") ?: 0)>20L*1024*1024) InfoNote("文件超过20MB预览上限，可保存后使用系统应用打开。")
-        if(!s.busy && s.error==null) PillButton("保存到手机",{ pickerKey=k;saving=JSONObject(s.data);save.launch(data.string("name").ifBlank { "download" }) },style=PillStyle.Primary,leading=TeleplyIcons.Save,modifier=Modifier.fillMaxWidth())
+        if(s.transfer.isNotBlank()) Text(s.transfer,style=MaterialTheme.typography.note)
+        if(s.savingFile) PillButton("取消保存",c::cancelSave,style=PillStyle.Text)
+        s.savedUri?.let { uri -> PillButton("打开已保存的文件",{ c.openSaved(context,uri,data.string("name")) },style=PillStyle.Text) }
+        data.optJSONObject("reference")?.let { ref -> PillButton("添加到消息",{ c.addReference(ref);if(k.chat=="@new") c.panel("new") else c.close() },enabled=!s.savingFile,style=PillStyle.Text) }
+        if(!s.busy && s.error==null) PillButton("保存到手机",{ pickerKey=k;saving=JSONObject(s.data);save.launch(data.string("name").ifBlank { "download" }) },enabled=!s.savingFile,style=PillStyle.Primary,leading=TeleplyIcons.Save,modifier=Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            PillButton("系统分享",{ c.shareFile(context,JSONObject(s.data),false) },enabled=!s.busy && s.error==null,leading=TeleplyIcons.Share,modifier=Modifier.weight(1f))
-            PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && s.error==null,leading=TeleplyIcons.Open,modifier=Modifier.weight(1f))
+            PillButton("系统分享",{ c.shareFile(context,JSONObject(s.data),false) },enabled=!s.busy && !s.savingFile && s.error==null,leading=TeleplyIcons.Share,modifier=Modifier.weight(1f))
+            PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && !s.savingFile && s.error==null,leading=TeleplyIcons.Open,modifier=Modifier.weight(1f))
         }
         if(data.string("kind")=="download") InfoNote("这类文件不提供内嵌预览，可保存后使用系统应用打开。")
     }

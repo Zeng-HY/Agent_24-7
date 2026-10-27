@@ -513,6 +513,7 @@ private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, m
     ) {
         OriginLabel(message)
         Markdown(message.text, Modifier.fillMaxWidth())
+        if(message.kind=="deliverables") PillButton("查看成果文件",{ vm.workspace.panel("files");vm.workspace.refresh("files",message.id) },style=PillStyle.Text,leading=TeleplyIcons.File)
         if (message.truncated) PillButton("展开完整消息", { vm.expand(message) }, enabled = !s.busy, style = PillStyle.Text)
     }
 }

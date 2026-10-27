@@ -78,13 +78,33 @@ def settings(item):
     return {'model':None,'effort':None,'mode':None,'recorded_at':None}
 
 
+def tokens(n,suffix):return round(float(n.replace(',',''))*{'':1,'k':1000,'m':1000000}[suffix.lower()])
+
+
 def usage_from_label(label):
     match=re.search(r'Context\s+([\d.]+)([kKmM]?)\s*/\s*([\d.]+)([kKmM]?)\s*\(([\d.]+)%\)',label)
     if not match:return None
-    def number(n,suffix):return round(float(n)*{'':1,'k':1000,'m':1000000}[suffix.lower()])
-    used,window=number(match[1],match[2]),number(match[3],match[4])
+    used,window=tokens(match[1],match[2]),tokens(match[3],match[4])
     if window<=0:return None
     return {'used_tokens':used,'context_window':window,'percent':float(match[5]),'context_state':'available',
+            'usage_time':datetime.now(timezone.utc).isoformat(),'source':'desktop','approximate':True}
+
+
+def usage_from_context(texts):
+    """The texts of the Context card in Claude's session panel (10-26, the dframe window): '53% used', then '526k / 1M',
+    this conversation's context and its window, then one row per part (Messages 420.9k 42.1%, MCP tools 18.5k 1.9% …)
+    that add up to the 526k. 'N tokens' stands for the pair when no window is shown. Since that window the Usage button
+    by the model names the plan's weekly use ('Usage: Weekly · all models: 48%, Resets Sat 3:00 PM'), not the context."""
+    percent=used=window=None
+    for text in texts:
+        text=(text or '').strip()
+        if percent is None and (match:=re.fullmatch(r'<?\s*(\d+(?:\.\d+)?)\s*%\s+used',text,re.I)):percent=float(match[1])
+        elif window is None and (match:=re.fullmatch(r'(\d[\d,]*(?:\.\d+)?)\s*([kKmM]?)\s*/\s*(\d[\d,]*(?:\.\d+)?)\s*([kKmM]?)',text)):
+            if tokens(match[3],match[4])>0:used,window=tokens(match[1],match[2]),tokens(match[3],match[4])
+        elif used is None and (match:=re.fullmatch(r'(\d[\d,]*(?:\.\d+)?)\s*([kKmM]?)\s+tokens',text,re.I)):used=tokens(match[1],match[2])
+    if percent is None and used is not None and window:percent=round(used/window*100,1)
+    if percent is None and used is None:return None
+    return {'used_tokens':used,'context_window':window,'percent':percent,'context_state':'available' if percent is not None else 'partial',
             'usage_time':datetime.now(timezone.utc).isoformat(),'source':'desktop','approximate':True}
 
 
@@ -131,10 +151,10 @@ class Controller:
         except ValueError:matched=False
         if not matched:raise chats.ChatError('电脑上显示的不是此 Claude 会话；请点击「电脑上打开」')
         return hwnd,root,doc
-    def _walk(self,node,depth=40):
+    def _walk(self,node,depth=40,offscreen=False):
         for ctrl,_ in self.desktop.auto.WalkControl(node,maxDepth=depth):
             try:
-                if not ctrl.IsOffscreen:yield ctrl
+                if offscreen or not ctrl.IsOffscreen:yield ctrl
             except Exception:continue
     @staticmethod
     def _enabled(ctrl):
@@ -184,6 +204,21 @@ class Controller:
             except Exception:continue
             if name.startswith('Dismiss suggestion '):out.append(name[len('Dismiss suggestion '):])
         return out
+    def _context(self,doc):
+        """This conversation's context from the Context card in the panel beside it (Session details, 10-26), read whether
+        scrolled into view or not; None while that panel is closed or the card folded, and on any doubt (two such cards)."""
+        try:
+            cards=[c for c in self.desktop._find(doc,'GroupControl','Context') if self._inside(c,'Session details')]
+            if len(cards)!=1:return None
+            return usage_from_context([c.Name for c in self.desktop._find(cards[0],'TextControl')])
+        except COMError:return None  # drawn anew while read: the next read, 5 s on, has it
+    @staticmethod
+    def _inside(ctrl,name,levels=5):
+        for _ in range(levels):
+            ctrl=ctrl.GetParentControl()
+            if ctrl is None:return False
+            if (ctrl.Name or '')==name:return True
+        return False
     def _queued(self,doc,buttons=None):
         # buttons: the document's buttons when the caller already walked it (a walk costs ~0.8 s in a long chat)
         out=[]
@@ -206,8 +241,11 @@ class Controller:
             out.append((button,{'id':identity,'text':content[:4000],'full_text':content}))
         return out
     OPTION_TYPES=('ButtonControl','RadioButtonControl','CheckBoxControl')
-    PROMPT_NAV={'Back':'上一题','Previous':'上一题','Skip':'跳过','Next':'下一题','Submit':'提交','Dismiss question':'不回答'}
-    PROMPT_HIDDEN={'View question options'}
+    # The question card of Claude's new window (10-26) has arrows at its top as well: back is the only way back there;
+    # forward only looks at the next question unanswered, which its Next does too.
+    PROMPT_NAV={'Back':'上一题','Previous':'上一题','Show previous question':'上一题','Skip':'跳过','Next':'下一题','Submit':'提交',
+                'Dismiss question':'不回答'}
+    PROMPT_HIDDEN={'View question options','Show next question'}
     @staticmethod
     def _pressed(ctrl):
         for getter,attr in (('GetTogglePattern','ToggleState'),('GetSelectionItemPattern','IsSelected')):
@@ -219,7 +257,7 @@ class Controller:
     def _action_state(self,item):
         """The dock and its action revision exactly as _read computes them (the visible options + the transcript stamp),
         read from the dock alone: a full _read walks the whole conversation first and took ~2.3 s (1.35 s now)."""
-        _,root,_=self._document(item);dock=self.desktop._claude_dock(root)
+        _,root,doc=self._document(item);dock=self.desktop._claude_ask(root,doc)
         options,_=self._dock_read(dock) if dock else ([],None)
         path=chats.conv_path(item);stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
         return signature([item['id'],options,stamp]),dock
@@ -229,7 +267,12 @@ class Controller:
         out: question text, progress such as '1 / 2', each choice as label + description, and the navigation.
         10-11 recording of a question (AskUserQuestion): texts '1' '/' '2' and the question; one button per option
         named 'label description N' holding a label text, a description text and the shortcut digit; 'Other N' with
-        an 'Other option' field; 'Skip' / 'Next'; 'View question options' and 'Dismiss question' in the header."""
+        an 'Other option' field; 'Skip' / 'Next'; 'View question options' and 'Dismiss question' in the header.
+        dock may also be a question card of Claude's new window (chats.question_card, recorded 10-26): the question,
+        'Show previous question', a text '1 of 2', 'Show next question', one button per option named 'label description'
+        holding the two texts, 'Other', 'Skip' / 'Next'. It sits among the messages, so it is read scrolled out of
+        view as well."""
+        card=chats.question_card(dock)
         options,buttons,texts,stack,box_top=[],[],[],[],None
         rows=list(self.desktop.auto.WalkControl(dock,maxDepth=30))
         attachment_names=set()
@@ -241,7 +284,7 @@ class Controller:
             try:kind=ctrl.ControlTypeName;name=(ctrl.Name or '').strip();off=ctrl.IsOffscreen
             except Exception:continue
             del stack[max(depth-1,0):];stack.append((kind,name))
-            if off:continue
+            if off and not card:continue
             if kind=='EditControl' and name=='Prompt':
                 try:box_top=ctrl.BoundingRectangle.top
                 except Exception:pass
@@ -264,7 +307,9 @@ class Controller:
         panel=[b for b in buttons if above(b['top'])];words=[name for top,name in texts if above(top)]
         if not panel:return options,None
         marks=[w for w in words if re.fullmatch(r'\d+|/',w)]
-        prompt={'title':'\n'.join(w for w in words if not re.fullmatch(r'\d+|/',w)),'progress':' '.join(marks[:3]) if len(marks)>=3 else None,
+        counter=next((w for w in words if re.fullmatch(r'\d+ of \d+',w)),None)  # the card's one text '1 of 2'
+        progress=counter.replace(' of ',' / ') if counter else ' '.join(marks[:3]) if len(marks)>=3 else None
+        prompt={'title':'\n'.join(w for w in words if not re.fullmatch(r'\d+|/|\d+ of \d+',w)),'progress':progress,
                 'choices':[],'nav':[],'other':None}
         for b in panel:
             name=b['option']['name']
@@ -323,6 +368,10 @@ class Controller:
         try:self.desktop._claude_unminimize()
         except Exception:pass
         recorded=settings(item);path=chats.conv_path(item);runtime=chats.runtime_info('claude',path) if path else {}
+        # The model and effort the session's record names go with every read, the desktop's context only when it is read
+        # (10-26: the context was not read, and the effort the phone shows went missing with it).
+        model,effort=recorded.get('model') or runtime.get('model'),recorded.get('effort')
+        if model or effort:runtime={**runtime,'model':model,'effort':effort}
         result={'settings':recorded,'runtime':runtime,'available':False,'on_screen':False,'actions':[],
                 'observed_at':int(time.time()*1000),'mode_options':self.modes,'recorded_label':self._model_name(recorded.get('model'))}
         try:
@@ -331,7 +380,7 @@ class Controller:
             model_name=next((n for n in names if n.startswith('Model: ')),None)
             model=model_label(model_name) if model_name else None
             effort=next((n[8:] for n in names if n.startswith('Effort: ')),None) or effort_label(model_name)
-            usage=next((usage_from_label(n) for n in names if n.startswith('Usage: ')),None)
+            usage=next((u for u in (usage_from_label(n) for n in names if n.startswith('Usage: ')) if u),None) or self._context(doc)
             result.update(available=bool(model),on_screen=True,model_label=model,effort_label=effort,running='Stop' in names or chats.summary(item).get('status')=='running',
                           mode_label=next((n.removeprefix('Permissions: ') for n in names if n in MODE_BUTTONS or n.startswith('Permissions: ')),None))
             if not model:
@@ -345,8 +394,8 @@ class Controller:
                 result['queued'].append({'id':queued['id'],'text':queued['text'],'token':self._ticket(item['id'],'steer_queued',{'id':queued['id']},revision)})
             if result['running'] and anchor:
                 result['stop_revision']=signature([item['id'],anchor]);result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
-            if usage:result['runtime']={**runtime,**usage,'model':recorded.get('model') or runtime.get('model'),'effort':recorded.get('effort')}
-            dock=self.desktop._claude_dock(root)
+            if usage:result['runtime']={**runtime,**usage}
+            dock=self.desktop._claude_ask(root,doc)  # a question card of Claude's new window, or the dock (10-26)
             options,prompt=self._dock_read(dock) if dock else ([],None)
             # Bind execution/answer buttons to both the visible set and the latest transcript version.
             stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
@@ -731,7 +780,7 @@ class Controller:
                 elif ticket['kind']=='action':
                     revision,dock=self._action_state(item)
                     if revision!=ticket['revision']:raise chats.ChatError('计划或执行选项已变化，未执行旧选项')
-                    targets=[c for c in self._walk(dock,30) if c.ControlTypeName==ticket['option']['type'] and (c.Name or '').strip()==ticket['option']['name']] if dock else []
+                    targets=[c for c in self._walk(dock,30,offscreen=chats.question_card(dock)) if c.ControlTypeName==ticket['option']['type'] and (c.Name or '').strip()==ticket['option']['name']] if dock else []
                 else:
                     options=self._again(self._menu,item,ticket['kind']);rev=signature([{k:v for k,v in settings(item).items() if k!='recorded_at'},[v['name'] for _,v in options]])
                     if rev!=ticket['revision']:raise chats.ChatError('模型或菜单已变化，请重新选择')

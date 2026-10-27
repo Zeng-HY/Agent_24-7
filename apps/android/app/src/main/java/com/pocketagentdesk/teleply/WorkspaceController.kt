@@ -17,13 +17,14 @@ import org.json.JSONObject
  * [newData] is what the new-conversation sheet lists (folders, models, permissions): what this phone had first, the
  * computer's lists when they come (0.8, web new-chat-ui.js); [newNote] a line under the sheet when a list did not come.
  */
-data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null) {
+data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null) {
     /** One Claude button at a time: its click waits for the computer's window. */
     val pressing:Boolean get() = cards.values.any { it.startsWith("pressing:") }
 }
 class WorkspaceController(private val scope:CoroutineScope,private val store:ReaderStore) {
     private val mutable=MutableStateFlow(WorkspaceState());val state=mutable.asStateFlow()
     private var api:ReadApi?=null;private var key:ChatKey?=null;private var fixture=false
+    private var saveJob:Job?=null
     private var generation=0;private var read:Job?=null;private var choiceRead:Job?=null
     private val mutex=Mutex();private val demo=mutableMapOf<ChatKey,String>()
     private val newIds=Mutex()
@@ -96,9 +97,9 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val synthetic=fixture
         launchSafe { try { mutex.withLock { if(synthetic) demo[k]=j.toString() else store.detail(k,"workspace",j.toString()) } } catch(_:Exception) { update(k) { it.copy(ready=false,error="交互草稿保存失败") } } }
     }
-    fun close() { read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null) } }
+    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null) } }
     fun panel(name:String) {
-        read?.cancel();generation++
+        saveJob?.cancel();read?.cancel();generation++
         mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote) }
         if(name=="new") openNew() else refresh(name)
     }
@@ -144,7 +145,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             try {
                 val q=mapOf("app" to k.app,"id" to k.chat)
                 val data=when(name) {
-                    "files" -> service.detail(k.device,"chat/files",q)
+                    "files" -> service.detail(k.device,"chat/files",q+mapOf("message" to query.ifBlank { null }))
                     "remote" -> if(query.isBlank()) service.detail(k.device,"files/places",q) else service.detail(k.device,"files/list",q+mapOf("path" to query,"offset" to offset))
                     "chat","skill" -> service.detail(k.device,if(k.chat=="@new") "chat/new/references" else "composer/references",q+mapOf("kind" to name,"query" to query,"offset" to if(fresh) "0" else offset,"fresh" to if(fresh) "1" else "0","scan_id" to if(offset!="0" && !fresh) JSONObject(state.value.data).string("scan_id") else "","projectless" to if(saved(k).string("folder").isBlank()) "1" else "0","folder" to saved(k).string("folder")))
                     else -> JSONObject()
@@ -488,16 +489,28 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     /** Clears the one-line result after the UI showed it. */
     fun clearResult() { mutable.update { it.copy(result="") } }
+    fun computerFile(reference:JSONObject) {
+        if(reference.string("download_id").isBlank()) { key?.let { k -> update(k) { it.copy(error="请更新电脑端后下载文件") } };return }
+        file(JSONObject(reference.toString()).put("id",reference.string("download_id")).put("reference",reference))
+    }
+    fun cancelSave() { saveJob?.cancel() }
+    fun openSaved(context:Context,uri:String,name:String) {
+        try { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),shareMime(name)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"打开已保存的文件")) }
+        catch(_:Exception) { key?.let { k -> update(k) { it.copy(transfer="文件已保存，手机上暂时没有可用的打开应用") } } }
+    }
     fun file(file:JSONObject) {
-        val k=key ?: return;val service=api ?: return;read?.cancel();val g=++generation
-        update(k) { it.copy(pane="file",busy=true,data=file.toString(),error=null,preview=null,result="") }
+        val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
+        update(k) { it.copy(pane="file",busy=true,data=file.toString(),error=null,preview=null,result="",transfer="",savedUri=null,savingFile=false) }
         read=launchSafe { try {
             val q=mapOf("app" to k.app,"id" to k.chat,"file" to file.getString("id"))
             val meta=service.detail(k.device,"file/meta",q)
             val kind=meta.string("kind")
-            val text=if(kind=="text") service.detail(k.device,"file/text",q).string("text") else ""
-            val bytes=if(kind in listOf("image","pdf") && meta.optLong("size")<=20L*1024*1024) service.download(k.device,k.chat,file.getString("id")) else null
-            if(g==generation) update(k) { it.copy(data=JSONObject(file.toString()).put("meta",meta).toString(),result=text,preview=bytes,busy=false) }
+            var text="";var bytes:ByteArray?=null;var note=""
+            try {
+                if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
+                if(kind in listOf("image","pdf") && meta.optLong("size")<=20L*1024*1024) bytes=service.download(k.device,k.chat,file.getString("id"))
+            } catch(e:CancellationException) { throw e } catch(_:Exception) { note="预览未能加载，仍可尝试保存原文件。" }
+            if(g==generation) update(k) { it.copy(data=JSONObject(file.toString()).put("kind",kind).put("meta",meta).toString(),result=text,preview=bytes,busy=false,transfer=note) }
         } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false) } } }
     }
     @Volatile private var listing:Pair<ChatKey,JSONObject>?=null
@@ -521,15 +534,36 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     fun saveFile(context:Context,uri:Uri,file:JSONObject) {
         val k=key ?: return;val service=api ?: return;val g=generation
-        val job=launchSafe { try {
-            withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri)?.use { output ->
-                val guarded=object:java.io.FilterOutputStream(output) {
-                    override fun write(buffer:ByteArray,offset:Int,length:Int) { require(state.value.key==k && g==generation) { "会话已切换，保存已停止" };out.write(buffer,offset,length) }
+        if(saveJob?.isActive==true) return
+        update(k) { it.copy(savingFile=true,transfer="正在保存…",savedUri=null) }
+        saveJob=scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri,"w")?.use { output ->
+                        var count=0L;var last=-1L
+                        val size=file.optJSONObject("meta")?.optLong("size") ?: file.optLong("size")
+                        val guarded=object:java.io.FilterOutputStream(output) {
+                            override fun write(buffer:ByteArray,offset:Int,length:Int) {
+                                require(state.value.key==k && g==generation) { "会话已切换，保存已停止" }
+                                out.write(buffer,offset,length);count+=length
+                                val percent=if(size>0) (count*100/size).coerceAtMost(100) else count/1048576
+                                if(percent!=last) { last=percent;update(k) { it.copy(transfer=if(size>0) "正在保存 $percent%" else "已接收 $percent MB") } }
+                            }
+                        }
+                        service.downloadTo(k.device,k.chat,file.getString("id"),guarded)
+                        require(size<0 || count==size) { "文件接收不完整，请重试" }
+                    } ?: error("无法保存到所选位置")
                 }
-                service.downloadTo(k.device,k.chat,file.getString("id"),guarded)
-            } ?: error("无法保存到所选位置") }
-            update(k) { it.copy(result="文件已保存") }
-        } catch(e:Exception) { update(k) { it.copy(error=e.message ?: "保存失败") } } };jobs+=job
+                require(valid(k) && g==generation) { "会话已切换，保存已停止" }
+                update(k) { it.copy(transfer="已保存到所选位置：${file.string("name")}",savedUri=uri.toString()) }
+            } catch(e:Exception) {
+                withContext(NonCancellable) {
+                    val removed=withContext(Dispatchers.IO) { runCatching { android.provider.DocumentsContract.deleteDocument(context.contentResolver,uri) }.getOrDefault(false) }
+                    if(valid(k) && g==generation) update(k) { it.copy(transfer=(if(e is CancellationException) "已取消保存" else "保存失败：${e.message ?: "请重试"}")+(if(removed) "" else "。请检查所选位置并删除未完成的文件。")) }
+                }
+            } finally { if(valid(k) && g==generation) update(k) { it.copy(savingFile=false) } }
+        }
+        jobs+=saveJob!!
     }
     fun shareFile(context:Context,file:JSONObject,open:Boolean) {
         val k=key ?: return;val service=api ?: return;val g=generation

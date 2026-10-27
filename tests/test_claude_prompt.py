@@ -213,5 +213,63 @@ class UsageMeterTest(unittest.TestCase):
         self.assertEqual(self.dock(rows), ([],None))
 
 
+class QuestionCardTest(unittest.TestCase):
+    """10-26: in Claude's new window a question is a card among the messages (class epitaxy-approval-card), not in the
+    dock; recorded from a two-question AskUserQuestion, depth below the card, the tops made up. Looking in the dock alone,
+    the phone showed no question at all."""
+    CARD = [[1, 'GroupControl', '', 10, False, True],
+            [2, 'TextControl', '第三次读取测试（1/2）：随便选一个。', 10, False, True],
+            [1, 'ButtonControl', 'Show previous question', 40, False, False],
+            [1, 'TextControl', '1 of 2', 40, False, True],
+            [1, 'ButtonControl', 'Show next question', 40, False, True],
+            [1, 'GroupControl', '', 80, False, True],
+            [2, 'ButtonControl', '选项甲 随便选', 80, False, True],
+            [3, 'GroupControl', '', 82, False, True], [4, 'TextControl', '选项甲', 82, False, True],
+            [3, 'GroupControl', '', 100, False, True], [4, 'TextControl', '随便选', 100, False, True],
+            [2, 'ButtonControl', '选项乙 随便选', 130, False, True],
+            [3, 'GroupControl', '', 132, False, True], [4, 'TextControl', '选项乙', 132, False, True],
+            [3, 'GroupControl', '', 150, False, True], [4, 'TextControl', '随便选', 150, False, True],
+            [2, 'GroupControl', '', 180, False, True],
+            [3, 'ButtonControl', 'Other', 180, False, True],
+            [1, 'GroupControl', '', 220, False, True],
+            [2, 'ButtonControl', 'Skip', 220, False, True],
+            [2, 'ButtonControl', 'Next', 220, False, True]]
+    CLASS = 'epitaxy-approval-card relative isolate flex flex-col rounded-card p-[12px] gap-[12px]'
+
+    def read(self, rows, cls=CLASS):
+        class Walk:
+            def WalkControl(self, node, maxDepth=30):
+                for depth, kind, name, top, off, enabled in rows:
+                    ctrl = Ctrl(depth, kind, name, top, off)
+                    ctrl.IsEnabled = enabled
+                    yield ctrl, depth
+        ctrl = claude_control.Controller.__new__(claude_control.Controller)
+        ctrl.desktop = type("D", (), {"auto": Walk()})()
+        return ctrl._dock_read(type("Box", (), {"ClassName": cls})())
+
+    def test_the_card_is_a_question(self):
+        options, prompt = self.read(self.CARD)
+        self.assertEqual([o['name'] for o in options], ['Show next question', '选项甲 随便选', '选项乙 随便选', 'Other', 'Skip', 'Next'])
+        self.assertEqual(prompt['title'], '第三次读取测试（1/2）：随便选一个。')
+        self.assertEqual(prompt['progress'], '1 / 2')
+        self.assertEqual([(c['name'], c['label'], c['description']) for c in prompt['choices']],
+                         [('选项甲 随便选', '选项甲', '随便选'), ('选项乙 随便选', '选项乙', '随便选')])
+        self.assertEqual([(n['name'], n['label']) for n in prompt['nav']], [('Skip', '跳过'), ('Next', '下一题')])
+        self.assertEqual(prompt['other'], {'name': 'Other'})
+
+    def test_back_is_the_arrow_once_there_is_a_question_before(self):
+        rows = [r[:5] + [True] if r[2] == 'Show previous question' else r for r in self.CARD]
+        rows = [r[:2] + ['2 of 2'] + r[3:] if r[2] == '1 of 2' else r for r in rows]
+        _, prompt = self.read(rows)
+        self.assertEqual(prompt['progress'], '2 / 2')
+        self.assertEqual([(n['name'], n['label']) for n in prompt['nav']], [('Show previous question', '上一题'), ('Skip', '跳过'), ('Next', '下一题')])
+
+    def test_a_card_scrolled_out_of_view_still_asks(self):
+        hidden = [r[:4] + [True] + r[5:] for r in self.CARD]
+        options, prompt = self.read(hidden)
+        self.assertEqual([c['label'] for c in prompt['choices']], ['选项甲', '选项乙'])
+        self.assertEqual(self.read(hidden, cls='group/approval-dock pointer-events-auto'), ([], None))  # the dock as before
+
+
 if __name__ == "__main__":
     unittest.main()

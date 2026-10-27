@@ -171,6 +171,7 @@ class NavigationTests(unittest.TestCase):
         self.filtered = False
         self.query = ''
         self.invoked = []
+        self.entry_offscreen = False
         self.desktop._claude_root.return_value = (1, 'root')
         self.desktop._claude_document.side_effect = lambda root, identity: 'document' if self.opened == identity else None
         self.desktop._value.side_effect = lambda node: self.query
@@ -179,8 +180,8 @@ class NavigationTests(unittest.TestCase):
         self.press = patch('claude_archive.winctl.press', side_effect=self.key).start()
         self.addCleanup(patch.stopall)
 
-    def node(self, name, identity=''):
-        node = SimpleNamespace(Name=name, AutomationId=identity, IsOffscreen=False, IsEnabled=True,
+    def node(self, name, identity='', offscreen=False, keys=''):
+        node = SimpleNamespace(Name=name, AutomationId=identity, IsOffscreen=offscreen, IsEnabled=True, AcceleratorKey=keys,
                                GetValuePattern=lambda: SimpleNamespace(SetValue=self.set_query))
         node.GetInvokePattern = lambda: SimpleNamespace(Invoke=lambda: self.invoke(node))
         return node
@@ -197,7 +198,7 @@ class NavigationTests(unittest.TestCase):
         if kind == 'WindowControl' and self.searching:
             result = [self.node('Search')]
         elif kind == 'ButtonControl' and not self.searching:
-            result = [self.node('Search', 'open-search')]
+            result = [self.node('Search', 'open-search', self.entry_offscreen, 'Control+k' if self.entry_offscreen else '')]
         elif self.searching and kind == 'ComboBoxControl':
             result = [self.node('Search', 'command-palette-input')]
         elif self.searching and kind == 'GroupControl' and self.filtered:
@@ -231,6 +232,30 @@ class NavigationTests(unittest.TestCase):
         self.actions.open_session({'id': IDENTITY, 'title': '同名测试'}, True)
         self.assertTrue(self.filtered)
         self.assertEqual(self.invoked, ['command-palette-item-filter-hint:archived', 'command-palette-item-' + IDENTITY])
+
+    def test_search_row_scrolled_out_of_view_still_opens_the_search(self):
+        # 10-26, Claude's dframe window: Search is a row at the top of the sidebar's list and scrolls away with it
+        self.entry_offscreen = True
+        self.assertEqual(self.actions.open_session({'id': IDENTITY, 'title': '同名测试'}, False), (1, 'root'))
+        self.assertEqual(self.invoked, ['command-palette-item-' + IDENTITY])
+        self.assertEqual(self.opened, IDENTITY)
+
+    def test_search_entry_is_the_one_with_the_search_shortcut(self):
+        row, bar = self.node('Search', 'row', True, 'Control+k'), self.node('Search', 'bar', False, 'Control+k')
+        files, disabled = self.node('Search', 'files'), self.node('Search', 'disabled', False, 'Control+k')
+        disabled.IsEnabled = False
+        found = lambda *controls: setattr(self.desktop._find, 'side_effect', lambda scope, kind, name=None: list(controls))
+        found(files, row, disabled)  # a panel's own Search in view, the sidebar's scrolled away
+        self.assertIs(self.actions._entry('root'), row)
+        found(row, files, bar)  # either opens the search: the one in view
+        self.assertIs(self.actions._entry('root'), bar)
+        found(files)  # a Claude from before 10-26: the single Search button in view
+        self.assertIs(self.actions._entry('root'), files)
+        found(files, self.node('Search', 'second'))
+        with self.assertRaisesRegex(chats.ChatError, '不唯一'):
+            self.actions._entry('root')
+        found(disabled, self.node('Search', 'hidden', True))
+        self.assertIsNone(self.actions._entry('root'))
 
     def test_current_target_needs_no_search(self):
         self.opened = IDENTITY

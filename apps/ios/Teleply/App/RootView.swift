@@ -46,6 +46,13 @@ struct RootView: View {
             default: break
             }
         }
+        // A tapped notification waits for the launch or a sign-in (AppModel+Push); signed in, the account gets
+        // this phone's 遥应通知 again when it is wanted.
+        .onChange(of: model.busy) { model.resumeNotification() }
+        .onChange(of: model.screen) { before, _ in
+            model.resumeNotification()
+            if before == .launch || before == .login { model.pushSync() }
+        }
     }
 
     private var colorScheme: ColorScheme? {

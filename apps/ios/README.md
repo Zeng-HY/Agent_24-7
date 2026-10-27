@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI，0.4.2 已发 TestFlight，待真机验）
+# 遥应 Teleply iOS 版（原生 SwiftUI；TestFlight 上 0.5.0 构建 6 带遥应通知、已在真机验通，0.4.2 构建 7 不带推送、待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -24,6 +24,28 @@
 - **TestFlight**：工作流 `ios-native-testflight`。用 Codemagic 团队里的 App Store Connect 密钥 `Teleply Codemagic`（App Manager），证书引用名 `teleply_distribution`（Apple Distribution，到期 2027-10-26），描述文件引用名 `teleply_appstore`（Apple 后台名 `Teleply App Store`，App Store 类型）；Team ID `CPSVJ7235A`，Apple App ID `6826968427`。这些名字 Codemagic 的接口读不到，构建开始时才核对。上传前会核对包里的 Bundle ID、构建号、加密声明、图标、隐私清单和简体中文；只进内部测试（App Store Connect 里的内部测试组开了自动分发），不提交审核。证书别重新生成：数量有上限，重新生成还得重做描述文件。
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
+
+## 0.5.0：遥应通知（10-26 发 TestFlight 构建 6，连同 0.4.2 的改动；从分支 `ios-native-push` 构建；10-26 真机从头到尾验通）
+
+Codemagic #6adf5a61（排队约 24 分钟，构建约 5 分钟），Delivery UUID 41dbb843-6e98-4d8f-9df1-89ee5151da0a。上传前的检查都过了，包括新加的推送权限：签好的应用和描述文件里 `aps-environment` 都是 production。构建 6 里的 0.4.2 到 8eacb90 为止，不含之后 `ios-native` 上的 8c600ba（点下后稍等一下才动作，滑动不再打开行）。
+
+用户 10-26 选了 Obsidian 产品设计目录里《Teleply - iOS 原生推送方案》的路线 C：手机通知由遥应自己收，经中转和苹果推送，不必再装 Bark。
+
+做了什么：
+
+- 设置 → 手机通知 最上面一组是“遥应通知”：没打开时“打开并试推一条”（系统只问一次通知权限），打开后“试推一条”“关掉”；系统设置里关了时给“去系统设置打开”；服务器没装密钥时写“服务器还没开通”。打开后如果这台电脑还开着 Bark，会问要不要关掉，免得一件事收到两条。Bark 一组照旧在下面。
+- 通知只写来源、电脑名和状态，例如标题“Claude · 我的电脑”，正文“有个对话好了”“有个对话出错停了”“有个对话在等你处理”，不写对话标题和内容。
+- 点通知直接进那个对话：没登录先登录；电脑不属于当前账号或已离线时说明原因，不打开。遥应开着、正看着这个对话时，这条通知不再弹。
+- 推送令牌跟账号走（登录 7 天过期后照样收），退出登录时先注销。系统权限一组多了一行“通知”。
+- 打包：应用带推送权限（`aps-environment` 为 production），`ci-testflight.sh` 核对签好的包里有这一项。10-26 已在苹果后台给 App ID 开了推送，重新生成了 `Teleply App Store` 描述文件，Codemagic 里的 `teleply_appstore` 也换成了新的。
+- 中转（0.27.0-dev.16，10-26 已更新并装好推送密钥）和电脑端（`notify.py`，Windows 0.27.0-dev.21，10-26 发到 GitHub 预发布）的改动在同一分支上，10-27 一起合进了 main。
+
+### 留给你在真机上验（0.5.0）
+
+1. 设置 → 手机通知 → 打开并试推一条：系统问通知权限时点“允许”，很快收到一条“试推一条：通知是好的”。10-26 22:34 已验：遥应开着时也弹出横幅，这一行变成“已打开”，下面写“刚推了一条，看看通知”。
+2. 退出登录再登录：遥应通知回到“没打开”，要再打开一次。
+3. 电脑装上含推送的 Windows 新版以后：在电脑上让一个对话做完，手机收到“Codex · 电脑名”“有个对话好了”，锁屏和在别的应用里时也一样；点它直接进那个对话。遥应开着、正看着这个对话时不弹。试推是点下就发，锁屏时没法点，所以锁屏放在这一步验。10-26 23:23 已验：电脑装 Windows dev.21 后，一个 Claude 对话做完，锁屏的 iPhone 收到通知，点开直接进了那个对话。电脑 2 分钟内有键盘或鼠标输入时不推，别的程序模拟的输入也算。
+4. 0.4.2 和 0.4.1 照下面两节各自的检查。
 
 ## 0.4.2：列表里的红色“[草稿]”（10-26 发 TestFlight 构建 7，连同 0.4.1 的改动，待真机验）
 

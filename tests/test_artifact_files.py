@@ -14,6 +14,25 @@ class Artifacts(unittest.TestCase):
         entry=SimpleNamespace(lock=threading.RLock(),messages=[{'id':'m','role':'assistant','text':' '.join(f'[f](<{p}>)' for p in paths)}])
         h=History(secret='test-only');h.transcript=lambda *args:({'cwd':str(root/'different-project')},entry)
         return h,entry,paths
+    def test_deepseek_presented_event_reaches_exact_file_list_and_download(self):
+        from deepseek_stream import public_messages
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);p=root/'数据核对报告.xlsx';p.write_bytes(b'PK-fixture')
+            records=[{'event':{'seq':7,'time':0,'type':'deliverables/presented','data':{'turn':1,'callId':'present-1','files':[{'path':p.name,'description':'数据核对报告'},{'path':p.name}]}}}]
+            messages=public_messages(records,'session-test');self.assertEqual(messages[0]['kind'],'deliverables')
+            entry=SimpleNamespace(lock=threading.RLock(),messages=messages)
+            h=History(secret='fixture');h.transcript=lambda *a:({'cwd':str(root)},entry)
+            rows=h.list_files('deepseek','session-test')['items'];self.assertEqual(len(rows),1)
+            self.assertEqual(h.file('deepseek','session-test',rows[0]['id'])['path'],p)
+            self.assertEqual(len(h.list_files('deepseek','session-test','7')['items']),1)
+            self.assertEqual(h.list_files('deepseek','session-test','8')['items'],[])
+            entry.messages=[]
+            with self.assertRaises(HistoryError):h.file('deepseek','session-test',rows[0]['id'])
+    def test_invalid_presented_event_does_not_authorize_files(self):
+        from deepseek_stream import public_messages
+        for data in ({'files':[{'path':'C:/private.txt'}]}, {'turn':True,'callId':'x','files':[]}):
+            self.assertEqual(public_messages([{'event':{'seq':1,'type':'deliverables/presented','data':data}}]),[])
+
     def test_unknown_extension_and_no_extension_are_exact_references(self):
         with tempfile.TemporaryDirectory() as d:
             h,entry,paths=self.fixture(Path(d),['中文 (1).html','file.unknown','noextension','image.svg'])

@@ -19,6 +19,13 @@ RESPONSE_HEADERS={'content-type','content-length','content-range','accept-ranges
                   'content-disposition','etag','last-modified','content-encoding'}
 
 
+class Refused(Exception):
+    """The computer answered the relay's own request with another status than 200."""
+    def __init__(self, status):
+        super().__init__(status)
+        self.status=status
+
+
 @dataclass(eq=False)
 class DeviceConnection:
     device: str
@@ -85,6 +92,42 @@ class TunnelHub:
         # The HTTP request task exclusively reads this websocket.
         await finished.wait()
         return ws
+
+    async def fetch(self, device, target, headers=None):
+        """A GET of the relay's own on this computer's tunnel (relay_push.py's event stream): the body's chunks as
+        they come, until the computer ends it or goes away. Not on a phone's behalf, so no sign-in is checked and
+        no usage counted; it takes one of the computer's 16 places while open. Close it with aclose()."""
+        conn=self.connections.get(device)
+        if not conn or not self.allowed(conn): raise ConnectionError('device offline')
+        if sum(item[0] is conn for item in self.pending.values())>=16: raise ConnectionError('device busy')
+        ident=secrets.token_hex(16)
+        future=asyncio.get_running_loop().create_future()
+        self.pending[ident]=(conn,None,future)
+        ws=finished=None
+        try:
+            await conn.socket.send_json({'v':1,'stream':ident})
+            ws,finished=await asyncio.wait_for(future,15)
+            conn.streams.add(ws)
+            await ws.send_json({'v':1,'method':'GET','target':target,'headers':dict(headers or {}),'length':None})
+            await ws.send_json({'end':True})
+            message=await asyncio.wait_for(ws.receive(),120)
+            if message.type!=WSMsgType.TEXT: raise ConnectionError()
+            metadata=message.json()
+            status=metadata.get('status') if isinstance(metadata,dict) else None
+            if status!=200: raise Refused(status if isinstance(status,int) else 502)
+            while self.allowed(conn):
+                # the computer sends a keepalive every 45 s (ntfy_feed.KEEPALIVE)
+                message=await asyncio.wait_for(ws.receive(),150)
+                if message.type==WSMsgType.BINARY: yield message.data
+                elif message.type==WSMsgType.TEXT and message.json().get('end'): return
+                else: raise ConnectionError()
+            raise ConnectionError('device gone')
+        finally:
+            self.pending.pop(ident,None)
+            if ws:
+                conn.streams.discard(ws)
+                await ws.close()
+            if finished: finished.set()
 
     async def proxy(self, request, token, device, target):
         conn=self.connections.get(device)

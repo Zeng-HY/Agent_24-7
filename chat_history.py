@@ -1,5 +1,6 @@
 """Append-aware public transcript index and scoped result-file registry."""
 from __future__ import annotations
+import os
 import base64,copy,hashlib,hmac,json,mimetypes,re,threading,time
 from collections import OrderedDict
 from datetime import datetime
@@ -252,11 +253,20 @@ class History:
     def list_files(self,app,tid,message_id=None):
         from message_files import references
         item,entry=self.transcript(app,tid)
-        out=[]
+        out=[];seen_paths=set()
         with entry.lock:
             messages=[m for m in entry.messages if (m['role']=='assistant' or (m.get('current_file') and m.get('tool_status')=='completed')) and (not message_id or m['id']==message_id)]
             for m in reversed(messages):
                 paths=references(m['text']) if m['role']=='assistant' else [m['current_file']]
+                if app=='deepseek' and m.get('kind')=='deliverables':
+                    paths=[]
+                    for declaration in m.get('presented_files',[]):
+                        raw=declaration['path'];p=Path(raw)
+                        if not p.is_absolute():
+                            cwd=Path(item.get('cwd') or '')
+                            if not cwd.is_absolute() or p.drive or raw.startswith(('\\','/')):continue
+                            p=Path(os.path.abspath(cwd/p))
+                        paths.append(str(p.absolute()))
                 for index,raw in enumerate(paths):
                     p=Path(raw)
                     # Only an explicit source reference authorizes this exact regular local file.
@@ -274,6 +284,9 @@ class History:
                     kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.htm','.markdown','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and size<=1<<20 else 'download'
                     updated=bool(old and st and old['mtime'] is not None and (old['mtime']!=st.st_mtime_ns or old['size']!=size))
                     self.files[(app,tid,fid)]={'path':p,'resolved':resolved,'size':size,'mtime':st.st_mtime_ns if st else None,'kind':kind,'message_id':m['id'],'index':index,'updated':updated or bool(old and old.get('updated'))}
+                    identity_path=str(p).casefold()
+                    if identity_path in seen_paths:continue
+                    seen_paths.add(identity_path)
                     out.append({'id':fid,'name':p.name,'path':str(p),'size':size,'modified':st.st_mtime_ns//1000000 if st else None,'kind':kind,'message_id':m['id'],'index':index,'state':'missing' if not st else 'updated' if self.files[(app,tid,fid)]['updated'] else 'current'})
         return {'items':out,'scope':'当前会话明确引用的具体文件；打开当前内容，不保存历史副本'}
 

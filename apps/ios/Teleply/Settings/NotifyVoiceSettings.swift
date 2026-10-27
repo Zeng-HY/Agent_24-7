@@ -4,17 +4,44 @@ import SwiftUI
 import TeleplyModel
 import TeleplyState
 
-/// 设置 → 手机通知 (spec 4.6, 7; web notify-ui.js as an iPhone shows it): Bark only. Paste its address and send one
-/// to try; once on, 试推一条 and 关掉; the last outcomes under it. The computer pushes when a turn ends, through
-/// Apple's push service, without this app open.
+/// 设置 → 手机通知 (spec 4.6, 7; plan "Teleply - iOS 原生推送方案"). First 遥应通知: this phone's own notifications
+/// through Apple's push service, kept by the service for the whole account (AppModel+Push); the web cannot have
+/// them, so this group is the native app's own. Then Bark as the web shows it on an iPhone: an address kept on this
+/// computer, 试推一条 and 关掉, the last outcomes under it. With both on, one turn comes twice, so turning 遥应通知
+/// on offers to turn this computer's Bark off.
 struct NotifySection: View {
     let model: AppModel
     @State private var state: JSONValue?
     @State private var address = ""
     @State private var busy = false
     @State private var note: String?
+    @State private var offerBarkOff = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        Section {
+            pushRows
+        } header: {
+            Text("手机通知")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("电脑上的对话好了、等你回答或批准时，用遥应自己的通知提醒这部 iPhone，账号下所有电脑都算。通知里只写来源、电脑名和状态。")
+                if let pushNote = model.push.note {
+                    Text(pushNote)
+                        .task(id: pushNote) { AccessibilityNotification.Announcement(pushNote).post() }
+                }
+            }
+        }
+        .listRowBackground(Palette.controlFill)
+        .task { await model.pushRefresh() }
+        // back from the system's settings, where the switch may have changed
+        .onChange(of: scenePhase) { if scenePhase == .active { Task { await model.pushRefresh() } } }
+        .alert("要关掉这台电脑的 Bark 吗？", isPresented: $offerBarkOff) {
+            Button("关掉 Bark", role: .destructive) { call("notify", ["address": ""]) }
+            Button("留着", role: .cancel) {}
+        } message: {
+            Text("遥应通知和 Bark 都开着，一件事会收到两条。")
+        }
         Section {
             if let state {
                 if state["configured"].bool() {
@@ -45,12 +72,15 @@ struct NotifySection: View {
                     .task { await load() }
             }
         } header: {
-            Text("手机通知")
+            Text("Bark")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 if let state {
                     Text(state["configured"].bool() ? "对话做完时推到这部手机。正在用这台电脑、或手机正开着那个对话时不推。"
                         : "对话做完时推到这部手机。先在 iPhone 上装 Bark，在它首页复制 https://api.day.app/ 开头的地址，贴在上面。")
+                    if state["configured"].bool(), model.push.phase == .on {
+                        Text("Bark 地址存在这台电脑上，要一台一台设；和遥应通知都开着，一件事会收到两条。")
+                    }
                     let recent = state["recent"].array.prefix(3).map { $0["time"].string() + " " + $0["text"].string() }
                     if !recent.isEmpty { Text("最近：" + recent.joined(separator: "\n")) }
                 }
@@ -61,6 +91,40 @@ struct NotifySection: View {
             }
         }
         .listRowBackground(Palette.controlFill)
+    }
+
+    /// 遥应通知's rows by where it stands: off, on, turned off in the system, or not yet possible on the service.
+    @ViewBuilder private var pushRows: some View {
+        switch model.push.phase {
+        case .checking:
+            Text("正在读取遥应通知…")
+                .foregroundStyle(Palette.muted)
+        case .off:
+            LabeledContent("遥应通知", value: "没打开")
+            Button("打开并试推一条") { turnPushOn() }
+                .disabled(model.push.working)
+        case .on:
+            LabeledContent("遥应通知", value: "已打开")
+            Button("试推一条") { Task { await model.pushTest() } }
+                .disabled(model.push.working || model.push.token == nil)
+            Button("关掉", role: .destructive) { Task { await model.pushTurnOff() } }
+                .disabled(model.push.working)
+        case .denied:
+            LabeledContent("遥应通知", value: "系统里关了")
+            Button("去系统设置打开") {
+                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
+            }
+        case .unavailable:
+            LabeledContent("遥应通知", value: "服务器还没开通")
+        }
+    }
+
+    /// 打开并试推一条; when this computer still sends to Bark, it asks whether to stop that.
+    private func turnPushOn() {
+        Task {
+            await model.pushTurnOn()
+            if model.push.phase == .on, state?["configured"].bool() == true { offerBarkOff = true }
+        }
     }
 
     private func load() async {
@@ -187,11 +251,14 @@ struct VoiceTermsView: View {
 /// The system permissions the app asks for (spec 4.6): where each stands; a tap opens 遥应's page in Settings.
 struct PermissionSection: View {
     @State private var tick = 0
+    @State private var notifications = "…"
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         let _ = tick
         Section {
+            row("通知", notifications)
+                .task(id: tick) { notifications = await notificationStatus() }
             row("麦克风", microphone)
                 .onChange(of: scenePhase) { if scenePhase == .active { tick += 1 } }
             row("语音识别", speech)
@@ -199,9 +266,18 @@ struct PermissionSection: View {
         } header: {
             Text("系统权限")
         } footer: {
-            Text("录音、iPhone 自带的语音识别和拍照要用到。点一行到系统设置里遥应这一页去改。")
+            Text("遥应通知、录音、iPhone 自带的语音识别和拍照要用到。点一行到系统设置里遥应这一页去改。")
         }
         .listRowBackground(Palette.controlFill)
+    }
+
+    /// Read from the system each time (it can only be changed there); the others are read as the rows draw.
+    private func notificationStatus() async -> String {
+        switch await SystemPush().permission() {
+        case .allowed: return "已允许"
+        case .denied: return "未允许"
+        case .notAsked: return "还没问过"
+        }
     }
 
     private func row(_ name: String, _ value: String) -> some View {

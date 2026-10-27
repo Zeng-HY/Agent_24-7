@@ -630,7 +630,7 @@ fun MenuScope.AttachMenu(app: String, ready: Boolean, pickers: AttachPickers, vm
     MenuRow("拍照", pickers::camera, icon = TeleplyIcons.Camera, enabled = ready)
     MenuRow("手机照片", pickers::photo, icon = TeleplyIcons.Image, enabled = ready)
     MenuRow("手机文件", pickers::file, icon = TeleplyIcons.File, enabled = ready)
-    MenuRow("电脑上的文件", { vm.workspace.panel("remote") }, icon = TeleplyIcons.Window, enabled = ready)
+    MenuRow("从电脑选择文件", { vm.workspace.panel("remote") }, icon = TeleplyIcons.Window, enabled = ready)
     MenuRow("引用对话", { vm.workspace.panel("chat") }, icon = TeleplyIcons.Chat, enabled = ready)
     if (app != "deepseek") MenuRow("引用技能", { vm.workspace.panel("skill") }, icon = TeleplyIcons.Skill, enabled = ready)
 }

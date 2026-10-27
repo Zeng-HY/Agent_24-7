@@ -80,6 +80,14 @@ def public_messages(records,sid=None):
     for record in records:
         event=record.get('event',{});kind=event.get('type');data=event.get('data') or {}
         seq=event.get('seq',0);base={'time':timestamp(event.get('time',0)),'turn_id':str(data.get('turn',''))}
+        if kind=='deliverables/presented':
+            files=data.get('files');turn=data.get('turn');call=data.get('callId')
+            if type(turn) is not int or turn<1 or not isinstance(call,str) or not call or not isinstance(files,list):continue
+            valid=[{'path':v['path'],'description':v.get('description','')} for v in files if isinstance(v,dict) and isinstance(v.get('path'),str) and v['path'].strip() and isinstance(v.get('description',''),str)]
+            if valid:
+                rows[str(seq)]={**base,'id':str(seq),'order':seq,'role':'assistant','kind':'deliverables','presented_files':valid,
+                    'text':'成果文件：\n'+'\n'.join(v['path'].replace('\\','/').rsplit('/',1)[-1] for v in valid)}
+            continue
         if kind=='subagent/catalog':
             # A conversation opened a subagent (the desktop shows these as its own cards). The label is the one the
             # host shows; the child's status is filled in when the history is read (deepseek_control.conversation).

@@ -70,6 +70,9 @@ public final class DemoWorld: Sendable {
         // Archived and deleted conversations, as "app:id".
         var archived: [String] = []
         var deleted: Set<String> = []
+        // 遥应通知: the phones' tokens the demo service keeps, and whether it could send at all.
+        var pushTokens: Set<String> = []
+        var pushAvailable = true
         // Notifications (Bark) and voice.
         var bark = ""
         var recent: [JSONValue] = []

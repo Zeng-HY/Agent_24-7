@@ -120,6 +120,33 @@ public struct DemoTransport: RelayFileTransport {
             }
             return removed ? Self.json(["ok": true]) : Self.json([:], status: 404)
         default:
+            return method == .post && path.hasPrefix("/account/push/") ? push(String(path.dropFirst("/account/push/".count)), body) : Self.notFound
+        }
+    }
+
+    /// 遥应通知 on the demo service (relay_push.py): it keeps the phone's token and "sends" nothing.
+    func push(_ action: String, _ body: JSONValue) -> RelayResponse {
+        let token = body["token"].string().lowercased()
+        let (signedIn, available) = world.state.withLock { ($0.signedIn, $0.pushAvailable) }
+        guard signedIn else { return Self.json([:], status: 401) }
+        if action != "state", !available { return Self.json(["error": "服务器还没开通遥应通知", "code": "push_unavailable"], status: 409) }
+        switch action {
+        case "state":
+            let (registered, phones) = world.state.withLock { ($0.pushTokens.contains(token), $0.pushTokens.count) }
+            return Self.json(["available": .bool(available), "registered": .bool(registered), "phones": .number(Double(phones))])
+        case "register":
+            guard token.count >= 32, token.allSatisfy(\.isHexDigit) else { return Self.json(["error": "推送令牌无效"], status: 400) }
+            world.state.withLock { _ = $0.pushTokens.insert(token) }
+            return Self.json(["ok": true])
+        case "unregister":
+            world.state.withLock { _ = $0.pushTokens.remove(token) }
+            return Self.json(["ok": true])
+        case "test":
+            guard world.state.withLock({ $0.pushTokens.contains(token) }) else {
+                return Self.json(["error": "这部手机还没登记遥应通知，请重新打开"], status: 400)
+            }
+            return Self.json(["ok": true, "text": "本地示例：刚推了一条"])
+        default:
             return Self.notFound
         }
     }

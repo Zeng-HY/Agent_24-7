@@ -35,6 +35,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote, urlsplit
+from _ctypes import COMError  # what UI Automation raises through comtypes
 
 import win32con
 import win32gui
@@ -61,11 +62,22 @@ CLAUDE_SWITCH_WAIT = 25
 CLAUDE_PROMPT_WAIT = 8         # after the switch, until the session's message box is there
 # Keyboard or mouse used this recently: someone is at the PC, and gets the keyboard back after a send (_give_back_keyboard)
 KEYBOARD_IN_USE = 120
+# UIA_E_ELEMENTNOTAVAILABLE: an element Windows found a moment ago is gone by the time it is read, because Claude drew that
+# part of its window anew. Windows names the same number 事件无法调用任何订户.
+ELEMENT_GONE = -2147220991
 # After a sidebar click Claude logs the switch at once, but a very long session can take half a minute to draw: 37 s
 # for one with a 42 MB record (10-12). The whole send has to fit in the 60 s the service gives it.
 CLAUDE_SWITCH_TAKEN_WAIT = 45
 _FOCUS_LINE = re.compile(rb"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[info\] \[CCD\] LocalSessions\.setFocusedSession: sessionId=(\S+)")
 CLAUDE_NO_FOLDER = "No folder"  # a new session in no folder: the first item of the folder menu, then the folder button's name
+# What Claude's sidebar says of a session after its title (claude.ai's page code, 10-26: waiting on a permission, on a
+# question, running, using the browser, unread, idle, done); before Claude 2.1.299 (10-15) it came before the title.
+CLAUDE_ROW_STATES = ("Running", "Awaiting input", "Awaiting answer", "Using the browser", "Unread response", "Idle", "Done")
+_CLAUDE_ROW_STATE = re.compile("|".join(CLAUDE_ROW_STATES))
+# after '<title> ' in a row's name: a state, or the line under the title ('Started by Claude from <parent>', 'Started
+# from a suggestion in <project>'), with or without a state before it
+_CLAUDE_ROW_ENDING = re.compile(rf"(?:(?:{_CLAUDE_ROW_STATE.pattern}) )?Started (?:by|from) .+|{_CLAUDE_ROW_STATE.pattern}")
+_CLAUDE_ROW_ID = re.compile(r"_r_[0-9a-z]+_(local_[0-9a-fA-F-]{36})")  # React's id for a row's part, then the session id
 
 # buttons that always sit around Claude's message box; the phone lists only the others
 # Get more usage: the usage-limit notice above the box ("Approaching weekly usage limit · Resets … · Get more usage ·
@@ -81,12 +93,22 @@ CLAUDE_FIXED_PREFIXES = ("Model:", "Effort:", "Usage:", "Usage,", "Permission", 
                          "Folder:", "Claude thinks longer with Max effort", "Scroll ", "Jump to", "Remove ")
 OPTION_TYPES = ("ButtonControl", "RadioButtonControl", "CheckBoxControl", "ListItemControl", "MenuItemControl",
                 "HyperlinkControl", "TabItemControl", "EditControl", "ComboBoxControl")
+# Claude's new window asks a question (AskUserQuestion) in a card of this class among the messages, not in the dock (10-26)
+CLAUDE_QUESTION_CARD = "epitaxy-approval-card"
 
 
 def in_notice(kinds: list[str]) -> bool:
     """Whether a control whose ancestors in the dock are these control types sits in a notice bar. Claude's notices
     (the usage limit, 10-16) are status bars; a question (AskUserQuestion, recorded 10-11) is a group and never is."""
     return "StatusBarControl" in kinds
+
+
+def question_card(ctrl) -> bool:
+    """Whether this is one of the question cards of Claude's new window rather than the dock."""
+    try:
+        return CLAUDE_QUESTION_CARD in (ctrl.ClassName or "")
+    except Exception:
+        return False
 
 
 class ChatError(Exception):
@@ -998,7 +1020,8 @@ def claude_delivery_stage(path,offset,text):
         if steered and want and norm(re.sub(r'^(\[图片\]\s*)+','',steered['text']))==want:return 'received'  # the mark is ours, not sent
         if rec.get('type')=='user':
             actual=_join_text((rec.get('message') or {}).get('content'))
-            if want and want in (norm(actual),norm(claude_command(actual))):return 'received'
+            # 10-26: Claude writes its own notes (<system-reminder>Linked sessions now …) into the user's record
+            if want and want in (norm(actual),norm(clean_claude_user(actual)),norm(claude_command(actual))):return 'received'
         elif rec.get('type')=='queue-operation' and rec.get('operation')=='enqueue':
             if want and norm(_join_text(rec.get('content')))==want:stage='queued'
     return stage
@@ -1207,11 +1230,27 @@ class Desktop:
         """Everything under scope of this kind ('EditControl', 'ButtonControl'), with exactly this name if one is given:
         one question that Windows answers itself. On 10-12 it found Claude's message box in 0.02 s, where walking the
         page element by element took 0.7 s (1 200 elements); one send walked it six times or more, so sending took
-        3.5-10 s."""
+        3.5-10 s.
+        An element in that answer that is gone by the time it is read (Claude drew that part anew) is left out: it is no
+        longer on the page. On 10-26 one in 444 reads of the sidebar's buttons, taken while sessions ran, failed whole so;
+        in a send, that would end the send before any row is pressed or the link tried (_claude_open catches only
+        ChatError). Any other COM error still goes to the caller, and so does a scope that is itself gone."""
         uia,auto=self.uia,self.auto
         condition=uia.CreatePropertyCondition(auto.PropertyId.ControlTypeProperty,getattr(auto.ControlType,kind))
         if name is not None:condition=uia.CreateAndCondition(condition,uia.CreatePropertyCondition(auto.PropertyId.NameProperty,name))
         found=scope.Element.FindAll(4,condition)  # 4: TreeScope_Descendants
+        controls=[]
+        for i in range(found.Length):
+            try:controls.append(auto.Control.CreateControlFromElement(found.GetElement(i)))
+            except COMError as exc:
+                if exc.hresult!=ELEMENT_GONE:raise
+        return controls
+
+    def _find_class(self,scope,part):
+        """Everything under scope whose class holds part (Chromium gives an element all its classes in one string), from
+        one question that Windows answers itself, as _find."""
+        uia,auto=self.uia,self.auto
+        found=scope.Element.FindAll(4,uia.CreatePropertyConditionEx(auto.PropertyId.ClassNameProperty,part,2))  # 2: within the name
         return [auto.Control.CreateControlFromElement(found.GetElement(i)) for i in range(found.Length)]
 
     def _claude_verified_prompt(self,root,conv_id):
@@ -1356,31 +1395,108 @@ class Desktop:
             return ""
 
     def _claude_sidebar_buttons(self, root, item, titles=()) -> list:
-        """The buttons in Claude's sidebar that may open this session, in page order. A click there switches inside
+        """The buttons in Claude's sidebar that may open this session, best first. A click there switches inside
         the running app at once, while a claude:// link first starts a second Claude.exe (8-15 s on a busy morning,
-        10-12). Since Claude 2.1.299 (10-15) a session's row is named by its title alone, a session Claude started
-        '<title> Started by Claude from <parent>'; before, '<state> <title>' ('Idle …', 'Running …'). Until 10-20 only
-        the old names were looked for, so every switch fell back to the link, and 2.1.299 mostly ignores the link:
-        sending to a session not on screen failed after 25 s. Two sessions can share a title and one session can
-        show twice, so the caller presses these in turn and checks the session address after each; a suggested
-        task card names a button by its title too, and that one is left out."""
+        10-12), and since Claude 2.1.299 (10-15) Claude mostly ignores the link: with no row found, sending to a
+        session not on screen failed after 25 s (10-20).
+        A row is named by the session's title, alone or followed by what Claude says of it; in Claude's new window
+        (10-26) '<title> Running', '<title> Awaiting answer', '<title> Started by Claude from <parent>' or '<title>
+        Started from a suggestion in <project>'; before 10-15, '<state> <title>'. Until 10-26 only 'Started by' was
+        looked for after the title, so a running session, or one waiting on an answer from the phone, went to the
+        link. A name with any other ending (an error, say) counts when the row's first line is the title itself.
+        A row that has nested sessions carries its session id: that row comes first, and a row of the same title that
+        carries another session's id is left out. Two sessions can still share a title and one session can show
+        twice, so the caller presses these in turn and checks the session address after each. A suggested task card
+        names a button by its title too, and so do buttons inside a row ('More options for …', 'Hide nested
+        sessions …'): those are left out."""
         wanted = {t.strip() for t in [item.get("title") or "", *titles] if t and t.strip()}
+        conv_id = item.get("id") or ""
+        found = self._claude_id_rows(root, conv_id)
+        by_id = bool(found)
         if not wanted:
-            return []
-        found = []
+            return found
         for ctrl in self._find(root, "ButtonControl"):
             try:
                 name = (ctrl.Name or "").strip()
             except Exception:
                 continue
-            for title in wanted:
-                prefix = name[: -len(title) - 1] if name.endswith(" " + title) else ""
-                if (name == title or name.startswith(title + " Started by ")
-                        or prefix and prefix != "More options for" and re.fullmatch(r"[A-Za-z][A-Za-z ]{2,28}", prefix)):
-                    if not self._in_task_card(ctrl):
-                        found.append(ctrl)
-                    break
+            fit = self._claude_row_fit(name, wanted)
+            if not fit or self._in_task_card(ctrl):
+                continue
+            carried, first_line = self._claude_row_parts(ctrl)
+            if carried and (carried != conv_id or by_id):
+                continue  # another session's row, or this one's, already first
+            if fit == "first line" and first_line not in wanted:
+                continue
+            found.append(ctrl)
         return found
+
+    @staticmethod
+    def _claude_row_fit(name: str, wanted) -> str:
+        """'name' when a row of one of these titles is named so; 'first line' when the name is a title and something
+        else ('<title> <error>', or another session's '<title> and more'), a row of that title only if its first line
+        is the title; '' otherwise."""
+        fit = ""
+        for title in wanted:
+            if name == title:
+                return "name"
+            if name.startswith(title + " "):
+                if _CLAUDE_ROW_ENDING.fullmatch(name[len(title) + 1:]):
+                    return "name"
+                fit = "first line"
+            elif name.endswith(" " + title) and _CLAUDE_ROW_STATE.fullmatch(name[: -len(title) - 1]):
+                return "name"
+        return fit
+
+    def _claude_row_parts(self, ctrl) -> tuple[str, str]:
+        """The session id a sidebar row carries ('' for most rows) and its first line, from one question to Windows
+        (1-7 ms on 10-26). Neither the group that holds the id nor the row's lines are control elements, so _find does
+        not see them; the raw view does."""
+        try:
+            uia, auto = self.uia, self.auto
+            request = uia.CreateCacheRequest()
+            request.TreeFilter = uia.RawViewCondition
+            props = auto.PropertyId
+            for prop in (props.AutomationIdProperty, props.ControlTypeProperty, props.NameProperty):
+                request.AddProperty(prop)
+            found = ctrl.Element.FindAllBuildCache(4, uia.RawViewCondition, request)  # 4: TreeScope_Descendants
+            carried = first_line = ""
+            for i in range(found.Length):
+                element = found.GetElement(i)
+                m = _CLAUDE_ROW_ID.fullmatch(element.CachedAutomationId or "")
+                carried = carried or (m[1] if m else "")
+                if not first_line and element.CachedControlType == auto.ControlType.TextControl:
+                    first_line = (element.CachedName or "").strip()
+            return carried, first_line
+        except Exception:
+            return "", ""
+
+    def _claude_id_rows(self, root, conv_id: str) -> list:
+        """The sidebar rows that carry this session's id. In Claude's new window (10-26) a row that has nested sessions
+        holds a group named by React's id for it and then the session's ('_r_82_local_…'), and the row is that group's
+        parent. One question to Windows (0.05 s on 10-26), in the raw view: the group is not a control element."""
+        if not conv_id.startswith("local_"):
+            return []
+        try:
+            uia, auto = self.uia, self.auto
+            request = uia.CreateCacheRequest()
+            request.TreeFilter = uia.RawViewCondition
+            request.AddProperty(auto.PropertyId.AutomationIdProperty)
+            condition = uia.CreatePropertyConditionEx(auto.PropertyId.AutomationIdProperty, conv_id, 2)  # 2: substring
+            found = root.Element.FindAllBuildCache(4, condition, request)
+            rows = []
+            for i in range(found.Length):
+                group = found.GetElement(i)
+                m = _CLAUDE_ROW_ID.fullmatch(group.CachedAutomationId or "")
+                if not m or m[1] != conv_id:
+                    continue  # the search palette's items hold the id too ('command-palette-item-local_…')
+                parent = uia.RawViewWalker.GetParentElement(group)
+                row = auto.Control.CreateControlFromElement(parent) if parent else None
+                if row is not None and row.ControlTypeName == "ButtonControl":
+                    rows.append(row)
+            return rows
+        except Exception:
+            return []
 
     @staticmethod
     def _in_task_card(ctrl) -> bool:
@@ -1471,6 +1587,20 @@ class Desktop:
         except Exception:pass
         dock = root.GroupControl(searchDepth=45, Compare=lambda c, d: "approval-dock" in (c.ClassName or ""))
         return dock if dock.Exists(1, 0.1) else None
+
+    def _claude_ask(self, root, doc=None):
+        """Where Claude asks something: its newest question card, or else the dock. In Claude's new window (10-26) a
+        question (AskUserQuestion) is a card among the messages (CLAUDE_QUESTION_CARD) and the dock holds only the message
+        box; read in the dock alone, the phone showed no question at all, with the conversation on screen all along
+        (10-26 22:00-22:17), and none could be answered from it. A card with no button left to press is passed over.
+        doc: the conversation, to look in it alone (one question to Windows) rather than the whole window."""
+        try:
+            for card in reversed(self._find_class(doc if doc is not None else root, CLAUDE_QUESTION_CARD)):
+                if any(button.IsEnabled for button in self._find(card, "ButtonControl")):
+                    return card
+        except Exception:
+            pass
+        return self._claude_dock(root)
 
     # -- actions (run on the worker thread)
 
@@ -1881,13 +2011,17 @@ class Desktop:
         shown = self._claude_title(root)
         if not self._same_title(shown, titles):
             return {"on_screen": False, "shown": shown, "options": [], "running": None}
-        dock = self._claude_dock(root)
-        if dock is None:
+        box = self._claude_ask(root)  # a question card of Claude's new window (10-26), or else the dock
+        if box is None:
             return {"on_screen": True, "shown": shown, "options": [], "running": None}
+        card = question_card(box)
         auto = self.auto
         options, counts, kinds = [], {}, []
         running = False
-        for ctrl, depth in auto.WalkControl(dock, maxDepth=30):
+        if card:  # Stop stays in the dock, below the card
+            dock = self._claude_dock(root)
+            running = dock is not None and bool(self._find(dock, "ButtonControl", "Stop"))
+        for ctrl, depth in auto.WalkControl(box, maxDepth=30):
             ctype = ctrl.ControlTypeName
             del kinds[max(depth - 1, 0):]
             kinds.append(ctype)
@@ -1902,7 +2036,7 @@ class Desktop:
             elif not name or name in CLAUDE_FIXED_BUTTONS or name.startswith(CLAUDE_FIXED_PREFIXES):
                 continue
             try:
-                if ctrl.IsOffscreen:
+                if ctrl.IsOffscreen and not card:  # a card scrolled out of view still asks
                     continue
                 r = ctrl.BoundingRectangle
                 if r.width() <= 2 or r.height() <= 2:
@@ -1932,15 +2066,15 @@ class Desktop:
         hwnd, root = self._claude_root()
         if not self._same_title(self._claude_title(root), titles):
             hwnd, root = self._claude_open(item, titles)
-        dock = self._claude_dock(root)
-        if dock is None:
+        box = self._claude_ask(root)  # where claude_options read the option
+        if box is None:
             raise ChatError("Claude 的输入区没找到")
         ctype = str(option.get("type", "")) + "Control"
         name = str(option.get("name", ""))
         nth = int(option.get("nth", 0))
         seen = 0
         target = None
-        for ctrl, _depth in self.auto.WalkControl(dock, maxDepth=30):
+        for ctrl, _depth in self.auto.WalkControl(box, maxDepth=30):
             if ctrl.ControlTypeName == ctype and (ctrl.Name or "").strip() == name:
                 if seen == nth:
                     target = ctrl

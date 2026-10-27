@@ -56,6 +56,12 @@ class Accounts:
                 CREATE TABLE IF NOT EXISTS usage(device TEXT, day TEXT, requests INTEGER DEFAULT 0,
                     uploads INTEGER DEFAULT 0, downloads INTEGER DEFAULT 0,
                     PRIMARY KEY(device,day));
+                -- the phones an account's notifications go to, and the events already sent (relay_push.py)
+                CREATE TABLE IF NOT EXISTS push_phones(id TEXT PRIMARY KEY, owner TEXT, platform TEXT,
+                    environment TEXT, token TEXT UNIQUE, label TEXT, version TEXT, created REAL, refreshed REAL,
+                    result TEXT DEFAULT '');
+                CREATE INDEX IF NOT EXISTS push_phones_owner ON push_phones(owner);
+                CREATE TABLE IF NOT EXISTS push_events(id TEXT PRIMARY KEY, time REAL);
             ''')
 
     @contextmanager
@@ -163,6 +169,7 @@ class Accounts:
                 raise ValueError('密码已变化，请重新登录')
             db.execute('DELETE FROM sessions WHERE owner=?', (owner,))
             db.execute('DELETE FROM grants WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_phones WHERE owner=?', (owner,))
 
     def reset(self, code, password):
         encoded = password_hash(password)
@@ -172,6 +179,7 @@ class Accounts:
             db.execute('UPDATE users SET password=? WHERE id=?', (encoded, owner))
             db.execute('DELETE FROM sessions WHERE owner=?', (owner,))
             db.execute('DELETE FROM grants WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_phones WHERE owner=?', (owner,))
 
     def bind(self, code, label, expected_name):
         if not label.strip() or len(label) > 80:

@@ -39,6 +39,29 @@ sudo python3 /home/admin/agent-relay-027/configure-mail.py
 
 填发信邮箱（QQ、163、126、Gmail、Outlook 等会自动填好服务器）和它的 SMTP 授权码，再把测试邮件里的 6 位代码输回去，注册和找回密码就开了。授权码只在服务器上输入，不要发到聊天、命令参数或 GitHub。注册和找回密码的邮件里有 6 位验证码，在发起的那个页面（手机或电脑绑定窗口）里直接输入即可，邮件里的链接也能用。
 
+## 开启遥应通知（iPhone 推送）
+
+中转替 iPhone 上的遥应向苹果发通知（`relay_push.py`）。电脑只告诉中转"哪个应用、哪个对话、什么事"，中转写成"Claude · 我的电脑：有个对话好了"交给苹果，对话内容不出电脑。没配置密钥时这一块不工作，别的照常。
+
+1. 先测服务器连不连得上苹果（只读）：
+
+```bash
+curl -sS -m 10 --http2 -o /dev/null -w '%{http_code} %{http_version}\n' https://api.push.apple.com/3/device/test
+```
+
+打出 `405 2` 这样的三位数加 2 就是通的；`000` 加报错就是不通。
+
+2. 照下面"更新服务器"上传新包并运行 `update-027.sh`。它先装新的 Python 库（httpx、h2、cryptography），装不上就什么都不换。
+3. 在苹果开发者网站建好推送密钥（环境 Production，类型 Topic Specific，勾 `com.pocketagentdesk.teleply`），把下载的 `.p8` 文件上传到 `/home/admin/`，然后：
+
+```bash
+sudo /opt/agent-relay-027/.venv/bin/python /home/admin/agent-relay-027-new/configure-push.py
+```
+
+按提示填 `.p8` 的路径和 Key ID（Team ID 默认 `CPSVJ7235A`）。脚本先问苹果一次，苹果收下了才保存：`/etc/agent-relay/push.env`（root 0600）和 systemd 附加设置 `/etc/systemd/system/agent-relay-027.service.d/push.conf`，再重启服务。之后删掉上传的 `.p8` 文件。密钥只在服务器上输入，不发到聊天、命令参数或 GitHub；日志里的手机令牌只有哈希的前 8 位。
+
+关掉：`sudo rm /etc/systemd/system/agent-relay-027.service.d/push.conf`，再 `sudo systemctl daemon-reload` 和 `sudo systemctl restart agent-relay-027.service`。手机登记的令牌留在数据库里，不影响别的功能。
+
 ## 更新服务器
 
 在电脑的源码目录运行 `python deploy/relay/pack-027.py`，把生成的 `dist/agent-relay-0.27.0-dev.zip` 上传到 `/home/admin/`，然后：
