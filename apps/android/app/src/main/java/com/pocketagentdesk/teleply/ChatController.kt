@@ -218,7 +218,9 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         }
         val extra=try { if(action=="send" && !planned) extras() else JSONObject() } catch(e:Exception) { update(k) { it.copy(error=e.message) };return }
         val hasExtras=extra.optJSONArray("attachments")?.length()?.let { it>0 }==true || extra.optJSONArray("references")?.length()?.let { it>0 }==true
-        if(!foreground || !s.ready || !s.control.available || !inFlight.add(k)) return
+        // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
+        val reachable=s.control.available || action=="send" && !planned && !promote && sendsWhileAway(k.app)
+        if(!foreground || !s.ready || !reachable || !inFlight.add(k)) return
         if(action=="send" && !planned && ((s.draft.isBlank() && !hasExtras) || s.draft.trim().length>20000 || queue && !s.control.queueAvailable) || action=="stop" && !s.control.running || promote && !s.control.running || planned && (k.app!="codex" || s.control.running)) { inFlight.remove(k);return }
         val rid=UUID.randomUUID().toString()
         val body=JSONObject().put("id",k.chat)

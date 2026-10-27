@@ -18,7 +18,11 @@ data class Message(val id: String, val role: String, val text: String, val trunc
 /** [meta] carries page-level fields as JSON, e.g. a conversation's title, folder, status and runtime. */
 data class Page<T>(val items: List<T>, val cursor: String? = null, val hasMore: Boolean = false, val hasNewer: Boolean = false, val reset: Boolean = false, val meta: String = "{}")
 fun JSONObject.string(key: String) = if (isNull(key)) "" else optString(key, "")
-fun <T> JSONObject.rows(key: String, parse: (JSONObject) -> T): List<T> = optJSONArray(key)?.let { a -> (0 until a.length()).map { parse(a.getJSONObject(it)) } } ?: emptyList()
+/**
+ * A list's objects. An entry that is not one (a null the computer wrote) is left out: taken as one, it failed the whole
+ * read, or ended the app while a page drew it (the iPhone's null trap, 10-27).
+ */
+fun <T> JSONObject.rows(key: String, parse: (JSONObject) -> T): List<T> = optJSONArray(key)?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map(parse) } ?: emptyList()
 fun parseChat(j: JSONObject): Chat = Chat(j.getString("id"), j.string("title").ifBlank { "未命名对话" }, j.string("folder"), j.string("preview"), j.string("status"), j.string("app"), j.optLong("updated"),
     j.optBoolean("group"), j.string("kind"), j.string("parent"), j.string("parent_title"), j.rows("children", ::parseChat), j.optInt("child_count"), j.optInt("child_running"))
 /**

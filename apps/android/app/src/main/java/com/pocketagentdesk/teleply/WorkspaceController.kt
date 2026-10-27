@@ -476,13 +476,20 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             catch(e:Exception) { update(k) { it.copy(cards=it.cards+(card to "error:"+(e.message ?: "没有点上，请在电脑上处理"))) } }
         }
     }
-    /** 电脑上打开: asks the computer to show this conversation in its desktop app. Not a message, nothing is sent. */
+    /**
+     * 电脑上打开: asks the computer to show this conversation in its desktop app. Not a message, nothing is sent. The
+     * state is read again at once, so the chips and the send button follow (web: openOnPC, then refresh).
+     */
     fun openOnComputer() {
         val k=key ?: return;val service=api ?: return
         if(k.chat=="@new" || state.value.busy) return
         update(k) { it.copy(busy=true,error=null,result="") }
         launchSafe {
-            try { val r=service.detail(k.device,"chat/open",body=JSONObject().put("app",k.app).put("id",k.chat));update(k) { it.copy(result=r.string("text").ifBlank { "已在电脑上打开" }) } }
+            try {
+                val r=service.detail(k.device,"chat/open",body=JSONObject().put("app",k.app).put("id",k.chat))
+                update(k) { it.copy(result=r.string("text").ifBlank { "已在电脑上打开" }) }
+                if(valid(k)) changed()
+            }
             catch(e:Exception) { update(k) { it.copy(error=e.message ?: "电脑上没有打开，请稍后再试") } }
             finally { update(k) { it.copy(busy=false) } }
         }

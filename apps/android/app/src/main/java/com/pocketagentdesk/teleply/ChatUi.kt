@@ -628,7 +628,8 @@ private fun CodexCards(raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, 
         QuestionCard {
             CardTitle("Codex 想问你")
             questions.forEach { q ->
-                val id = q.getString("id")
+                // Not getString: a question without an id would end the app while the card is drawn.
+                val id = q.string("id")
                 val options = q.rows("options") { it }
                 val selected = answers.strings(id)
                 Text(q.string("question"), style = MaterialTheme.typography.card, color = p.text, fontWeight = FontWeight.Medium)
@@ -660,7 +661,7 @@ private fun CodexCards(raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, 
                     editing = false
                 },
                 style = PillStyle.Primary,
-                enabled = !ws.busy && questions.isNotEmpty() && questions.all { answers.strings(it.getString("id")).isNotEmpty() },
+                enabled = !ws.busy && questions.isNotEmpty() && questions.all { answers.strings(it.string("id")).isNotEmpty() },
                 modifier = Modifier.fillMaxWidth(),
             )
         }

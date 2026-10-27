@@ -217,11 +217,12 @@ private fun QueueTray(app: String, chat: ComposerState, raw: JSONObject, vm: Rea
 }
 
 /**
- * The status line at the top of the input card (spec 0.4 §4.3): an error, a model switch result, a voice note or the
- * last receipt (B03). Takes no room when there is nothing to say. A source action whose result is unknown offers 核对.
+ * The status line at the top of the input card (spec 0.4 §4.3): an error, a model switch result, a voice note, why the
+ * computer cannot take the next message ([away], with 电脑上打开) or the last receipt (B03). Takes no room when there is
+ * nothing to say. A source action whose result is unknown offers 核对.
  */
 @Composable
-private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObject, local: String, vm: ReaderViewModel, pill: VoicePill? = null) {
+private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObject, local: String, vm: ReaderViewModel, away: String?, pill: VoicePill? = null) {
     val p = LocalTeleply.current
     if (pill != null) {
         // Voice says what it is doing, with the one thing that can be done about it (web .voice-pill).
@@ -239,20 +240,25 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
         local.isNotBlank() -> local to p.muted
         ws.result.isNotBlank() && ws.pane == null -> ws.result to p.muted
         unknown -> "上次操作的结果还没确认" to p.muted
+        // The computer's words on why the next message cannot go, in place of an old receipt (10-27).
+        away != null -> away to p.muted
         receipt != null && receipt != "送达状态待确认" -> receipt to p.muted
         else -> null to p.muted
     }
     if (text == null && !unknown) return
+    val opens = !unknown && away != null && text == away
     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
             text.orEmpty(),
             style = MaterialTheme.typography.note,
             color = color,
-            maxLines = 2,
+            // The computer's reason whole: it says what to do.
+            maxLines = if (opens) 3 else 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).padding(vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
         )
         if (unknown) PillButton("核对上次操作", vm.workspace::checkAction, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy)
+        else if (opens) PillButton("电脑上打开", vm.workspace::openOnComputer, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy)
     }
 }
 
@@ -291,7 +297,9 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     LaunchedEffect(chat.focus) { if (chat.focus > 0) runCatching { requester.requestFocus(); keyboard?.show() } }
     val lift by animateFloatAsState(if (focused) 1f else 0f, label = "composer-focus")
     val queue = chat.control.running && chat.control.queueAvailable
-    val canSend = chat.ready && chat.control.available && !chat.submitting && input.composition == null && (chat.draft.isNotBlank() || hasExtras) && chat.draft.trim().length <= 20000
+    // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
+    val reachable = chat.control.available || sendsWhileAway(s.app)
+    val canSend = chat.ready && reachable && !chat.submitting && input.composition == null && (chat.draft.isNotBlank() || hasExtras) && chat.draft.trim().length <= 20000
     val send = { if (canSend) controller.send(queue) }
     val narrow = LocalConfiguration.current.screenWidthDp < 370
     val shape = TeleplyShape.Composer
@@ -305,7 +313,7 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     }
     val maxField = (LocalConfiguration.current.screenHeightDp * 0.3f).dp
     Column(Modifier.fillMaxWidth().then(surface).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
-        StatusLine(chat, ws, saved, note, vm, voice.pill)
+        StatusLine(chat, ws, saved, note, vm, awayReason(s.app, raw), voice.pill)
         if (!voice.active) Attachments(saved, vm)
         // While recording, the card shows what is heard in place of the text box (web: the box becomes the recorder).
         if (voice.active) VoiceLive(voice, Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
@@ -335,14 +343,20 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
                 menus?.show(MenuRequest(plus.bounds, MenuPlacement.BelowStart, "添加附件或引用", width = 240.dp) { AttachMenu(s.app, ws.ready, pickers, vm) })
             }, modifier = Modifier.menuAnchor(plus), style = IconButtonStyle.Plain, tint = p.muted, enabled = ws.ready)
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                val (model, mode, plan) = chipLabels(s.app, raw, saved)
-                val modeName = if (s.app == "deepseek") "权限" else "模式"
-                ComposerChip(model, {
-                    menus?.show(MenuRequest(modelAnchor.bounds, MenuPlacement.BelowStart, "模型", width = 300.dp, scrolls = false, maxHeight = 480.dp) { ModelMenu(vm) })
-                }, narrow, description = "模型：$model", modifier = Modifier.menuAnchor(modelAnchor))
-                ComposerChip(mode, {
-                    menus?.show(MenuRequest(modeAnchor.bounds, MenuPlacement.BelowStart, modeName, width = 280.dp) { ModeMenu(vm) { confirm = it } })
-                }, narrow, selected = plan, description = "$modeName：$mode", modifier = Modifier.menuAnchor(modeAnchor))
+                if (chipAway(s.app, raw)) {
+                    // Not open on the computer: the chip opens it there, as its menus would act on another conversation
+                    // (web codex-ui.js, claude-ui.js "away"); the mode chip waits until then.
+                    ComposerChip("电脑上打开", vm.workspace::openOnComputer, narrow, description = "电脑上打开这个对话", away = true, enabled = !ws.busy)
+                } else {
+                    val (model, mode, plan) = chipLabels(s.app, raw, saved)
+                    val modeName = if (s.app == "deepseek") "权限" else "模式"
+                    ComposerChip(model, {
+                        menus?.show(MenuRequest(modelAnchor.bounds, MenuPlacement.BelowStart, "模型", width = 300.dp, scrolls = false, maxHeight = 480.dp) { ModelMenu(vm) })
+                    }, narrow, description = "模型：$model", modifier = Modifier.menuAnchor(modelAnchor))
+                    ComposerChip(mode, {
+                        menus?.show(MenuRequest(modeAnchor.bounds, MenuPlacement.BelowStart, modeName, width = 280.dp) { ModeMenu(vm) { confirm = it } })
+                    }, narrow, selected = plan, description = "$modeName：$mode", modifier = Modifier.menuAnchor(modeAnchor))
+                }
             }
             }
             MicButton(vm, voice, s, { input.selection.min to input.selection.max }) { note = it }
@@ -365,32 +379,47 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     }
 }
 
-/** Model and mode chips (web .composer-chip): transparent capsule, 12sp/500 (11sp under 370dp), a small arrow. */
+/**
+ * Model and mode chips (web .composer-chip): transparent capsule, 12sp/500 (11sp under 370dp), a small arrow. An [away]
+ * chip (电脑上打开, web .is-away) takes the accent colour and no arrow: it opens no menu.
+ */
 @Composable
-private fun ComposerChip(text: String, onClick: () -> Unit, narrow: Boolean, selected: Boolean = false, description: String, modifier: Modifier = Modifier) {
+private fun ComposerChip(text: String, onClick: () -> Unit, narrow: Boolean, selected: Boolean = false, description: String, modifier: Modifier = Modifier, away: Boolean = false, enabled: Boolean = true) {
     val p = LocalTeleply.current
+    val tint = (if (selected) p.onSelected else if (away) p.accent else p.muted).copy(alpha = if (enabled) 1f else 0.45f)
     Row(
         modifier.minimumInteractiveComponentSize().heightIn(min = 32.dp).widthIn(max = 150.dp).clip(CircleShape)
             .background(if (selected) p.selected else Color.Transparent)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = description; if (selected) stateDescription = "计划模式" }
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, style = MaterialTheme.typography.labelMedium.copy(fontSize = if (narrow) 11.sp else 12.sp), color = if (selected) p.onSelected else p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Icon(TeleplyIcons.ChevronDown, contentDescription = null, tint = if (selected) p.onSelected else p.muted, modifier = Modifier.padding(start = 2.dp).size(12.dp))
+        Text(text, style = MaterialTheme.typography.labelMedium.copy(fontSize = if (narrow) 11.sp else 12.sp), color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (!away) Icon(TeleplyIcons.ChevronDown, contentDescription = null, tint = tint, modifier = Modifier.padding(start = 2.dp).size(12.dp))
     }
 }
 
-/** What the chips say, per source (spec 4.3): Codex model·effort and 普通执行/计划; Claude its labels; DeepSeek model and permission. */
+/** Claude's recorded modes by the names its desktop gives them (web claude-ui.js modeShown). */
+private val ClaudeModes = mapOf("auto" to "Auto", "default" to "Manual", "acceptEdits" to "Accept edits")
+
+/**
+ * What the chips say, per source (spec 4.3): Codex model·effort and 普通执行/计划; DeepSeek model and permission.
+ * Claude as the web paints it (claude-ui.js paint): the desktop's model label, else the name kept for the recorded
+ * model, else its id; the recorded effort, else the desktop's; the desktop's mode, else the recorded one. So a
+ * conversation the computer is not showing reads "Opus 5.5 · 高" and "Auto", not its bare id and 默认 (10-27).
+ */
 fun chipLabels(app: String, raw: JSONObject, saved: JSONObject): Triple<String, String, Boolean> {
     val settings = raw.optJSONObject("settings") ?: JSONObject()
     return when (app) {
         "claude" -> {
-            val model = raw.string("model_label").ifBlank { settings.string("model").ifBlank { "模型" } }
-            val effort = raw.string("effort_label")
-            val mode = raw.string("mode_label").ifBlank { "默认" }
-            Triple(if (effort.isNotBlank()) "$model · $effort" else model, mode, settings.string("mode") == "plan")
+            val name = listOf(raw.string("model_label"), raw.string("recorded_label"), settings.string("model")).firstOrNull { it.isNotBlank() }
+            val recorded = settings.string("effort")
+            val effort = if (recorded.isNotBlank()) effortName(recorded) else raw.string("effort_label")
+            val shown = raw.string("mode_label")
+            val plan = if (shown.isNotBlank()) shown.startsWith("plan", ignoreCase = true) else settings.string("mode") == "plan"
+            val mode = if (plan) "计划模式" else shown.ifBlank { ClaudeModes[settings.string("mode")] ?: "普通执行" }
+            Triple(if (name == null) "模型" else "$name · ${effort.ifBlank { "默认" }}", mode, plan)
         }
         "deepseek" -> {
             val model = settings.string("model").ifBlank { "模型" }
@@ -406,6 +435,65 @@ fun chipLabels(app: String, raw: JSONObject, saved: JSONObject): Triple<String, 
             Triple(if (effort.isNotBlank()) "$name · $effort" else name, if (plan) "计划" else "普通执行", plan)
         }
     }
+}
+
+/** The computer read the conversation and it is not the one open there (its state says `available` false). */
+private fun notOnComputer(raw: JSONObject) = raw.has("available") && !raw.optBoolean("available")
+
+/**
+ * The model chip says 电脑上打开 and opens the conversation there instead of its menu (web codex-ui.js and
+ * claude-ui.js "away"): Codex not open on the computer; Claude not shown there with nothing recorded, since a pick in a
+ * recorded Claude conversation switches the computer to it by itself.
+ */
+fun chipAway(app: String, raw: JSONObject): Boolean {
+    if (!notOnComputer(raw)) return false
+    return when (app) {
+        "codex" -> true
+        "claude" -> (raw.optJSONObject("settings") ?: JSONObject()).string("model").isBlank()
+        else -> false
+    }
+}
+
+/**
+ * Why the next message cannot go now, in the computer's own words, for the status line: otherwise the send button
+ * stays grey with no word on why (10-27). Claude's messages go all the same (the computer opens the conversation
+ * itself, as on the web), so only its away chip says why there.
+ */
+fun awayReason(app: String, raw: JSONObject): String? {
+    if (!notOnComputer(raw) || app == "claude" && !chipAway(app, raw)) return null
+    return raw.string("reason").ifBlank { if (app == "deepseek") null else "电脑上没有打开这个对话；点「电脑上打开」后再发" }
+}
+
+/**
+ * Whether a message can go while the computer shows another conversation: Claude's can (web sendConv; the computer
+ * opens it, Windows 0.27.0-dev.19 and later), the others' cannot.
+ */
+fun sendsWhileAway(app: String) = app == "claude"
+
+/**
+ * Claude's effort choices in the model menu. The desktop shows them as named levels (Low, Medium, High…) or as one
+ * slider: its steps are listed, at most 20, by the names the computer learnt for them, else the current one's label or
+ * 第 N 档 (web renderCatalog). A slider without a step above 0 lists none: on the iPhone a list of named levels taken for
+ * a slider with a step of 0 made the app quit (0.5.0, 10-27). [steps] are (value, label); [slider] is the effort a
+ * picked step is set on, null for named levels.
+ */
+internal class ClaudeEfforts(val steps: List<Pair<String, String>>, val selected: String?, val slider: JSONObject?)
+
+internal fun claudeEfforts(efforts: List<JSONObject>): ClaudeEfforts {
+    val slider = efforts.singleOrNull()?.takeIf { it.optJSONObject("range") != null }
+        ?: return ClaudeEfforts(efforts.map { it.string("name") }.filter { it.isNotBlank() }.map { it to it }, efforts.find { it.optBoolean("selected") }?.string("name"), null)
+    val range = slider.getJSONObject("range")
+    val min = range.optDouble("min", 0.0)
+    val max = range.optDouble("max", Double.NaN)
+    val step = range.optDouble("step", 0.0)
+    // A borrowed list has no current step (value null).
+    val value = (range.opt("value") as? Number)?.toDouble()
+    val values = if (step > 0 && step.isFinite() && min.isFinite()) (0 until 20).map { min + it * step }.filter { it <= max } else emptyList()
+    val steps = values.mapIndexed { i, v ->
+        val learnt = range.optJSONObject("labels")?.string(v.toInt().toString()).orEmpty()
+        v.toString() to learnt.ifBlank { range.string("label").takeIf { v == value && it.isNotBlank() } ?: "第 ${i + 1} 档" }
+    }
+    return ClaudeEfforts(steps, value?.toString(), slider)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -490,18 +578,10 @@ private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
                 }
                 MenuRow("刷新电脑上的列表", { c.loadChoices(fresh = true, model = current.string("model")) }, detail = "会在电脑上打开 Claude 的模型菜单读一遍", enabled = idle && !refreshing, dismissOnClick = false)
             }
-            val efforts = catalog.rows("effort") { it }
-            // The desktop shows effort either as named steps or as one slider with steps.
-            val range = efforts.singleOrNull()?.optJSONObject("range")?.takeIf { it.optDouble("step", 0.0) > 0 }
-            val steps = if (range != null) {
-                val min = range.optDouble("min")
-                val step = range.getDouble("step")
-                (0 until 20).map { min + it * step }.filter { it <= range.optDouble("max") }.map { v ->
-                    v.toString() to range.optJSONObject("labels")?.string(v.toInt().toString()).orEmpty().ifBlank { if (v % 1.0 == 0.0) v.toInt().toString() else v.toString() }
-                }
-            } else efforts.map { it.string("name") to it.string("name") }
-            val selected = if (range != null) efforts.first().opt("value")?.let { (it as? Number)?.toDouble()?.toString() } else efforts.find { it.optBoolean("selected") }?.string("name")
-            ChoiceList(steps, selected, idle, { v -> if (range != null) set("effort", efforts.first().string("name"), v.toDouble()) else set("effort", v, true) }, footer) {
+            // Named levels or one slider's steps (claudeEfforts: a slider without a usable step lists none).
+            val efforts = claudeEfforts(catalog.rows("effort") { it })
+            val slider = efforts.slider
+            ChoiceList(efforts.steps, efforts.selected, idle, { v -> if (slider != null) set("effort", slider.string("name"), v.toDouble()) else set("effort", v, true) }, footer) {
                 catalog.rows("model") { it }.forEach { m ->
                     val on = m.optBoolean("selected")
                     MenuRow(m.string("name"), { if (!on) set("model", m.string("name"), true) }, trailing = check(on), enabled = idle)

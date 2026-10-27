@@ -103,6 +103,60 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
         compose.runOnIdle { org.junit.Assert.assertEquals(2,world.desktopMenuReads) }
     }
+    /** The desktop's six named levels (10-27) and a slider with a step of 0 open the model menu; it lists what it can. */
+    @Test fun claudeModelMenuTakesNamedLevelsAndSlidersWithAndWithoutAStep() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        val world=vm.fixtureWorld!!
+        world.claudeEfforts=org.json.JSONArray("""[{"name":"Low"},{"name":"Medium Recommended"},{"name":"High"},{"name":"Extra"},{"name":"Max 3.5× or more usage"},{"name":"Ultracode"}]""")
+        compose.onNodeWithContentDescription("模型：Opus 4.7 · 高").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
+        compose.onNodeWithText("推理强度").assertExists()
+        compose.onNodeWithText("Ultracode").assertExists().assertIsNotSelected()
+        // The iPhone quit here (0.5.0): one slider with a step of 0. No steps, the models stay.
+        world.claudeEfforts=org.json.JSONArray("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":5,"step":0,"value":0,"label":"Low"}}]""")
+        compose.onNodeWithText("刷新电脑上的列表").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy && org.json.JSONObject(vm.workspace.state.value.choices).optJSONObject("source_catalog")?.toString()?.contains("SliderControl")==true }
+        compose.onNodeWithText("Ultracode").assertDoesNotExist()
+        compose.onNodeWithText("推理强度").assertDoesNotExist()
+        compose.onNodeWithText("Opus 4.7").assertExists()
+        // A slider with a step: its steps, the current one chosen.
+        world.claudeEfforts=org.json.JSONArray("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":3,"step":1,"value":1,"label":"Medium","labels":{"0":"Low"}}}]""")
+        compose.onNodeWithText("刷新电脑上的列表").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy && org.json.JSONObject(vm.workspace.state.value.choices).optJSONObject("source_catalog")?.toString()?.contains("\"step\":1")==true }
+        compose.onNodeWithText("Medium").assertIsSelected()
+        compose.onNodeWithText("第 4 档").assertExists()
+    }
+    /** 10-27: a Codex conversation not open on the computer says why, and its model chip opens it there. */
+    @Test fun codexNotOpenOnTheComputerSaysWhyAndOpensFromTheChip() {
+        launch();fixtureList();openChat("电脑上没打开的 Codex 对话",FixtureWorld.AWAY_CODEX)
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("available") }
+        compose.onNodeWithText("电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试").assertExists()
+        compose.onNodeWithTag("composer").performTextInput("先别发")
+        compose.onNodeWithContentDescription("发送").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("模式：普通执行").assertDoesNotExist()
+        compose.onNodeWithContentDescription("电脑上打开这个对话").performClick()
+        // Read again at once: the chips and the send button follow.
+        compose.waitUntil(10000) { vm.composer.state.value.control.available }
+        compose.onNodeWithContentDescription("模型：测试模型 · 中").assertExists()
+        compose.onNodeWithContentDescription("模式：普通执行").assertExists()
+        compose.onNodeWithText("电脑端尚未打开这个对话",substring=true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("发送").assertIsEnabled()
+    }
+    /** 10-27 (web sendConv): Claude not shown on the computer reads its recorded names and takes the message all the same. */
+    @Test fun claudeNotShownOnTheComputerNamesItsChipsAndSendsAllTheSame() {
+        launch();fixtureList();openChat("电脑上没在显示的 Claude 对话",FixtureWorld.AWAY_CLAUDE)
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("available") }
+        compose.runOnIdle { org.junit.Assert.assertFalse(vm.composer.state.value.control.available) }
+        compose.onNodeWithContentDescription("模型：Opus 5.5 · 高").assertExists()
+        compose.onNodeWithContentDescription("模式：Auto").assertExists()
+        compose.onNodeWithText("电脑上显示的不是此 Claude 会话",substring=true).assertDoesNotExist()
+        compose.onNodeWithTag("composer").performTextInput("照样发出去")
+        compose.onNodeWithContentDescription("发送").performClick()
+        compose.waitUntil(15000) { vm.composer.state.value.submissions.firstOrNull()?.label=="已送达" }
+        // The computer opened it to send it there.
+        compose.waitUntil(10000) { vm.composer.state.value.control.available }
+        compose.onNodeWithContentDescription("模型：Opus 5.5 · 高").assertExists()
+    }
     @Test fun newConversationChoicesAreMenusOnOneSheet() {
         launch();fixtureList();compose.onNodeWithContentDescription("新建对话").performClick()
         compose.waitUntil(10000) { vm.workspace.state.value.pane=="new" && !vm.workspace.state.value.busy && vm.workspace.state.value.ready }
@@ -437,7 +491,7 @@ abstract class ReaderUiScenarios {
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()
         listRow("加载更多对话").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==8 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==10 }
         listRow("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy }
         compose.onNodeWithContentDescription("返回").assertHasClickAction().performClick()
@@ -456,7 +510,7 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="running" }
         compose.onNodeWithText("没有找到对话").assertIsDisplayed()
         compose.onNodeWithText("清除筛选").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==7 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==9 }
     }
     @Test fun lightLargeTextHasReachableServiceAndSettings() {
         launch("light",2f)

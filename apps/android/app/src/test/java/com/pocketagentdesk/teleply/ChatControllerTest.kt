@@ -95,6 +95,26 @@ class ChatControllerTest {
         c.bind(key.copy(scope="another"),api,true,false) {};runCurrent();api.gate.complete(Unit);runCurrent()
         assertEquals("",c.state.value.draft);assertTrue(c.state.value.submissions.isEmpty());assertEquals("account",store.records.values.single().scope)
     }
+    /** 10-27 (web sendConv): Claude's message goes while the computer shows another conversation; Codex's waits. */
+    @Test fun claudeSendsWhileTheComputerShowsAnotherConversationAndCodexWaits()=runTest {
+        for(app in listOf("claude","codex")) {
+            var sends=0
+            val api=object:TestApi() {
+                override suspend fun control(device:String,chat:String,fresh:Boolean)=parseControl(JSONObject("""{"available":false,"running":true,"active_turn_id":"turn","reason":"电脑上没有打开这个对话","settings":{"model":"opus"}}"""))
+                override fun events(device:String,chat:String)=flow<LiveFrame> { awaitCancellation() }
+                override suspend fun command(device:String,route:String,body:JSONObject):JSONObject { sends++;return JSONObject().put("request_id",body.string("request_id")).put("delivery_state","accepted") }
+            }
+            val c=ChatController(backgroundScope,DraftStore())
+            c.bind(key.copy(app=app),api,true,false) {};runCurrent()
+            assertFalse(c.state.value.control.available)
+            c.edit("照样发出去");runCurrent();c.send();runCurrent()
+            assertEquals(app,if(app=="claude") 1 else 0,sends)
+            assertEquals(app,if(app=="claude") "" else "照样发出去",c.state.value.draft)
+            // Stopping still needs the conversation in front on the computer.
+            c.stop();runCurrent()
+            assertEquals(app,if(app=="claude") 1 else 0,sends)
+        }
+    }
     @Test fun backgroundDisablesCommandsAndRestoresDraft()=runTest {
         val store=DraftStore();val api=CommandApi();val c=ChatController(backgroundScope,store)
         c.bind(key,api,true,false) {};runCurrent();c.edit("中文草稿");runCurrent();c.bind(key,api,false,false) {};runCurrent();c.send();runCurrent()

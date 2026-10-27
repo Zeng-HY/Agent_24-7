@@ -163,6 +163,26 @@ class WorkspaceControllerTest {
         assertEquals(1,api.answers);assertEquals(0,api.stateReads)
         assertTrue(c.state.value.error!!.contains("失效"));assertNull(JSONObject(c.state.value.saved).optJSONObject("pending_action"))
     }
+    /** 电脑上打开 reads the state again at once, so the chips and the send button follow (10-27, web openOnPC). */
+    @Test fun openOnComputerReadsTheStateAgain()=runTest {
+        var fails=false
+        val routes=mutableListOf<String>()
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                routes+=route
+                if(fails) throw ServiceFailure(409,"device_offline")
+                return JSONObject().put("ok",true).put("text","已在电脑上打开「会话」")
+            }
+        }
+        var changes=0
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.changed={ changes++ };c.bind(key,api,false);runCurrent()
+        c.openOnComputer();runCurrent()
+        assertEquals(listOf("chat/open"),routes);assertEquals(1,changes)
+        assertEquals("已在电脑上打开「会话」",c.state.value.result);assertFalse(c.state.value.busy)
+        // Not opened: why, and nothing read again.
+        fails=true;c.openOnComputer();runCurrent()
+        assertEquals(1,changes);assertEquals("电脑已离线，请稍后刷新电脑列表。",c.state.value.error);assertFalse(c.state.value.busy)
+    }
     /** 0.8 (web savedCatalog): the menu shows the kept list at once and asks without fresh; 刷新 asks with it. */
     @Test fun claudeListShowsKeptCopyAndReadsTheDesktopOnlyOnRefresh()=runTest {
         val store=WorkspaceStore();val api=WorkspaceApi();val claude=key.copy(app="claude")
