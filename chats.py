@@ -1687,8 +1687,18 @@ class Desktop:
             pointer = win32gui.GetCursorPos()
             try:
                 winctl.focus(hwnd)
-                if win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), 2) != hwnd:  # 2: GA_ROOT
-                    raise ChatError("电脑上 Claude 的这个选项被别的窗口挡住了，没有点")
+                # Something can be over that spot for a moment: on 10-27 at 09:55 a tap was refused so, and the same tap
+                # 46 s later went through (no screen saver is set on that PC). Looked at again for 2 s; the window still
+                # there then is named, for the log.
+                deadline = time.monotonic() + 2
+                while (top := win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), 2)) != hwnd:  # 2: GA_ROOT
+                    if time.monotonic() >= deadline:
+                        try:
+                            cover = f"{win32gui.GetClassName(top)}，{_process_of(top) or '?'}"
+                        except Exception:
+                            cover = "?"
+                        raise ChatError(f"电脑上 Claude 的这个选项被别的窗口挡住了（{cover}），没有点")
+                    time.sleep(0.2)
                 # As a hand does it: the pointer there first, then press and release apart. So it picked the option at
                 # once on 10-27 09:39; at 09:09 winctl.click_screen (press and release at one go) was not seen to.
                 win32api.SetCursorPos((x, y))

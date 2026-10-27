@@ -423,13 +423,18 @@ class SendTests(unittest.TestCase):
         with patch('chats.winctl.input_desktop_ready',return_value=True),patch('chats.winctl.focus') as focus,\
              patch('chats.winctl._send') as send,patch('chats.winctl._mouse_input',side_effect=lambda flags:flags),\
              patch('chats.win32gui.GetCursorPos',return_value=(5,6)),patch('chats.win32gui.WindowFromPoint',return_value=11),\
-             patch('chats.win32gui.GetAncestor',return_value=7) as root,patch('chats.win32api.SetCursorPos') as pointer,patch('chats.time.sleep'):
+             patch('chats.win32gui.GetAncestor',return_value=7) as root,patch('chats.win32api.SetCursorPos') as pointer,patch('chats.time.sleep'),\
+             patch('chats.time.monotonic',side_effect=(i/5 for i in range(10**6)).__next__),\
+             patch('chats.win32gui.GetClassName',return_value='tooltips_class32'),patch('chats._process_of',return_value='claude.exe'):
             d._click_control(7,option)
             self.assertEqual(scrolled,[1]);focus.assert_called_once_with(7)
             self.assertEqual(send.call_args_list,[call([down]),call([up])])  # pressed and released apart, as a hand does
             self.assertEqual(pointer.call_args_list,[call((200,220)),call((5,6))])  # there, then back where it was
-            root.return_value=8;send.reset_mock();pointer.reset_mock()  # another window over that spot
-            with self.assertRaises(chats.ChatError):d._click_control(7,option)
+            root.side_effect=[8,8,7];send.reset_mock()  # 10-27 09:55: something over that spot for a moment
+            d._click_control(7,option);self.assertEqual(send.call_count,2)
+            root.side_effect=None;root.return_value=8;send.reset_mock();pointer.reset_mock()  # and one that stays
+            with self.assertRaises(chats.ChatError) as refused:d._click_control(7,option)
+            self.assertIn('tooltips_class32，claude.exe',str(refused.exception))  # named for the log
             send.assert_not_called();pointer.assert_called_once_with((5,6))
             root.return_value=7;focus.side_effect=chats.winctl.WinError('没能把窗口拉到前台')
             with self.assertRaises(chats.ChatError):d._click_control(7,option)
