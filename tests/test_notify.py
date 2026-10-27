@@ -87,6 +87,9 @@ class TurnEnd(unittest.TestCase):
                          {"state": "done", "key": "t1", "time": "2026-10-14T03:01:00Z", "text": "改好了。"})
         self.assertEqual(notify.turn_end("codex", [done.encode(), aborted.encode()])["state"], "stopped")
         self.assertIsNone(notify.turn_end("codex", [other.encode()]))
+        noted = codex_line("task_complete", "2026-10-14T03:01:00Z", turn_id="t3",
+                           last_agent_message="好了。\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n</oai-mem-citation>")
+        self.assertEqual(notify.turn_end("codex", [noted.encode()])["text"], "好了。")  # Codex's memory notes stay out (10-27)
 
     def test_claude_one_answer_in_two_records(self):
         lines = [claude_line("user", "2026-10-14T03:00:00Z", uuid="u1", message={"content": "帮我看看"}),

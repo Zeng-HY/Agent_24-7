@@ -1,6 +1,7 @@
 """One authenticated SSE stream; only existing public message and control fields leave the host."""
 import copy,json,time,select
 from datetime import datetime,timezone
+import chats
 from codex_control import ordered_turns
 
 def merge_live_messages(page,entry,state,previous=None):
@@ -17,7 +18,8 @@ def merge_live_messages(page,entry,state,previous=None):
             if item.get('type') not in (None,'agentMessage'):return None
             # Legacy logs use generated IDs. Limit exact-text fallback to this turn
             # and public legacy assistant messages; never compare reasoning items.
-            candidates=[m for m in entry.messages if m.get('turn_id')==turn_id and m.get('legacy') and not m.get('source_id') and m['role']=='assistant' and (m.get('phase') or '')==(item.get('phase') or '') and m['text']==item.get('text')]
+            text=chats.codex_answer(item.get('text') or '')  # as the log's copy reads (no memory notes, file links)
+            candidates=[m for m in entry.messages if m.get('turn_id')==turn_id and m.get('legacy') and not m.get('source_id') and m['role']=='assistant' and (m.get('phase') or '')==(item.get('phase') or '') and m['text']==text]
             return candidates[0] if len(candidates)==1 else None
         def public(m):
             from activity_records import public_message
@@ -71,7 +73,7 @@ def merge_live_messages(page,entry,state,previous=None):
                     order=base+(index+1)/(len(items)+1) if before and anchor_cache.get(key)!=anchor_id else positions.get(key,old.get('order',base+(index+1)/(len(items)+1)))
                     anchor_cache[key]=anchor_id
                 positions[key]=order
-                text=item['text'];messages.append({'id':ident,'source_id':ident,'role':'assistant','phase':item.get('phase') or '',
+                text=chats.codex_answer(item['text']);messages.append({'id':ident,'source_id':ident,'role':'assistant','phase':item.get('phase') or '',
                     'turn_id':turn['turnId'],'order':order,
                     'source_sequence':index,'after_id':before[1]['id'] if before else None,'before_id':after[1]['id'] if after else None,
                     'time':datetime.fromtimestamp((turn.get('turnStartedAtMs') or 0)/1000,timezone.utc).isoformat(),

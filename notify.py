@@ -116,7 +116,7 @@ def _codex_end(lines: list[bytes]) -> dict | None:
         if state:
             ts = rec.get("timestamp") or ""
             end = {"state": state, "key": payload.get("turn_id") or ts, "time": ts,
-                   "text": payload.get("last_agent_message") or ""}
+                   "text": chats.codex_answer(payload.get("last_agent_message") or "")}
     return end
 
 
