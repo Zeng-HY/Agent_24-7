@@ -101,6 +101,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -1012,42 +1013,55 @@ fun MenuScope.MenuLoading(text: String) {
 
 /**
  * A row of segments inside a menu (spec 0.4 §4.3: the effort under the model list). One tap applies the choice and
- * closes the menu. Up to six segments share the width; more scroll sideways.
+ * closes the menu. Every name shows whole (10-27: six of Claude's levels were cut to "Med", "Hig"): the segments share
+ * the width evenly when each name fits its share, else each takes its name's width, and the row scrolls sideways only
+ * when the names together are wider than the menu (very large text).
  */
 @Composable
 fun MenuScope.MenuSegments(options: List<Pair<String, String>>, selected: String?, enabled: Boolean = true, onSelect: (String) -> Unit) {
     val p = LocalTeleply.current
     val appear = appear() ?: return
     val thumb = if (p.dark) Color(0xFF3A3A3C) else Color.White
-    val fits = options.size <= 6
-    Row(
-        Modifier.fillMaxWidth().then(appear).padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(CircleShape).background(p.glassTrack)
-            .then(if (fits) Modifier else Modifier.horizontalScroll(rememberScrollState()))
-            .padding(3.dp)
-            .selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        options.forEach { (value, label) ->
-            val on = value == selected
-            Box(
-                Modifier.then(if (fits) Modifier.weight(1f) else Modifier.widthIn(min = 52.dp))
-                    .heightIn(min = 44.dp)
-                    .then(if (on) Modifier.softShadow(CircleShape, p, TeleplyShadow.Segment) else Modifier)
-                    .clip(CircleShape)
-                    .background(if (on) thumb else Color.Transparent)
-                    .selectable(on, enabled = enabled, role = Role.RadioButton) {
-                        dismiss()
-                        if (!on) onSelect(value)
-                    }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = (if (on) p.text else p.muted).copy(alpha = if (enabled) 1f else 0.45f), maxLines = 1)
+    val style = MaterialTheme.typography.labelLarge
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxWidth().then(appear).padding(horizontal = 12.dp, vertical = 6.dp)) {
+        // The names' own widths with the segments' padding, against the room inside the track (3dp each side, 2dp gaps).
+        val widths = options.map { (_, label) -> with(density) { measurer.measure(label, style, softWrap = false, maxLines = 1).size.width.toDp() } + SegmentPadding * 2 }
+        val room = maxWidth - 6.dp - 2.dp * (options.size - 1)
+        val even = widths.all { it <= room / options.size }
+        val scrolls = !even && widths.fold(0.dp) { sum, w -> sum + w } > room
+        Row(
+            Modifier.fillMaxWidth().clip(CircleShape).background(p.glassTrack)
+                .then(if (scrolls) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
+                .padding(3.dp)
+                .selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            options.forEachIndexed { index, (value, label) ->
+                val on = value == selected
+                Box(
+                    Modifier.then(when { even -> Modifier.weight(1f); scrolls -> Modifier.widthIn(min = 52.dp); else -> Modifier.weight(widths[index].value) })
+                        .heightIn(min = 44.dp)
+                        .then(if (on) Modifier.softShadow(CircleShape, p, TeleplyShadow.Segment) else Modifier)
+                        .clip(CircleShape)
+                        .background(if (on) thumb else Color.Transparent)
+                        .selectable(on, enabled = enabled, role = Role.RadioButton) {
+                            dismiss()
+                            if (!on) onSelect(value)
+                        }
+                        .padding(horizontal = SegmentPadding),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, style = style, color = (if (on) p.text else p.muted).copy(alpha = if (enabled) 1f else 0.45f), maxLines = 1, softWrap = false)
+                }
             }
         }
     }
 }
+
+/** A menu segment's padding beside its name. */
+private val SegmentPadding = 6.dp
 
 /** Search box at the top of a long menu (the project menu over 8 projects). Typing filters; nothing is sent. */
 @Composable

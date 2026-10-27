@@ -163,6 +163,75 @@ class WorkspaceControllerTest {
         assertEquals(1,api.answers);assertEquals(0,api.stateReads)
         assertTrue(c.state.value.error!!.contains("失效"));assertNull(JSONObject(c.state.value.saved).optJSONObject("pending_action"))
     }
+    /** 电脑上打开 reads the state again at once, so the chips and the send button follow (10-27, web openOnPC). */
+    @Test fun openOnComputerReadsTheStateAgain()=runTest {
+        var fails=false
+        val routes=mutableListOf<String>()
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                routes+=route
+                if(fails) throw ServiceFailure(409,"device_offline")
+                return JSONObject().put("ok",true).put("text","已在电脑上打开「会话」")
+            }
+        }
+        var changes=0
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.changed={ changes++ };c.bind(key,api,false);runCurrent()
+        c.openOnComputer();runCurrent()
+        assertEquals(listOf("chat/open"),routes);assertEquals(1,changes)
+        assertEquals("已在电脑上打开「会话」",c.state.value.result);assertFalse(c.state.value.busy)
+        // Not opened: why, and nothing read again.
+        fails=true;c.openOnComputer();runCurrent()
+        assertEquals(1,changes);assertEquals("电脑已离线，请稍后刷新电脑列表。",c.state.value.error);assertFalse(c.state.value.busy)
+    }
+    /** 10-27 (as on the iPhone): a file an answer links to opens the page of the file the computer lists by that path. */
+    @Test fun aFileLinkInAnAnswerOpensThePageOfTheListedFileOnly()=runTest {
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                if(route=="chat/files") return JSONObject().put("items",org.json.JSONArray(FixtureWorld.FILES)
+                    .put(JSONObject().put("id","dot").put("name","x.md").put("path","D:\\a\\.claude\\x.md").put("kind","text").put("state","current"))
+                    .put(JSONObject().put("id","gone").put("name","old.md").put("path","D:\\a\\old.md").put("kind","text").put("state","missing")))
+                if(route=="file/text") return JSONObject().put("text","# 说明")
+                return JSONObject().put("kind","text").put("size",12)
+            }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.openLinkedFile("d:/FIXTURE/说明.md");runCurrent()
+        assertEquals("file",c.state.value.pane);assertEquals("fixture-md",JSONObject(c.state.value.data).string("id"))
+        // Its page goes back to the conversation (linked); the file's text stays with the page, out of the status line.
+        assertTrue(JSONObject(c.state.value.data).optBoolean("linked"));assertEquals("# 说明",c.state.value.result)
+        c.close();assertEquals("",c.state.value.result)
+        c.file(JSONObject().put("id","fixture-md").put("name","说明.md"));runCurrent()
+        assertEquals("# 说明",c.state.value.result)
+        c.panel("files");assertEquals("",c.state.value.result)
+        c.close()
+        // The reader dropped the backslash before ".claude": still that file.
+        c.openLinkedFile("D:\\a.claude\\x.md");runCurrent()
+        assertEquals("dot",JSONObject(c.state.value.data).string("id"))
+        c.close()
+        c.openLinkedFile("D:\\fixture\\secret.txt");runCurrent()
+        assertNull(c.state.value.pane);assertTrue(c.state.value.error!!.contains("不在电脑列出的对话文件里"))
+        c.openLinkedFile("D:\\a\\old.md");runCurrent()
+        assertNull(c.state.value.pane);assertEquals("文件已移动或删除",c.state.value.error)
+    }
+    /** A picture's preview (10-27) goes with its row: removed, or sent with the message. */
+    @Test fun aPicturePreviewGoesWithItsRow()=runTest {
+        val folder=java.io.File(java.nio.file.Files.createTempDirectory("tp").toFile(),PhotoFolder).apply { mkdirs() }
+        val removed=java.io.File(folder,"a.jpg").apply { writeText("a") };val sent=java.io.File(folder,"b.jpg").apply { writeText("b") }
+        val stranger=java.io.File(folder.parentFile,"c.jpg").apply { writeText("c") }
+        val store=WorkspaceStore()
+        store.values[key to "workspace"]=JSONObject().put("uploads",org.json.JSONArray()
+            .put(JSONObject().put("local","l1").put("name","a.jpg").put("image",true).put("status","ready").put("preview",removed.path).put("meta",JSONObject().put("id","m1")))
+            .put(JSONObject().put("local","l2").put("name","b.jpg").put("image",true).put("status","ready").put("preview",sent.path).put("meta",JSONObject().put("id","m2")))
+            .put(JSONObject().put("local","l3").put("name","c.jpg").put("image",true).put("status","ready").put("preview",stranger.path).put("meta",JSONObject().put("id","m3")))).toString()
+        val c=WorkspaceController(backgroundScope,store);c.bind(key,FixtureApi(),false);runCurrent()
+        c.removeUpload("l1");runCurrent()
+        assertFalse(removed.exists());assertTrue(sent.exists())
+        c.clearSent(key,JSONObject().put("attachments",org.json.JSONArray().put("m2").put("m3")));runCurrent()
+        assertFalse(sent.exists())
+        // Only a file in the previews' folder is ever deleted.
+        assertTrue(stranger.exists())
+        assertTrue(JSONObject(c.state.value.saved).rows("uploads") { it }.isEmpty())
+    }
     /** 0.8 (web savedCatalog): the menu shows the kept list at once and asks without fresh; 刷新 asks with it. */
     @Test fun claudeListShowsKeptCopyAndReadsTheDesktopOnlyOnRefresh()=runTest {
         val store=WorkspaceStore();val api=WorkspaceApi();val claude=key.copy(app="claude")

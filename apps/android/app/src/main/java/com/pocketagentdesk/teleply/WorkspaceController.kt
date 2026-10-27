@@ -97,10 +97,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val synthetic=fixture
         launchSafe { try { mutex.withLock { if(synthetic) demo[k]=j.toString() else store.detail(k,"workspace",j.toString()) } } catch(_:Exception) { update(k) { it.copy(ready=false,error="交互草稿保存失败") } } }
     }
-    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null) } }
+    /** A file page keeps the file's text in [WorkspaceState.result]: it goes with the page, not into the status line. */
+    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null,result=if(it.pane=="file") "" else it.result) } }
     fun panel(name:String) {
         saveJob?.cancel();read?.cancel();generation++
-        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote) }
+        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote,result=if(it.pane=="file") "" else it.result) }
         if(name=="new") openNew() else refresh(name)
     }
     /**
@@ -264,7 +265,9 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val j=saved(k)
         val images=extras.optJSONArray("attachments")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
         val refs=extras.rows("references") { it.string("id") }.toSet()
-        j.put("uploads",JSONArray(j.rows("uploads") { it }.filter { it.optJSONObject("meta")?.string("id") !in images+refs }))
+        val (sent,kept)=j.rows("uploads") { it }.partition { it.optJSONObject("meta")?.string("id") in images+refs }
+        sent.forEach { dropPhotoPreview(it.string("preview")) }
+        j.put("uploads",JSONArray(kept))
         j.put("references",JSONArray(j.rows("references") { it }.filter { it.string("id") !in refs }))
         // Settings bind to the next message only (web: d.settings and d.base go with the send); the chip then shows
         // what the computer has, and a later message is not checked against the settings from before this one.
@@ -315,6 +318,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                         }
                     } ?: error("无法读取所选文件，请重新选择")
                 }
+                // A picture shows itself in its tile (10-27): its preview is made before the upload and goes with the row.
+                if(image) withContext(Dispatchers.IO) { photoPreview(context,temp) }?.let { preview ->
+                    val j=saved(k);val row=j.rows("uploads") { it }.firstOrNull { it.string("local")==local }
+                    if(valid(k) && row!=null) { row.put("preview",preview);persist(k,j,synthetic) } else dropPhotoPreview(preview)
+                }
                 val target=if(k.chat=="@new") ensureNewId(k,service) else k.chat
                 val meta=service.uploadStream(k.device,target,name,temp.length(),image,k.chat=="@new") { temp.inputStream() }
                 if(valid(k)) { val j=saved(k);j.rows("uploads") { it }.firstOrNull { it.string("local")==local }?.put("status","ready")?.put("meta",meta);persist(k,j,synthetic) }
@@ -326,6 +334,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     fun removeUpload(local:String) {
         uploadJobs.remove(local)?.cancel()
         val k=key ?: return;val j=saved(k)
+        j.rows("uploads") { it }.filter { it.string("local")==local }.forEach { dropPhotoPreview(it.string("preview")) }
         // Removing a pending local row never silently removes other attachments.
         launchSafe { persist(k,j.put("uploads",JSONArray(j.rows("uploads") { it }.filter { it.string("local")!=local }))) }
     }
@@ -363,6 +372,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 val job=NewJob(rid,k.app,if(projectless) "" else folder,projectless,if(projectless) "" else name?.ifBlank { null } ?: folder.substringAfterLast('/').substringAfterLast('\\'),text,
                     references=references.toString(),images=JSONArray(images).toString(),body=body.toString(),pending=JSONObject().put("state","creating").put("message","正在创建对话…").toString())
                 // The sheet starts afresh: same source, project and picks; the words, files and request id go with the job.
+                j.rows("uploads") { it }.forEach { dropPhotoPreview(it.string("preview")) }
                 persist(k,JSONObject(j.toString()).apply { listOf("new_id","first_message","uploads","references").forEach { remove(it) } })
                 created(job)
             } catch(e:CancellationException) { throw e }
@@ -378,6 +388,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val k=key ?: return
         if(k.chat!="@new" || k.app!=job.app) return
         launchSafe {
+            saved(k).rows("uploads") { it }.forEach { dropPhotoPreview(it.string("preview")) }
             val j=saved(k).put("first_message",job.text).put("folder",job.folder).put("projectless",if(job.projectless) "1" else "")
                 .put("references",JSONArray(job.references)).put("uploads",JSONArray())
             j.remove("new_id")
@@ -476,13 +487,20 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             catch(e:Exception) { update(k) { it.copy(cards=it.cards+(card to "error:"+(e.message ?: "没有点上，请在电脑上处理"))) } }
         }
     }
-    /** 电脑上打开: asks the computer to show this conversation in its desktop app. Not a message, nothing is sent. */
+    /**
+     * 电脑上打开: asks the computer to show this conversation in its desktop app. Not a message, nothing is sent. The
+     * state is read again at once, so the chips and the send button follow (web: openOnPC, then refresh).
+     */
     fun openOnComputer() {
         val k=key ?: return;val service=api ?: return
         if(k.chat=="@new" || state.value.busy) return
         update(k) { it.copy(busy=true,error=null,result="") }
         launchSafe {
-            try { val r=service.detail(k.device,"chat/open",body=JSONObject().put("app",k.app).put("id",k.chat));update(k) { it.copy(result=r.string("text").ifBlank { "已在电脑上打开" }) } }
+            try {
+                val r=service.detail(k.device,"chat/open",body=JSONObject().put("app",k.app).put("id",k.chat))
+                update(k) { it.copy(result=r.string("text").ifBlank { "已在电脑上打开" }) }
+                if(valid(k)) changed()
+            }
             catch(e:Exception) { update(k) { it.copy(error=e.message ?: "电脑上没有打开，请稍后再试") } }
             finally { update(k) { it.copy(busy=false) } }
         }
@@ -492,6 +510,33 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     fun computerFile(reference:JSONObject) {
         if(reference.string("download_id").isBlank()) { key?.let { k -> update(k) { it.copy(error="请更新电脑端后下载文件") } };return }
         file(JSONObject(reference.toString()).put("id",reference.string("download_id")).put("reference",reference))
+    }
+    private var linkRead:Job?=null
+    /**
+     * A file an answer links to (web reading-ui.js referencedFile; user 10-27, as on the iPhone): its page, to look at,
+     * save or share, found by its path among the files the computer lists for this conversation (the files its
+     * answers name). One that is not listed says why; it used to read （链接未开放）.
+     */
+    fun openLinkedFile(path:String) {
+        val k=key ?: return;val service=api ?: return
+        update(k) { it.copy(error=null) }
+        linkRead?.cancel()
+        linkRead=launchSafe {
+            try {
+                val listed=service.detail(k.device,"chat/files",mapOf("app" to k.app,"id" to k.chat))
+                if(!valid(k)) return@launchSafe
+                listing=k to listed
+                val items=listed.rows("items") { it }
+                val match=items.find { normalizePath(it.string("path"))==normalizePath(path) } ?: items.find { looseFilePath(it.string("path"))==looseFilePath(path) }
+                when {
+                    match==null || match.string("id").isBlank() -> update(k) { it.copy(error="这个文件不在电脑列出的对话文件里，现在打不开；电脑端更新后再试") }
+                    match.string("state")=="missing" -> update(k) { it.copy(error="文件已移动或删除") }
+                    // Its page goes back to the conversation, not to the list of files.
+                    else -> file(JSONObject(match.toString()).put("linked",true))
+                }
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) { if(valid(k)) update(k) { it.copy(error=e.message ?: "没读到电脑上的对话文件，请稍后再试") } }
+        }
     }
     fun cancelSave() { saveJob?.cancel() }
     fun openSaved(context:Context,uri:String,name:String) {

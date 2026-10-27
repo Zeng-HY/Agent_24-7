@@ -68,11 +68,14 @@ fun JSONObject.strings(name:String)=optJSONArray(name)?.let { a -> (0 until a.le
         "chat","skill" -> TeleplySheet(if(pane=="chat") "引用对话" else "引用技能",back) { PaneStatus(s,j,c);ReferencesPane(pane,k,data,c,s.busy,s.error!=null) }
         "remote" -> TeleplySheet("从电脑选择文件",back) { PaneStatus(s,j,c);RemotePane(k,data,c) }
         "files" -> TeleplySheet("对话文件",c::close) { PaneStatus(s,j,c);FilesPane(data,c) }
-        "file" -> DetailPage(data.string("name").ifBlank { "文件" },{ c.panel(if(data.has("reference")) "remote" else "files") }) { FilePage(vm,k,data,s) }
+        "file" -> DetailPage(data.string("name").ifBlank { "文件" },fileBack(data,c)) { FilePage(vm,k,data,s) }
         "diff" -> DetailPage("本轮差异",c::close) { DiffPage(data,c,s) }
         else -> LaunchedEffect(pane) { c.close() }
     }
 }
+
+/** A file page goes back where it was opened: its list, or the conversation for a file an answer links to (10-27). */
+private fun fileBack(data:JSONObject,c:WorkspaceController):()->Unit = if(data.optBoolean("linked")) c::close else ({ c.panel(if(data.has("reference")) "remote" else "files") })
 
 @Composable private fun PaneStatus(s:WorkspaceState,j:JSONObject,c:WorkspaceController) {
     val p=LocalTeleply.current
@@ -402,7 +405,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     var pickerKey by remember { mutableStateOf<ChatKey?>(null) }
     var saving by remember { mutableStateOf<JSONObject?>(null) }
     val save=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> if(uri!=null && c.state.value.key==pickerKey) saving?.let { c.saveFile(context,uri,it) } }
-    PageFrame(data.string("name").ifBlank { "文件" },"当前文件 · ${operationLabel(data.optJSONObject("meta")?.string("state").orEmpty())}",{ c.panel(if(data.has("reference")) "remote" else "files") }) {
+    PageFrame(data.string("name").ifBlank { "文件" },"当前文件 · ${operationLabel(data.optJSONObject("meta")?.string("state").orEmpty())}",fileBack(data,c)) {
         ProgressLine(s.busy,p.line)
         s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
         val lower=data.string("name").lowercase()

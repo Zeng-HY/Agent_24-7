@@ -107,7 +107,8 @@ fun NtfySettings(vm: ReaderViewModel, s: ReaderState) {
     val explain = when {
         state == null -> null
         !on -> "安卓手机用 ntfy App 收。① 装 ntfy（Google Play、F-Droid 都有）；② 在 ntfy 里点 ＋，主题名称填上面的主题，勾上「使用其他服务器」，地址填上面的服务器，点「订阅」；③ 回到这里点「打开并试推一条」。点主题或服务器就能复制。手机上的 Tailscale 要一直连着才收得到。"
-        (ntfy?.optInt("listening") ?: 0) > 0 -> "对话做完时推到 ntfy App。正在用这台电脑、或手机正开着那个对话时不推。"
+        // Windows dev.22 pushes whether or not someone is at the computer (user 10-27); only the phone open on it holds one back.
+        (ntfy?.optInt("listening") ?: 0) > 0 -> "对话做完时推到 ntfy App。手机正开着那个对话时不推。"
         else -> "现在没有手机连着：看看 ntfy 里订阅了上面的主题和服务器没有，手机上的 Tailscale 连着没有。" + (ntfy?.string("last_seen")?.takeIf { it.isNotBlank() }?.let { "上次连着是 $it。" } ?: "") + "没连着时做完的对话，连上后会补推（12 小时内的）。"
     }
     if (explain != null) Text(explain, style = MaterialTheme.typography.note, color = p.muted)

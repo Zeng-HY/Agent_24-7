@@ -39,7 +39,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "file/text" -> JSONObject().put("text", if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
         "chat/diff" -> JSONObject("""{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}""")
         "chat/projects" -> world.tree(query["more"], device)
-        "chat/open" -> JSONObject().put("ok", true).put("text", "本地示例：没有真的打开电脑上的窗口")
+        "chat/open" -> world.open(body?.string("id").orEmpty())
         "chat/resolve" -> JSONObject().put("items", JSONArray())
         "chat/check" -> world.claudeCheck(body?.optLong("offset") ?: 0)
         "chats/children" -> world.children(query["id"].orEmpty(), query["offset"]?.toIntOrNull() ?: 0)
@@ -160,6 +160,15 @@ class FixtureWorld {
     private var claudeEffort = "高"
     private var claudeMode = "default"
     private val claudeCatalogs = mutableMapOf<String, JSONObject>()
+    /** Effort entries the demo's Claude model list shows in place of its three (tests: the desktop's named levels, a slider). */
+    var claudeEfforts: JSONArray? = null
+    /**
+     * Conversations the demo computer is not showing (10-27): a Codex one not open there, which waits for 电脑上打开, and
+     * a Claude one with its settings recorded, which takes a message all the same. 电脑上打开, a Claude message or a pick
+     * in its model menu opens them there, as the computer does.
+     */
+    private val away = mutableSetOf(AWAY_CODEX, AWAY_CLAUDE)
+    private val awaySettings = JSONObject().put("model", "claude-opus-5-5").put("effort", "high").put("mode", "auto")
     private val newRequests = mutableMapOf<String, JSONObject>()
     private var drafts = 0
     private val created = mutableListOf<Pair<Chat, String>>()
@@ -190,6 +199,8 @@ class FixtureWorld {
         Chat("question", "只读问题记录", "测试项目", "问题卡在时间线里作答", "waiting", "codex", NOW - 7_200_000),
         Chat("claude-next", "Claude 下一步示例", "测试项目", "下一步按钮和任务卡片", "idle", "claude", NOW - 9_000_000),
         Chat("plan-demo", "Codex 计划示例", "测试项目", if (planDone) "已按计划开始" else "计划待确认", if (planDone && running["codex"] == true) "running" else "idle", "codex", NOW - 10_800_000),
+        Chat(AWAY_CODEX, "电脑上没打开的 Codex 对话", "测试项目", "先在电脑上打开才能发", "idle", "codex", NOW - 12_000_000),
+        Chat(AWAY_CLAUDE, "电脑上没在显示的 Claude 对话", "测试项目", "照样能发，电脑会先切过去", "idle", "claude", NOW - 12_600_000),
         Chat(UNGROUPED, "未分组的会话", "", "不在 DeepSeek 工作区里，多是脚本或命令行开的一次性会话", "idle", "deepseek", NOW - 14_400_000, group = true,
             children = listOf(Chat("ds-stray-1", "整理下载目录（脚本）", "", "", "idle", "deepseek", NOW - 14_400_000, kind = "script")), childCount = 1),
     )
@@ -204,6 +215,7 @@ class FixtureWorld {
 
     /** Claude's model list as the computer keeps it (claude_control catalog): kept unless [fresh] or the model changed. */
     fun claudeCatalog(id: String, fresh: Boolean): JSONObject {
+        if (id == AWAY_CLAUDE) return awayCatalog()
         val model = claudeId(claudeModel)
         val kept = claudeCatalogs[id]
         if (kept != null && !fresh && kept.string("model_id") == model) return JSONObject(kept.toString()).put("cached", true)
@@ -215,10 +227,25 @@ class FixtureWorld {
     }
     private fun catalogNow() = JSONObject().put("model_id", claudeId(claudeModel)).put("updated_at", NOW).put("cached", false)
         .put("model", JSONArray(listOf("Opus 4.7", "Sonnet 4.6").map { JSONObject().put("name", it).put("selected", it == claudeModel) }))
-        .put("effort", JSONArray(listOf("高", "中", "低").map { JSONObject().put("name", it).put("selected", it == claudeEffort) }))
+        .put("effort", claudeEfforts?.let { JSONArray(it.toString()) } ?: JSONArray(listOf("高", "中", "低").map { JSONObject().put("name", it).put("selected", it == claudeEffort) }))
+
+    /** The away Claude conversation's list as the desktop names it: its models and six named effort levels. */
+    private fun awayCatalog() = JSONObject().put("model_id", awaySettings.string("model")).put("updated_at", NOW).put("cached", true)
+        .put("model", JSONArray(AWAY_MODELS.map { (id, name) -> JSONObject().put("name", name).put("selected", id == awaySettings.string("model")) }))
+        .put("effort", JSONArray(AWAY_EFFORTS.map { (name, value) -> JSONObject().put("name", name).put("selected", value == awaySettings.string("effort")) }))
 
     /** A Claude setting applied "on the computer": the state and the list come back, nothing is read again. */
     fun claudeSetting(id: String, kind: String, name: String): JSONObject {
+        if (id == AWAY_CLAUDE) {
+            // The computer shows the conversation first, then makes the change there.
+            away -= id
+            when (kind) {
+                "model" -> AWAY_MODELS.find { it.second == name }?.let { awaySettings.put("model", it.first) }
+                "effort" -> AWAY_EFFORTS.find { it.first == name }?.let { awaySettings.put("effort", it.second) }
+                "mode" -> awaySettings.put("mode", name)
+            }
+            return JSONObject().put("ok", true).put("text", "本地示例：电脑切到这个对话后换好了").put("state", JSONObject(state("claude", id).raw)).apply { if (kind != "mode") put("catalog", awayCatalog()) }
+        }
         when (kind) {
             "model" -> { claudeModel = name; claudeEffort = "高" }
             "effort" -> claudeEffort = name
@@ -266,11 +293,29 @@ class FixtureWorld {
         return JSONObject().put("request_id", rid).put("state", "creating").put("timing", JSONObject().put("active", JSONObject().put("name", "desktop_open")))
     }
 
+    /**
+     * The away Claude conversation as claude_control reads it: while another one is shown, from its record only (the
+     * name kept for its model, no desktop labels, why); once shown, with the desktop's labels.
+     */
+    private fun awayClaude(shown: Boolean, run: Boolean, turn: String, queued: List<Queued>, turnMap: Map<String, String>): Control {
+        val name = AWAY_MODELS.find { it.first == awaySettings.string("model") }?.second
+        val raw = JSONObject().put("settings", JSONObject(awaySettings.toString())).put("recorded_label", name).put("mode_options", JSONArray(AWAY_MODES)).put("actions", JSONArray())
+        if (!shown) return Control(false, false, "", false, emptyList(), emptyMap(), false, raw.put("available", false).put("on_screen", false)
+            .put("model_label", JSONObject.NULL).put("effort_label", JSONObject.NULL).put("mode_label", JSONObject.NULL).put("reason", "电脑上显示的不是此 Claude 会话；请点击「电脑上打开」").toString())
+        raw.put("available", true).put("on_screen", true).put("running", run).put("model_label", name).put("effort_label", AWAY_EFFORTS.find { it.second == awaySettings.string("effort") }?.first)
+            .put("mode_label", DESKTOP_MODES[awaySettings.string("mode")]).put("queued", JSONArray())
+        return Control(true, run, turn, true, queued, turnMap, false, raw.toString())
+    }
+
     private fun state(app: String, chat: String): Control {
         val queued = queues[app].orEmpty().values.toList()
         val run = running[app] == true
         val turn = turns[app].orEmpty()
         val turnMap = if (turn.isBlank()) emptyMap() else mapOf(turn to if (run) "inProgress" else "interrupted")
+        // Not open on the demo computer, Codex answers as codex_control does: not available, why, no settings.
+        if (chat == AWAY_CODEX) return if (chat in away) Control(false, false, "", false, emptyList(), emptyMap(), false, CODEX_AWAY)
+            else Control(true, run, if (run) turn else "", true, queued, turnMap, false, JSONObject(CODEX_STATE).put("questions", JSONArray()).toString())
+        if (chat == AWAY_CLAUDE) return awayClaude(chat !in away, run, turn, queued, turnMap)
         // A conversation the demo just created has nothing waiting in it.
         if (created.any { it.first.id == chat }) return when (app) {
             "claude" -> Control(true, false, "", true, emptyList(), emptyMap(), false, JSONObject(CLAUDE_STATE).apply { remove("prompt") }.toString())
@@ -280,9 +325,9 @@ class FixtureWorld {
         return when (app) {
             "claude" -> {
                 val raw = JSONObject(CLAUDE_STATE)
-                raw.getJSONObject("settings").put("model", claudeId(claudeModel)).put("mode", claudeMode)
+                raw.getJSONObject("settings").put("model", claudeId(claudeModel)).put("mode", claudeMode).put("effort", mapOf("高" to "high", "中" to "medium", "低" to "low")[claudeEffort] ?: claudeEffort)
                 raw.put("model_label", claudeModel).put("effort_label", claudeEffort)
-                    .put("mode_label", mapOf("default" to "默认", "acceptEdits" to "自动接受修改", "plan" to "计划")[claudeMode] ?: claudeMode)
+                    .put("mode_label", DESKTOP_MODES[claudeMode] ?: claudeMode)
                 raw.put("running", run).put("stop_token", if (run) "t-stop" else "")
                 raw.put("queued", JSONArray(queued.map { JSONObject().put("id", it.id).put("text", it.text).put("token", "t-steer-${it.id}") }))
                 if (chat == "claude-next") {
@@ -296,6 +341,9 @@ class FixtureWorld {
                     1 -> raw.put("prompt", JSONObject(CLAUDE_SECOND))
                     else -> raw.remove("prompt")
                 }
+                // As computers before Windows dev.23 sent them: the question's buttons again, by their raw names. The app
+                // shows only the question (web askParts).
+                raw.optJSONObject("prompt")?.let { prompt -> raw.put("actions", JSONArray(prompt.rows("choices") { JSONObject().put("name", it.string("label") + " " + it.string("description")).put("token", it.string("token")) })) }
                 Control(true, run, turn, true, queued, turnMap, claudeStep < 2, raw.toString())
             }
             "deepseek" -> {
@@ -345,6 +393,8 @@ class FixtureWorld {
     private fun claudeSend(body: JSONObject): JSONObject {
         if (body.string("text") in setOf("测试电脑草稿", "draft") && body.string("replace_draft").isBlank())
             throw ServiceFailure(400, "desktop_draft", "电脑上 Claude 的输入框里已经有「e」，没有发出", notSubmitted = true, draft = "e")
+        // A conversation it was not showing, the computer opens first (Windows 0.27.0-dev.19).
+        away -= body.string("id")
         claudeOffset += 100
         claudeChecks[claudeOffset] = 0
         val run = running["claude"] == true
@@ -356,6 +406,12 @@ class FixtureWorld {
         claudeChecks[offset] = n
         val queued = running["claude"] == true && n < 3
         return JSONObject().put("delivered", !queued && n >= 2).put("queued", queued)
+    }
+
+    /** 电脑上打开: no window opens, but a conversation the demo computer was not showing now is. */
+    fun open(id: String): JSONObject {
+        away -= id
+        return JSONObject().put("ok", true).put("text", "本地示例：没有真的打开电脑上的窗口")
     }
 
     fun claudeChoose(token: String): JSONObject {
@@ -453,6 +509,8 @@ class FixtureWorld {
         created.any { it.first.id == chat } -> created.first { it.first.id == chat }.second.let { text ->
             listOf(Message("$chat-1", "user", text.ifBlank { "请查看这些图片或引用。" }), Message("$chat-2", "assistant", "本地示例：收到，这是固定的回复。"))
         }
+        chat == AWAY_CODEX -> listOf(Message("w1", "user", "把上周的会议记录整理成要点。"), Message("w2", "assistant", AWAY_ANSWER))
+        chat == AWAY_CLAUDE -> listOf(Message("w3", "user", "检查一下发布脚本。"), Message("w4", "assistant", "检查完了，脚本没有问题。"))
         app == "claude" && chat == "claude-next" -> listOfNotNull(
             Message("n1", "user", "把发布说明的测试补齐。", details = """{"origin":"other_chat"}"""),
             Message("n2", "assistant", "先列一下要做的几步。", phase = "commentary"),
@@ -517,6 +575,34 @@ class FixtureWorld {
         /** Fixed clock so the demo reads the same every time (2026-10-24 12:00 UTC). */
         const val NOW = 1_792_843_200_000L
         const val UNGROUPED = "ungrouped"
+        const val AWAY_CODEX = "codex-away"
+        const val AWAY_CLAUDE = "claude-away"
+        /** The words on the desktop's mode button for the recorded modes (claude_control MODE_BUTTONS). */
+        private val DESKTOP_MODES = mapOf("auto" to "Auto", "default" to "Manual", "acceptEdits" to "Accept edits", "plan" to "Plan")
+        /** The away Claude conversation's models (id, name) and effort levels (name, as recorded), as the desktop lists them. */
+        private val AWAY_MODELS = listOf("claude-opus-5-5" to "Opus 5.5", "claude-sonnet-5" to "Sonnet 5")
+        private val AWAY_EFFORTS = listOf("Low" to "low", "Medium Recommended" to "medium", "High" to "high", "Extra" to "xhigh", "Max 3.5× or more usage" to "max", "Ultracode" to "ultra")
+        private const val AWAY_MODES = """[{"name":"auto","label":"Auto"},{"name":"default","label":"Manual"},{"name":"plan","label":"Plan"}]"""
+        /**
+         * An answer as Codex writes them (10-27): links to files on the computer, one of them not among the conversation's
+         * files, a file citation, and its memory notes, which the phone does not show.
+         */
+        val AWAY_ANSWER = """
+整理好了，要点在 [说明.md](D:\fixture\说明.md)；原始录音 [会议录音.m4a](D:\fixture\会议录音.m4a) 不在对话文件里。
+
+:codex-file-citation{path="D:\fixture\images\logo.png" purpose="output"}
+
+<oai-mem-citation>
+<citation_entries>
+MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
+</citation_entries>
+<rollout_ids>
+01a0bef3-b1d0-79d3-b7e4-4251056b2729
+</rollout_ids>
+</oai-mem-citation>
+""".trimIndent()
+        /** codex_control's answer for a conversation no Codex window has open. */
+        private const val CODEX_AWAY = """{"available":false,"reason":"电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试","settings":null}"""
         private const val TASK_TITLE = "整理发布清单"
         const val HEARD = "好的帮我把发布说明里的升级步骤补上"
         const val TIDIED = "好的，帮我把发布说明里的升级步骤补上。"
@@ -586,9 +672,9 @@ val message = "A deliberately long line to verify horizontal scrolling without m
 
         private const val CODEX_STATE = """{"available":true,"settings":{"model":"fixture-model","effort":"medium","mode":"default","service_tier":null},"catalog":{"models":[{"id":"fixture-model","name":"测试模型","efforts":["low","medium"],"default_effort":"medium"}]},"questions":[{"id":"fixture-question","answer_revision":"v1","status":"pending","kind":"native","turn_id":"fixture-question-turn","questions":[{"id":"q1","header":"方案","question":"选择固定测试方案","options":[{"label":"方案A","description":"固定选项"},{"label":"方案B","description":"另一选项"}]}]}]}"""
 
-        private const val CLAUDE_STATE = """{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"默认","mode_options":[{"name":"default","label":"默认"},{"name":"acceptEdits","label":"自动接受修改"},{"name":"plan","label":"计划"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1"},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"""
+        private const val CLAUDE_STATE = """{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"Manual","mode_options":[{"name":"default","label":"Manual"},{"name":"acceptEdits","label":"Accept edits"},{"name":"plan","label":"Plan"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":true}}"""
 
-        private const val CLAUDE_SECOND = """{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3"},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"""
+        private const val CLAUDE_SECOND = """{"title":"要不要附上升级步骤？","progress":"2/2","choices":[{"label":"附上","description":"在末尾列出升级步骤","token":"t-choice-3","pressed":true},{"label":"不附","description":"只写改动","token":"t-choice-4"}],"nav":[{"name":"submit","label":"提交","token":"t-nav-submit"}],"other":true}"""
 
         private const val DEEPSEEK_STATE = """{"available":true,"settings":{"provider":"deepseek","model":"deepseek-v4","reasoningEffort":"high"},"permission":"workspace","permission_name":"工作区内修改","interactions":[{"event":"approval/request","eventId":"e-approval-1","request":{"toolName":"shell","reason":"rm -rf build/","displayReason":"删除 build 目录（构建缓存）"}}],"questions":[]}"""
     }

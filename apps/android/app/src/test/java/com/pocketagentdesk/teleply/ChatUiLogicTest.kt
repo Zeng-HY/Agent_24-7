@@ -9,11 +9,24 @@ class ChatUiLogicTest {
     @Test fun askBarFollowsEachSource() {
         val codex=pendingCards("codex",JSONObject("""{"questions":[{"status":"pending","questions":[{"question":"选哪个？"}]},{"status":"answered","questions":[{"question":"旧问题"}]}]}"""))
         assertEquals(listOf("选哪个？"),codex.map { it.summary })
-        val claude=pendingCards("claude",JSONObject("""{"prompt":{"title":"格式？","progress":"1/2","choices":[]}}"""))
+        val claude=pendingCards("claude",JSONObject("""{"prompt":{"title":"格式？","progress":"1/2","choices":[{"label":"要点"}]}}"""))
         assertEquals("1/2",claude.single().progress)
         val deepseek=pendingCards("deepseek",JSONObject("""{"interactions":[{"event":"approval/request","eventId":"e","request":{"toolName":"shell"}},{"event":"user-questions/request","request":{"callId":"c","questions":[{"question":"补充？"}]}}]}"""))
         assertEquals(2,deepseek.single().count);assertTrue(deepseek.single().summary.contains("shell"))
         assertTrue(pendingCards("deepseek",JSONObject("""{"interactions":[]}""")).isEmpty())
+    }
+    /**
+     * Claude's plan options are its question's own buttons, so they show only without a question (web askParts; user
+     * 10-27): before Windows dev.23 the computer sent both, and a second card of raw button names showed.
+     */
+    @Test fun claudeHasItsQuestionOrElseItsPlanOptions() {
+        val both=JSONObject("""{"prompt":{"title":"格式？","progress":"1/2","choices":[{"label":"要点","pressed":true}]},"actions":[{"name":"要点 每条一行","token":"t"}]}""")
+        assertTrue(claudeAsks(both));assertEquals(listOf(PendingCard("choice","格式？","1/2")),pendingCards("claude",both))
+        val bare=JSONObject("""{"prompt":{},"actions":[{"label":"执行","token":"t"}]}""")
+        assertFalse(claudeAsks(bare));assertEquals(listOf(PendingCard("actions","计划与执行选项")),pendingCards("claude",bare))
+        assertEquals(listOf("choice"),pendingCards("claude",JSONObject("""{"prompt":{"nav":[{"name":"Submit","label":"提交"}]}}""")).map { it.kind })
+        assertTrue(pendingCards("claude",JSONObject()).isEmpty())
+        assertTrue(pendingCards("claude",JSONObject("""{"prompt":null,"actions":[]}""")).isEmpty())
     }
     @Test fun chipsShowNextMessageSettingsForCodex() {
         val raw=JSONObject("""{"settings":{"model":"m1","effort":"medium","mode":"default"},"catalog":{"models":[{"id":"m1","name":"模型一"},{"id":"m2","name":"模型二"}]}}""")

@@ -83,6 +83,17 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { vm.workspace.state.value.pane=="new" && org.json.JSONObject(vm.workspace.state.value.saved).string("first_message")=="测试失败" }
         compose.runOnIdle { org.junit.Assert.assertTrue(vm.jobs.jobs.value.isEmpty()) }
     }
+    /** 10-27: Claude's question shows the option chosen on the computer, and no second card of its own buttons. */
+    @Test fun claudeQuestionShowsTheChosenOptionAndNoPlanOptions() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("actions") }
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.onNodeWithContentDescription("选择简洁要点").performScrollTo().assertIsSelected()
+        compose.onNodeWithContentDescription("选择完整段落").assertIsNotSelected()
+        // The demo sends the buttons again as actions, as computers before dev.23 did: only the question shows.
+        compose.onNodeWithText("计划与执行选项").assertDoesNotExist()
+        compose.onNodeWithText("简洁要点 每条改动一行").assertDoesNotExist()
+    }
     @Test fun claudeModelMenuShowsTheKeptListAndReadsTheDesktopOnlyOnRefresh() {
         launch();fixtureList();openChat("Claude 选项示例","claude-demo")
         val world=vm.fixtureWorld!!
@@ -102,6 +113,99 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("刷新电脑上的列表").performClick()
         compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
         compose.runOnIdle { org.junit.Assert.assertEquals(2,world.desktopMenuReads) }
+    }
+    /** The desktop's six named levels (10-27) and a slider with a step of 0 open the model menu; it lists what it can. */
+    @Test fun claudeModelMenuTakesNamedLevelsAndSlidersWithAndWithoutAStep() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        val world=vm.fixtureWorld!!
+        world.claudeEfforts=org.json.JSONArray("""[{"name":"Low"},{"name":"Medium Recommended"},{"name":"High"},{"name":"Extra"},{"name":"Max 3.5× or more usage"},{"name":"Ultracode"}]""")
+        compose.onNodeWithContentDescription("模型：Opus 4.7 · 高").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
+        compose.onNodeWithText("推理强度").assertExists()
+        compose.onNodeWithText("Ultracode").assertExists().assertIsNotSelected()
+        // In the chip's words, each whole on one line (10-27: they were cut to "Med", "Hig").
+        listOf("低","中","高","极高","最高","Ultracode").forEach(::assertWhole)
+        // The iPhone quit here (0.5.0): one slider with a step of 0. No steps, the models stay.
+        world.claudeEfforts=org.json.JSONArray("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":5,"step":0,"value":0,"label":"Low"}}]""")
+        compose.onNodeWithText("刷新电脑上的列表").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy && org.json.JSONObject(vm.workspace.state.value.choices).optJSONObject("source_catalog")?.toString()?.contains("SliderControl")==true }
+        compose.onNodeWithText("Ultracode").assertDoesNotExist()
+        compose.onNodeWithText("推理强度").assertDoesNotExist()
+        compose.onNodeWithText("Opus 4.7").assertExists()
+        // A slider with a step: its steps, the current one chosen.
+        world.claudeEfforts=org.json.JSONArray("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":3,"step":1,"value":1,"label":"Medium","labels":{"0":"Low"}}}]""")
+        compose.onNodeWithText("刷新电脑上的列表").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy && org.json.JSONObject(vm.workspace.state.value.choices).optJSONObject("source_catalog")?.toString()?.contains("\"step\":1")==true }
+        compose.onNodeWithText("中").assertIsSelected()
+        compose.onNodeWithText("第 4 档").assertExists()
+    }
+    /** With large text the six levels no longer fit side by side: the row scrolls, and each name stays whole. */
+    @Test fun claudeEffortNamesStayWholeWithLargeText() {
+        launch(fontScale=1.6f);fixtureList();openChat("Claude 选项示例","claude-demo")
+        vm.fixtureWorld!!.claudeEfforts=org.json.JSONArray("""[{"name":"Low"},{"name":"Medium Recommended"},{"name":"High"},{"name":"Extra"},{"name":"Max 3.5× or more usage"},{"name":"Ultracode"}]""")
+        compose.onNodeWithContentDescription("模型：Opus 4.7 · 高").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
+        listOf("低","中","高","极高","最高","Ultracode").forEach(::assertWhole)
+    }
+    /** A label laid out whole on one line: as wide as its words, not cut by its segment. */
+    protected fun assertWhole(label:String) {
+        val layout=mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNode(hasText(label),useUnmergedTree=true).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action?.invoke(layout)
+        layout.single().let { text ->
+            org.junit.Assert.assertEquals(label,1,text.lineCount)
+            org.junit.Assert.assertTrue(label,text.size.width>=text.multiParagraph.maxIntrinsicWidth-1f)
+        }
+    }
+    /** 10-27: a Codex conversation not open on the computer says why, and its model chip opens it there. */
+    @Test fun codexNotOpenOnTheComputerSaysWhyAndOpensFromTheChip() {
+        launch();fixtureList();openChat("电脑上没打开的 Codex 对话",FixtureWorld.AWAY_CODEX)
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("available") }
+        compose.onNodeWithText("电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试").assertExists()
+        compose.onNodeWithTag("composer").performTextInput("先别发")
+        compose.onNodeWithContentDescription("发送").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("模式：普通执行").assertDoesNotExist()
+        compose.onNodeWithContentDescription("电脑上打开这个对话").performClick()
+        // Read again at once: the chips and the send button follow.
+        compose.waitUntil(10000) { vm.composer.state.value.control.available }
+        compose.onNodeWithContentDescription("模型：测试模型 · 中").assertExists()
+        compose.onNodeWithContentDescription("模式：普通执行").assertExists()
+        compose.onNodeWithText("电脑端尚未打开这个对话",substring=true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("发送").assertIsEnabled()
+    }
+    /** 10-27 (as on the iPhone): Codex's own notes are not shown; a file an answer links to opens its page, one not listed says why. */
+    @Test fun answerFileLinksOpenTheirPageAndCodexNotesStayHidden() {
+        launch();fixtureList();openChat("电脑上没打开的 Codex 对话",FixtureWorld.AWAY_CODEX)
+        compose.onAllNodesWithText("MEMORY.md",substring=true).assertCountEquals(0)
+        compose.onAllNodesWithText("codex-file-citation",substring=true).assertCountEquals(0)
+        compose.onAllNodesWithText("链接未开放",substring=true).assertCountEquals(0)
+        fun to(path:String):(androidx.compose.ui.text.AnnotatedString.Range<androidx.compose.ui.text.LinkAnnotation>)->Boolean = { (it.item as? androidx.compose.ui.text.LinkAnnotation.Url)?.url?.let(::fileLinkPath)==path }
+        val answer=compose.onNodeWithText("整理好了",substring=true)
+        answer.performFirstLinkClick(to("D:\\fixture\\会议录音.m4a"))
+        compose.waitUntil(10000) { vm.workspace.state.value.error?.contains("不在电脑列出的对话文件里")==true }
+        compose.onNodeWithText("这个文件不在电脑列出的对话文件里",substring=true).assertExists()
+        answer.performFirstLinkClick(to("D:\\fixture\\说明.md"))
+        compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { org.junit.Assert.assertEquals("fixture-md",org.json.JSONObject(vm.workspace.state.value.data).string("id")) }
+        compose.runOnIdle { vm.workspace.close() }
+        // Codex's file citation is a link to its file.
+        compose.onNodeWithText("logo.png").performFirstLinkClick(to("D:\\fixture\\images\\logo.png"))
+        compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { org.junit.Assert.assertEquals("fixture-png",org.json.JSONObject(vm.workspace.state.value.data).string("id")) }
+    }
+    /** 10-27 (web sendConv): Claude not shown on the computer reads its recorded names and takes the message all the same. */
+    @Test fun claudeNotShownOnTheComputerNamesItsChipsAndSendsAllTheSame() {
+        launch();fixtureList();openChat("电脑上没在显示的 Claude 对话",FixtureWorld.AWAY_CLAUDE)
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("available") }
+        compose.runOnIdle { org.junit.Assert.assertFalse(vm.composer.state.value.control.available) }
+        compose.onNodeWithContentDescription("模型：Opus 5.5 · 高").assertExists()
+        compose.onNodeWithContentDescription("模式：Auto").assertExists()
+        compose.onNodeWithText("电脑上显示的不是此 Claude 会话",substring=true).assertDoesNotExist()
+        compose.onNodeWithTag("composer").performTextInput("照样发出去")
+        compose.onNodeWithContentDescription("发送").performClick()
+        compose.waitUntil(15000) { vm.composer.state.value.submissions.firstOrNull()?.label=="已送达" }
+        // The computer opened it to send it there.
+        compose.waitUntil(10000) { vm.composer.state.value.control.available }
+        compose.onNodeWithContentDescription("模型：Opus 5.5 · 高").assertExists()
     }
     @Test fun newConversationChoicesAreMenusOnOneSheet() {
         launch();fixtureList();compose.onNodeWithContentDescription("新建对话").performClick()
@@ -252,6 +356,8 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { compose.onAllNodesWithText("打开并试推一条").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("打开并试推一条").performScrollTo().performClick()
         compose.waitUntil(10000) { compose.onAllNodesWithText("已开 · ntfy").fetchSemanticsNodes().isNotEmpty() }
+        // Windows dev.22: pushed whether or not someone is at the computer.
+        compose.onNodeWithText("对话做完时推到 ntfy App。手机正开着那个对话时不推。").assertExists()
         compose.onNodeWithText("试推一条").performScrollTo().assertHasClickAction()
         compose.onNodeWithText("录音后自动整理").performScrollTo().assertIsOn()
         compose.onNodeWithText("显示操作耗时").assertDoesNotExist()
@@ -437,7 +543,7 @@ abstract class ReaderUiScenarios {
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()
         listRow("加载更多对话").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==8 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==10 }
         listRow("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy }
         compose.onNodeWithContentDescription("返回").assertHasClickAction().performClick()
@@ -456,7 +562,7 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="running" }
         compose.onNodeWithText("没有找到对话").assertIsDisplayed()
         compose.onNodeWithText("清除筛选").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==7 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==9 }
     }
     @Test fun lightLargeTextHasReachableServiceAndSettings() {
         launch("light",2f)
