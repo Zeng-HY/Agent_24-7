@@ -53,25 +53,6 @@ def idle_seconds() -> float | None:
     return ((kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000.0
 
 
-_sent_ticks: tuple[int, int] | None = None  # GetTickCount() before and after this service last pressed keys or clicked
-
-
-def person_idle_seconds() -> float | None:
-    """Seconds since a person used this PC's keyboard or mouse. None when Windows will not say, and when the last
-    input was this service's own key presses or clicks (SendInput, sent for the phone): Windows counts those as use,
-    so nothing then tells whether anyone is here."""
-    info = _LastInput()
-    info.cbSize = ctypes.sizeof(info)
-    if not user32.GetLastInputInfo(ctypes.byref(info)):
-        return None
-    if _sent_ticks is not None:
-        def after(tick: int) -> int:  # signed milliseconds from tick to the last input; the count wraps every 49 days
-            return ((info.dwTime - tick + 2 ** 31) & 0xFFFFFFFF) - 2 ** 31
-        if after(_sent_ticks[0]) >= -50 and after(_sent_ticks[1]) <= 1000:
-            return None
-    return ((kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000.0
-
-
 def input_desktop_ready() -> bool:
     """Read the interactive desktop identity without switching or unlocking it."""
     desktop = None
@@ -349,11 +330,8 @@ MODIFIERS = {"Control": 0x11, "Ctrl": 0x11, "Shift": 0x10, "Alt": 0x12, "Win": 0
 
 
 def _send(inputs: list[INPUT]) -> None:
-    global _sent_ticks
     array = (INPUT * len(inputs))(*inputs)
-    before = kernel32.GetTickCount()
     sent = user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT))
-    _sent_ticks = (before, kernel32.GetTickCount())
     if sent != len(inputs):
         raise WinError("按键没送进去；电脑可能锁屏了")
 

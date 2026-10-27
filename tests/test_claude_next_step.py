@@ -111,7 +111,7 @@ class Notice(unittest.TestCase):
     def test_it_says_claude_waits_on_you(self):
         sent = []
         n = notify.Notifier({"token": "t", "bark": {"server": "https://api.day.app", "key": "k" * 22}}, "家里电脑", lambda *a: None, lambda: None,
-                            idle=lambda: None, sender=lambda *a, **k: sent.append((a, k)), page_url=lambda: "https://pc.example.ts.net/")
+                            sender=lambda *a, **k: sent.append((a, k)), page_url=lambda: "https://pc.example.ts.net/")
         n._tell({"key": "k"}, {"app": "claude", "id": "c1", "title": "部署方案"}, notify.turn_end("claude", TURN))
         (_, title, body), extra = sent[0]
         self.assertEqual((title, body, extra["subtitle"]), ("部署方案", ASK, "家里电脑 · Claude 在等你选"))

@@ -1,4 +1,3 @@
-import ctypes
 import io
 import json
 import sys
@@ -6,12 +5,10 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import notify  # noqa: E402
-import winctl  # noqa: E402
 
 KEY = "AbCdEf1234567890xyZQ"
 
@@ -117,19 +114,20 @@ class Watcher(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.now = 1_800_000_000.0  # 2027-01-15; the turns below end after it
         self.sent, self.saved, self.logged = [], [], []
-        self.idle = None
         self.cfg = {"token": "secret", "bark": {"server": "https://api.day.app", "key": KEY}}
         self.codex = Path(self.dir.name) / "rollout.jsonl"
         self.codex.write_text(codex_line("task_complete", "2026-10-01T00:00:00Z", turn_id="old", last_agent_message="旧的") + "\n", encoding="utf-8")
         self.items = [{"app": "codex", "id": "x1", "title": "改通知", "path": str(self.codex)}]
         patches = [mock.patch.object(notify.chats, "_codex_rows", lambda where, args, limit: [dict(i) for i in self.items]),
                    mock.patch.object(notify.chats, "claude_sessions", lambda limit: []),
-                   mock.patch.object(notify.chats, "conv_path", lambda item: Path(item["path"]))]
+                   mock.patch.object(notify.chats, "conv_path", lambda item: Path(item["path"])),
+                   # not this PC's DeepSeek: read for real, each look took 10 s, and its turns end whenever they end
+                   mock.patch("deepseek_control.catalog", lambda: [])]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
         self.notifier = notify.Notifier(self.cfg, "家里电脑", self.logged.append, lambda: self.saved.append(dict(self.cfg)),
-                                        clock=lambda: self.now, idle=lambda: self.idle,
+                                        clock=lambda: self.now,
                                         sender=lambda *a, **k: self.sent.append((a, k)), page_url=lambda: "https://pc.example.ts.net/")
 
     def turn(self, kind, turn_id, text="", ts="2027-01-15T08:00:10Z"):
@@ -152,23 +150,20 @@ class Watcher(unittest.TestCase):
         self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · 已推到手机")
         self.assertNotIn(KEY, json.dumps(self.notifier.public()) + "".join(self.logged))
 
-    def test_not_sent_when_stopped_watched_or_someone_is_here(self):
+    def test_not_sent_when_stopped_or_watched_and_sent_whoever_is_at_the_pc(self):
+        # 10-27: someone at this PC no longer holds them back; nothing of its keyboard or mouse is read
         self.notifier.look()
         self.turn("turn_aborted", "t1")
         self.notifier.look()
         with self.notifier.watching("codex", "x1"):
             self.turn("task_complete", "t2", "好")
             self.notifier.look()
-        self.idle = 35.0
-        self.turn("task_complete", "t3", "好")
-        self.notifier.look()
-        self.idle = 300.0
-        self.turn("task_complete", "t4", "好")
-        self.notifier.look()
+        with mock.patch("ctypes.windll.user32.GetLastInputInfo", side_effect=AssertionError("PC input read")):
+            self.turn("task_complete", "t3", "好")
+            self.notifier.look()
         self.assertEqual(len(self.sent), 1)
         self.assertEqual([r["text"] for r in self.notifier.public()["recent"]],
-                         ["Codex「改通知」好了 · 已推到手机", "Codex「改通知」好了 · 没推：有人 35 秒前用过这台电脑",
-                          "Codex「改通知」好了 · 没推：手机正开着这个对话"])
+                         ["Codex「改通知」好了 · 已推到手机", "Codex「改通知」好了 · 没推：手机正开着这个对话"])
 
     def test_nothing_is_read_without_an_address_and_only_later_turns_count(self):
         self.cfg.pop("bark")
@@ -235,9 +230,9 @@ class Watcher(unittest.TestCase):
         self.notifier.look()
         self.assertEqual((len(self.sent), len(self.notifier.feed.since("all"))), (1, 1))
         self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · ntfy 现在没连着，连上后会收到；已推到手机")
-        self.idle = 20.0
-        self.turn("task_complete", "t2", "好")
-        self.notifier.look()
+        with self.notifier.watching("codex", "x1"):
+            self.turn("task_complete", "t2", "好")
+            self.notifier.look()
         self.assertEqual((len(self.sent), len(self.notifier.feed.since("all"))), (1, 1))
 
     def test_ntfy_turned_on_and_off_from_the_page_and_tried_alone(self):
@@ -296,31 +291,9 @@ class Watcher(unittest.TestCase):
             self.notifier._tell(bark, item, {"state": "done", "text": "先改方案还是先测？", "asks": True})
             with self.notifier.watching("claude", "c1"):
                 self.notifier._tell(bark, item, {"state": "done", "text": "好了"})
-            self.idle = 30.0
             self.notifier._tell(bark, item, {"state": "done", "text": "好了"})
-        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["failed", "waiting"])
-        self.assertEqual(len(self.sent), 2)  # Bark is on here too: the same two
-
-
-class PersonIdle(unittest.TestCase):
-    """The service's own key presses (SendInput for the phone) are not a person at the PC."""
-
-    def fake(self, last_input, now):
-        def last(ref):
-            ref._obj.dwTime = last_input & 0xFFFFFFFF
-            return 1
-        return SimpleNamespace(GetLastInputInfo=last), SimpleNamespace(GetTickCount=lambda: now)
-
-    def test_own_input_and_a_persons(self):
-        cases = [((1000, 1010), 1005, 9000, None),        # the last input was ours
-                 ((1000, 1010), 5000, 9000, 4.0),          # a person, four seconds ago
-                 (None, 5000, 9000, 4.0),                  # nothing sent yet
-                 ((2 ** 32 - 20, 2 ** 32 - 10), 5, 3000, None)]  # the tick count wrapped in between
-        for sent, last_input, now, expected in cases:
-            user32, kernel32 = self.fake(last_input, now)
-            with mock.patch.object(winctl, "user32", user32), mock.patch.object(winctl, "kernel32", kernel32), \
-                    mock.patch.object(winctl, "_sent_ticks", sent):
-                self.assertEqual(winctl.person_idle_seconds(), expected, (sent, last_input))
+        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["failed", "waiting", "done"])
+        self.assertEqual(len(self.sent), 3)  # Bark is on here too: the same three
 
 
 if __name__ == "__main__":

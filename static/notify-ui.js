@@ -65,7 +65,7 @@
     else ntfyGroup.append(row('打开并试推一条', () => call('/api/notify/ntfy', {on: true})));
     ntfyNote.textContent = !n.on ? '安卓手机用 ntfy App 收。① 装 ntfy（Google Play、F-Droid 都有）；② 在 ntfy 里点 ＋，主题名称填上面的主题，' +
         '勾上「使用其他服务器」，地址填上面的服务器，点「订阅」；③ 回到这里点「打开并试推一条」。点主题或服务器就能复制。手机上的 Tailscale 要一直连着才收得到。'
-      : n.listening ? '对话做完时推到 ntfy App。正在用这台电脑、或手机正开着那个对话时不推。'
+      : n.listening ? '对话做完时推到 ntfy App。手机正开着那个对话时不推。'
       : '现在没有手机连着：看看 ntfy 里订阅了上面的主题和服务器没有，手机上的 Tailscale 连着没有。' +
         (n.last_seen ? '上次连着是 ' + n.last_seen + '。' : '') + '没连着时做完的对话，连上后会补推（12 小时内的）。';
   }
@@ -74,7 +74,7 @@
     if (state.configured) {
       const on = el('div', 'setting-row'); on.append(el('span', '', '已开'), el('span', 'setting-value', state.server));
       barkGroup.append(on, row('试推一条', () => call('/api/notify/test', {channel: 'bark'})), row('关掉', () => call('/api/notify', {address: ''}), 'danger'));
-      barkNote.textContent = iPhone ? '对话做完时推到这部手机。正在用这台电脑、或手机正开着那个对话时不推。' : '对话做完时推到装了 Bark 的 iPhone。';
+      barkNote.textContent = iPhone ? '对话做完时推到这部手机。手机正开着那个对话时不推。' : '对话做完时推到装了 Bark 的 iPhone。';
       return;
     }
     const field = el('div', 'setting-row'), input = el('input');
