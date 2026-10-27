@@ -76,7 +76,7 @@
 
 .device-actions .device-connect:disabled{transition:none}
 
-:root[data-theme=dark] .tree-app .mark.code-symbol{color:var(--text)}
+:root[data-theme=dark] .tree-app .mark.codex{color:var(--text)}
 
 /* Code/output panels share a bounded body and a non-scrolling toolbar. */
 :root{--tp-code-fill:#f5f5f5;--tp-code-edge:#e3e3e3}
