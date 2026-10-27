@@ -22,7 +22,7 @@
 - **本机**（Swift 6.4.1，Windows）：在 `apps/ios/TeleplyCore` 里 `swift build`、`swift test`。
 - **云端检查**：Codemagic 工作流 `ios-native-check`（Xcode 27.1）。`CHECK_MODE=compile` 只编译并跑 `TeleplyCore` 测试；`CHECK_MODE=shots` 再在模拟器上截图（默认 iOS 27.1，`SHOT_RUNTIMES="iOS-27-1 iOS-26-5"` 加跑 26.5），截图在产物 `shots.zip`。
 - **TestFlight**：工作流 `ios-native-testflight`。用 Codemagic 团队里的 App Store Connect 密钥 `Teleply Codemagic`（App Manager），证书引用名 `teleply_distribution`（Apple Distribution，到期 2027-10-26），描述文件引用名 `teleply_appstore`（Apple 后台名 `Teleply App Store`，App Store 类型）；Team ID `CPSVJ7235A`，Apple App ID `6826968427`。这些名字 Codemagic 的接口读不到，构建开始时才核对。上传前会核对包里的 Bundle ID、构建号、加密声明、图标、隐私清单和简体中文；只进内部测试（App Store Connect 里的内部测试组开了自动分发），不提交审核。证书别重新生成：数量有上限，重新生成还得重做描述文件。
-- 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
+- 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `main` 分支，先推送（10-27 起只留 `main`，`ios-native` 已合进去并删掉）。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
 ## 下个构建带上的改动（还没发）

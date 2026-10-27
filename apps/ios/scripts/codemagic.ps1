@@ -21,7 +21,7 @@ param(
     [string]$Runtimes = '',
     # Some of the tour's variants only (testLight, testDark, testLargestText), space-separated.
     [string]$Only = '',
-    [string]$Branch = 'ios-native',
+    [string]$Branch = 'main',
     [string]$AppId = $env:TELEPLY_CODEMAGIC_APP,
     [string]$OutDir = (Join-Path $PSScriptRoot '..\build\codemagic'),
     [string]$BuildId = '',
