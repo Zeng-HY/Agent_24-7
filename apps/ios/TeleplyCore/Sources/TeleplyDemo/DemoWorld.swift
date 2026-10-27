@@ -642,7 +642,8 @@ enum DemoData {
         switch app {
         case "claude":
             return [
-                message("c1", "user", "帮我把这次的发布说明整理一下。"),
+                // Sent with a picture from the phone: the computer's record of that send is in the state (`images`).
+                message("c1", "user", "[图片] 帮我把这次的发布说明整理一下。", ["time": "2026-10-20T08:00:00.000Z"]),
                 message("c2", "assistant", "我先看一下现有的文档和最近的提交。", ["phase": "commentary"]),
                 message("c3", "tool", "读取 docs/release.md", ["tool": "read", "title": "读取 docs/release.md", "tool_status": "completed"]),
                 message("c4", "assistant", "有两种写法，请在下面选一种。", ["kind": "question"]),
@@ -725,7 +726,7 @@ enum DemoData {
 
     static let codexState = parse(#"{"available":true,"settings":{"model":"fixture-model","effort":"medium","mode":"default","service_tier":null},"catalog":{"models":[{"id":"fixture-model","name":"测试模型","efforts":["low","medium"],"default_effort":"medium"}]},"questions":[{"id":"fixture-question","answer_revision":"v1","status":"pending","kind":"native","turn_id":"fixture-question-turn","questions":[{"id":"q1","header":"方案","question":"选择固定测试方案","options":[{"label":"方案A","description":"固定选项"},{"label":"方案B","description":"另一选项"}]}]}]}"#)
 
-    static let claudeState = parse(#"{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"默认","mode_options":[{"name":"default","label":"默认"},{"name":"acceptEdits","label":"自动接受修改"},{"name":"plan","label":"计划"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":{"name":"Other"}}}"#)
+    static let claudeState = parse(#"{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"默认","mode_options":[{"name":"default","label":"默认"},{"name":"acceptEdits","label":"自动接受修改"},{"name":"plan","label":"计划"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":{"name":"Other"}},"images":[{"request_id":"fixture-send-1","images":[{"id":"fixture-picture-1","name":"发布说明截图.png","url":"/api/codex/image?id=fixture-picture-1","thumbnail":"/api/codex/image?thumb=1&id=fixture-picture-1"}],"text":"帮我把这次的发布说明整理一下。","created":1792483190,"status":"accepted"}]}"#)
 
     /// The conversation files of the demo (Android FixtureWorld.FILES): a page, a picture beside it, a Markdown note.
     static let files: [JSONValue] = [

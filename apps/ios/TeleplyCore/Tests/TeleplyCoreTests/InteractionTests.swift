@@ -118,6 +118,20 @@ struct AnsweringTests {
         #expect(!model.messages.isEmpty)
     }
 
+    /// A picture sent with a message shows in it (user 10-27): the demo's Claude send with a picture, as the computer
+    /// kept it, fetched small for the bubble and whole, under its own name, for Quick Look.
+    @Test func aSentPictureShowsInItsMessageAndOpensWhole() async throws {
+        let model = await demoConversation("Claude 选项示例")
+        let pictures = sentPictures(messages: model.messages, records: model.conversation.control.raw["images"].array)
+        let picture = try #require(pictures["c1"]?.first)
+        let small = try #require(await model.workspace.sentPicture(picture, whole: false))
+        let whole = try #require(await model.workspace.sentPicture(picture, whole: true))
+        #expect(small.lastPathComponent == "small.png")
+        #expect(whole.lastPathComponent == "发布说明截图.png")
+        #expect(FileManager.default.fileExists(atPath: whole.path))
+        #expect(model.workspace.error == nil)
+    }
+
     @Test func aDeepSeekApprovalIsDecidedAndTheCardGoes() async {
         let model = await demoConversation("DeepSeek 批准示例")
         #expect(pendingCards(app: "deepseek", raw: model.conversation.control.raw).first?.kind == "approval")

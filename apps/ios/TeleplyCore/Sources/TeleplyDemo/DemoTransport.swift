@@ -40,13 +40,14 @@ public struct DemoTransport: RelayFileTransport {
         return computer(device, route, query, request.method, body)
     }
 
-    /// A conversation's file as the demo computer has it: the fixed picture, the Word file, or a line of text.
+    /// A conversation's file as the demo computer has it: the fixed picture, the Word file, or a line of text. A picture
+    /// sent with a message (/api/codex/image) is the fixed picture too.
     public func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
         if delay > .zero { try await Task.sleep(for: delay) }
         let network = world.network
         if network == .offline { throw Offline() }
         if network.delay > .zero { try await Task.sleep(for: network.delay) }
-        let file = Self.query(request.url)["file"] ?? ""
+        let file = request.url.path.hasSuffix("/api/codex/image") ? "fixture-png" : Self.query(request.url)["file"] ?? ""
         let bytes = switch file {
         case "fixture-png": Data(base64Encoded: DemoData.png) ?? Data()
         case "fixture-docx": DemoData.docx

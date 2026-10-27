@@ -146,9 +146,10 @@ public func parseChat(_ json: JSONValue) throws -> Chat {
 
 /// Fields a message keeps besides its text: a tool step's title and changes; Claude's checklist (plan: items),
 /// next-step box (next: tool_id, recap, ask, actions, open) and proposed task (task: title, brief, offer); a
-/// DeepSeek subagent (subagent: child, label, status); a message from another conversation (origin) and thinking.
+/// DeepSeek subagent (subagent: child, label, status); a message from another conversation (origin) and thinking;
+/// when the record wrote it (time), which ties a Claude send's pictures to it (sentPictures).
 let messageDetails = ["tool", "title", "changes", "activity_turn", "items", "tool_id", "recap", "ask", "actions", "blocked", "open",
-                      "brief", "offer", "label", "child", "status", "mode", "origin", "thinking", "source_id"]
+                      "brief", "offer", "label", "child", "status", "mode", "origin", "thinking", "source_id", "time"]
 
 public func parseMessage(_ json: JSONValue) throws -> Message {
     var message = Message(id: try requiredString(json, "id"), role: json["role"].string(), text: json["text"].string())

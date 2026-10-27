@@ -89,6 +89,33 @@ extension WorkspaceModel {
         }
     }
 
+    /// Where pictures sent with messages are kept once fetched: a folder per picture, the small copy and the whole one
+    /// under its own name (Quick Look shows the name and needs the extension).
+    nonisolated public static let sentPictureFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("teleply-sent-pictures")
+
+    /// A picture sent with a message (state `images`, web codex-ui.js renderImages and previewImage): its small copy
+    /// for the bubble, or the whole one to look at, fetched from the computer once and kept in the caches. Nil when it
+    /// cannot be had; for the whole one the page says why.
+    public func sentPicture(_ picture: SentPicture, whole: Bool) async -> URL? {
+        guard let key, let client else { return nil }
+        var base = picture.name.filter { !"/\\:*?\"<>|".contains($0) }
+        if let dot = base.lastIndex(of: "."), dot != base.startIndex { base = String(base[..<dot]) }  // it comes back a PNG
+        let kept = Self.sentPictureFolder.appendingPathComponent(picture.id)
+            .appendingPathComponent(whole ? (base.isEmpty ? "图片" : base) + ".png" : "small.png")
+        if FileManager.default.fileExists(atPath: kept.path) { return kept }
+        do {
+            let fetched = try await client.sentPicture(device: key.device, id: picture.id, small: !whole)
+            try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: kept)
+            try FileManager.default.moveItem(at: fetched, to: kept)
+            return kept
+        } catch {
+            if whole { self.error = describe(error) }
+            return nil
+        }
+    }
+
     /// 查看成果文件 under a DeepSeek deliverables message: 对话文件 with only the files that message presented.
     public func filesOf(message: String) {
         dropFile()

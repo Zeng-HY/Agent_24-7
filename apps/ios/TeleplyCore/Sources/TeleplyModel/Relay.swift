@@ -361,6 +361,18 @@ public struct RelayClient: Sendable {
         return saved
     }
 
+    /// A picture the computer kept of a send (GET /api/codex/image by its id; [small]: its copy of at most 320 px), to
+    /// a file on this phone; the caller owns it.
+    public func sentPicture(device: String, id: String, small: Bool) async throws -> URL {
+        guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
+        var request = try get(Self.devicePath(device, "/api/codex/image"), query: [("thumb", small ? "1" : nil), ("id", id)], deadline: small ? 40 : 120)
+        request.headers["Accept"] = "*/*"
+        let answer = try await files.download(request, limit: Self.downloadLimit, progress: nil)
+        if answer.status == 401 { try? vault?.write(origin.key, nil) }
+        guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
+        return saved
+    }
+
     /// The computer's voice service (web voice-ui.js): raw audio up, recognised text back. A whole recording, or the
     /// end of one, waits for recognition (and 整理) on the computer.
     public static let voiceRoutes: Set<String> = ["voice", "voice/stream/start", "voice/stream/chunk", "voice/stream/end", "voice/stream/cancel", "voice/stream/cloud"]

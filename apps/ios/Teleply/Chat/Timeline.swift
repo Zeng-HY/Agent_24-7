@@ -1,6 +1,8 @@
+import QuickLook
 import SwiftUI
 import TeleplyModel
 import TeleplyState
+import UIKit
 
 /// A run of process steps that folds under its first step's header (design language §8; Android TimelineItem).
 struct ProcessGroup: Equatable {
@@ -79,6 +81,8 @@ struct MessageActions {
     var files: (String) -> Void = { _ in }
     /// 打开新建对话 under a Codex reply that made a conversation: that conversation, by its id.
     var thread: (String) -> Void = { _ in }
+    /// A picture sent with a message: its small copy, or the whole one (true), as a file on this phone.
+    var picture: (SentPicture, Bool) async -> URL? = { _, _ in nil }
     var busy: Bool
 }
 
@@ -90,6 +94,8 @@ struct TimelineItem: View {
     let raw: JSONValue
     /// The label of the send from this phone that became this message (已送达…), shown under the bubble.
     var receipt: String?
+    /// Pictures sent with a user message, as the computer kept them.
+    var pictures: [SentPicture] = []
     @Binding var folds: [String: Bool]
     let actions: MessageActions
 
@@ -99,7 +105,7 @@ struct TimelineItem: View {
             VStack(alignment: .trailing, spacing: 0) {
                 OriginLabel(message: message)
                     .padding(.trailing, 4)
-                UserBubble(message: message, actions: actions, receipt: receipt)
+                UserBubble(message: message, actions: actions, receipt: receipt, pictures: pictures)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.top, 20)
@@ -248,6 +254,8 @@ struct UserBubble: View {
     var receipt: String?
     /// Still being sent: shown lighter (Android sending).
     var sending = false
+    /// Pictures sent with it, from the computer's copies (web codex-ui.js renderImages).
+    var pictures: [SentPicture] = []
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -266,18 +274,99 @@ struct UserBubble: View {
 
     private var bubble: some View {
         let dark = scheme == .dark
+        // With its pictures shown, their [图片] mark goes from the words.
+        let words = pictures.isEmpty ? message.text : picturedWords(message.text) ?? message.text
         return TrailingFraction(fraction: 0.88) {
-            MarkdownView(source: message.text,
-                         look: MarkdownLook(link: dark ? Palette.accent : .white, code: dark ? Palette.codeFill : .white.opacity(0.18)),
-                         fill: false)
-                .foregroundStyle(Palette.onBubble)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Palette.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.bubbleEdge, lineWidth: 1))
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .contextMenu { MessageMenu(text: message.text, message: message, actions: actions) }
+            VStack(alignment: .leading, spacing: 8) {
+                if !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    MarkdownView(source: words,
+                                 look: MarkdownLook(link: dark ? Palette.accent : .white, code: dark ? Palette.codeFill : .white.opacity(0.18)),
+                                 fill: false)
+                        .foregroundStyle(Palette.onBubble)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !pictures.isEmpty {
+                    SentPictureGrid(pictures: pictures, load: actions.picture)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Palette.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.bubbleEdge, lineWidth: 1))
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contextMenu { MessageMenu(text: message.text, message: message, actions: actions) }
+        }
+    }
+}
+
+/// Pictures sent with a message, from the computer's copies (web .sent-images): 110 × 100 with 14 pt corners, two to
+/// a row; a tap opens the whole picture in Quick Look.
+private struct SentPictureGrid: View {
+    let pictures: [SentPicture]
+    let load: (SentPicture, Bool) async -> URL?
+    @State private var looking: URL?
+
+    var body: some View {
+        let rows = stride(from: 0, to: pictures.count, by: 2).map { Array(pictures[$0..<min($0 + 2, pictures.count)]) }
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    ForEach(row) { picture in
+                        SentPictureTile(picture: picture, load: load) { looking = $0 }
+                    }
+                }
+            }
+        }
+        .quickLookPreview($looking)
+    }
+}
+
+private struct SentPictureTile: View {
+    let picture: SentPicture
+    let load: (SentPicture, Bool) async -> URL?
+    let open: (URL) -> Void
+    @State private var image: UIImage?
+    @State private var opening = false
+
+    var body: some View {
+        Button {
+            guard !opening else { return }
+            opening = true
+            Task {
+                if let whole = await load(picture, true) { open(whole) }
+                opening = false
+            }
+        } label: {
+            // The picture fills the tile and is cut to it, so it neither grows the tile nor reaches past it.
+            Color.clear
+                .frame(width: 110, height: 100)
+                .overlay {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.system(size: 20))
+                            .foregroundStyle(Palette.onBubble.opacity(0.7))
+                    }
+                }
+                .overlay {
+                    if opening {
+                        ProgressView()
+                            .tint(Palette.onBubble)
+                    }
+                }
+                .background(Palette.onBubble.opacity(0.18))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("查看 " + picture.name))
+        // Drawn small from the computer's copy, away from the screen.
+        .task(id: picture.id) {
+            guard image == nil, let small = await load(picture, false) else { return }
+            image = await UIImage(contentsOfFile: small.path)?.byPreparingThumbnail(ofSize: CGSize(width: 220, height: 200))
         }
     }
 }
