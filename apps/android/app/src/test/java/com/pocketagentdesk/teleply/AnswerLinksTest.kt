@@ -41,6 +41,11 @@ MEMORY.md:694-696|note=[used Windows Word rendering fallback workflow]
         val shown = markdownDocument(tidyAnswer(answer, shown = true))
         assertEquals(listOf("D:\\Personal\\agent_remote\\.claude\\合并稿.docx"), links(shown))
         assertEquals("没有注记", tidyAnswer("没有注记"))
+        // Windows dev.22 writes the citation as a link itself, with forward slashes: nothing left to tidy, it opens the same.
+        val fromDev22 = "已合并为一份。\n\n[合并稿.docx](<D:/Personal/语言桥/合并稿.docx>)"
+        assertEquals(fromDev22, tidyAnswer(fromDev22, shown = true))
+        assertEquals(listOf("D:/Personal/语言桥/合并稿.docx"), links(markdownDocument(fromDev22)).map { localPath(it) })
+        assertEquals(normalizePath("D:\\Personal\\语言桥\\合并稿.docx"), normalizePath("D:/Personal/语言桥/合并稿.docx"))
         // Not closed (a cut message): left as it is.
         assertEquals("a <oai-mem-citation>b", tidyAnswer("a <oai-mem-citation>b"))
     }

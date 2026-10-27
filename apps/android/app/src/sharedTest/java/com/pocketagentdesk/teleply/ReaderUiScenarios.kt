@@ -326,6 +326,8 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { compose.onAllNodesWithText("打开并试推一条").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("打开并试推一条").performScrollTo().performClick()
         compose.waitUntil(10000) { compose.onAllNodesWithText("已开 · ntfy").fetchSemanticsNodes().isNotEmpty() }
+        // Windows dev.22: pushed whether or not someone is at the computer.
+        compose.onNodeWithText("对话做完时推到 ntfy App。手机正开着那个对话时不推。").assertExists()
         compose.onNodeWithText("试推一条").performScrollTo().assertHasClickAction()
         compose.onNodeWithText("录音后自动整理").performScrollTo().assertIsOn()
         compose.onNodeWithText("显示操作耗时").assertDoesNotExist()
