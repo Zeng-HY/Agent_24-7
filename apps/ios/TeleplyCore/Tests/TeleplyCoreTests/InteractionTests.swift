@@ -11,10 +11,16 @@ struct PendingCardTests {
         #expect(pendingCards(app: "codex", raw: raw) == [PendingCard(kind: "question", summary: "选哪个？")])
     }
 
-    @Test func claudeHasItsPromptWithProgressAndItsPlanOptions() {
-        let raw = DemoData.parse(#"{"prompt":{"title":"格式？","progress":"1/2"},"actions":[{"label":"执行","token":"t"}]}"#)
-        #expect(pendingCards(app: "claude", raw: raw) == [PendingCard(kind: "choice", summary: "格式？", progress: "1/2"),
-                                                          PendingCard(kind: "actions", summary: "计划与执行选项")])
+    /// The plan options are the question's own buttons, so they show only without a question (web askParts); before
+    /// Windows dev.23 the PC sent both, and both apps drew a second card of raw button names.
+    @Test func claudeHasItsPromptWithProgressOrElseItsPlanOptions() {
+        let both = DemoData.parse(#"{"prompt":{"title":"格式？","progress":"1/2","choices":[{"label":"要点","pressed":true}]},"actions":[{"name":"要点 1","token":"t"}]}"#)
+        #expect(pendingCards(app: "claude", raw: both) == [PendingCard(kind: "choice", summary: "格式？", progress: "1/2")])
+        let bare = DemoData.parse(#"{"prompt":{},"actions":[{"label":"执行","token":"t"}]}"#)
+        #expect(!claudeAsks(bare))
+        #expect(pendingCards(app: "claude", raw: bare) == [PendingCard(kind: "actions", summary: "计划与执行选项")])
+        #expect(pendingCards(app: "claude", raw: DemoData.parse(#"{"prompt":{"nav":[{"name":"Submit"}]}}"#)).map(\.kind) == ["choice"])
+        #expect(pendingCards(app: "claude", raw: [:]).isEmpty)
     }
 
     @Test func deepseekPutsApprovalsFirstAndCountsEveryItemOnce() {

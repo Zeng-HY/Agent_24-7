@@ -18,15 +18,13 @@ public struct PendingCard: Equatable, Sendable {
 }
 
 /// What waits for an answer in a source's state (Android pendingCards): Codex's pending question cards; Claude's
-/// desktop prompt and its plan options; DeepSeek's approvals first, then its questions.
+/// desktop prompt, or else its plan options; DeepSeek's approvals first, then its questions.
 public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
     switch app {
     case "claude":
-        var cards: [PendingCard] = []
         let prompt = raw["prompt"]
-        if prompt.isObject { cards.append(PendingCard(kind: "choice", summary: prompt["title"].string(), progress: prompt["progress"].string())) }
-        if !raw["actions"].array.isEmpty { cards.append(PendingCard(kind: "actions", summary: "计划与执行选项")) }
-        return cards
+        if claudeAsks(raw) { return [PendingCard(kind: "choice", summary: prompt["title"].string(), progress: prompt["progress"].string())] }
+        return raw["actions"].array.isEmpty ? [] : [PendingCard(kind: "actions", summary: "计划与执行选项")]
     case "deepseek":
         let approvals = deepseekApprovals(raw)
         let questions = deepseekQuestionCards(raw)
@@ -44,6 +42,14 @@ public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
             return PendingCard(kind: "question", summary: question.isEmpty ? "Codex 有问题要问你" : question)
         }
     }
+}
+
+/// Whether Claude's desktop shows a question laid out for the phone (web askParts): a prompt with choices or
+/// navigation. Its buttons are also the plan options, so those show only without one (the PC repeated them as
+/// raw names under the question until dev.23).
+public func claudeAsks(_ raw: JSONValue) -> Bool {
+    let prompt = raw["prompt"]
+    return prompt.isObject && (!prompt["choices"].array.isEmpty || !prompt["nav"].array.isEmpty)
 }
 
 /// DeepSeek's approval requests, each its own card.

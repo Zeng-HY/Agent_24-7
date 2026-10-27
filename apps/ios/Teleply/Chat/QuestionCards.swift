@@ -29,14 +29,12 @@ enum InlineCard: Identifiable {
 }
 
 /// The cards of a source's state: Codex's pending ones and answered ones it lets you change; Claude's desktop
-/// question and its plan options; DeepSeek's approvals, then its questions.
+/// question, or else its plan options; DeepSeek's approvals, then its questions.
 func inlineCards(app: String, raw: JSONValue) -> [InlineCard] {
     switch app {
     case "claude":
-        var cards: [InlineCard] = []
-        if raw["prompt"].isObject { cards.append(.claudePrompt(raw["prompt"])) }
-        if !raw["actions"].array.isEmpty { cards.append(.claudeActions(raw["actions"].array)) }
-        return cards
+        if claudeAsks(raw) { return [.claudePrompt(raw["prompt"])] }
+        return raw["actions"].array.isEmpty ? [] : [.claudeActions(raw["actions"].array)]
     case "deepseek":
         return deepseekApprovals(raw).map(InlineCard.deepseekApproval) + deepseekQuestionCards(raw).map(InlineCard.deepseekQuestion)
     default:
@@ -295,7 +293,9 @@ private struct ChoiceQuestion: View {
 // MARK: Claude
 
 /// Claude's question as its desktop shows it (web claude-ui.js): a tap on an option taps it on the computer; with
-/// several questions the computer's own 下一题 and 提交 go on.
+/// several questions the computer's own 下一题 and 提交 go on. An option Claude shows as chosen shows chosen here
+/// (its `pressed`): a question of one choice starts with its first, and since Windows dev.23 a tap there goes on by
+/// itself; a question of several shows each tap's pick until 提交.
 private struct ClaudePromptCard: View {
     let model: AppModel
     let prompt: JSONValue
@@ -309,7 +309,7 @@ private struct ClaudePromptCard: View {
             CardTitle(text: (title.isEmpty ? "Claude 想问你" : title) + (progress.isEmpty ? "" : "（\(progress)）"))
             ForEach(Array(prompt["choices"].array.enumerated()), id: \.offset) { _, choice in
                 let token = choice["token"].string()
-                OptionCard(title: choice["label"].string(), detail: choice["description"].string(), selected: false,
+                OptionCard(title: choice["label"].string(), detail: choice["description"].string(), selected: choice["pressed"].bool(),
                            enabled: !workspace.busy && !token.isEmpty) {
                     workspace.action("claude/choose", ["token": .string(token)])
                 }
