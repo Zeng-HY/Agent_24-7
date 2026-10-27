@@ -31,6 +31,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     var restoreExtras:(ChatKey,JSONObject)->Unit = { _,_ -> }
     /** True while a tap waits on the computer: no state poll then (web claude-ui.js: a read holds Claude ~1.4 s). */
     var pollPaused:()->Boolean = { false }
+    /** The conversation's state was read from the computer (entering, a poll, after a send, an action's reply). */
+    var seen:(ChatKey)->Unit = {}
     private val mutable=MutableStateFlow(ComposerState())
     val state=mutable.asStateFlow()
     private var key:ChatKey?=null
@@ -70,6 +72,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                         val control=service.control(next.device,next.chat)
                         if(t!=token) return@launch
                         update(next) { it.copy(control=mergeControl(it.control,control)) }
+                        seen(next)
                         // Recovery reads receipts only. No mutation is replayed.
                         state.value.submissions.filter { it.label in Unsettled || it.action=="stop" }.forEach { reconcile(it,service,synthetic) }
                         coroutineScope {
@@ -82,7 +85,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                                     delay(every)
                                     if(pollPaused()) continue
                                     val fresh=service.control(next.device,next.chat,fresh=false)
-                                    if(t==token) update(next) { it.copy(control=mergeControl(it.control,fresh)) }
+                                    // The same state as before changes nothing on the page (StateFlow keeps an equal value).
+                                    if(t==token) { update(next) { it.copy(control=mergeControl(it.control,fresh)) };seen(next) }
                                     // Claude has no receipts: its queued and unconfirmed sends are looked for in its record (web pollReceipts).
                                     if(next.app=="claude") claudePending(next).forEach { runCatching { reconcile(it,service,synthetic) } }
                                 }
@@ -162,7 +166,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     /** 立即补充: hand a queued message to the running turn (B05). Claude does this with a desktop token instead. */
     fun promote(message:String) = submit("queue-action",message=message,promote=true)
     /** A state the computer sent back with an action (Claude settings): shown as read, no second request. */
-    fun applyState(k:ChatKey,raw:JSONObject) { if(key==k) update(k) { it.copy(control=mergeControl(it.control,parseControl(raw))) } }
+    fun applyState(k:ChatKey,raw:JSONObject) { if(key==k) { update(k) { it.copy(control=mergeControl(it.control,parseControl(raw))) };seen(k) } }
     /**
      * Words written on a new conversation's page before it existed go on to the conversation (web writeDraft): added
      * under a draft already there, never over it.
@@ -180,7 +184,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     fun refreshControl() {
         val k=key ?: return;val service=api ?: return;val t=token
         scope.launch {
-            try { val fresh=service.control(k.device,k.chat);if(t==token) update(k) { it.copy(control=mergeControl(it.control,fresh)) } }
+            try { val fresh=service.control(k.device,k.chat);if(t==token) { update(k) { it.copy(control=mergeControl(it.control,fresh)) };seen(k) } }
             catch(e:CancellationException) { throw e } catch(_:Exception) { }
         }
     }
@@ -276,7 +280,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                 save(record.copy(label=label),synthetic)
             }
             val control=runCatching { service.control(k.device,k.chat) }.getOrNull()
-            if(control!=null && binding==token && foreground) { update(k) { it.copy(control=mergeControl(it.control,control)) } }
+            if(control!=null && binding==token && foreground) { update(k) { it.copy(control=mergeControl(it.control,control)) };seen(k) }
         } catch(e:Exception) {
             if(began) {
                 val failure=e as? ServiceFailure

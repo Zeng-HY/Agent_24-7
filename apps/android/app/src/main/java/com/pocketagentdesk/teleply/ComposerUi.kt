@@ -212,7 +212,7 @@ private fun QueueTray(app: String, chat: ComposerState, raw: JSONObject, vm: Rea
                 val running = chat.control.running
                 PillButton(
                     "立即补充",
-                    { if (app == "claude") vm.workspace.action("claude/choose", JSONObject().put("token", row.token)) else vm.composer.promote(row.id) },
+                    { if (app == "claude") vm.workspace.action("claude/choose", JSONObject().put("token", row.token), local = claudePress("steer", row.id)) else vm.composer.promote(row.id) },
                     style = PillStyle.Text,
                     minHeight = 36.dp,
                     enabled = running && !chat.submitting && !ws.busy && (app != "claude" || row.token.isNotBlank()),
@@ -269,7 +269,7 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).padding(vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
         )
-        if (unknown) PillButton("核对上次操作", vm.workspace::checkAction, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy)
+        if (unknown) PillButton("核对上次操作", vm.workspace::checkAction, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy && !ws.checking)
         else if (opens) PillButton("电脑上打开", vm.workspace::openOnComputer, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy)
     }
 }

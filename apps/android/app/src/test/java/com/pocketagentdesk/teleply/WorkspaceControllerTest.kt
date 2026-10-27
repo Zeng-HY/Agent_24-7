@@ -35,8 +35,83 @@ private class WorkspaceApi:ReadApi by FixtureApi() {
         return JSONObject().put("request_id",body.string("request_id")).put("accepted",true)
     }
 }
+/** Claude as the computer reads it: [asking] a question with an option, else nothing waiting; a press's reply may be [lost]. */
+private class ClaudePressApi:ReadApi by FixtureApi() {
+    var asking=true;var lost=true;var presses=0
+    override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+        if(route=="claude/choose") { presses++;if(lost) throw java.io.IOException("timeout");return JSONObject().put("ok",true).put("text","已在电脑上点选") }
+        return JSONObject()
+    }
+    override suspend fun control(device:String,chat:String,fresh:Boolean):Control {
+        val raw=JSONObject().put("available",true)
+        if(asking) raw.put("prompt",JSONObject("""{"title":"选哪个？","choices":[{"label":"甲","token":"t1"}],"nav":[]}"""))
+        return parseControl(raw)
+    }
+}
 @OptIn(ExperimentalCoroutinesApi::class)
 class WorkspaceControllerTest {
+    /** 10-27: a Claude press whose reply was lost. 核对上次操作 reads Claude again and settles it with what it found; nothing is pressed again. */
+    @Test fun aLostClaudePressIsCheckedAndSettledWithoutPressingAgain()=runTest {
+        val claude=key.copy(app="claude");val api=ClaudePressApi();val shown=mutableListOf<JSONObject>()
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.stateRead={ _,raw -> shown+=raw };c.bind(claude,api,false);runCurrent()
+        c.action("claude/choose",JSONObject().put("token","t1"),local=claudePress("choice"));runCurrent()
+        val pending=JSONObject(c.state.value.saved).getJSONObject("pending_action")
+        assertEquals("unknown",pending.string("status"));assertTrue(pending.optLong("at")>0);assertEquals("choice",pending.getJSONObject("local").string("what"))
+        assertFalse(pending.getJSONObject("body").has("local"))
+        assertEquals("没收到电脑的回复，上次操作的结果还没确认；不会自动重试。",c.state.value.error)
+        c.checkAction();runCurrent()
+        assertEquals("电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。",c.state.value.result)
+        assertEquals("done",JSONObject(c.state.value.saved).getJSONObject("pending_action").string("status"))
+        assertEquals(1,api.presses);assertEquals(1,shown.size);assertNull(c.state.value.error);assertFalse(c.state.value.busy);assertFalse(c.state.value.checking)
+        // Settled, the same option can be pressed again.
+        api.lost=false;c.action("claude/choose",JSONObject().put("token","t1"),local=claudePress("choice"));runCurrent()
+        assertEquals(2,api.presses);assertNull(c.state.value.error)
+        // Lost again, and this time nothing waits on the computer any more.
+        api.lost=true;c.action("claude/choose",JSONObject().put("token","t2"),local=claudePress("choice"));runCurrent()
+        api.asking=false;c.checkAction();runCurrent()
+        assertEquals("电脑上已经没有在等的选项，上次的选择已处理。",c.state.value.result);assertEquals(3,api.presses)
+        assertEquals(2,JSONObject(c.state.value.saved).getJSONArray("action_history").length())
+    }
+    /** 10-27: past the 2 minutes the computer takes the token, or kept without a time, a press goes quietly on the next state read. */
+    @Test fun aStaleClaudePressGoesQuietlyOnTheNextStateRead()=runTest {
+        val claude=key.copy(app="claude");val store=WorkspaceStore()
+        fun stored(at:Long?)=JSONObject().put("pending_action",JSONObject().put("route","claude/choose").put("body",JSONObject().put("token","t1").put("request_id","r1")).put("status","unknown").apply { if(at!=null) put("at",at) }).toString()
+        for(at in listOf(null,System.currentTimeMillis()-ClaudePressLife-1_000)) {
+            store.values[claude to "workspace"]=stored(at)
+            val c=WorkspaceController(backgroundScope,store);c.bind(claude,ClaudePressApi(),false);runCurrent()
+            c.claudeStateRead(claude);runCurrent()
+            val pending=JSONObject(c.state.value.saved).getJSONObject("pending_action")
+            assertEquals("done",pending.string("status"));assertEquals("expired",pending.string("settled"));assertEquals("",c.state.value.result)
+            assertEquals("done",JSONObject(store.values[claude to "workspace"]!!).getJSONObject("pending_action").string("status"))
+        }
+        // A press of a moment ago may still land: it stays to be checked.
+        store.values[claude to "workspace"]=stored(System.currentTimeMillis())
+        val fresh=WorkspaceController(backgroundScope,store);fresh.bind(claude,ClaudePressApi(),false);runCurrent()
+        fresh.claudeStateRead(claude);runCurrent()
+        assertEquals("unknown",JSONObject(fresh.state.value.saved).getJSONObject("pending_action").string("status"))
+        // Codex and DeepSeek actions are not Claude presses: they wait for their own check.
+        val codex=WorkspaceStore();codex.values[key to "workspace"]=stored(null).replace("claude/choose","codex/answer")
+        val other=WorkspaceController(backgroundScope,codex);other.bind(key,ClaudePressApi(),false);runCurrent()
+        other.claudeStateRead(key);runCurrent()
+        assertEquals("unknown",JSONObject(other.state.value.saved).getJSONObject("pending_action").string("status"))
+    }
+    /** What a checked Claude press came to: a stop, a 立即补充, plan options; a press kept before 10-27 reads as a choice. */
+    @Test fun whatACheckedClaudePressCameTo() {
+        fun found(press:JSONObject,raw:String)=claudePressFound(JSONObject().put("local",press),parseControl(JSONObject(raw)))
+        assertEquals("电脑上的 Claude 还在运行；上次的停止可能没送到，需要的话请再点一次。",found(claudePress("stop"),"""{"running":true}"""))
+        assertEquals("电脑上的 Claude 已经停下了。",found(claudePress("stop"),"""{"running":false}"""))
+        assertEquals("这条消息还在电脑上排队；上次的立即补充可能没送到，可以再点一次。",found(claudePress("steer","q1"),"""{"queued":[{"id":"q1","text":"x","token":"t"}]}"""))
+        assertEquals("这条消息已经不在电脑上排队了，上次的立即补充已处理。",found(claudePress("steer","q1"),"""{"queued":[]}"""))
+        assertEquals("电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。",claudePressFound(JSONObject(),parseControl(JSONObject("""{"actions":[{"name":"Yes","token":"t"}]}"""))))
+    }
+    /** 核对上次操作 with nothing open left the page busy for good: every later action and state poll waited on it. */
+    @Test fun checkingTheLastActionLeavesThePageFree()=runTest {
+        val api=WorkspaceApi().apply { uncertain=true };val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.action("codex/answer",JSONObject("""{"question_id":"q","answers":{"a":["A"]}}"""),JSONObject("""{"id":"q","answer_revision":"v1"}"""));runCurrent()
+        c.checkAction();runCurrent()
+        assertEquals("回答回执：unknown",c.state.value.result);assertFalse(c.state.value.busy);assertFalse(c.state.value.checking)
+        assertEquals("unknown",JSONObject(c.state.value.saved).getJSONObject("pending_action").string("status"))
+    }
     @Test fun computerFileOpensDownloadWithoutChangingReferencesOrDraft()=runTest {
         val api=object:ReadApi by FixtureApi() {
             override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {

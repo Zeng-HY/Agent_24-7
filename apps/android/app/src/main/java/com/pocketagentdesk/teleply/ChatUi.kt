@@ -337,7 +337,7 @@ private fun ChatTopBar(s: ReaderState, vm: ReaderViewModel, chat: ComposerState,
         val canStop = chat.control.running && (s.app != "claude" || claudeStop.isNotBlank())
         if (canStop) {
             StopPill("停止这一轮", enabled = chat.control.available && !chat.submitting, disabledReason = "暂时不能控制这个来源") {
-                if (s.app == "claude") vm.workspace.action("claude/choose", JSONObject().put("token", claudeStop)) else vm.composer.stop()
+                if (s.app == "claude") vm.workspace.action("claude/choose", JSONObject().put("token", claudeStop), local = claudePress("stop")) else vm.composer.stop()
             }
             Spacer(Modifier.width(8.dp))
         }
@@ -867,13 +867,13 @@ private fun ClaudeCards(raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState
                 val label = claudeChoiceLabel(choice)
                 // A tap clicks the same choice on the computer straight away (web: 正在电脑上点选…).
                 OptionCard(label, choice.string("description"), choice.optBoolean("pressed"), enabled = !ws.busy && token.isNotBlank(), description = "选择$label") {
-                    c.action("claude/choose", JSONObject().put("token", token))
+                    c.action("claude/choose", JSONObject().put("token", token), local = claudePress("choice"))
                 }
             }
             if (busy) CardStatus("正在电脑上点选…")
             val nav = prompt.rows("nav") { it }
             if (nav.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                nav.forEach { item -> PillButton(item.string("label").ifBlank { item.string("name") }, { c.action("claude/choose", JSONObject().put("token", item.string("token"))) }, enabled = !ws.busy && item.string("token").isNotBlank(), style = if (item.string("name") in ClaudeGoOn) PillStyle.Primary else PillStyle.Secondary) }
+                nav.forEach { item -> PillButton(item.string("label").ifBlank { item.string("name") }, { c.action("claude/choose", JSONObject().put("token", item.string("token")), local = claudePress("choice")) }, enabled = !ws.busy && item.string("token").isNotBlank(), style = if (item.string("name") in ClaudeGoOn) PillStyle.Primary else PillStyle.Secondary) }
             }
             if (claudeTakesOther(prompt)) Text("要自己写答案的话，请在电脑上点「Other」填写。", style = MaterialTheme.typography.note, color = p.muted)
         }
@@ -883,7 +883,7 @@ private fun ClaudeCards(raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState
     if (actions.isNotEmpty()) QuestionCard {
         CardTitle("计划与执行选项")
         actions.forEach { action ->
-            PillButton(action.string("label").ifBlank { action.string("name") }, { c.action("claude/choose", JSONObject().put("token", action.string("token"))) }, enabled = !ws.busy && action.string("token").isNotBlank(), modifier = Modifier.fillMaxWidth())
+            PillButton(action.string("label").ifBlank { action.string("name") }, { c.action("claude/choose", JSONObject().put("token", action.string("token")), local = claudePress("choice")) }, enabled = !ws.busy && action.string("token").isNotBlank(), modifier = Modifier.fillMaxWidth())
         }
     }
 }

@@ -516,6 +516,21 @@ abstract class ReaderUiScenarios {
         compose.waitForIdle()
         org.junit.Assert.assertEquals(top,first.fetchSemanticsNode().boundsInRoot.top,2f)
     }
+    /** 10-27: a Claude press whose reply was lost: 核对上次操作 reads Claude again, says what it found, and the line goes. */
+    @Test fun aLostClaudePressIsCheckedFromTheStatusLine() {
+        launch();fixtureList();openChat("Claude 选项示例","claude-demo")
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.runOnIdle { vm.fixtureWorld!!.network=FixtureNetwork.Offline }
+        compose.onNodeWithContentDescription("选择完整段落").performScrollTo().performClick()
+        compose.waitUntil(10000) { org.json.JSONObject(vm.workspace.state.value.saved).optJSONObject("pending_action")?.string("status")=="unknown" && !vm.workspace.state.value.busy }
+        compose.onNodeWithText("没收到电脑的回复，上次操作的结果还没确认；不会自动重试。").assertExists()
+        compose.runOnIdle { vm.fixtureWorld!!.network=FixtureNetwork.Instant }
+        compose.onNodeWithText("核对上次操作").performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.result.isNotBlank() && !vm.workspace.state.value.checking }
+        compose.onNodeWithText("电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。").assertExists()
+        compose.onNodeWithText("核对上次操作").assertDoesNotExist()
+        compose.onNodeWithText("上次操作的结果还没确认").assertDoesNotExist()
+    }
     /** The conversation can scroll no further down: the latest messages are on screen (the list's own reading of its end). */
     protected fun atBottom():Boolean {
         val range=compose.onNodeWithTag("messages").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange]

@@ -17,9 +17,35 @@ import org.json.JSONObject
  * [newData] is what the new-conversation sheet lists (folders, models, permissions): what this phone had first, the
  * computer's lists when they come (0.8, web new-chat-ui.js); [newNote] a line under the sheet when a list did not come.
  */
-data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null) {
+data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null,
+                          /** 核对上次操作 reading the computer: the button waits; nothing else does. */
+                          val checking:Boolean=false) {
     /** One Claude button at a time: its click waits for the computer's window. */
     val pressing:Boolean get() = cards.values.any { it.startsWith("pressing:") }
+}
+
+/**
+ * How long the computer takes a Claude press after it gave its one-time token (claude_control _ticket and choose:
+ * 120 s). A press whose reply was lost cannot land after that.
+ */
+const val ClaudePressLife=120_000L
+
+/** What a Claude press was, kept with it on this phone only (never sent): an option or button of its card ("choice"), 停止这一轮 ("stop"), or 立即补充 of a queued message ([item]). */
+fun claudePress(what:String,item:String="")=JSONObject().put("what",what).apply { if(item.isNotBlank()) put("item",item) }
+
+/**
+ * What a Claude press whose reply was lost came to, by Claude's state read since (10-27): still waiting for it, so
+ * press again; or nothing waiting any more, so it was dealt with. Nothing is sent again either way.
+ */
+fun claudePressFound(pending:JSONObject,state:Control):String {
+    val raw=runCatching { JSONObject(state.raw) }.getOrDefault(JSONObject())
+    val press=pending.optJSONObject("local") ?: JSONObject()
+    return when(press.string("what")) {
+        "stop" -> if(state.running) "电脑上的 Claude 还在运行；上次的停止可能没送到，需要的话请再点一次。" else "电脑上的 Claude 已经停下了。"
+        "steer" -> if(press.string("item").isNotBlank() && press.string("item") in raw.rows("queued") { it.string("id") }) "这条消息还在电脑上排队；上次的立即补充可能没送到，可以再点一次。"
+            else "这条消息已经不在电脑上排队了，上次的立即补充已处理。"
+        else -> if(pendingCards("claude",raw).isNotEmpty()) "电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。" else "电脑上已经没有在等的选项，上次的选择已处理。"
+    }
 }
 class WorkspaceController(private val scope:CoroutineScope,private val store:ReaderStore) {
     private val mutable=MutableStateFlow(WorkspaceState());val state=mutable.asStateFlow()
@@ -411,33 +437,88 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         launchSafe { persist(k,j) }
     }
     fun setNewPermission(option:JSONObject) { val k=key ?: return;launchSafe { persist(k,saved(k).put("new_permission",option.string("value")).put("new_permission_name",option.string("name")).put("permission_confirmed",option.optBoolean("confirm"))) } }
+    /**
+     * 核对上次操作: what became of an action whose reply was lost, read back from the computer; nothing is sent again.
+     * A Codex answer has a receipt, DeepSeek's model and permission are read back. A Claude press has neither, and the
+     * computer takes its token for 2 minutes only (10-27: the line stayed for ever and a tap changed nothing): Claude's
+     * state is read again, shown, and the press settled, with what that state shows ([claudePressFound]).
+     */
     fun checkAction() {
-        val k=key ?: return;val service=api ?: return;val pending=saved(k).optJSONObject("pending_action") ?: return
-        if(state.value.busy) return
-        launchSafe { try {
-            if(pending.string("route")=="codex/answer") {
-                val receipt=service.receipt(k.device,k.chat,pending.getJSONObject("body").getString("request_id"))
-                if(receipt.string("state") in listOf("accepted","rejected")) persist(k,saved(k).put("pending_action",pending.put("status","done")))
-                update(k) { it.copy(result="回答回执：${receipt.string("state")}") }
-            } else {
-                val actual=JSONObject(service.control(k.device,k.chat).raw);val body=pending.getJSONObject("body")
-                val confirmed=when(pending.string("route")) {
-                    "deepseek/permission" -> actual.string("permission")==body.string("preset")
-                    "deepseek/model" -> body.optJSONObject("settings")?.let { wanted -> val current=actual.optJSONObject("settings") ?: JSONObject();wanted.keys().asSequence().all { wanted.opt(it)==current.opt(it) } }==true
-                    else -> false
+        val k=key ?: return;val service=api ?: return
+        val pending=saved(k).optJSONObject("pending_action")?.takeIf { it.string("status")=="unknown" } ?: return
+        if(state.value.busy || state.value.checking) return
+        update(k) { it.copy(checking=true,error=null,result="") }
+        launchSafe {
+            var checked=false
+            try {
+                val result=when(pending.string("route")) {
+                    "codex/answer" -> {
+                        val receipt=service.receipt(k.device,k.chat,pending.getJSONObject("body").getString("request_id"))
+                        if(receipt.string("state") in listOf("accepted","rejected")) settle(k,pending,"receipt")
+                        "回答回执：${receipt.string("state")}"
+                    }
+                    "claude/choose" -> {
+                        val read=service.control(k.device,k.chat)
+                        stateRead(k,JSONObject(read.raw))
+                        settle(k,pending,"checked")
+                        claudePressFound(pending,read)
+                    }
+                    else -> {
+                        val actual=JSONObject(service.control(k.device,k.chat).raw);val body=pending.getJSONObject("body")
+                        val confirmed=when(pending.string("route")) {
+                            "deepseek/permission" -> actual.string("permission")==body.string("preset")
+                            "deepseek/model" -> body.optJSONObject("settings")?.let { wanted -> val current=actual.optJSONObject("settings") ?: JSONObject();wanted.keys().asSequence().all { wanted.opt(it)==current.opt(it) } }==true
+                            else -> false
+                        }
+                        if(confirmed) settle(k,pending,"read")
+                        if(confirmed) "已读回所选设置" else "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。"
+                    }
                 }
-                if(confirmed) persist(k,saved(k).put("pending_action",pending.put("status","done")))
-                update(k) { it.copy(result=if(confirmed) "已读回所选设置" else "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。") }
+                update(k) { it.copy(result=result) }
+                checked=true
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) { update(k) { it.copy(error=e.message ?: "没读到电脑上的状态，请稍后再核对") } }
+            finally { update(k) { it.copy(checking=false) } }
+            // The pane and the cards follow what was found. (A plain refresh() here, with no pane open, left the page
+            // busy for good: every later action and state poll waited on it.)
+            if(checked && valid(k)) {
+                state.value.pane?.let { refresh(it) }
+                if(pending.string("route")!="claude/choose") changed()
             }
-            refresh()
-        } catch(e:Exception) { update(k) { it.copy(error=e.message) } } }
+        }
     }
+    /**
+     * Claude's state was read (entering the conversation, a poll, after a send or a press): a press still unknown past
+     * the 2 minutes the computer takes its token, or kept before 10-27 without a time, can no longer land. It is
+     * settled quietly and its line goes (10-27: 「上次操作的结果还没确认」 stayed for ever). Nothing is sent again.
+     */
+    fun claudeStateRead(k:ChatKey) {
+        if(!valid(k) || k.app!="claude" || !state.value.ready || state.value.checking || k in active) return
+        val pending=saved(k).optJSONObject("pending_action")?.takeIf { it.string("route")=="claude/choose" && it.string("status")=="unknown" } ?: return
+        val at=pending.optLong("at")
+        if(at>0 && System.currentTimeMillis()-at<ClaudePressLife) return
+        launchSafe { settle(k,pending,"expired") }
+    }
+    /**
+     * [pending] done, kept as the last action (the next one moves it to action_history), when it is still the one
+     * waiting there; and the words its lost reply left in the status line go with it.
+     */
+    private suspend fun settle(k:ChatKey,pending:JSONObject,how:String) {
+        if(!valid(k)) return
+        val j=saved(k);val now=j.optJSONObject("pending_action") ?: return
+        if(now.string("status")!="unknown" || now.optJSONObject("body")?.string("request_id")!=pending.optJSONObject("body")?.string("request_id")) return
+        persist(k,j.put("pending_action",JSONObject(now.toString()).put("status","done").put("settled",how)))
+        update(k) { it.copy(error=if(it.error!=null && it.error==lostReply) null else it.error) }
+    }
+    /** What a lost reply left in the status line ([action]), cleared when that action is settled. */
+    private var lostReply:String?=null
     /**
      * An answer, approval or desktop choice, posted at once as the web does (0.8): the computer checks it still waits
      * there (question revision, event, token) and turns a stale one away, so the phone no longer reads the state first.
-     * [question] stays for the call sites; its revision travels in the body.
+     * [question] stays for the call sites; its revision travels in the body. The copy kept on this phone has when it was
+     * posted ("at", 10-27) and [local] (what a Claude press was, [claudePress]), neither of which is sent.
      */
-    fun action(route:String,body:JSONObject,@Suppress("UNUSED_PARAMETER") question:JSONObject?=null) {
+    fun action(route:String,body:JSONObject,@Suppress("UNUSED_PARAMETER") question:JSONObject?=null,local:JSONObject?=null) {
         val k=key ?: return;val service=api ?: return;if(state.value.busy || !active.add(k)) return
         val synthetic=fixture;update(k) { it.copy(busy=true,error=null,result="") }
         launchSafe {
@@ -451,20 +532,26 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 require(previous==null || previous.string("status")=="done" || actionIdentity(previous.string("route"),previous.optJSONObject("body") ?: JSONObject())!=actionIdentity(route,payload)) { "上次操作结果仍待核对，请刷新来源状态后处理" }
                 val next=saved(k)
                 if(previous!=null) next.put("action_history",JSONArray(next.rows("action_history") { it }+previous))
-                persist(k,next.put("pending_action",JSONObject().put("route",route).put("body",payload).put("status","unknown")),synthetic)
+                val at=System.currentTimeMillis()
+                fun kept(status:String)=JSONObject().put("route",route).put("body",payload).put("status",status).put("at",at).apply { if(local!=null) put("local",JSONObject(local.toString())) }
+                persist(k,next.put("pending_action",kept("unknown")),synthetic)
                 posted=true
                 val result=if(route=="codex/answer") service.command(k.device,"answer",payload) else service.detail(k.device,route,body=payload)
-                persist(k,saved(k).put("pending_action",JSONObject().put("route",route).put("body",payload).put("status","done")),synthetic)
+                persist(k,saved(k).put("pending_action",kept("done")),synthetic)
                 update(k) { it.copy(result=result.string("text").ifBlank { "操作已返回，请刷新核对实际状态" }) }
                 if(state.value.pane!=null) refresh(state.value.pane.orEmpty())
                 changed()
             } catch(e:CancellationException) { throw e }
             catch(e:Exception) {
                 // Turned away by the computer (4xx: answered elsewhere, expired, changed): nothing happened there, so it
-                // is not left to be checked. A lost reply (network) stays "unknown" and is never sent again by itself.
-                if(posted && e is ServiceFailure && e.status in 400..499) persist(k,saved(k).apply { remove("pending_action") },synthetic)
-                update(k) { it.copy(error=e.message ?: "操作结果待确认；不会自动重试") }
-                if(posted && e is ServiceFailure && e.status in 400..499) changed()
+                // is not left to be checked. A lost reply (network) stays "unknown" and is never sent again by itself;
+                // it says so in words, not the system's ("timeout").
+                val turnedAway=posted && e is ServiceFailure && e.status in 400..499
+                if(turnedAway) persist(k,saved(k).apply { remove("pending_action") },synthetic)
+                val why=if(posted && e !is ServiceFailure) "没收到电脑的回复，上次操作的结果还没确认；不会自动重试。" else e.message ?: "操作结果待确认；不会自动重试"
+                lostReply=if(posted && !turnedAway) why else null
+                update(k) { it.copy(error=why) }
+                if(turnedAway) changed()
             }
             finally { active.remove(k);update(k) { it.copy(busy=false) } }
         }

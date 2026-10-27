@@ -64,6 +64,25 @@ class ChatControllerTest {
         c.pollPaused={ true };advanceTimeBy(10_000);runCurrent()
         assertEquals(3,reads.size)
     }
+    /**
+     * 10-27 (the iPhone redrew a long DeepSeek conversation on every poll): a poll that finds nothing new leaves the page
+     * as it was; every read is told on, for a Claude press that can no longer land.
+     */
+    @Test fun pollsWithNothingNewChangeNothingAndEachReadIsTold()=runTest {
+        var state="""{"available":true,"running":false}"""
+        val api=object:TestApi() {
+            override suspend fun control(device:String,chat:String,fresh:Boolean)=parseControl(JSONObject(state))
+            override fun events(device:String,chat:String)=flow<LiveFrame> { awaitCancellation() }
+        }
+        val reads=mutableListOf<ChatKey>();val c=ChatController(backgroundScope,DraftStore());c.seen={ reads+=it }
+        c.bind(key.copy(app="deepseek"),api,true,false) {};runCurrent()
+        val emitted=mutableListOf<ComposerState>();backgroundScope.launch { c.state.collect { emitted+=it } };runCurrent()
+        val before=emitted.size
+        advanceTimeBy(7_501);runCurrent()
+        assertEquals(before,emitted.size);assertEquals(4,reads.size)
+        state="""{"available":true,"running":true}""";advanceTimeBy(2_500);runCurrent()
+        assertEquals(before+1,emitted.size);assertTrue(c.state.value.control.running);assertEquals(5,reads.size)
+    }
     @Test fun deepseekPollsEveryTwoAndAHalfSeconds()=runTest {
         val reads=mutableListOf<Boolean>()
         val api=object:TestApi() {

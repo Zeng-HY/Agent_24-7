@@ -133,6 +133,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         // No state poll while a tap waits on the computer (web claude-ui.js `choosing`).
         composer.pollPaused={ workspace.state.value.busy || workspace.state.value.pressing || composer.state.value.submitting }
         workspace.stateRead={ k,raw -> composer.applyState(k,raw) }
+        // Each read of Claude's state lets a press that can no longer land go quietly (10-27).
+        composer.seen={ k -> workspace.claudeStateRead(k) }
         workspace.created={ job -> jobCreated(job) }
         workspace.adopted={ job -> jobs.adopt(job) }
         jobs.settle={ job -> if(isNewPage(state.value.chat) && state.value.chat?.id==job.preview) finishJob(job) }

@@ -82,7 +82,7 @@ private fun fileBack(data:JSONObject,c:WorkspaceController):()->Unit = if(data.o
     ProgressLine(s.busy,p.line)
     s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
     if(s.result.isNotBlank() && s.pane!="file") Text(s.result,style=MaterialTheme.typography.note,color=p.muted)
-    if(j.optJSONObject("pending_action")?.string("status")=="unknown") PillButton("核对上次操作",c::checkAction,enabled=!s.busy,style=PillStyle.Text)
+    if(j.optJSONObject("pending_action")?.string("status")=="unknown") PillButton("核对上次操作",c::checkAction,enabled=!s.busy && !s.checking,style=PillStyle.Text)
 }
 
 // --- New conversation (web new-chat sheet, spec 0.4 §4.4) -----------------------------------------------------
