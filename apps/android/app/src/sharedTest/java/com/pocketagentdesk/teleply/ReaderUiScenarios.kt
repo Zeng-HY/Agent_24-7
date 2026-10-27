@@ -142,6 +142,26 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("电脑端尚未打开这个对话",substring=true).assertDoesNotExist()
         compose.onNodeWithContentDescription("发送").assertIsEnabled()
     }
+    /** 10-27 (as on the iPhone): Codex's own notes are not shown; a file an answer links to opens its page, one not listed says why. */
+    @Test fun answerFileLinksOpenTheirPageAndCodexNotesStayHidden() {
+        launch();fixtureList();openChat("电脑上没打开的 Codex 对话",FixtureWorld.AWAY_CODEX)
+        compose.onAllNodesWithText("MEMORY.md",substring=true).assertCountEquals(0)
+        compose.onAllNodesWithText("codex-file-citation",substring=true).assertCountEquals(0)
+        compose.onAllNodesWithText("链接未开放",substring=true).assertCountEquals(0)
+        fun to(path:String):(androidx.compose.ui.text.AnnotatedString.Range<androidx.compose.ui.text.LinkAnnotation>)->Boolean = { (it.item as? androidx.compose.ui.text.LinkAnnotation.Url)?.url?.let(::fileLinkPath)==path }
+        val answer=compose.onNodeWithText("整理好了",substring=true)
+        answer.performFirstLinkClick(to("D:\\fixture\\会议录音.m4a"))
+        compose.waitUntil(10000) { vm.workspace.state.value.error?.contains("不在电脑列出的对话文件里")==true }
+        compose.onNodeWithText("这个文件不在电脑列出的对话文件里",substring=true).assertExists()
+        answer.performFirstLinkClick(to("D:\\fixture\\说明.md"))
+        compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { org.junit.Assert.assertEquals("fixture-md",org.json.JSONObject(vm.workspace.state.value.data).string("id")) }
+        compose.runOnIdle { vm.workspace.close() }
+        // Codex's file citation is a link to its file.
+        compose.onNodeWithText("logo.png").performFirstLinkClick(to("D:\\fixture\\images\\logo.png"))
+        compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { org.junit.Assert.assertEquals("fixture-png",org.json.JSONObject(vm.workspace.state.value.data).string("id")) }
+    }
     /** 10-27 (web sendConv): Claude not shown on the computer reads its recorded names and takes the message all the same. */
     @Test fun claudeNotShownOnTheComputerNamesItsChipsAndSendsAllTheSame() {
         launch();fixtureList();openChat("电脑上没在显示的 Claude 对话",FixtureWorld.AWAY_CLAUDE)

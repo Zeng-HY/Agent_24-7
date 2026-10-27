@@ -506,7 +506,7 @@ class FixtureWorld {
         created.any { it.first.id == chat } -> created.first { it.first.id == chat }.second.let { text ->
             listOf(Message("$chat-1", "user", text.ifBlank { "请查看这些图片或引用。" }), Message("$chat-2", "assistant", "本地示例：收到，这是固定的回复。"))
         }
-        chat == AWAY_CODEX -> listOf(Message("w1", "user", "把上周的会议记录整理成要点。"), Message("w2", "assistant", "整理好了，放在 `docs/meeting.md`。"))
+        chat == AWAY_CODEX -> listOf(Message("w1", "user", "把上周的会议记录整理成要点。"), Message("w2", "assistant", AWAY_ANSWER))
         chat == AWAY_CLAUDE -> listOf(Message("w3", "user", "检查一下发布脚本。"), Message("w4", "assistant", "检查完了，脚本没有问题。"))
         app == "claude" && chat == "claude-next" -> listOfNotNull(
             Message("n1", "user", "把发布说明的测试补齐。", details = """{"origin":"other_chat"}"""),
@@ -580,6 +580,24 @@ class FixtureWorld {
         private val AWAY_MODELS = listOf("claude-opus-5-5" to "Opus 5.5", "claude-sonnet-5" to "Sonnet 5")
         private val AWAY_EFFORTS = listOf("Low" to "low", "Medium Recommended" to "medium", "High" to "high", "Extra" to "xhigh", "Max 3.5× or more usage" to "max", "Ultracode" to "ultra")
         private const val AWAY_MODES = """[{"name":"auto","label":"Auto"},{"name":"default","label":"Manual"},{"name":"plan","label":"Plan"}]"""
+        /**
+         * An answer as Codex writes them (10-27): links to files on the computer, one of them not among the conversation's
+         * files, a file citation, and its memory notes, which the phone does not show.
+         */
+        val AWAY_ANSWER = """
+整理好了，要点在 [说明.md](D:\fixture\说明.md)；原始录音 [会议录音.m4a](D:\fixture\会议录音.m4a) 不在对话文件里。
+
+:codex-file-citation{path="D:\fixture\images\logo.png" purpose="output"}
+
+<oai-mem-citation>
+<citation_entries>
+MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
+</citation_entries>
+<rollout_ids>
+01a0bef3-b1d0-79d3-b7e4-4251056b2729
+</rollout_ids>
+</oai-mem-citation>
+""".trimIndent()
         /** codex_control's answer for a conversation no Codex window has open. */
         private const val CODEX_AWAY = """{"available":false,"reason":"电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试","settings":null}"""
         private const val TASK_TITLE = "整理发布清单"

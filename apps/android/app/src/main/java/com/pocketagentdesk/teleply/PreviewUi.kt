@@ -42,6 +42,13 @@ fun normalizePath(path: String): String {
     return parts.joinToString("/").lowercase()
 }
 
+/**
+ * A path as [normalizePath] folds it, without a separator before a punctuation mark: the Markdown reader takes a
+ * backslash before one for an escape and drops it (an answer's link to D:\a\.claude arrives as D:\a.claude). A file
+ * link is matched this way when its exact path is not listed.
+ */
+fun looseFilePath(path: String) = normalizePath(path).replace(Regex("""/(?=[!-/:-@\[-`{-~])"""), "")
+
 /** The page's base address: its own folder, so that relative paths (with ..) resolve as on the computer. */
 fun previewBase(filePath: String): String {
     val folder = filePath.replace('\\', '/').substringBeforeLast('/', "")

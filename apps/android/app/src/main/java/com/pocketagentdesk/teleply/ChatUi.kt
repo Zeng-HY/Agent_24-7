@@ -523,9 +523,11 @@ private fun AnswerBlock(message: Message, s: ReaderState, vm: ReaderViewModel, m
 private fun MenuScope.MessageMenu(text: String, sheets: ChatSheets, message: Message) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    MenuRow("复制", { clipboard.setText(AnnotatedString(text)) }, icon = TeleplyIcons.Copy)
-    MenuRow("选择文字", { sheets.select = message.copy(text = text) }, icon = TeleplyIcons.Text)
-    MenuRow("分享", { shareText(context, text) }, icon = TeleplyIcons.Share)
+    // Copied and shared as shown: without Codex's own notes (tidyAnswer, 10-27).
+    val shown = remember(text) { tidyAnswer(text) }
+    MenuRow("复制", { clipboard.setText(AnnotatedString(shown)) }, icon = TeleplyIcons.Copy)
+    MenuRow("选择文字", { sheets.select = message.copy(text = shown) }, icon = TeleplyIcons.Text)
+    MenuRow("分享", { shareText(context, shown) }, icon = TeleplyIcons.Share)
 }
 
 private fun shareText(context: Context, text: String) {

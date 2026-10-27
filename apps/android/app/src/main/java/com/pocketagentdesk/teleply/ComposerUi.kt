@@ -6,6 +6,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,17 +19,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -52,7 +57,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -60,6 +67,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -76,7 +84,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 private val EffortNames = mapOf("none" to "无", "minimal" to "最低", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高", "max" to "最高", "ultra" to "Ultra")
@@ -715,34 +727,58 @@ fun MenuScope.AttachMenu(app: String, ready: Boolean, pickers: AttachPickers, vm
     if (app != "deepseek") MenuRow("引用技能", { vm.workspace.panel("skill") }, icon = TeleplyIcons.Skill, enabled = ready)
 }
 
-/** Attachment and reference tiles inside the card; each removable, failures say why (spec 8.2). */
+/**
+ * Attachment and reference tiles inside the card; each removable, failures say why (spec 8.2). A picture shows itself
+ * and opens large when tapped (user 10-27, as on the iPhone).
+ */
 @Composable
 fun Attachments(saved: JSONObject, vm: ReaderViewModel) {
     val uploads = saved.rows("uploads") { it }
     val refs = saved.rows("references") { it }
     if (uploads.isEmpty() && refs.isEmpty()) return
+    var looking by remember { mutableStateOf<String?>(null) }
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 6.dp, end = 6.dp, top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         uploads.forEach { row ->
             val status = when (row.string("status")) { "ready" -> null; "uploading", "checking" -> "上传中"; else -> "上传失败" }
-            Tile(if (row.optBoolean("image")) TeleplyIcons.Image else TeleplyIcons.File, row.string("name"), status, status == "上传失败", "移除附件 ${row.string("name")}") { vm.workspace.removeUpload(row.string("local")) }
+            Tile(if (row.optBoolean("image")) TeleplyIcons.Image else TeleplyIcons.File, row.string("name"), status, status == "上传失败", "移除附件 ${row.string("name")}", row.string("preview").ifBlank { null }, { looking = it }) { vm.workspace.removeUpload(row.string("local")) }
         }
         refs.forEach { ref ->
             val name = ref.string("name").ifBlank { ref.string("title") }
             Tile(if (ref.string("kind") == "skill") TeleplyIcons.Skill else if (ref.string("kind") == "chat") TeleplyIcons.Chat else TeleplyIcons.Folder, name, null, false, "移除引用 $name") { vm.workspace.removeReference(ref.string("id")) }
         }
     }
+    looking?.let { PhotoViewer(it) { looking = null } }
 }
 
+/** [preview]: a picture's preview, drawn small in place of the icon and name, opened large ([onLook]) when tapped. */
 @Composable
-private fun Tile(icon: androidx.compose.ui.graphics.vector.ImageVector, name: String, status: String?, failed: Boolean, removeLabel: String, onRemove: () -> Unit) {
+private fun Tile(icon: androidx.compose.ui.graphics.vector.ImageVector, name: String, status: String?, failed: Boolean, removeLabel: String, preview: String? = null, onLook: (String) -> Unit = {}, onRemove: () -> Unit) {
     val p = LocalTeleply.current
-    Row(Modifier.widthIn(max = 200.dp).clip(TeleplyShape.Thumb).background(if (failed) p.stopBg else p.panel).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = if (failed) p.error else p.muted, modifier = Modifier.size(16.dp))
-        Column(Modifier.weight(1f, fill = false).padding(start = 6.dp, top = 6.dp, bottom = 6.dp)) {
-            Text(name, style = MaterialTheme.typography.bodySmall, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val thumbnail by produceState<ImageBitmap?>(null, preview) { value = preview?.let { withContext(Dispatchers.IO) { photoThumbnail(it, 160)?.asImageBitmap() } } }
+    val picture = thumbnail
+    Row(Modifier.widthIn(max = 200.dp).clip(TeleplyShape.Thumb).background(if (failed) p.stopBg else p.panel).padding(start = if (picture != null) 4.dp else 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (picture != null && preview != null) {
+            Image(picture, contentDescription = "放大看 $name", contentScale = ContentScale.Crop,
+                modifier = Modifier.padding(vertical = 4.dp).size(40.dp).clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button) { onLook(preview) })
+        } else Icon(icon, contentDescription = null, tint = if (failed) p.error else p.muted, modifier = Modifier.size(16.dp))
+        if (picture == null || status != null) Column(Modifier.weight(1f, fill = false).padding(start = 6.dp, top = 6.dp, bottom = 6.dp)) {
+            if (picture == null) Text(name, style = MaterialTheme.typography.bodySmall, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (status != null) Text(status, style = MaterialTheme.typography.labelSmall, color = if (failed) p.error else p.muted)
         }
         TeleplyIconButton(TeleplyIcons.Close, removeLabel, onRemove, style = IconButtonStyle.Plain, tint = p.muted)
+    }
+}
+
+/** A picked picture large (the iPhone opens Quick Look): its preview over the whole window; a tap or 返回 closes it. */
+@Composable
+private fun PhotoViewer(path: String, onClose: () -> Unit) {
+    val picture by produceState<ImageBitmap?>(null, path) { value = withContext(Dispatchers.IO) { runCatching { android.graphics.BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() } }
+    Dialog(onClose, DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black).clickable(onClickLabel = "关闭", role = Role.Button, onClick = onClose), contentAlignment = Alignment.Center) {
+            picture?.let { Image(it, contentDescription = "图片", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+            // On a dark round backing, so it shows on a light picture too.
+            TeleplyIconButton(TeleplyIcons.Close, "关闭", onClose, modifier = Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(8.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape), style = IconButtonStyle.Plain, tint = Color.White)
+        }
     }
 }
 

@@ -82,8 +82,15 @@ class MainActivity : ComponentActivity() {
  * The whole app (spec 4): glass menus over everything, in-window sheets, the sidebar drawer, and one page per screen.
  * Wide windows (840dp and 480dp high) show the list and the conversation side by side (spec 6.7).
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable fun ReaderApp(s:ReaderState,vm:ReaderViewModel) {
+    // A file an answer links to opens its page (Markdown fileLink, 10-27); any other link goes to the system as before.
+    val system=LocalUriHandler.current
+    val links=remember(system,vm) { object:UriHandler { override fun openUri(uri:String) { val path=fileLinkPath(uri);if(path!=null) vm.workspace.openLinkedFile(path) else system.openUri(uri) } } }
+    CompositionLocalProvider(LocalUriHandler provides links) { ReaderScreens(s,vm) }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun ReaderScreens(s:ReaderState,vm:ReaderViewModel) {
     val p=LocalTeleply.current
     val graph=LocalContext.current.applicationContext as? NativeApplication
     val keyboard=LocalSoftwareKeyboardController.current
