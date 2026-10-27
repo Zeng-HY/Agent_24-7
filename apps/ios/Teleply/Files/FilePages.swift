@@ -112,13 +112,13 @@ struct FilesSheet: View {
 }
 
 /// A file's page (spec 4.5; web artifact-preview.js; Android FilePage): the system back and a centred title, the
-/// file as it is now. HTML opens as a page with 查看源码 beside it, Markdown as text to read; other text in a code
-/// panel; pictures and PDFs in the page and in Quick Look. 保存到文件 and 分享 hand a copy to the system. A file the
-/// page cannot show (a Word file, a file from the computer) has them in the page too, with Quick Look for what the
-/// system can show (Android 1.0.2); a Word, Excel or PowerPoint file the computer's Office can open shows above them
-/// as the PDF it makes (Windows dev.26), while the buttons keep taking the file itself. A download shows how far it
-/// got and can be stopped; a saved file can be opened from where it went. A computer file's page also adds it to the
-/// message.
+/// file as it is now, 保存到文件 and 分享 at the top right. HTML opens as a page with 查看源码 beside it, Markdown as text
+/// to read; other text in a code panel; a picture in the page, larger in Quick Look. A PDF, and a Word, Excel or
+/// PowerPoint file, a sound or a video up to 20 MB, fill the page as the phone itself shows them, the way 快速查看 does
+/// (user 10-28: "点开直接调用快速预览，不要这样转换了，下载按钮在右上角"); the computer's PDF of an Office file is for the
+/// web and Android. A file the page does not show offers Quick Look when the system can show it. A download shows how
+/// far it got and can be stopped; a saved file can be opened from where it went. A computer file's page also adds it
+/// to the message.
 struct FilePage: View {
     let model: AppModel
     @State private var rendered = true
@@ -136,103 +136,37 @@ struct FilePage: View {
         let data = workspace.data
         let meta = data["meta"]
         let name = data["name"].string().isEmpty ? "文件" : data["name"].string()
-        let lower = name.lowercased()
-        let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
-        let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
-        let loaded = !workspace.paneBusy && workspace.paneError == nil
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("当前文件 · " + operationLabel(meta["state"].string()) + (meta.has("size") ? " · " + byteSize(meta["size"].int64()) : ""))
-                    .captionFont()
-                    .foregroundStyle(Palette.muted)
-                if workspace.paneBusy { ProgressView().frame(maxWidth: .infinity) }
-                if let error = workspace.paneError {
-                    Text(error)
-                        .noteFont()
-                        .foregroundStyle(Palette.danger)
-                }
-                let text = workspace.fileText
-                if !text.isEmpty {
-                    if html || markdown {
-                        Picker("显示", selection: $rendered) {
-                            Text(html ? "查看页面" : "阅读视图").tag(true)
-                            Text("查看源码").tag(false)
-                        }
-                        .pickerStyle(.segmented)
-                        if !rendered {
-                            CodePanel(label: name, code: text, copyLabel: "复制文件内容")
-                        } else if html {
-                            HtmlPreview(model: model, source: text, file: data)
-                                .frame(height: 520)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
-                                .accessibilityLabel(Text("网页预览：" + name))
-                            Text("按网页打开：脚本和网上的图片照常加载；它拿不到这个应用的登录信息和手机里的文件，点链接用 Safari 打开。")
-                                .noteFont()
-                                .foregroundStyle(Palette.muted)
+        let kind = meta["kind"].string()
+        Group {
+            if let shown = workspace.preview, kind == "pdf" || kind == "download" {
+                VStack(alignment: .leading, spacing: 12) {
+                    facts(meta)
+                    Group {
+                        if kind == "pdf" {
+                            PDFPreview(url: shown)
                         } else {
-                            MarkdownView(source: text)
+                            DocumentPreview(url: shown)
+                                .id(shown)
                         }
-                    } else {
-                        CodePanel(label: name, code: text, copyLabel: "复制文件内容")
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
+                    footer(name)
                 }
-                if let preview = workspace.preview {
-                    if meta["kind"].string() == "image", let image = UIImage(contentsOfFile: preview.path) {
-                        Button { quickLook = preview } label: {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: .infinity)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Text("图片：\(name)，点按放大"))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        facts(meta)
+                        scrolled(name, kind: kind)
+                        footer(name)
                     }
-                    if meta["kind"].string() == "pdf" {
-                        pdfBox(preview)
-                    }
-                    Button("用快速查看打开", systemImage: "eye") { quickLook = preview }
-                        .buttonStyle(PillStyle())
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
-                if meta["size"].int64() > 20 * 1024 * 1024 && ["image", "pdf"].contains(meta["kind"].string()) {
-                    Text("文件超过20MB预览上限，可保存后用系统应用打开。")
-                        .noteFont()
-                        .foregroundStyle(Palette.muted)
-                }
-                if !workspace.fileNote.isEmpty {
-                    Text(workspace.fileNote)
-                        .noteFont()
-                        .foregroundStyle(Palette.muted)
-                }
-                // A Word, Excel or PowerPoint file as the computer's Office makes it a PDF.
-                if workspace.converting {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("正在用电脑上的 Office 转成 PDF…")
-                            .noteFont()
-                            .foregroundStyle(Palette.muted)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else if let pdf = workspace.officePDF {
-                    pdfBox(pdf)
-                } else if !workspace.convertNote.isEmpty {
-                    Text(workspace.convertNote)
-                        .noteFont()
-                        .foregroundStyle(Palette.danger)
-                }
-                if loaded && text.isEmpty && workspace.preview == nil {
-                    unshown(lower)
-                }
-                if data["reference"].isObject {
-                    Button("添加到消息", systemImage: "plus.circle") { workspace.addComputerFile() }
-                        .buttonStyle(PillStyle(wide: true))
-                        .disabled(workspace.transferring)
-                }
-                transferLine(name)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
         .background(Palette.page)
         .navigationTitle(name)
@@ -270,31 +204,100 @@ struct FilePage: View {
         }
     }
 
-    /// A PDF in the page, as tall as the HTML preview.
-    private func pdfBox(_ file: URL) -> some View {
-        PDFPreview(url: file)
-            .frame(height: 520)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
+    /// 当前文件 · its state · its size.
+    private func facts(_ meta: JSONValue) -> some View {
+        Text("当前文件 · " + operationLabel(meta["state"].string()) + (meta.has("size") ? " · " + byteSize(meta["size"].int64()) : ""))
+            .captionFont()
+            .foregroundStyle(Palette.muted)
     }
 
-    /// A file the page cannot show: what can be done with it, in the page and not only in the bar above. Shown as
-    /// the computer's PDF, the buttons still take the file itself.
+    /// What the page shows in its own scrolling: while it loads, what went wrong, the text, the picture, or what can be
+    /// done with a file it does not show.
     @ViewBuilder
-    private func unshown(_ lower: String) -> some View {
+    private func scrolled(_ name: String, kind: String) -> some View {
         let workspace = model.workspace
-        let looks = Self.quickLooks(lower)
-        let asPDF = workspace.converting || workspace.officePDF != nil
-        Button("保存到文件", systemImage: "square.and.arrow.down") { copy { saving = $0 } }
-            .buttonStyle(PillStyle(kind: .primary, wide: true))
-            .disabled(workspace.transferring)
-        if looks {
-            Button("用快速查看打开", systemImage: "eye") { copy { quickLook = $0 } }
+        let lower = name.lowercased()
+        let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
+        let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
+        let loaded = !workspace.paneBusy && workspace.paneError == nil
+        let text = workspace.fileText
+        let picture = kind == "image" ? workspace.preview.flatMap { UIImage(contentsOfFile: $0.path) } : nil
+        if workspace.paneBusy { ProgressView().frame(maxWidth: .infinity) }
+        if let error = workspace.paneError {
+            Text(error)
+                .noteFont()
+                .foregroundStyle(Palette.danger)
+        }
+        if !text.isEmpty {
+            if html || markdown {
+                Picker("显示", selection: $rendered) {
+                    Text(html ? "查看页面" : "阅读视图").tag(true)
+                    Text("查看源码").tag(false)
+                }
+                .pickerStyle(.segmented)
+                if !rendered {
+                    CodePanel(label: name, code: text, copyLabel: "复制文件内容")
+                } else if html {
+                    HtmlPreview(model: model, source: text, file: workspace.data)
+                        .frame(height: 520)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
+                        .accessibilityLabel(Text("网页预览：" + name))
+                    Text("按网页打开：脚本和网上的图片照常加载；它拿不到这个应用的登录信息和手机里的文件，点链接用 Safari 打开。")
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                } else {
+                    MarkdownView(source: text)
+                }
+            } else {
+                CodePanel(label: name, code: text, copyLabel: "复制文件内容")
+            }
+        }
+        if let preview = workspace.preview, let picture {
+            Button { quickLook = preview } label: {
+                Image(uiImage: picture)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("图片：\(name)，点按放大"))
+        }
+        if !workspace.fileNote.isEmpty {
+            Text(workspace.fileNote)
+                .noteFont()
+                .foregroundStyle(Palette.muted)
+        }
+        if loaded && text.isEmpty && picture == nil {
+            unshown(lower, size: workspace.data["meta"]["size"].int64())
+        }
+    }
+
+    /// 添加到消息 on a computer file's page, then the download under way or how the save went.
+    @ViewBuilder
+    private func footer(_ name: String) -> some View {
+        let workspace = model.workspace
+        if workspace.data["reference"].isObject {
+            Button("添加到消息", systemImage: "plus.circle") { workspace.addComputerFile() }
                 .buttonStyle(PillStyle(wide: true))
                 .disabled(workspace.transferring)
         }
-        Text(asPDF ? "PDF 只用来看；保存到文件、快速查看和分享的是原文件。"
-             : looks ? "这类文件不在页面里显示；可以用快速查看打开，或保存到文件、分享给其他应用。" : "这类文件不在页面里显示；可以保存到文件，或分享给其他应用打开。")
+        transferLine(name)
+    }
+
+    /// A file the page does not show: Quick Look when the system can show it; saving and sharing are at the top right.
+    @ViewBuilder
+    private func unshown(_ lower: String, size: Int64) -> some View {
+        let looks = Self.quickLooks(lower)
+        if looks {
+            Button("用快速查看打开", systemImage: "eye") { copy { quickLook = $0 } }
+                .buttonStyle(PillStyle(wide: true))
+                .disabled(model.workspace.transferring)
+        }
+        Text(!looks ? "这类文件手机上看不了，可以点右上角保存到文件，或分享给其他应用打开。"
+             : size > RelayClient.previewLimit ? "文件超过 20MB，不直接显示；可以用快速查看打开，或点右上角保存到文件、分享。"
+             : "可以用快速查看打开，或点右上角保存到文件、分享。")
             .noteFont()
             .foregroundStyle(Palette.muted)
     }

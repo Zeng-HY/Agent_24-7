@@ -177,70 +177,67 @@ struct AttachmentTests {
         workspace.file(files[0])
         await workspace.settle()
         #expect(workspace.data["kind"].string() == "download")
-        #expect(workspace.preview == nil && workspace.fileNote.isEmpty && workspace.paneError == nil)
-        // Without "preview": "pdf" no PDF is asked for: the page is as before.
-        #expect(workspace.officePDF == nil && !workspace.converting && workspace.convertNote.isEmpty)
-        #expect(await !watched.log.items.contains { $0.url.path.hasSuffix("/api/file/pdf") })
+        #expect(workspace.fileNote.isEmpty && workspace.paneError == nil)
+        // The page shows the Word file itself.
+        let shown = try #require(workspace.preview)
+        #expect(shown.lastPathComponent == "翻译稿.docx")
+        #expect(try Data(contentsOf: shown) == DemoData.docx)
         let copy = try await workspace.fileCopy()
         #expect(copy.lastPathComponent == "翻译稿.docx")
         #expect(try Data(contentsOf: copy) == DemoData.docx)
+        // Saving took the page's copy: the file was fetched once.
+        #expect(await watched.log.items.filter { $0.url.path.hasSuffix("/api/file") }.count == 1)
         // The whole conversation's files still list it beside the others.
         workspace.panel("files")
         await workspace.settle()
         #expect(workspace.data["items"].array.count == 5)
     }
 
-    /// A Word file the computer's Office can open shows as the PDF it makes (Windows dev.26); 保存到文件, 分享 and 快速查看
-    /// still take the Word file itself, and the PDF goes with the page.
-    @Test func anOfficeFileShowsAsTheComputersPDFAndSavesItself() async throws {
-        let model = await demoConversation("原生阅读示例")
+    /// A Word file shows as itself even where the computer offers its PDF ("preview": "pdf", Windows dev.26): the page
+    /// has a copy of the .docx and nothing is asked of the computer's Office (user 10-28: "不要这样转换了"). The copy
+    /// goes with the page.
+    @Test func anOfficeFileShowsAsItselfAndNeverAsksForAPDF() async throws {
+        let watched = WatchedTransport()
+        let model = await demoConversation("原生阅读示例", on: watched)
         let workspace = model.workspace
         workspace.panel("files")
         await workspace.settle()
         let report = try #require(workspace.data["items"].array.first { $0["preview"].string() == "pdf" })
         workspace.file(report)
         await workspace.settle()
-        #expect(workspace.data["kind"].string() == "download" && workspace.preview == nil && workspace.paneError == nil)
-        #expect(!workspace.converting && workspace.convertNote.isEmpty)
-        let pdf = try #require(workspace.officePDF)
-        #expect(try Data(contentsOf: pdf) == DemoData.pdf)
-        let copy = try await workspace.fileCopy()
-        #expect(copy.lastPathComponent == "发布说明.docx")
-        #expect(try Data(contentsOf: copy) == DemoData.docx)
+        #expect(workspace.data["kind"].string() == "download" && workspace.paneError == nil && workspace.fileNote.isEmpty)
+        let shown = try #require(workspace.preview)
+        #expect(shown.lastPathComponent == "发布说明.docx")
+        #expect(try Data(contentsOf: shown) == DemoData.docx)
+        #expect(await !watched.log.items.contains { $0.url.path.hasSuffix("/api/file/pdf") })
         workspace.close()
-        #expect(workspace.officePDF == nil && !FileManager.default.fileExists(atPath: pdf.path))
+        #expect(workspace.preview == nil && !FileManager.default.fileExists(atPath: shown.path))
     }
 
-    /// The first time can take half a minute: the page offers the file meanwhile and says what it waits for.
-    @Test func whileOfficeWorksThePageAlreadyOffersTheFile() async throws {
-        let world = DemoWorld()
-        let model = await demoConversation("原生阅读示例", on: DemoTransport(world: world))
-        let workspace = model.workspace
-        world.network = .normal
-        workspace.file(DemoData.files[3])
-        for _ in 0..<300 where workspace.paneBusy { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(!workspace.paneBusy && workspace.converting && workspace.officePDF == nil)
-        #expect(workspace.data["meta"]["preview"].string() == "pdf")
-        await workspace.settle()
-        #expect(!workspace.converting && workspace.officePDF != nil)
-    }
-
-    /// The computer's Office could not make it: its words, and the file can still be saved. A row's own "preview": "pdf"
-    /// is enough to ask (the computer's facts of 翻译稿.docx leave it out).
-    @Test func anOfficeFileTheComputerCannotShowSaysWhyAndStillSaves() async throws {
+    /// Over 20 MB a file is not fetched by opening its page; saving it still downloads it whole.
+    @Test func anOfficeFileOver20MBWaitsToBeAskedFor() async throws {
         let watched = WatchedTransport()
         let model = await demoConversation("原生阅读示例", on: watched)
         let workspace = model.workspace
-        workspace.file(["id": "fixture-office-broken", "name": "旧格式报告.doc"])
+        workspace.file(["id": "fixture-office-big", "name": "季度汇报.pptx"])
         await workspace.settle()
-        #expect(workspace.paneError == nil && !workspace.converting && workspace.officePDF == nil)
-        #expect(workspace.convertNote == "电脑上的 Word 打不开这个文件，没能转成 PDF")
+        #expect(workspace.paneError == nil && workspace.fileNote.isEmpty && workspace.preview == nil)
+        #expect(workspace.data["meta"]["size"].int64() > RelayClient.previewLimit)
+        #expect(await !watched.log.items.contains { $0.url.path.hasSuffix("/api/file") || $0.url.path.hasSuffix("/api/file/pdf") })
         let copy = try await workspace.fileCopy()
-        #expect(copy.lastPathComponent == "旧格式报告.doc")
-        workspace.file(["id": "fixture-docx", "name": "翻译稿.docx", "preview": "pdf"])
-        await workspace.settle()
-        #expect(await watched.log.items.filter { $0.url.path.hasSuffix("/api/file/pdf") }.compactMap { queryValue($0, "file") }
-            == ["fixture-office-broken", "fixture-docx"])
+        #expect(copy.lastPathComponent == "季度汇报.pptx")
+        #expect(await watched.log.items.filter { $0.url.path.hasSuffix("/api/file") }.compactMap { queryValue($0, "file") } == ["fixture-office-big"])
+    }
+
+    /// Office files, the pictures the computer lists as plain files, sound and video show in the page, whatever the
+    /// letters' case; text, iWork, archives and names without an extension do not.
+    @Test func whatAPageShowsByItself() {
+        for name in ["报告.DOCX", "表.xlsx", "旧.doc", "汇报.pptx", "动图.gif", "照片.HEIC", "录音.m4a", "视频.mp4", "DJI_0194_D.MP4"] {
+            #expect(WorkspaceModel.showsInPage(name), "\(name)")
+        }
+        for name in ["说明.txt", "说明.pages", "包.zip", "图.svg", "没有扩展名", "末尾是点.", ".docx.zip"] {
+            #expect(!WorkspaceModel.showsInPage(name), "\(name)")
+        }
     }
 
     @Test func aPreviewThatDoesNotLoadLeavesTheFileToSave() async throws {

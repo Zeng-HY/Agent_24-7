@@ -729,7 +729,7 @@ enum DemoData {
     static let claudeState = parse(#"{"available":true,"settings":{"model":"opus","effort":"high","mode":"default"},"model_label":"Opus 4.7","effort_label":"高","mode_label":"默认","mode_options":[{"name":"default","label":"默认"},{"name":"acceptEdits","label":"自动接受修改"},{"name":"plan","label":"计划"}],"action_revision":"r1","prompt":{"title":"发布说明用哪种格式？","progress":"1/2","choices":[{"label":"简洁要点","description":"每条改动一行","token":"t-choice-1","pressed":true},{"label":"完整段落","description":"按版本分节，适合对外发布","token":"t-choice-2"}],"nav":[],"other":{"name":"Other"}},"images":[{"request_id":"fixture-send-1","images":[{"id":"fixture-picture-1","name":"发布说明截图.png","url":"/api/codex/image?id=fixture-picture-1","thumbnail":"/api/codex/image?thumb=1&id=fixture-picture-1"}],"text":"帮我把这次的发布说明整理一下。","created":1792483190,"status":"accepted"}]}"#)
 
     /// The conversation files of the demo (Android FixtureWorld.FILES): a page, a picture beside it, a Markdown note;
-    /// and a Word file the computer's Office shows as a PDF (preview pdf, Windows dev.26).
+    /// and a Word file whose PDF the computer offers (preview pdf, Windows dev.26), which this phone does not ask for.
     static let files: [JSONValue] = [
         ["id": "fixture-html", "name": "安全预览.html", "path": "D:\\fixture\\安全预览.html", "kind": "text", "state": "current", "size": 900],
         ["id": "fixture-png", "name": "logo.png", "path": "D:\\fixture\\images\\logo.png", "kind": "image", "state": "current", "size": 462],
@@ -737,46 +737,6 @@ enum DemoData {
         ["id": "fixture-report", "name": "发布说明.docx", "path": "D:\\fixture\\发布说明.docx", "kind": "download", "state": "current",
          "size": .number(Double(docx.count)), "preview": "pdf"],
     ]
-
-    /// 发布说明.docx as the computer's Office turns it into a PDF (GET /api/file/pdf): one A5 page of text, built here
-    /// so that it stays a valid PDF (the cross-reference table counts bytes).
-    static let pdf: Data = {
-        let lines = ["Office on the computer turned this Word file into", "a PDF, so the phone can show it in the page.", "",
-                     "1. Pictures sent from the phone show in the message.", "2. Long messages open in full.",
-                     "3. Word, Excel and PowerPoint files show as PDF.", "", "Save, Quick Look and Share still use the .docx itself."]
-        let page = """
-            0.93 0.95 0.98 rg
-            0 515 420 80 re f
-            0.07 0.07 0.07 rg
-            BT /F2 22 Tf 36 548 Td (Release notes) Tj ET
-            0.42 0.45 0.5 rg
-            BT /F1 11 Tf 36 528 Td (Teleply demo: a Word file shown as a PDF) Tj ET
-            0.07 0.07 0.07 rg
-            BT /F1 12 Tf 17 TL 36 480 Td
-            """ + "\n" + lines.map { "(\($0)) Tj T*" }.joined(separator: "\n") + "\nET"
-        let objects = [
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 595] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
-            "<< /Length \(page.utf8.count) >>\nstream\n" + page + "\nendstream",
-        ]
-        var text = "%PDF-1.4\n"
-        var offsets: [Int] = []
-        for (index, object) in objects.enumerated() {
-            offsets.append(text.utf8.count)
-            text += "\(index + 1) 0 obj\n" + object + "\nendobj\n"
-        }
-        let table = text.utf8.count
-        text += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
-        for offset in offsets {
-            let digits = String(offset)
-            text += String(repeating: "0", count: 10 - digits.count) + digits + " 00000 n \n"
-        }
-        text += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(table)\n%%EOF\n"
-        return Data(text.utf8)
-    }()
 
     /// What DeepSeek presented as a turn's result (deliverables/presented, Android 1.0.2): a small Word file that
     /// the computer lists for that message only.

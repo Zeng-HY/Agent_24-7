@@ -223,7 +223,8 @@ final class ScreenshotTour: XCTestCase {
                 app.swipeUp()
                 snap(app, page: "20-approval", variant: variant)
             }
-            // 0.4.1: DeepSeek's result file: 查看成果文件 under its message, the Word file's page, Quick Look.
+            // 0.4.1: DeepSeek's result file: 查看成果文件 under its message, the Word file's page. 0.5.5: the Word file
+            // fills the page as the phone shows it, with no Quick Look button.
             let result = app.buttons["查看成果文件"].firstMatch
             if result.waitForExistence(timeout: 5), reach(app, result, up: false) {
                 result.tap()
@@ -233,18 +234,9 @@ final class ScreenshotTour: XCTestCase {
                     snap(app, page: "30-deliverables", variant: variant)
                     word.tap()
                     if app.navigationBars["翻译稿.docx"].waitForExistence(timeout: 10) {
-                        sleep(1)
+                        sleep(5)
                         snap(app, page: "31-word-file", variant: variant)
-                        let look = app.buttons["用快速查看打开"].firstMatch
-                        if look.waitForExistence(timeout: 5), look.isHittable {
-                            look.tap()
-                            sleep(6)
-                            snap(app, page: "32-quick-look", variant: variant)
-                            // Quick Look speaks the simulator's own language, not the app's.
-                            let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["完成", "Done", "关闭", "Close"])).firstMatch
-                            if done.waitForExistence(timeout: 5) { done.tap() }
-                            sleep(1)
-                        }
+                        XCTAssertFalse(app.buttons["用快速查看打开"].exists, "the Word file's page still offers Quick Look")
                         back(app)
                     }
                 }

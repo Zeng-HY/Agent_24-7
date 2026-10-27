@@ -333,7 +333,7 @@ public struct RelayClient: Sendable {
     public static let imageLimit: Int64 = 20 * 1024 * 1024
     public static let fileLimit: Int64 = 64 * 1024 * 1024
     public static let downloadLimit: Int64 = 100 * 1024 * 1024
-    /// A picture or PDF is shown in a file's page up to 20 MB (web artifact-preview).
+    /// A picture, a PDF or another file a file's page shows itself is shown up to 20 MB (web artifact-preview).
     public static let previewLimit: Int64 = 20 * 1024 * 1024
 
     /// A picture (codex/upload) or another file (files/upload) for [app]'s conversation [chat], or for a new
@@ -360,30 +360,6 @@ public struct RelayClient: Sendable {
         let answer = try await files.download(request, limit: Self.downloadLimit, progress: progress)
         if answer.status == 401 { try? vault?.write(origin.key, nil) }
         guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
-        return saved
-    }
-
-    /// A Word, Excel or PowerPoint file of the conversation as the computer's Office turned it into a PDF (GET
-    /// /api/file/pdf, offered when the file's facts say "preview": "pdf"), to a file on this phone of at most 20 MB;
-    /// the caller owns it. The first one of a file's version can take half a minute while Office starts; the computer
-    /// keeps it after that. Its refusals come as {"error": …} like the other file routes.
-    public func pdfPreview(device: String, app: String, chat: String, file: String) async throws -> URL {
-        guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
-        var request = try get(Self.devicePath(device, "/api/file/pdf"), query: [("app", app), ("id", chat), ("file", file)], deadline: 300)
-        request.headers["Accept"] = "*/*"
-        // The 20 MB is checked here, with words of its own; the transport keeps its usual limit.
-        let answer = try await files.download(request, limit: Self.downloadLimit, progress: nil)
-        if answer.status == 401 { try? vault?.write(origin.key, nil) }
-        guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
-        let size = ((try? FileManager.default.attributesOfItem(atPath: saved.path))?[.size] as? NSNumber)?.int64Value ?? 0
-        let head = (try? FileHandle(forReadingFrom: saved)).flatMap { handle in
-            defer { try? handle.close() }
-            return try? handle.read(upToCount: 5)
-        } ?? Data()
-        guard size <= Self.previewLimit, head == Data("%PDF-".utf8) else {
-            try? FileManager.default.removeItem(at: saved)
-            throw ReadFailure(size > Self.previewLimit ? "转成的 PDF 超过 20MB，页面里不显示；可以保存原文件后打开。" : "电脑转出来的不是 PDF，可以保存原文件后打开。")
-        }
         return saved
     }
 

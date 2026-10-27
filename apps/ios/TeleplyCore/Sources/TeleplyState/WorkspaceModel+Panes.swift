@@ -125,8 +125,9 @@ extension WorkspaceModel {
         readPane("files", query: message, offset: "0", fresh: false)
     }
 
-    /// A conversation file's page (spec 4.5; Android file): what it is, its text for a text file, and for a picture
-    /// or PDF up to 20 MB a copy on this phone for Quick Look. It shows the file as it is now (当前文件).
+    /// A conversation file's page (spec 4.5; Android file): what it is, its text for a text file, and for a picture,
+    /// a PDF or another file the page shows itself (showsInPage) a copy on this phone, up to 20 MB. It shows the file
+    /// as it is now (当前文件).
     public func file(_ file: JSONValue) {
         guard key != nil, client != nil else { return }
         pane = "file"
@@ -173,10 +174,8 @@ extension WorkspaceModel {
         closePicker()
     }
 
-    /// Reads a file page: its facts first, then its text or picture. A preview that does not load leaves the file to
-    /// be saved all the same (Android 1.0.2), with a line saying so. A Word, Excel or PowerPoint file the computer's
-    /// Office can show (its list row or facts say "preview": "pdf") then comes as a PDF, while the page already offers
-    /// the file itself.
+    /// Reads a file page: its facts first, then its text, or a copy of what the page shows itself. A preview that does
+    /// not load leaves the file to be saved all the same (Android 1.0.2), with a line saying so.
     func load(_ file: JSONValue) {
         guard let key, let client else { return }
         paneRead?.cancel()
@@ -193,14 +192,14 @@ extension WorkspaceModel {
                 let ids: [(String, String?)] = [("app", key.app), ("id", key.chat), ("file", id)]
                 let meta = try await client.detail(device: key.device, route: "file/meta", query: ids)
                 let kind = meta["kind"].string()
-                let office = kind == "download" && (meta["preview"].string() == "pdf" || file["preview"].string() == "pdf")
+                let name = file["name"].string().isEmpty ? meta["name"].string() : file["name"].string()
+                let shown = ["image", "pdf"].contains(kind) || (kind == "download" && Self.showsInPage(name))
                 var text = ""
                 var copy: URL?
                 var note = ""
                 do {
                     if kind == "text" { text = try await client.detail(device: key.device, route: "file/text", query: ids)["text"].string() }
-                    if ["image", "pdf"].contains(kind) && meta["size"].int64() <= RelayClient.previewLimit {
-                        let name = file["name"].string().isEmpty ? meta["name"].string() : file["name"].string()
+                    if shown && meta["size"].int64() <= RelayClient.previewLimit {
                         copy = renamed(try await client.download(device: key.device, app: key.app, chat: key.chat, file: id), to: name)
                     }
                 } catch is CancellationError {
@@ -220,9 +219,7 @@ extension WorkspaceModel {
                 self.fileText = text
                 self.preview = copy
                 self.fileNote = note
-                self.converting = office
                 self.paneBusy = false
-                if office { await self.convert(id, key, client, g) }
             } catch is CancellationError {
             } catch {
                 guard let self, g == self.paneGeneration else { return }
@@ -232,28 +229,14 @@ extension WorkspaceModel {
         }
     }
 
-    /// The computer's PDF of an Office file for the page of generation [g]; on failure the computer's own words. A
-    /// page left meanwhile drops it.
-    func convert(_ id: String, _ key: ChatKey, _ client: RelayClient, _ g: Int) async {
-        do {
-            let pdf = try await client.pdfPreview(device: key.device, app: key.app, chat: key.chat, file: id)
-            guard g == paneGeneration else {
-                try? FileManager.default.removeItem(at: pdf)
-                return
-            }
-            officePDF = pdf
-        } catch {
-            guard g == paneGeneration else { return }
-            convertNote = convertFailure(error)
-        }
-        converting = false
-    }
-
-    /// The computer's error text when it gave one; otherwise the phone's words, saying what did not work.
-    func convertFailure(_ error: any Error) -> String {
-        if let failure = error as? ServiceFailure, failure.status != 401, !failure.detail.isEmpty { return String(failure.detail.prefix(500)) }
-        if error is ReadFailure { return describe(error) }
-        return "没能转成 PDF：" + describe(error)
+    /// What a file's page shows by itself besides text, pictures and PDFs, from a copy on this phone (user 10-28:
+    /// "点开直接调用快速预览，不要这样转换了"): Word, Excel and PowerPoint files the way 快速查看 draws them, the
+    /// pictures the computer lists as plain files, sound and video. The computer's PDF of an Office file ("preview":
+    /// "pdf", Windows dev.26) is for the web and Android; this phone does not ask for it.
+    nonisolated public static func showsInPage(_ name: String) -> Bool {
+        guard let dot = name.lastIndex(of: ".") else { return false }
+        return ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "gif", "heic", "heif", "tif", "tiff", "bmp",
+                "mp3", "m4a", "wav", "aac", "mp4", "mov", "m4v"].contains(name[name.index(after: dot)...].lowercased())
     }
 
     /// 本轮差异 (spec 4.5, B12): what the source's record says the turn changed, a page at a time; never guessed from
@@ -345,16 +328,12 @@ extension WorkspaceModel {
         transfer = ""
     }
 
-    /// A file page's own things go with it: its text, its preview's copy, its PDF, a copy under way.
+    /// A file page's own things go with it: its text, its preview's copy, a copy under way.
     func dropFile() {
         cancelCopy()
         fileText = ""
         fileNote = ""
         dropPreview()
-        if let officePDF { try? FileManager.default.removeItem(at: officePDF) }
-        officePDF = nil
-        converting = false
-        convertNote = ""
     }
 
     /// A file an HTML page names beside itself (web artifact-preview resource): only one this conversation lists,
