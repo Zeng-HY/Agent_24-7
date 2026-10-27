@@ -112,6 +112,8 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
         compose.onNodeWithText("推理强度").assertExists()
         compose.onNodeWithText("Ultracode").assertExists().assertIsNotSelected()
+        // In the chip's words, each whole on one line (10-27: they were cut to "Med", "Hig").
+        listOf("低","中","高","极高","最高","Ultracode").forEach(::assertWhole)
         // The iPhone quit here (0.5.0): one slider with a step of 0. No steps, the models stay.
         world.claudeEfforts=org.json.JSONArray("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":5,"step":0,"value":0,"label":"Low"}}]""")
         compose.onNodeWithText("刷新电脑上的列表").performClick()
@@ -123,8 +125,25 @@ abstract class ReaderUiScenarios {
         world.claudeEfforts=org.json.JSONArray("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":3,"step":1,"value":1,"label":"Medium","labels":{"0":"Low"}}}]""")
         compose.onNodeWithText("刷新电脑上的列表").performClick()
         compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy && org.json.JSONObject(vm.workspace.state.value.choices).optJSONObject("source_catalog")?.toString()?.contains("\"step\":1")==true }
-        compose.onNodeWithText("Medium").assertIsSelected()
+        compose.onNodeWithText("中").assertIsSelected()
         compose.onNodeWithText("第 4 档").assertExists()
+    }
+    /** With large text the six levels no longer fit side by side: the row scrolls, and each name stays whole. */
+    @Test fun claudeEffortNamesStayWholeWithLargeText() {
+        launch(fontScale=1.6f);fixtureList();openChat("Claude 选项示例","claude-demo")
+        vm.fixtureWorld!!.claudeEfforts=org.json.JSONArray("""[{"name":"Low"},{"name":"Medium Recommended"},{"name":"High"},{"name":"Extra"},{"name":"Max 3.5× or more usage"},{"name":"Ultracode"}]""")
+        compose.onNodeWithContentDescription("模型：Opus 4.7 · 高").performClick()
+        compose.waitUntil(10000) { !vm.workspace.state.value.choicesBusy }
+        listOf("低","中","高","极高","最高","Ultracode").forEach(::assertWhole)
+    }
+    /** A label laid out whole on one line: as wide as its words, not cut by its segment. */
+    protected fun assertWhole(label:String) {
+        val layout=mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNode(hasText(label),useUnmergedTree=true).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action?.invoke(layout)
+        layout.single().let { text ->
+            org.junit.Assert.assertEquals(label,1,text.lineCount)
+            org.junit.Assert.assertTrue(label,text.size.width>=text.multiParagraph.maxIntrinsicWidth-1f)
+        }
     }
     /** 10-27: a Codex conversation not open on the computer says why, and its model chip opens it there. */
     @Test fun codexNotOpenOnTheComputerSaysWhyAndOpensFromTheChip() {

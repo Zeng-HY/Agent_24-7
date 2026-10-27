@@ -485,15 +485,28 @@ fun sendsWhileAway(app: String) = app == "claude"
 /**
  * Claude's effort choices in the model menu. The desktop shows them as named levels (Low, Medium, High…) or as one
  * slider: its steps are listed, at most 20, by the names the computer learnt for them, else the current one's label or
- * 第 N 档 (web renderCatalog). A slider without a step above 0 lists none: on the iPhone a list of named levels taken for
+ * 第 N 档 (web renderCatalog); names in the chip's words ([claudeEffortLabel]). A slider without a step above 0 lists none: on the iPhone a list of named levels taken for
  * a slider with a step of 0 made the app quit (0.5.0, 10-27). [steps] are (value, label); [slider] is the effort a
  * picked step is set on, null for named levels.
  */
 internal class ClaudeEfforts(val steps: List<Pair<String, String>>, val selected: String?, val slider: JSONObject?)
 
+/** Claude's effort levels by the first word of the desktop's names (claude_control EFFORT_LABELS), as Claude records them. */
+private val ClaudeLevels = mapOf("low" to "low", "medium" to "medium", "high" to "high", "extra" to "xhigh", "max" to "max")
+
+/**
+ * A Claude effort level's name in the menu. The desktop's own are long ("Medium Recommended", "Max 3.5× or more
+ * usage"), and six of them were cut to "Med", "Hig" in the menu's row (user 10-27): a level goes by the word the model
+ * chip uses for it (effortName: 中, 极高, 最高), as on the web's chip; one not known keeps its first word (Ultracode).
+ */
+fun claudeEffortLabel(name: String): String {
+    val word = name.trim().substringBefore(' ')
+    return ClaudeLevels[word.lowercase()]?.let(::effortName) ?: word
+}
+
 internal fun claudeEfforts(efforts: List<JSONObject>): ClaudeEfforts {
     val slider = efforts.singleOrNull()?.takeIf { it.optJSONObject("range") != null }
-        ?: return ClaudeEfforts(efforts.map { it.string("name") }.filter { it.isNotBlank() }.map { it to it }, efforts.find { it.optBoolean("selected") }?.string("name"), null)
+        ?: return ClaudeEfforts(efforts.map { it.string("name") }.filter { it.isNotBlank() }.map { it to claudeEffortLabel(it) }, efforts.find { it.optBoolean("selected") }?.string("name"), null)
     val range = slider.getJSONObject("range")
     val min = range.optDouble("min", 0.0)
     val max = range.optDouble("max", Double.NaN)
@@ -502,8 +515,8 @@ internal fun claudeEfforts(efforts: List<JSONObject>): ClaudeEfforts {
     val value = (range.opt("value") as? Number)?.toDouble()
     val values = if (step > 0 && step.isFinite() && min.isFinite()) (0 until 20).map { min + it * step }.filter { it <= max } else emptyList()
     val steps = values.mapIndexed { i, v ->
-        val learnt = range.optJSONObject("labels")?.string(v.toInt().toString()).orEmpty()
-        v.toString() to learnt.ifBlank { range.string("label").takeIf { v == value && it.isNotBlank() } ?: "第 ${i + 1} 档" }
+        val learnt = range.optJSONObject("labels")?.string(v.toInt().toString()).orEmpty().ifBlank { range.string("label").takeIf { v == value }.orEmpty() }
+        v.toString() to if (learnt.isNotBlank()) claudeEffortLabel(learnt) else "第 ${i + 1} 档"
     }
     return ClaudeEfforts(steps, value?.toString(), slider)
 }

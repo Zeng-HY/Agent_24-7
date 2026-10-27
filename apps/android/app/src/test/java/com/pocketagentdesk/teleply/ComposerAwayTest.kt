@@ -54,12 +54,15 @@ class ComposerAwayTest {
         // The desktop's six named levels as read on 10-27, none selected (a list borrowed from another conversation).
         val named=claudeEfforts(rows("""[{"name":"Low"},{"name":"Medium Recommended"},{"name":"High"},{"name":"Extra"},{"name":"Max 3.5× or more usage"},{"name":"Ultracode"}]"""))
         assertEquals(listOf("Low","Medium Recommended","High","Extra","Max 3.5× or more usage","Ultracode"),named.steps.map { it.first })
+        // Shown in the model chip's words (10-27: the desktop's names were cut to "Med", "Hig"); picked by the desktop's.
+        assertEquals(listOf("低","中","高","极高","最高","Ultracode"),named.steps.map { it.second })
         assertNull(named.selected);assertNull(named.slider)
         assertEquals("High",claudeEfforts(rows("""[{"name":"Low","selected":false},{"name":"High","selected":true},{"name":null}]""")).selected)
-        assertEquals(listOf("Low","High"),claudeEfforts(rows("""[{"name":"Low"},{"name":"High"},{"name":null},{}]""")).steps.map { it.second })
+        assertEquals(listOf("低","高"),claudeEfforts(rows("""[{"name":"Low"},{"name":"High"},{"name":null},{}]""")).steps.map { it.second })
+        assertEquals(listOf("高","中","Turbo"),listOf(" High ","中","Turbo mode").map(::claudeEffortLabel))
         // One slider (claude_control: Effort, SliderControl): its steps by the names learnt, else the current one's label, else 第 N 档.
         val slider=claudeEfforts(rows("""[{"name":"Effort","type":"SliderControl","selected":true,"range":{"min":0,"max":4,"step":1,"value":2,"label":"High","labels":{"0":"Low"}}}]"""))
-        assertEquals(listOf("0.0" to "Low","1.0" to "第 2 档","2.0" to "High","3.0" to "第 4 档","4.0" to "第 5 档"),slider.steps)
+        assertEquals(listOf("0.0" to "低","1.0" to "第 2 档","2.0" to "高","3.0" to "第 4 档","4.0" to "第 5 档"),slider.steps)
         assertEquals("2.0",slider.selected);assertEquals("Effort",slider.slider?.string("name"))
         // A step of 0, below 0, missing or not a number, or no top: no steps, and the slider is not taken for a named level.
         for(range in listOf("""{"min":0,"max":5,"step":0}""","""{"min":0,"max":5,"step":-1}""","""{"min":0,"max":5}""","""{"min":null,"max":5,"step":"x"}""","""{"min":0,"step":1}""")) {
