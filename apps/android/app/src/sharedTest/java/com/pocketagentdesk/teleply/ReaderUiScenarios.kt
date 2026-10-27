@@ -353,7 +353,7 @@ abstract class ReaderUiScenarios {
         compose.runOnIdle { vm.workspace.panel("files") };compose.waitUntil(10000) { !vm.workspace.state.value.busy }
         compose.onNodeWithText("预算表.xlsx").performScrollTo().performClick()
         compose.waitUntil(10000) { vm.workspace.state.value.previewNote.isNotBlank() }
-        compose.onNodeWithText("没能转成 PDF：本地示例：电脑上的 Excel 没有响应，没能转成 PDF").assertExists()
+        compose.onNodeWithText("没能转成 PDF：本地示例：电脑上的 Excel 没有响应").assertExists()
         compose.onNodeWithText("保存到手机").performScrollTo().assertIsEnabled()
         compose.runOnIdle { org.junit.Assert.assertEquals(2,world.pdfReads) }
     }
@@ -557,6 +557,17 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。").assertExists()
         compose.onNodeWithText("核对上次操作").assertDoesNotExist()
         compose.onNodeWithText("上次操作的结果还没确认").assertDoesNotExist()
+        // 示例网络 回复丢失: the computer takes 提交 and the reply is lost; afterwards nothing waits there any more.
+        compose.onNodeWithText("跳过").performScrollTo().performClick()
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).optJSONObject("prompt")?.string("progress")=="2 / 2" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { vm.fixtureWorld!!.network=FixtureNetwork.LostReply }
+        compose.onNodeWithText("提交").performScrollTo().performClick()
+        compose.waitUntil(10000) { org.json.JSONObject(vm.workspace.state.value.saved).optJSONObject("pending_action")?.string("status")=="unknown" && !vm.workspace.state.value.busy }
+        compose.runOnIdle { vm.fixtureWorld!!.network=FixtureNetwork.Instant }
+        compose.onNodeWithText("核对上次操作").performClick()
+        compose.waitUntil(10000) { vm.workspace.state.value.result.isNotBlank() && !vm.workspace.state.value.checking }
+        compose.onNodeWithText("电脑上已经没有在等的选项，上次的选择已处理。").assertExists()
+        compose.onNodeWithText("核对上次操作").assertDoesNotExist()
     }
     /** The conversation can scroll no further down: the latest messages are on screen (the list's own reading of its end). */
     protected fun atBottom():Boolean {

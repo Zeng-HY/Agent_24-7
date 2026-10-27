@@ -22,7 +22,10 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
 
     override suspend fun control(device: String, chat: String, fresh: Boolean): Control { net(); return world.control(source, chat, fresh) }
 
-    override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject { net(); return reply(device, route, query, body) }
+    override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject { net(); return reply(device, route, query, body).also { if (body != null) lost() } }
+
+    /** 示例网络 回复丢失 (10-27): the demo computer has done what it was asked, and its reply never reaches the phone. */
+    private fun lost() { if (world.network == FixtureNetwork.LostReply) throw java.io.IOException("本地示例：电脑做了，回复在路上丢了") }
 
     private fun reply(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject = when (route) {
         "chat/new/options" -> JSONObject("""{"models":[{"id":"fixture-model","label":"测试模型","efforts":[{"id":"medium","label":"中"}]}]}""")
@@ -84,7 +87,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         net()
         world.pdfReads++
         world.pdfGate?.await() ?: run { if (world.pdfDelay > 0) kotlinx.coroutines.delay(world.pdfDelay) }
-        if (file == "fixture-xlsx") throw ServiceFailure(500, detail = "本地示例：电脑上的 Excel 没有响应，没能转成 PDF")
+        if (file == "fixture-xlsx") throw ServiceFailure(500, detail = "本地示例：电脑上的 Excel 没有响应")
         if (file != "fixture-docx") throw ServiceFailure(404, detail = "这个文件不能转成 PDF")
         return java.util.Base64.getDecoder().decode(FixtureWorld.PDF)
     }
@@ -95,7 +98,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     // 诊断测速 times these where the network would: the demo's sends show its record too.
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
         val timer = if (route == "send") Diagnostics.start("消息提交") else null
-        return try { net(); world.command(source, route, body).also { Diagnostics.finish(timer, 0, speedOutcome(it)) } }
+        return try { net(); world.command(source, route, body).also { lost(); Diagnostics.finish(timer, 0, speedOutcome(it)) } }
         catch (e: Exception) { Diagnostics.finish(timer, 0, if (e is ServiceFailure) "HTTP ${e.status}" else "网络失败"); throw e }
     }
 
@@ -153,8 +156,12 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     }
 }
 
-/** 开发者选项 → 示例网络: how the demo computer answers (0.9.1), to see the app on a slow or broken connection. */
-enum class FixtureNetwork(val label: String, val delay: Long) { Instant("立即", 0), Normal("一般", 400), Slow("慢", 2_500), Offline("断开", 0) }
+/**
+ * 开发者选项 → 示例网络: how the demo computer answers (0.9.1), to see the app on a slow or broken connection; and since
+ * 10-27 回复丢失: it does what is asked (an answer, an approval, a press of Claude's) but the reply never comes back, to
+ * see 核对上次操作. Reads are answered as with 立即.
+ */
+enum class FixtureNetwork(val label: String, val delay: Long) { Instant("立即", 0), Normal("一般", 400), Slow("慢", 2_500), Offline("断开", 0), LostReply("回复丢失", 0) }
 
 /** Shared state of the demo across sources: answered cards, queue, receipts, archive, notifications and voice. */
 class FixtureWorld {

@@ -248,7 +248,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                 if (handoff != null) item(key = "handoff") { Reading { NewFirstMessage(handoff.text, "", false) {} } }
                 itemsIndexed(s.messages, key = { _, m -> "msg:${m.id}" }, contentType = { _, m -> m.role + m.kind + m.phase }) { index, message ->
                     // Taken out here, so the row below is the same as before when none of these changed.
-                    val row = rows[index]
+                    val row = rows.getOrElse(index) { TimelineRow() }
                     val busy = s.busy
                     val receipt = receipts[message.request]
                     val working = running && row.lastGroup
