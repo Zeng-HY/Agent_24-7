@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.1 待发 TestFlight：遥应通知加上 10-27 的修复）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.1 构建 7 已发 TestFlight：遥应通知加上 10-27 的修复，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,7 +25,7 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `ios-native` 分支，先推送。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.5.1：Claude 菜单不再闪退，输入框说明原因，答案里的文件能打开（10-27）
+## 0.5.1：Claude 菜单不再闪退，输入框说明原因，答案里的文件能打开（10-27 发 TestFlight 构建 7，待真机验）
 
 用户 10-27 在 0.5.0 上反馈（有的经推送会话转来）：在电脑没打开的 Claude 对话里点模型按钮，应用闪退；电脑没打开对话时发送键灰着，也不说为什么；Claude 的模型显示成 “claude-opus-…”；Codex 答案底部有一串看不懂的字；答案里的文件下载不了；选的照片只显示文件名。0.5.1 从合进 main 的 `ios-native` 构建，带着 0.5.0 的遥应通知。
 
@@ -244,6 +244,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #23 `6adf4a6f…` | ios-native-check（shots，浅色和最大字号） | 失败 | 26（排队 47） | 0.4.2：文件页、电脑文件页、成果文件、草稿红字都看过；行仍会被打开（行先收到抬手，滑动还没报移动）；快速查看的关闭按钮在模拟器上是英文，浅色那轮之后走偏 |
 | #24 `6adf5cde…` | ios-native-check（shots，三种外观） | 失败（检查脚本误判） | 26（排队 23） | 行和侧栏按钮改成点后 0.1 秒再动作：右滑只拉出侧栏，下面仍是列表；浅色、深色几乎每步都截到，快速查看显示出 Word 内容；唯一的失败是用标题判断“对话被打开”误判（列表那一行的标题也算），已改 |
 | #25 `6adf690e…` | ios-native-testflight | 成功 | 6（排队 50） | 0.4.2（7）上传，Delivery UUID `07ae989f-ee9d-4d0d-9062-baa2648784d0`；截图存 `F:\Android-Dev\work\ios-042-screens`。构建在 Codemagic 上成功，这台电脑下载产物时连不上 Codemagic，重新拉取后核对了上传记录 |
+| #26 `6adfef34…` | ios-native-testflight | 成功 | 7（排队 1） | 0.5.1（7）上传，Delivery UUID `9e2087f0-6519-4b26-9487-6b605cc8a218`；版本 0.5.1 下的 7 号，和 0.4.2 的 7 号不冲突。从合进 main 的 `ios-native`（f8de8e6）构建，带遥应通知；按用户的意思没跑截图检查。推送会话的两次构建（6adf45f8 编译检查、6adf5a61 上传 0.5.0（6））记在 0.5.0 一节 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
