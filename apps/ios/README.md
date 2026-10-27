@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.2 发 TestFlight：Claude 问题卡跟上电脑 dev.24，Codex 新建对话的按钮，待真机验）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.2 构建 8 已发 TestFlight：Claude 问题卡跟上电脑 dev.24，Codex 新建对话的按钮，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,7 +25,7 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `main` 分支，先推送（10-27 起只留 `main`，`ios-native` 已合进去并删掉）。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.5.2：Claude 问题卡跟上电脑 dev.23、dev.24，Codex 新建的对话变成按钮（10-27 构建，待真机验）
+## 0.5.2：Claude 问题卡跟上电脑 dev.23、dev.24，Codex 新建的对话变成按钮（10-27 发 TestFlight 构建 8，待真机验）
 
 用户 10-27 看过 0.5.1 之后的进度，要这些改动连同下面四处小问题一起发；又发来 iPhone 截图：Codex 新建对话时，回答里露出一行 `::created-thread{threadId="…"}`。
 
@@ -43,7 +43,7 @@
 
 还没做：发出去的图片在消息里仍只显示“[图片]”。电脑记录里只写这三个字，不给图片，到 Windows dev.24 也没改；手机这边也还没像网页那样，把本机发出的图片单独显示出来。
 
-检查情况：本机 `TeleplyCore` 142 项通过（新加 4 项）；界面代码在云端构建时编译；按用户的意思不跑截图。
+检查情况：本机 `TeleplyCore` 142 项通过（新加 4 项）；界面代码在 Codemagic 上一次编过（下面构建表 #27），上传前的检查都过了；按用户的意思没跑截图，新按钮和改过的问题卡都还没在模拟器上看过，第一次就在真机上看。
 
 ### 留给你在真机上验（0.5.2）
 
@@ -274,6 +274,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #24 `6adf5cde…` | ios-native-check（shots，三种外观） | 失败（检查脚本误判） | 26（排队 23） | 行和侧栏按钮改成点后 0.1 秒再动作：右滑只拉出侧栏，下面仍是列表；浅色、深色几乎每步都截到，快速查看显示出 Word 内容；唯一的失败是用标题判断“对话被打开”误判（列表那一行的标题也算），已改 |
 | #25 `6adf690e…` | ios-native-testflight | 成功 | 6（排队 50） | 0.4.2（7）上传，Delivery UUID `07ae989f-ee9d-4d0d-9062-baa2648784d0`；截图存 `F:\Android-Dev\work\ios-042-screens`。构建在 Codemagic 上成功，这台电脑下载产物时连不上 Codemagic，重新拉取后核对了上传记录 |
 | #26 `6adfef34…` | ios-native-testflight | 成功 | 7（排队 1） | 0.5.1（7）上传，Delivery UUID `9e2087f0-6519-4b26-9487-6b605cc8a218`；版本 0.5.1 下的 7 号，和 0.4.2 的 7 号不冲突。从合进 main 的 `ios-native`（f8de8e6）构建，带遥应通知；按用户的意思没跑截图检查。推送会话的两次构建（6adf45f8 编译检查、6adf5a61 上传 0.5.0（6））记在 0.5.0 一节 |
+| #27 `6ae02140…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.2（8）上传，Delivery UUID `258fe14a-9a73-4881-b857-db8a655a680e`；第一次从 `main` 构建（4da3398，含 Windows dev.24）；按用户的意思没跑截图 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
