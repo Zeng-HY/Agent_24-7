@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.3 发 TestFlight：发出去的图片显示出来，待真机验）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.3 构建 9 已发 TestFlight：发出去的图片显示出来，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -25,12 +25,12 @@
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `main` 分支，先推送（10-27 起只留 `main`，`ios-native` 已合进去并删掉）。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
 
-## 0.5.3：发出去的图片显示出来（10-27 构建，待真机验）
+## 0.5.3：发出去的图片显示出来（10-27 发 TestFlight 构建 9，待真机验）
 
 - **发出去的图片显示出来**（用户 10-27：发出去的消息只显示“[图片]”，要照网页做）：从手机发给 Codex 或 Claude 的图片，在那条消息里显示成小图（110×100，两张一排），点一下用快速查看看大图。和网页一样，图片取自电脑的记录：从手机或网页发图时，电脑都会记下图片和一张小图，放在对话状态的 `images` 里。Codex 的消息带着发送编号，按编号对上；Claude 的记录里没有编号，按发送时的文字和时间对上，网页这一步对不上 Claude。图片显示出来后，文字前的“[图片]”就不再显示。在电脑上直接发的图片电脑没有记录，仍只显示“[图片]”。
 - 本地示例“Claude 选项示例”的第一条消息带一张图。
 
-检查情况：本机 `TeleplyCore` 146 项通过（新加 4 项）；界面代码在云端构建时编译；按用户的意思不跑截图。
+检查情况：本机 `TeleplyCore` 146 项通过（新加 4 项）；界面代码在 Codemagic 上一次编过（构建表 #28），上传前的检查都过了；按用户的意思没跑截图，消息里的小图第一次就在真机上看。
 
 ### 留给你在真机上验（0.5.3）
 
@@ -289,6 +289,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #25 `6adf690e…` | ios-native-testflight | 成功 | 6（排队 50） | 0.4.2（7）上传，Delivery UUID `07ae989f-ee9d-4d0d-9062-baa2648784d0`；截图存 `F:\Android-Dev\work\ios-042-screens`。构建在 Codemagic 上成功，这台电脑下载产物时连不上 Codemagic，重新拉取后核对了上传记录 |
 | #26 `6adfef34…` | ios-native-testflight | 成功 | 7（排队 1） | 0.5.1（7）上传，Delivery UUID `9e2087f0-6519-4b26-9487-6b605cc8a218`；版本 0.5.1 下的 7 号，和 0.4.2 的 7 号不冲突。从合进 main 的 `ios-native`（f8de8e6）构建，带遥应通知；按用户的意思没跑截图检查。推送会话的两次构建（6adf45f8 编译检查、6adf5a61 上传 0.5.0（6））记在 0.5.0 一节 |
 | #27 `6ae02140…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.2（8）上传，Delivery UUID `258fe14a-9a73-4881-b857-db8a655a680e`；第一次从 `main` 构建（4da3398，含 Windows dev.24）；按用户的意思没跑截图 |
+| #28 `6ae02b92…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.3（9）上传，Delivery UUID `37de98d6-f594-4f71-84ab-e401290c0409`；从 `main` 的 b01c835 构建；唯一的编译警告在原有的 `ChatModel.swift:578`；没跑截图 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
