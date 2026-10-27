@@ -104,7 +104,7 @@ Android 0.4.0 移除正常页的原生地址栏和账号主题注入，使用服
 
 未绑定时可选择旧版文件夹。迁移保留原目录，失败恢复覆盖的目标文件；验证手机连接、附件与 Windows 登录自启后再人工处理旧目录或旧设备记录，不按相同名称自动合并。不要据“在线”一项就删除旧数据。
 
-Windows 更新版本由根目录 `windows-version.json` 维护。递增 build；运行 `deploy/windows/build.ps1` 会生成单文件安装包及 `dist/windows-update.json`，清单记录对应源码提交、文件名、大小与 SHA-256。将二者上传同一个 GitHub Release；测试版本标记 Pre-release。仅上传 Actions 临时产物不会推送更新。
+Windows 更新版本由根目录 `windows-version.json` 维护。递增 build；运行 `deploy/windows/build.ps1` 会生成单文件安装包及 `dist/windows-update.json`，清单记录对应源码提交、文件名、大小与 SHA-256。dev.25 起再运行 `deploy/updates/publish.py windows`：签名清单，把安装包和清单传到阿里云（应用先看阿里云，再看 GitHub），见 `deploy/updates/README.md`。然后把安装包、`windows-update.json`、`windows-update.json.sig` 上传同一个 GitHub Release；测试版本标记 Pre-release。仅上传 Actions 临时产物不会推送更新。
 
 旧版没有检查更新功能，需要手动覆盖安装本版一次。此后用户从托盘检查、下载并确认安装；不会静默下载执行。覆盖更新保留当前安装目录、数据与自启选择。代码哈希校验不等于 Windows 发布者数字签名。
 

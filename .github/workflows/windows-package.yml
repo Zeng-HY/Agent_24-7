@@ -30,7 +30,7 @@ jobs:
         env:
           PYTHONUTF8: '1'
         run: |
-          foreach ($pattern in @('test_relay_identity.py','test_relay_v2.py','test_relay_vault.py','test_relay_desktop.py','test_relay_migration.py','test_relay_updates.py','test_relay_controller.py')) {
+          foreach ($pattern in @('test_relay_identity.py','test_relay_v2.py','test_relay_vault.py','test_relay_desktop.py','test_relay_migration.py','test_relay_updates.py','test_update_publish.py','test_relay_controller.py')) {
             .venv\Scripts\python.exe -m unittest discover -s tests -p $pattern -q
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $pattern" }
           }

@@ -8,6 +8,8 @@ import subprocess
 import sys
 
 root=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(root))
+import relay_updates
 version=json.loads((root/'windows-version.json').read_text(encoding='utf-8'))
 notes=json.loads((root/'windows-release-notes.json').read_text(encoding='utf-8')).get(version['version'],{})
 summary=notes.get('summary')
@@ -19,6 +21,9 @@ if '--manifest' in sys.argv:
     info=json.loads((root/'build/windows-build.json').read_text(encoding='utf-8'))
     file=root/'dist'/('AgentRemote-'+info['version']+'-Setup.exe')
     info.update(schema=1,name=file.name,size=file.stat().st_size,sha256=hashlib.sha256(file.read_bytes()).hexdigest(),summary=summary,notes=notes['details'])
+    # Read by dev.25 and later (signed by deploy/updates/publish.py); earlier builds read only the fields above.
+    info.update(product='windows',channel=relay_updates.channel(info),
+        urls=[relay_updates.ALIYUN+file.name,relay_updates.REPO+'windows-v'+info['version']+'/'+file.name])
     (root/'dist/windows-update.json').write_text(json.dumps(info,indent=2)+'\n',encoding='utf-8')
 else:
     version['commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()

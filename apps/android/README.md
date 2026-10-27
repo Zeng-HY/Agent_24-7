@@ -207,7 +207,7 @@
 
 1. 改 `app/build.gradle.kts` 的 `versionName`（`x.y.z`，不带后缀），`versionCode` 加一。
 2. 在有 `%USERPROFILE%\.android\teleply-signing\` 的电脑上运行 `./scripts/release.ps1`：跑 JVM 测试，构建 release，输出 `build/Teleply-x.y.z-N.apk`，打印签名证书和 SHA-256。证书不是 `1df09ab7…b2e22946` 时脚本报错停下。
-3. 把这个文件附到本仓库的 GitHub Release，文件名不改（预发布也可以）。手机上的应用每天看一次，也可以在设置里点"检查更新"。
+3. 在仓库根目录运行 `.toolchain\release-venv\Scripts\python.exe deploy\updates\publish.py android apps\android\build\Teleply-x.y.z-N.apk --notes-file 说明.txt`（见 `deploy/updates/README.md`）：它给 `android-update.json` 签名，域名绑好以后还会传到阿里云。再把 APK、`android-update.json`、`android-update.json.sig` 附到本仓库的 GitHub Release `android-vx.y.z`，文件名不改。1.0.3 起应用先看阿里云，再看 GitHub，只认签过名的清单；1.0.2 及以前只认 GitHub 上的 APK。手机上的应用每天看一次，也可以在设置里点"检查更新"。
 4. `teleply-signing` 文件夹一旦丢失，就发不了能覆盖安装的更新，所有人得卸载重装；一旦泄露，别人能做出能覆盖安装的假遥应。另外离线备份一份，不要提交进仓库，也不要发给别人。
 
 0.8–0.9 的预览版用这台电脑的 `debug.keystore` 签名、文件名 `TeleplyNative-…`；那把调试钥匙仍用于开发版和性能版，丢了只影响这两个开发用的副本。

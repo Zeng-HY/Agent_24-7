@@ -1,0 +1,7 @@
+# Only for deploy/updates/publish.py: it signs the update manifests and uploads releases to Alibaba Cloud OSS.
+# The apps never import it. Same pinned versions as the relay (requirements-relay.txt). Keep this file ASCII.
+#   python -m venv .toolchain\release-venv
+#   .toolchain\release-venv\Scripts\python.exe -m pip install -r requirements-release.txt
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
