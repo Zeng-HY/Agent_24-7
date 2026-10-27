@@ -195,6 +195,8 @@ public final class AppModel {
         conversation.pollPaused = { workspace.busy || workspace.pressing || conversation.submitting }
         workspace.changed = { conversation.refreshControl() }
         workspace.stateRead = { key, raw in conversation.applyState(key, raw) }
+        // A Claude desktop option whose reply was lost goes quietly once its token can no longer land.
+        conversation.controlRead = { key in workspace.settleStaleChoice(key) }
         self.conversation = conversation
         self.workspace = workspace
         jobs = NewChatJobs(pacer: services.pacer, store: services.store, now: services.now)

@@ -8,6 +8,13 @@ func actionIdentity(_ route: String, _ body: JSONValue) -> String {
     return route + ":" + (id ?? body["kind"].string())
 }
 
+/// What 核对上次操作 says of a Claude desktop option whose reply was lost, from what Claude shows now.
+func claudeChoiceCheck(_ raw: JSONValue) -> String {
+    pendingCards(app: "claude", raw: raw).isEmpty
+        ? "电脑上已经没有在等的选项，上次的选择已处理。"
+        : "电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。"
+}
+
 /// What goes with a conversation's next message and the source's own choices (Android WorkspaceController):
 /// settings bound to the next message (Codex), the model, effort, mode and permission menus (Claude, DeepSeek)
 /// with their lists kept on this phone, answers being chosen in the timeline's cards, actions posted to the
@@ -491,14 +498,16 @@ public final class WorkspaceModel {
                 }
                 var next = self.current(key).object
                 if previous.isObject { next["action_history"] = .array(self.current(key)["action_history"].array + [previous]) }
-                next["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "unknown"]
+                // When it was posted (ms): a Claude desktop option can only land within two minutes (settleStaleChoice).
+                let at = JSONValue.number(Double(self.now()))
+                next["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "unknown", "at": at]
                 await self.persist(key, .object(next))
                 posted = true
                 let reply = route == "codex/answer"
                     ? try await client.command(device: key.device, app: key.app, route: "answer", body: .object(payload))
                     : try await client.detail(device: key.device, route: route, body: .object(payload))
                 var done = self.current(key).object
-                done["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "done"]
+                done["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "done", "at": at]
                 await self.persist(key, .object(done))
                 let text = reply["text"].string()
                 if self.key == key { self.result = text.isEmpty ? "操作已返回，请刷新核对实际状态" : text }
@@ -543,11 +552,14 @@ public final class WorkspaceModel {
         }
     }
 
-    /// 核对上次操作: reads back whether an action whose reply was lost took effect; never sends it again.
+    /// 核对上次操作: reads back whether an action whose reply was lost took effect; never sends it again. A Claude
+    /// desktop option (claude/choose) has no receipt, and its token works on the computer for two minutes only: what
+    /// Claude shows now is put on the page and settles it, saying whether Claude still waits for a choice.
     public func checkAction() {
         guard let key, let client, !busy else { return }
         let pending = current(key)["pending_action"]
         guard pending.isObject else { return }
+        error = nil
         work = Task { [weak self] in
             do {
                 let route = pending["route"].string()
@@ -565,24 +577,50 @@ public final class WorkspaceModel {
                         confirmed = actual["permission"].string() == body["preset"].string()
                     case "deepseek/model":
                         confirmed = body["settings"].isObject && body["settings"].object.allSatisfy { actual["settings"][$0.key] == $0.value }
+                    case "claude/choose":
+                        // Shown as read, so a choice still waiting comes with tokens that work now.
+                        self?.stateRead(key, actual)
+                        confirmed = true
                     default:
                         confirmed = false
                     }
-                    line = confirmed ? "已读回所选设置" : "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。"
+                    line = route == "claude/choose" ? claudeChoiceCheck(actual)
+                        : confirmed ? "已读回所选设置" : "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。"
                 }
                 guard let self else { return }
-                if confirmed {
-                    var next = self.current(key).object
-                    var done = pending.object
-                    done["status"] = "done"
-                    next["pending_action"] = .object(done)
-                    await self.persist(key, .object(next))
-                }
+                if confirmed { self.settle(key, pending) }
                 if self.key == key { self.result = line }
             } catch {
                 if self?.key == key { self?.error = describe(error) }
             }
         }
+    }
+
+    /// How long the computer takes a Claude desktop option's token (claude_control.py choose): 120 s.
+    static let choiceLife: Int64 = 120_000
+
+    /// The conversation's Claude state was read: a desktop option (claude/choose) whose reply was lost more than two
+    /// minutes ago can no longer land, since its token has run out on the computer, so it is settled with no tap and
+    /// 上次操作的结果还没确认 goes. One kept by a build before 10-27 has no time and goes the same way. Nothing is sent
+    /// again; Codex's answers and DeepSeek's settings wait for 核对上次操作 as before.
+    public func settleStaleChoice(_ key: ChatKey) {
+        guard key.app == "claude", self.key == key, ready, !busy else { return }
+        let pending = current(key)["pending_action"]
+        guard pending["route"].string() == "claude/choose", pending["status"].string() == "unknown" else { return }
+        let at = pending["at"]
+        guard at.isNull || now() - at.int64() > Self.choiceLife else { return }
+        settle(key, pending)
+    }
+
+    /// Marks [pending] done, as a reply would have (the next action moves it to action_history); not when another
+    /// action has taken its place meanwhile.
+    func settle(_ key: ChatKey, _ pending: JSONValue) {
+        guard current(key)["pending_action"] == pending else { return }
+        var done = pending.object
+        done["status"] = "done"
+        var next = current(key).object
+        next["pending_action"] = .object(done)
+        keep(key, .object(next))
     }
 
     /// 电脑上打开: the computer shows this conversation in its desktop app. Not a message; nothing is sent.

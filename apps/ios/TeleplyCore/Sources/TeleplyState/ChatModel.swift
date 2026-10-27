@@ -69,6 +69,9 @@ public final class ChatModel {
 
     /// True while a tap waits on the computer (web claude-ui.js `choosing`): no state poll then.
     @ObservationIgnored public var pollPaused: () -> Bool = { false }
+    /// The source's state was read for a conversation (entering, a poll, after an action): a Claude desktop option
+    /// left unconfirmed may be settled by it (WorkspaceModel.settleStaleChoice).
+    @ObservationIgnored public var controlRead: (ChatKey) -> Void = { _ in }
     /// Attachments, references and settings bound to the next message; throws why a send cannot go yet.
     @ObservationIgnored public var extras: () throws -> JSONValue = { [:] }
     /// The settings bound to the next message (Codex), what a plan is carried out with.
@@ -199,7 +202,7 @@ public final class ChatModel {
                 control.available = false
                 let state = try await client.control(device: key.device, app: key.app, chat: key.chat)
                 guard t == token else { return }
-                control = mergeControl(previous: control, incoming: state)
+                take(state, key)
                 // Recovery reads receipts only; nothing is sent again.
                 for record in submissions where unsettledLabels.contains(record.label) || record.action == "stop" {
                     try? await reconcile(record, client)
@@ -243,7 +246,7 @@ public final class ChatModel {
             onFrame(frame, key)
             connection = "实时连接正常"
             if let incoming = frame.control {
-                control = mergeControl(previous: control, incoming: incoming)
+                take(incoming, key)
                 // A stop waiting on its turn, or a queued send that left the queue: its receipt says what happened.
                 for record in submissions where record.action == "stop" && record.label.contains("等待")
                     || record.label == "已排队" && !incoming.queued.contains(where: { $0.id == record.request }) {
@@ -260,7 +263,7 @@ public final class ChatModel {
             try await pacer.wait(every)
             if pollPaused() { continue }
             let state = try await client.control(device: key.device, app: key.app, chat: key.chat, fresh: false)
-            if t == token { control = mergeControl(previous: control, incoming: state) }
+            if t == token { take(state, key) }
             // Claude keeps no receipts: its queued and unconfirmed sends are looked for in its record (web pollReceipts).
             if key.app == "claude" {
                 for record in claudePending(key) { try? await reconcile(record, client) }
@@ -282,14 +285,20 @@ public final class ChatModel {
         let t = token
         refreshing = Task { [weak self] in
             guard let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat), let self, t == self.token else { return }
-            self.control = mergeControl(previous: self.control, incoming: fresh)
+            self.take(fresh, key)
         }
     }
 
     /// A state the computer sent back with an action (Claude settings): shown as read, no second request.
     public func applyState(_ key: ChatKey, _ raw: JSONValue) {
         guard self.key == key else { return }
-        control = mergeControl(previous: control, incoming: parseControl(raw))
+        take(parseControl(raw), key)
+    }
+
+    /// A state read for the conversation on screen ([key]) is kept and handed on.
+    func take(_ incoming: Control, _ key: ChatKey) {
+        control = mergeControl(previous: control, incoming: incoming)
+        controlRead(key)
     }
 
     // MARK: The draft (spec B10)
@@ -559,7 +568,7 @@ public final class ChatModel {
                 await save(done, synthetic)
             }
             if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat), binding == token, foreground, self.key == key {
-                control = mergeControl(previous: control, incoming: fresh)
+                take(fresh, key)
             }
         } catch {
             if began {
