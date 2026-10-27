@@ -173,7 +173,30 @@ def plain(text: str) -> str:
     """Markdown marks out, for one-line previews."""
     text = re.sub(r"```[a-zA-Z0-9_-]*", " ", text or "")
     text = re.sub(r"\*\*|__|`|^#+\s*|^\s*[-*]\s+|\|", " ", text, flags=re.M)
-    return re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    return re.sub(r"\[([^\]]+)\]\((?:<[^>\n]*>|[^)]+)\)", r"\1", text)
+
+
+_MEM_CITATION = re.compile(r"\s*<oai-mem-citation>[\s\S]*?(?:</oai-mem-citation>|$)")
+_FILE_CITATION = re.compile(r':codex-file-citation\{((?:[^{}"]|"[^"]*")*)\}')
+
+
+def codex_answer(text: str) -> str:
+    """A Codex answer as the phone shows it (10-27). Codex ends some answers with the memory notes it used
+    (<oai-mem-citation>…</oai-mem-citation>), which its desktop does not show: left out. It names a file it made as
+    :codex-file-citation{path="D:\\…\\x.docx" purpose="output"}, which its desktop draws as a file card: made a link to
+    that file, so the phone lists it with the conversation's files (message_files.references) and can fetch it."""
+    if "<oai-mem-citation>" in text:
+        text = _MEM_CITATION.sub("", text).rstrip()
+    return _FILE_CITATION.sub(_file_link, text) if ":codex-file-citation{" in text else text
+
+
+def _file_link(match: re.Match) -> str:
+    path = dict(re.findall(r'(\w+)="([^"]*)"', match[1])).get("path", "").strip()
+    if not re.match(r"[A-Za-z]:[\\/]", path):
+        return f"`{path}`" if path else ""
+    path = path.replace("\\", "/")  # in a link a backslash before . or _ reads as an escape and is dropped
+    name = re.sub(r"([`\[\]])", r"\\\1", path.rsplit("/", 1)[-1])  # what a file name may hold that would end the label
+    return f"[{name}](<{path}>)"
 
 
 def clean_text(text: str) -> str:
@@ -529,7 +552,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
         ts = rec.get("timestamp") or ""
         if rec.get('type')=='response_item':
             if kind=='message' and payload.get('role')=='assistant' and payload.get('phase') in ('commentary','final_answer'):
-                text=_join_text(payload.get('content')).strip()
+                text=codex_answer(_join_text(payload.get('content')).strip())
                 if text:msgs.append({'role':'assistant','text':text,'time':ts,'phase':payload['phase'],'source_id':payload.get('id'),'public_response':True})
             continue
         if ts:
@@ -543,7 +566,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
                              "client_request_id": item.get("client_id"), "source_id": item.get("id")})
             elif t == "AgentMessage":
                 saw_items = True
-                text = _join_text(item.get("content")).strip()
+                text = codex_answer(_join_text(item.get("content")).strip())
                 if text and item.get('phase') in (None, 'commentary', 'final_answer'):
                     msgs.append({"role": "assistant", "text": text, "time": ts, "phase": item.get("phase") or "", "source_id": item.get("id")})
             elif t == 'Plan' and isinstance(item.get('text'),str):
@@ -572,13 +595,41 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
                          "source_id": payload.get("id"), "client_request_id": payload.get("client_id")})
         elif kind == "agent_message":
             if payload.get("phase") in (None, "commentary", "final_answer"):
-                msgs.append({"role": "assistant", "text": payload.get("message") or "", "time": ts, "legacy": True,
+                msgs.append({"role": "assistant", "text": codex_answer(payload.get("message") or ""), "time": ts, "legacy": True,
                              "phase": payload.get("phase") or "", "source_id": payload.get("id")})
     if saw_items:
         msgs = [m for m in msgs if not (m.get('legacy') and m.get('time') and any(
             not v.get('legacy') and v.get('time')==m['time'] and v['role']==m['role']
             and v.get('phase','')==m.get('phase','') and v['text']==m['text'] for v in msgs))]
-    return msgs, state
+    kept: list[dict] = []
+    for m in msgs:  # the second copy of an answer goes, as in chat_history.Transcript
+        if not any(codex_twins(v, m) for v in kept[-4:]):
+            kept.append(m)
+    return kept, state
+
+
+TWIN_SECONDS = 5
+
+
+def codex_twins(a: dict, b: dict) -> bool:
+    """Whether two rows are one Codex message. Codex writes each answer twice: as an event (agent_message; an
+    item_completed item in older versions) and as a response item (public_response), on neighbouring lines. Until 10-27
+    they were taken for one only with the very same timestamp; newer Codex writes them milliseconds apart (at most
+    0.128 s in 80 conversations), so every answer showed twice."""
+    if a["role"] != b["role"] or bool(a.get("public_response")) == bool(b.get("public_response")):
+        return False
+    if (a.get("phase") or "") != (b.get("phase") or "") or a["text"].strip() != b["text"].strip():
+        return False
+    if a.get("time") == b.get("time"):
+        return True
+    try:
+        return abs(_seconds(a["time"]) - _seconds(b["time"])) <= TWIN_SECONDS
+    except (KeyError, AttributeError, ValueError):
+        return False
+
+
+def _seconds(ts: str) -> float:
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
 
 
 def _claude_tool(block: dict) -> str:

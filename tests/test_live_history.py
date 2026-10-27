@@ -32,6 +32,15 @@ class LiveHistoryTests(unittest.TestCase):
         self.assertEqual(merge_live_messages(self.page,self.entry,self.state)[1],[])
         self.rows[0]['turn_id']='earlier'
         self.assertEqual(merge_live_messages(self.page,self.entry,self.state)[1],['native-different-id'])
+    def test_live_text_reads_as_the_log_copy_will(self):
+        # 10-27: Codex's memory notes are left out of the log's copy, so the live text must match it without them
+        notes='\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n</oai-mem-citation>'
+        self.turn['items']=[{'id':'live','type':'agentMessage','phase':'final_answer','text':'答完了'+notes}]
+        messages,ids=merge_live_messages(self.page,self.entry,self.state)
+        self.assertEqual((ids,messages[-1]['text']),(['live'],'答完了'))
+        self.rows[0].update(legacy=True,source_id=None,phase='final_answer',text='答完了')
+        self.turn['items'][0]['id']='native-different-id'
+        self.assertEqual(merge_live_messages(self.page,self.entry,self.state)[1],[])
     def test_live_message_is_promoted_even_after_it_leaves_the_page(self):
         previous={'m0':{**self.rows[0],'streaming':True}}
         messages,ids=merge_live_messages(self.page,self.entry,self.state,previous)

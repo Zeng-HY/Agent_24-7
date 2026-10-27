@@ -13,9 +13,10 @@ done, failed or waiting; it writes the words and asks Apple to deliver them (rel
 Every 10 s the newest conversations are looked at, and a file that grew is read from its end. A turn that ended there
 after this service started (Codex: task_complete; Claude: an answer that stopped for good, not to use a tool) is sent
 once, with the conversation's title and the start of its last answer; tapping it opens that conversation on this
-computer's page. Not sent: turns the user stopped, and turns that end while someone uses this PC's keyboard or mouse
-(in the last 2 minutes; this service's own key presses do not count) or while the phone has that conversation open
-(its live stream is connected). What happened goes into the log, and the last few show under 设置 → 手机通知.
+computer's page. Not sent: turns the user stopped, and turns that end while the phone has that conversation open (its
+live stream is connected). Someone using this PC no longer holds them back (10-27): the user wants them there too, and
+the keyboard and mouse input that held them back for 2 minutes also came from programs (on 10-26, UI tests typing into
+Claude once a second held back every one). What happened goes into the log, and the last few show under 设置 → 手机通知.
 """
 
 from __future__ import annotations
@@ -36,10 +37,8 @@ from urllib.parse import quote, urlsplit
 import chats
 import machines
 import ntfy_feed
-import winctl
 
 POLL_SECONDS = 10
-PRESENT_SECONDS = 120   # someone used this PC this recently: they see it here, the phone is left alone
 TAIL_BYTES = 256 << 10  # how much of a grown file is read; a turn's end is the last thing written
 LIMIT = 30              # conversations of each app looked at, newest first
 DEFAULT_SERVER = "https://api.day.app"
@@ -117,7 +116,7 @@ def _codex_end(lines: list[bytes]) -> dict | None:
         if state:
             ts = rec.get("timestamp") or ""
             end = {"state": state, "key": payload.get("turn_id") or ts, "time": ts,
-                   "text": payload.get("last_agent_message") or ""}
+                   "text": chats.codex_answer(payload.get("last_agent_message") or "")}
     return end
 
 
@@ -188,10 +187,9 @@ def _seconds(ts: str, fallback: float) -> float:
 
 
 class Notifier:
-    def __init__(self, cfg: dict, name: str, log, save, clock=time.time, idle=winctl.person_idle_seconds,
-                 sender=send, page_url=None, feed=None) -> None:
+    def __init__(self, cfg: dict, name: str, log, save, clock=time.time, sender=send, page_url=None, feed=None) -> None:
         self.cfg, self.name, self.log, self.save = cfg, name, log, save
-        self.clock, self.idle, self.sender = clock, idle, sender
+        self.clock, self.sender = clock, sender
         self.feed = feed or ntfy_feed.Feed(clock=clock)  # what the ntfy app on an Android phone listens to
         self.relay = ntfy_feed.Feed(topic="teleply-push", clock=clock)  # what the relay reads for 遥应's own
         self._own_url = page_url or (lambda: machines.own_url(machines.tailscale_status()))
@@ -400,9 +398,6 @@ class Notifier:
         with self.lock:
             if self.open.get((item["app"], item["id"])):
                 return "手机正开着这个对话"
-        idle = self.idle()
-        if idle is not None and idle < PRESENT_SECONDS:
-            return f"有人 {int(idle)} 秒前用过这台电脑"
         return ""
 
     def _tell(self, found: dict | None, item: dict, end: dict) -> None:
