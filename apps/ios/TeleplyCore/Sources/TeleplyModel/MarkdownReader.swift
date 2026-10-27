@@ -39,6 +39,18 @@ public indirect enum MarkdownBlock: Sendable, Equatable {
     case html(String)
 }
 
+/// A conversation a Codex reply says it made (web remote.html assistantMarkdown): a `threadId` one opens; a
+/// `clientThreadId` one is still being made.
+public struct CreatedThread: Sendable, Equatable {
+    public let id: String
+    public let ready: Bool
+
+    public init(id: String, ready: Bool) {
+        self.id = id
+        self.ready = ready
+    }
+}
+
 public enum MarkdownReader {
     /// Smart punctuation stays off: straight quotes and dashes keep the original text (spec B16).
     public static func blocks(_ source: String) -> [MarkdownBlock] {
@@ -48,8 +60,10 @@ public enum MarkdownReader {
 
     /// What Codex writes for itself goes before an answer is shown, copied or shared (user 10-27, a phone user asked
     /// what the lines at the bottom were): its memory citations go whole, and a file citation becomes a link to the
-    /// file, which opens like any file link.
+    /// file, which opens like any file link. A conversation it made goes from the text too, to a button under it
+    /// ([createdThreads]), and so do its plan's `<proposed_plan>` tags (web assistantMarkdown).
     public static func tidy(_ source: String) -> String {
+        let source = directives(source).text
         guard source.contains("oai-mem-citation") || source.contains(":codex-file-citation") else { return source }
         var text = source.replacingOccurrences(of: #"\s*<oai-mem-citation>[\s\S]*?</oai-mem-citation>"#, with: "", options: .regularExpression)
         guard let directive = try? NSRegularExpression(pattern: #":codex-file-citation\{[^}]*?path="([^"]+)"[^}]*\}"#) else { return text }
@@ -60,6 +74,40 @@ public enum MarkdownReader {
             text.replaceSubrange(whole, with: "[\(name)](<\(path)>)")
         }
         return text
+    }
+
+    /// The conversations a reply says it made, in order: 打开新建对话 under the text for each (user 10-27: the line
+    /// `::created-thread{threadId="…"}` showed raw on the phone; the web draws a button).
+    public static func createdThreads(_ source: String) -> [CreatedThread] {
+        directives(source).threads
+    }
+
+    /// The lines Codex writes for its desktop, outside code (web remote.html assistantMarkdown): a line of its own
+    /// `::created-thread{threadId="…"}` (or `clientThreadId`) and `<proposed_plan>` tags leave the text.
+    static func directives(_ source: String) -> (text: String, threads: [CreatedThread]) {
+        guard source.contains("::created-thread{") || source.contains("proposed_plan>") else { return (source, []) }
+        var lines: [Substring] = []
+        var threads: [CreatedThread] = []
+        var fence: Character?
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let bare = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let mark = bare.first, mark == "`" || mark == "~", bare.hasPrefix(String(repeating: mark, count: 3)) {
+                if fence == nil { fence = mark } else if fence == mark { fence = nil }
+                lines.append(line)
+                continue
+            }
+            if fence == nil {
+                if bare.range(of: #"^::created-thread\{(threadId|clientThreadId)="[a-zA-Z0-9-]+"\}$"#, options: .regularExpression) != nil,
+                   let quote = bare.firstIndex(of: "\"") {
+                    let id = bare[bare.index(after: quote)...].prefix { $0 != "\"" }
+                    threads.append(CreatedThread(id: String(id), ready: bare.hasPrefix("::created-thread{threadId=")))
+                    continue
+                }
+                if bare == "<proposed_plan>" || bare == "</proposed_plan>" { continue }
+            }
+            lines.append(line)
+        }
+        return (lines.joined(separator: "\n"), threads)
     }
 
     /// A Windows path an answer links to (web markdown-ui.js local): the drive letter and a slash, after any %-escapes.

@@ -28,6 +28,17 @@ struct ComposerAwayTests {
         #expect(blank.model == "模型" && blank.mode == "普通执行" && !blank.plan)
     }
 
+    /// Claude's effort levels in the model menu by the chip's words (user 10-27: the desktop's six names were cut to
+    /// "Med", "Hig" in the menu's row), as Android does; a slider's steps by the names learnt, else 第 N 档 (web).
+    @Test func claudeEffortLevelsGoByTheChipsWords() {
+        let desktop = ["Low", "Medium Recommended", "High", "Extra", "Max 3.5× or more usage", "Ultracode"]
+        #expect(desktop.map(claudeEffortLabel) == ["低", "中", "高", "极高", "最高", "Ultracode"])
+        #expect([" High ", "中", "Turbo mode", ""].map(claudeEffortLabel) == ["高", "中", "Turbo", ""])
+        let range = state(#"{"min":0,"max":4,"step":1,"value":2,"label":"High","labels":{"0":"Low"}}"#)
+        #expect((0...4).map { claudeStepLabel(range, value: Double($0), index: $0) } == ["低", "第 2 档", "高", "第 4 档", "第 5 档"])
+        #expect(claudeStepLabel(state(#"{"min":0,"max":1,"step":1,"label":"High"}"#), value: 0, index: 0) == "第 1 档")
+    }
+
     @Test func theModelChipOpensTheConversationOnlyWhenItIsAway() {
         let codexAway = state(#"{"available":false,"reason":"电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试"}"#)
         #expect(chipAway(app: "codex", raw: codexAway))

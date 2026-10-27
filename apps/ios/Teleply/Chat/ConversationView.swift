@@ -29,7 +29,7 @@ struct ConversationView: View {
         let control = model.conversation.control
         let roles = timelineRoles(model.messages, app: model.app, raw: control.raw, running: control.running, asking: control.questions)
         let actions = MessageActions(select: { selecting = $0 }, expand: { model.expand($0) }, diff: { model.workspace.diff($0) },
-                                     files: { model.workspace.filesOf(message: $0) }, busy: model.busy)
+                                     files: { model.workspace.filesOf(message: $0) }, thread: { model.openCreated($0) }, busy: model.busy)
         let submissions = model.conversation.submissions
         let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
         // Sends still on their way that the record does not show yet (Android outbox).

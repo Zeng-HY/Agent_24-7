@@ -52,6 +52,19 @@ public func claudeAsks(_ raw: JSONValue) -> Bool {
     return prompt.isObject && (!prompt["choices"].array.isEmpty || !prompt["nav"].array.isEmpty)
 }
 
+/// An option's words on Claude's question card. Since Windows dev.24 a ticked option of a question that takes several
+/// says "✓ " in its label, for the apps that did not show `pressed` (iOS 0.5.1); shown chosen here, it goes without.
+public func claudeChoiceLabel(_ choice: JSONValue) -> String {
+    let label = choice["label"].string()
+    return choice["pressed"].bool() && label.hasPrefix("✓ ") ? String(label.dropFirst(2)) : label
+}
+
+/// Whether Claude's question also takes an answer of one's own, written on the computer (web `p.other`): the PC sends
+/// its Other button as a part of its own, or null.
+public func claudeTakesOther(_ prompt: JSONValue) -> Bool {
+    prompt["other"].isObject || prompt["other"].bool()
+}
+
 /// DeepSeek's approval requests, each its own card.
 public func deepseekApprovals(_ raw: JSONValue) -> [JSONValue] {
     raw["interactions"].array.filter { $0["event"].string() == "approval/request" }

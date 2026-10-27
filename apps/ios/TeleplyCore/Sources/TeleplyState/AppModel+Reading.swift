@@ -18,6 +18,28 @@ extension AppModel {
         }
     }
 
+    /// 打开新建对话 under a Codex reply that made a conversation (web remote.html: the conversation is read first, and
+    /// only then opened; it may not be in the list yet). Read failing, this page stays and says why.
+    public func openCreated(_ id: String) {
+        operation { [weak self] g in
+            guard let self, let device = self.device else { return }
+            do {
+                _ = try await self.client.history(device: device.id, app: "codex", chat: id, around: nil)
+            } catch let failure as ServiceFailure where failure.status == 401 {
+                throw failure
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ReadFailure("暂时无法打开这个对话：" + describe(error))
+            }
+            guard self.current(g) else { return }
+            var chat = Chat(id: id, title: "新建对话")
+            chat.app = "codex"
+            await self.useSource(chat.app)
+            try await self.readChat(g, chat, restorePosition: true)
+        }
+    }
+
     /// Points reading at [app] when it changes (the list's rows carry their own source).
     func useSource(_ source: String) async {
         guard !source.isEmpty, source != app, sourceOrder.contains(source) else { return }

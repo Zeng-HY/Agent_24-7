@@ -77,6 +77,8 @@ struct MessageActions {
     var diff: (String) -> Void = { _ in }
     /// 查看成果文件 under a DeepSeek deliverables message: 对话文件 for that message, by its id.
     var files: (String) -> Void = { _ in }
+    /// 打开新建对话 under a Codex reply that made a conversation: that conversation, by its id.
+    var thread: (String) -> Void = { _ in }
     var busy: Bool
 }
 
@@ -302,6 +304,27 @@ private struct AnswerBlock: View {
                         .clipped()
                         .background(Palette.page)
                 }
+            // A conversation the reply made (web remote.html renderAssistantText): a button each under the text.
+            ForEach(Array(MarkdownReader.createdThreads(message.text).enumerated()), id: \.offset) { _, thread in
+                if thread.ready {
+                    Button { actions.thread(thread.id) } label: {
+                        Label("打开新建对话", systemImage: "bubble.left.and.bubble.right")
+                            .buttonFont()
+                            .foregroundStyle(Palette.selectedInk)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 44)
+                            .background(Palette.selectedFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(actions.busy)
+                    .padding(.top, 12)
+                } else {
+                    Text("新对话正在准备中")
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                        .padding(.top, 12)
+                }
+            }
             // The files DeepSeek presented as the turn's result (Android 1.0.2), to open or save.
             if message.kind == "deliverables" {
                 Button("查看成果文件", systemImage: "doc.on.doc") { actions.files(message.id) }

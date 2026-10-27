@@ -93,4 +93,19 @@ struct MarkdownReaderTests {
         #expect(runs.first.flatMap { $0.link }.flatMap(URL.init(string:)).flatMap(MarkdownReader.fileLinkPath) == #"D:\Personal\语言桥\合并稿.docx"#)
         #expect(MarkdownReader.tidy("没有注记") == "没有注记")
     }
+
+    /// Codex names a conversation it made on a line of its own (user 10-27: it showed raw on the phone); the web
+    /// draws 打开新建对话 under the text instead. Inside code the line stays; a clientThreadId one is not made yet.
+    @Test func aConversationCodexMadeIsAButtonNotALine() {
+        let answer = "已新建对话。\n\n::created-thread{threadId=\"0000-made-1\"}"
+        #expect(MarkdownReader.tidy(answer) == "已新建对话。\n")
+        #expect(MarkdownReader.createdThreads(answer) == [CreatedThread(id: "0000-made-1", ready: true)])
+        #expect(MarkdownReader.createdThreads("  ::created-thread{clientThreadId=\"c-1\"}\r") == [CreatedThread(id: "c-1", ready: false)])
+        let code = "```text\n::created-thread{threadId=\"x\"}\n```"
+        #expect(MarkdownReader.tidy(code) == code && MarkdownReader.createdThreads(code).isEmpty)
+        #expect(MarkdownReader.createdThreads("见 ::created-thread{threadId=\"x\"}").isEmpty)
+        #expect(MarkdownReader.createdThreads("::created-thread{threadId=\"a b\"}").isEmpty)
+        #expect(MarkdownReader.tidy("<proposed_plan>\n# 计划\n</proposed_plan>") == "# 计划")
+        #expect(MarkdownReader.blocks(answer) == [.paragraph([InlineRun("已新建对话。")])])
+    }
 }

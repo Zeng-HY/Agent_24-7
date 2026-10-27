@@ -143,9 +143,8 @@ struct ModelMenu: View {
                     Picker("推理强度", selection: Binding(get: { efforts[0]["value"].double() }, set: { value in
                         workspace.claudeSetting(kind: "effort", name: efforts[0]["name"].string(), value: .number(value), expected: expected)
                     })) {
-                        ForEach(steps, id: \.self) { value in
-                            let label = range["labels"][String(Int(value))].string()
-                            Text(label.isEmpty ? (value.rounded() == value ? String(Int(value)) : String(value)) : label).tag(value)
+                        ForEach(Array(steps.enumerated()), id: \.element) { index, value in
+                            Text(claudeStepLabel(range, value: value, index: index)).tag(value)
                         }
                     }
                     .pickerStyle(.palette)
@@ -156,7 +155,7 @@ struct ModelMenu: View {
                         workspace.claudeSetting(kind: "effort", name: name, value: true, expected: expected)
                     })) {
                         ForEach(efforts.map { $0["name"].string() }, id: \.self) { name in
-                            Text(name).tag(name)
+                            Text(claudeEffortLabel(name)).tag(name)
                         }
                     }
                     .pickerStyle(.palette)

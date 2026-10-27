@@ -23,6 +23,18 @@ struct PendingCardTests {
         #expect(pendingCards(app: "claude", raw: [:]).isEmpty)
     }
 
+    /// Windows dev.24 writes "✓ " before a ticked option of a question that takes several, for apps that do not show
+    /// `pressed`; shown chosen here, it goes. The PC's Other is a part of its own, never true (the demo said true).
+    @Test func aTickedClaudeOptionIsMarkedOnceAndOtherIsAPart() {
+        #expect(claudeChoiceLabel(DemoData.parse(#"{"label":"✓ 要点","pressed":true}"#)) == "要点")
+        #expect(claudeChoiceLabel(DemoData.parse(#"{"label":"✓ 完成","pressed":false}"#)) == "✓ 完成")
+        #expect(claudeChoiceLabel(DemoData.parse(#"{"label":"段落","pressed":null}"#)) == "段落")
+        #expect(claudeTakesOther(DemoData.parse(#"{"other":{"name":"Other","token":"t"}}"#)))
+        #expect(claudeTakesOther(DemoData.parse(#"{"other":true}"#)))
+        #expect(!claudeTakesOther(DemoData.parse(#"{"other":null}"#)))
+        #expect(!claudeTakesOther([:]))
+    }
+
     @Test func deepseekPutsApprovalsFirstAndCountsEveryItemOnce() {
         let raw = DemoData.parse(#"{"interactions":[{"event":"approval/request","eventId":"e1","request":{"toolName":"shell"}},{"event":"user-questions/request","eventId":"e2","request":{"callId":"c1","questions":[{"id":"q","question":"哪个目录？"}]}}],"questions":[{"callId":"c1","questions":[]}]}"#)
         #expect(pendingCards(app: "deepseek", raw: raw) == [PendingCard(kind: "approval", summary: "批准这一步吗？ · shell", count: 2)])
@@ -93,6 +105,17 @@ struct AnsweringTests {
         model.workspace.action("claude/choose", ["token": "t-nav-submit"])
         await until(model)
         #expect(pendingCards(app: "claude", raw: model.conversation.control.raw).isEmpty)
+    }
+
+    /// 打开新建对话 under a Codex reply (user 10-27): the conversation it made is read, then opened.
+    @Test func aConversationCodexMadeOpensFromItsButton() async {
+        let model = await demoConversation("只读问题记录")
+        model.openCreated("fixture-made")
+        await model.settle()
+        #expect(model.chat?.id == "fixture-made")
+        #expect(model.app == "codex")
+        #expect(model.error == nil)
+        #expect(!model.messages.isEmpty)
     }
 
     @Test func aDeepSeekApprovalIsDecidedAndTheCardGoes() async {

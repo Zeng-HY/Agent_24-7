@@ -293,9 +293,10 @@ private struct ChoiceQuestion: View {
 // MARK: Claude
 
 /// Claude's question as its desktop shows it (web claude-ui.js): a tap on an option taps it on the computer; with
-/// several questions the computer's own 下一题 and 提交 go on. An option Claude shows as chosen shows chosen here
-/// (its `pressed`): a question of one choice starts with its first, and since Windows dev.23 a tap there goes on by
-/// itself; a question of several shows each tap's pick until 提交.
+/// several questions the computer's own 下一题 and 提交 go on, drawn strong as on the web. An option Claude shows as
+/// chosen shows chosen here (its `pressed`): a question of one choice starts with its first, and since Windows dev.23
+/// a tap there goes on by itself; a question of several shows each tap's pick until 提交. Since dev.24 the PC may hold
+/// the question for Claude Code (its hook) and lay it out the same way, a command's or file change's permission too.
 private struct ClaudePromptCard: View {
     let model: AppModel
     let prompt: JSONValue
@@ -309,7 +310,7 @@ private struct ClaudePromptCard: View {
             CardTitle(text: (title.isEmpty ? "Claude 想问你" : title) + (progress.isEmpty ? "" : "（\(progress)）"))
             ForEach(Array(prompt["choices"].array.enumerated()), id: \.offset) { _, choice in
                 let token = choice["token"].string()
-                OptionCard(title: choice["label"].string(), detail: choice["description"].string(), selected: choice["pressed"].bool(),
+                OptionCard(title: claudeChoiceLabel(choice), detail: choice["description"].string(), selected: choice["pressed"].bool(),
                            enabled: !workspace.busy && !token.isEmpty) {
                     workspace.action("claude/choose", ["token": .string(token)])
                 }
@@ -323,12 +324,12 @@ private struct ClaudePromptCard: View {
                         Button(label.isEmpty ? item["name"].string() : label) {
                             workspace.action("claude/choose", ["token": item["token"]])
                         }
-                        .buttonStyle(PillStyle(kind: item["name"].string() == "submit" ? .primary : .secondary))
+                        .buttonStyle(PillStyle(kind: ["Next", "Submit"].contains(item["name"].string()) ? .primary : .secondary))
                         .disabled(workspace.busy || item["token"].string().isEmpty)
                     }
                 }
             }
-            if prompt["other"].bool() {
+            if claudeTakesOther(prompt) {
                 Text("要自己写答案的话，请在电脑上点「Other」填写。")
                     .noteFont()
                     .foregroundStyle(Palette.muted)
