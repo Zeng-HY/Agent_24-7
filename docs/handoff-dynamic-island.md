@@ -236,6 +236,7 @@ deploy/windows/build.ps1 -InnoCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC
 ```
 
   它默认用仓库的 `.venv\Scripts\python.exe`，得到 `dist/AgentRemote-<版本>-Setup.exe` 和 `dist/windows-update.json`。
+  构建前确认 `.venv` 装了 `requirements.txt` **和** `requirements-build.txt`。10-28 这台 `.venv` 少了 pystray/pywebview，打出的 dev.27 一启动就弹「启动未完成，请检查运行环境。」；补装依赖、重新打包、重装才好。启动失败时先用安装版的 `--self-test` 排除环境，再查 `.venv` 缺的包。
 - **装到这台电脑**：运行安装包（装在 `G:\AgentRemote`）。装好后一分钟内会重新连上中转。
 - **发布**（用户同意后）：
 
