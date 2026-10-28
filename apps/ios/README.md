@@ -37,7 +37,7 @@
 - **点岛进对话**：`teleply://open?d=…&a=…&c=…`，应用照点通知的规矩核对账号、电脑和来源，再打开对话。
 - **中转**：新表 `push_activities`（每个岛的令牌和最后状态）、`push_start`（远程开启令牌）；新请求 `POST /account/push/activity`、`/start-token`、`/island-test`。岛的推送用 `apns-push-type: liveactivity`、主题 `com.pocketagentdesk.teleply.push-type.liveactivity`、10 分钟过期。`island-test` 只推「好了」，苹果拒收时把原因交给手机，所以「让中转改一下」成功就证明密钥认这个主题（交接 3.5 没证成的那个问题）。
 - **Codemagic**：TestFlight 工作流加了 `teleply_island_appstore`；`ci-testflight.sh` 会拦下扩展没进包、Bundle ID / 构建号 / 版本不对、不是 WidgetKit 扩展、不是 iPhone only、应用没开实时活动；`ci-check.sh` 比较扩展里的图标和颜色副本和应用里的是否一样。
-- **测试**：这台电脑 `TeleplyCore` 175 项通过（新加 11 项岛的文字、样例、网址、请求体，6 项试岛和让中转改一下）；Python 84 项通过（中转 18 项，其他 66 项）。中转的新测试核对请求头、主题、样例 JSON、令牌失效和账号清理。
+- **测试**：这台电脑 `TeleplyCore` 175 项通过（新加 11 项岛的文字、样例、网址、请求体，6 项试岛和让中转改一下）；Python 85 项通过（中转 19 项，其他 66 项）。中转的新测试核对请求头、主题、样例 JSON、令牌失效和账号清理。
 
 检查情况：
 

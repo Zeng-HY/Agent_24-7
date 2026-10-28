@@ -94,6 +94,26 @@ class AppleTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(seen[2].headers['authorization'], first)
         await apns.close()
 
+    async def test_an_island_post_carries_the_live_activity_topic_and_its_priority(self):
+        _, pem = new_key()
+        now = [1_800_000_000.0]
+        seen = []
+
+        def apple(request):
+            seen.append(request)
+            return httpx.Response(200)
+
+        apns = relay_push.Apns(pem, 'KEY1234567', 'CPSVJ7235A', clock=lambda: now[0], transport=httpx.MockTransport(apple))
+        payload = {'aps': {'timestamp': int(now[0]), 'event': 'update', 'content-state': {'state': 'working', 'since': int(now[0]),
+                                                                                          'turn': int(now[0])}}}
+        self.assertEqual(await apns.send('production', PHONE, payload, '', now[0] + 600, push_type='liveactivity',
+                                         priority=5, topic=relay_push.ISLAND_TOPIC), (200, ''))
+        headers = seen[0].headers
+        self.assertEqual((headers['apns-topic'], headers['apns-push-type'], headers['apns-priority'], headers['apns-expiration']),
+                         ('com.pocketagentdesk.teleply.push-type.liveactivity', 'liveactivity', '5', str(int(now[0] + 600))))
+        self.assertEqual(json.loads(seen[0].content), payload)
+        await apns.close()
+
     async def test_a_stale_provider_token_is_made_again_once_and_reasons_come_back(self):
         _, pem = new_key()
         answers = [httpx.Response(403, json={'reason': 'ExpiredProviderToken'}), httpx.Response(200),

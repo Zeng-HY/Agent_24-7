@@ -642,7 +642,7 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
 | 三 | 方案三、六 | 问题 7–8 | 中转、电脑、TestFlight 0.6.2 |
 | 四 | 方案七 | 问题 9 | 中转、电脑、TestFlight 0.6.3 |
 
-**阶段零现在的进度（10-28）**：代码已在 `main`（89b56df），云端 #37 编过，本机 175 项 Swift 和 84 项 Python 通过。还没做的：用户在苹果后台登记扩展 App ID、做描述文件、传到 Codemagic（3.3 的 1–3 步），然后更新中转（3.4）和上传 TestFlight（3.7，先问）。做完这几步，按下面的两条真机验收。
+**阶段零现在的进度（10-28）**：代码已在 `main`（89b56df），云端 #37 编过，本机 175 项 Swift 和 85 项 Python 通过。还没做的：用户在苹果后台登记扩展 App ID、做描述文件、传到 Codemagic（3.3 的 1–3 步），然后更新中转（3.4）和上传 TestFlight（3.7，先问）。做完这几步，按下面的两条真机验收。
 
 **阶段零的真机验收**：
 
