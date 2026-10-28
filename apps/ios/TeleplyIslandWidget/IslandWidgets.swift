@@ -31,13 +31,17 @@ struct IslandLiveActivity: Widget {
                         BrandMark(size: 15)
                         Text("遥应").font(.system(size: 13, weight: .semibold))
                     }
+                    // 0.6.3: the expanded island's top corners used to clip the mark and this word (user 10-28).
+                    .padding(.leading, 6)
+                    .padding(.top, 3)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Text("\(IslandWords.counts(context.state)?.total ?? context.state.peers?.count ?? 1)")
                         .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
                         .fixedSize()
-                        .padding(.trailing, 2)
+                        .padding(.trailing, 10)
+                        .padding(.top, 3)
                         .foregroundStyle(IslandPalette.muted)
                         .accessibilityLabel("\(IslandWords.counts(context.state)?.total ?? context.state.peers?.count ?? 1) 个对话")
                 }
