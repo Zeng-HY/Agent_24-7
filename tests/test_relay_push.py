@@ -293,17 +293,24 @@ class WithAppleTests(RelayTests):
         await self.events[0].put(event)
         self.assertTrue(await self.until(lambda: self.sender.sent))
         sent = self.sender.sent[0]
-        self.assertEqual(sent['payload'], {'aps': {'alert': {'title': 'Claude · alice的电脑', 'body': '有个对话在等你处理'}, 'sound': 'default',
-                                                   'thread-id': sent['collapse']},
+        fallback = 'Claude · alice的电脑'
+        self.assertEqual(sent['payload'], {'aps': {'alert': {'title': fallback, 'subtitle': fallback, 'body': '在等你选'},
+                                                   'sound': 'default', 'thread-id': relay_push.notice_thread(self.devices[0]),
+                                                   'category': relay_push.NOTICE_CATEGORY},
                                            'teleply': {'d': self.devices[0], 'a': 'claude', 'c': 'chat-1'}})
-        self.assertEqual(len(sent['collapse']), 24)
+        self.assertEqual(sent['push_type'], 'alert')
+        self.assertEqual(sent['priority'], 10)
+        self.assertEqual(sent['collapse'], relay_push.notice_collapse(self.devices[0], 'claude', 'chat-1'))
         self.assertGreater(sent['expires'], 1_000_000_000)
         # the same event again (the relay came back and asked for the last ten minutes), then another kind
         await self.events[0].put(event)
         await self.events[0].put({**event, 'id': 'e2', 'kind': 'done'})
         self.assertTrue(await self.until(lambda: len(self.sender.sent) == 2))
         await asyncio.sleep(.2)
-        self.assertEqual([s['payload']['aps']['alert']['body'] for s in self.sender.sent], ['有个对话在等你处理', '有个对话好了'])
+        self.assertEqual([s['payload']['aps']['alert']['body'] for s in self.sender.sent], ['在等你选', '好了'])
+        # one sound an account in ten seconds: the done right after the waiting went in silently (user 10-28)
+        self.assertNotIn('sound', self.sender.sent[1]['payload']['aps'])
+        self.assertEqual(self.sender.sent[1]['payload']['aps']['interruption-level'], 'passive')
         await self.events[0].put({**event, 'id': 'e3', 'kind': 'done'})  # the same again within a minute: held back
         await self.events[0].put({**event, 'id': 'e4', 'app': 'mail'})   # not an app the relay knows
         await asyncio.sleep(.3)
@@ -428,16 +435,87 @@ class IslandTests(RelayTests):
         self.assertEqual(len(self.sender.sent), 1)
         self.assertEqual(self.sender.sent[0]['push_type'], 'alert')
         self.assertIn('teleply', self.sender.sent[0]['payload'])
-        self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['body'], '有个对话好了')
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['body'], '好了')  # no known start: no 用时
 
     async def test_a_dead_island_falls_back_to_a_notice(self):
+        self.service.push.clock = lambda: 1761630000.0
         await self.post('register', {'token': PHONE})
         await self.post('activity', self.registration())
         self.sender.answers = [(410, 'Unregistered')]
         await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
                                                           'app': 'claude', 'chat': 'chat-1'})
         self.assertEqual([s['push_type'] for s in self.sender.sent], ['liveactivity', 'alert'])
+        self.assertEqual(self.sender.sent[1]['payload']['aps']['alert']['body'], '好了 · 用了 5 分钟')
+        self.assertEqual(self.sender.sent[1]['priority'], 10)
         self.assertEqual(self.activities(), [])  # the dead island is gone
+
+    async def test_one_sound_for_a_burst_of_notices_and_they_stack_per_computer(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('register', {'token': PHONE})
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'b1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'c1', 'title': '改登录页'})
+        self.service.push.clock = lambda: 1761630002.0
+        await self.service.push.deliver(self.devices[0], {'id': 'b2', 'event': 'message', 'kind': 'done',
+                                                          'app': 'codex', 'chat': 'c2', 'title': '跑测试'})
+        self.assertEqual(len(self.sender.sent), 2)
+        first, second = self.sender.sent
+        self.assertEqual(first['payload']['aps']['sound'], 'default')  # the first of the burst rings
+        self.assertNotIn('sound', second['payload']['aps'])            # the second only goes to the notification centre
+        self.assertEqual(second['payload']['aps']['interruption-level'], 'passive')
+        self.assertEqual(second['priority'], 5)
+        # one stack per computer: the same thread-id, one row per conversation
+        self.assertEqual(first['payload']['aps']['thread-id'], second['payload']['aps']['thread-id'])
+        self.assertNotEqual(first['collapse'], second['collapse'])
+        await self.service.push.deliver(self.devices[0], {'id': 'b3', 'event': 'message', 'kind': 'waiting',
+                                                          'app': 'claude', 'chat': 'c1', 'title': '改登录页'})
+        self.service.push.clock = lambda: 1761630065.0
+        await self.service.push.deliver(self.devices[0], {'id': 'b4', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'c1', 'title': '改登录页'})
+        self.assertEqual(self.sender.sent[3]['collapse'], first['collapse'])  # one conversation, one row
+
+    async def test_one_sound_for_a_burst_of_island_updates(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.registration(chat='c1', token='ef' * 32))
+        await self.post('activity', self.registration(chat='c2', token='cd' * 32))
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'i1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'c1'})
+        self.service.push.clock = lambda: 1761630003.0
+        await self.service.push.deliver(self.devices[0], {'id': 'i2', 'event': 'message', 'kind': 'failed',
+                                                          'app': 'claude', 'chat': 'c2'})
+        self.assertEqual([s['push_type'] for s in self.sender.sent], ['liveactivity', 'liveactivity'])
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['sound'], 'default')
+        second = self.sender.sent[1]
+        self.assertNotIn('alert', second['payload']['aps'])  # the burst's second changes the island, silently
+        self.assertEqual(second['priority'], 5)
+        self.assertEqual(second['payload']['aps']['content-state']['state'], 'failed')
+        self.assertEqual(self.activities()[1]['state'], 'failed')
+
+    async def test_a_notice_carries_the_title_the_subtitle_and_how_long_the_turn_took(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('register', {'token': PHONE})
+        await self.service.push.deliver(self.devices[0], {'id': 't0', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'chat-1', 'since': 1761629640,
+                                                          'title': '改登录页'})
+        self.assertEqual(self.sender.sent, [])  # 在干活 without an island says nothing
+        await self.service.push.deliver(self.devices[0], {'id': 't1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1', 'title': '改登录页'})
+        aps = self.sender.sent[0]['payload']['aps']
+        self.assertEqual(aps['alert'], {'title': '改登录页', 'subtitle': 'Claude · alice的电脑',
+                                        'body': '好了 · 用了 6 分钟'})
+        self.assertEqual(aps['category'], 'teleply.conversation')
+        self.assertEqual(self.service.push.starts, {})  # the turn it took is not needed after the notice
+
+    async def test_a_conversation_seen_under_a_minute_says_only_好了(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('register', {'token': PHONE})
+        await self.service.push.deliver(self.devices[0], {'id': 's0', 'event': 'message', 'kind': 'running',
+                                                          'app': 'codex', 'chat': 'c9', 'since': 1761629985})
+        await self.service.push.deliver(self.devices[0], {'id': 's1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'codex', 'chat': 'c9'})
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['body'], '好了')
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['title'], 'Codex · alice的电脑')
 
     async def test_a_turn_running_a_minute_is_started_from_afar_with_the_start_token(self):
         self.service.push.clock = lambda: 1761630000.0
@@ -470,6 +548,7 @@ class IslandTests(RelayTests):
                                                           'app': 'claude', 'chat': 'chat-1', 'quiet': True})
         self.assertEqual(len(self.sender.sent), 1)
         self.assertEqual(self.sender.sent[0]['push_type'], 'liveactivity')
+        self.assertNotIn('alert', self.sender.sent[0]['payload']['aps'])  # 正开着这个对话: silent
         self.assertEqual(self.activities()[0]['state'], 'done')
 
     async def test_a_quiet_event_without_an_island_sends_nothing(self):
@@ -480,16 +559,25 @@ class IslandTests(RelayTests):
         self.assertEqual(self.sender.sent, [])
         self.assertEqual(self.activities(), [])
 
-    async def test_a_finished_island_ends_five_minutes_later(self):
+    async def test_a_finished_island_ends_five_minutes_later_and_leaves_a_silent_record(self):
         self.service.push.clock = lambda: 1761630000.0
-        await self.post('activity', self.registration())
+        await self.post('register', {'token': PHONE})
+        await self.post('activity', self.registration(title='改登录页'))
         await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
-                                                          'app': 'claude', 'chat': 'chat-1'})
+                                                          'app': 'claude', 'chat': 'chat-1', 'title': '改登录页'})
         self.sender.sent.clear()
         self.service.push.clock = lambda: 1761630301.0
         await self.service.push.sweep_islands()
-        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual([s['push_type'] for s in self.sender.sent], ['liveactivity', 'alert'])
         self.assertEqual(self.sender.sent[0]['payload']['aps']['event'], 'end')
+        record = self.sender.sent[1]
+        self.assertEqual(record['priority'], 5)
+        self.assertNotIn('sound', record['payload']['aps'])
+        self.assertEqual(record['payload']['aps']['interruption-level'], 'passive')
+        self.assertEqual(record['payload']['aps']['alert'],
+                         {'title': '改登录页', 'subtitle': 'Claude · alice的电脑', 'body': '好了 · 用了 5 分钟'})
+        self.assertEqual(record['payload']['aps']['thread-id'], relay_push.notice_thread(self.devices[0]))
+        self.assertEqual(record['collapse'], relay_push.notice_collapse(self.devices[0], 'claude', 'chat-1'))
         self.assertEqual(self.activities(), [])
 
     async def test_a_computer_gone_goes_grey_and_comes_back(self):

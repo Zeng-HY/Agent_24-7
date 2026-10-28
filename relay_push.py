@@ -5,9 +5,13 @@ the account, not to the sign-in, so it keeps working after a 7-day sign-in runs 
 removes it, and a new password removes all of an account's phones. While an account has a phone, the relay keeps a
 stream open to each of its connected computers: GET /api/notify/push through the tunnel (notify.py, ntfy_feed.py),
 which says only which app, which conversation and what happened. The relay writes the words itself, "Claude · 我的
-电脑" over "有个对话好了", and hands them to Apple for each of the account's phones. Apple sees those words and the
-computer's and the conversation's ids, never the conversation. A tap opens that conversation in the app, which checks
-the account and the computer first.
+电脑" over "有个对话好了", and hands them to Apple for each of the account's phones. A tap opens that conversation in
+the app, which checks the account and the computer first.
+
+10-28 (user's choice) a notice also carries the conversation's title, as its first line, and the app's category that
+groups a computer's notices into one stack. Apple then sees the title too; the conversation's words and commands
+still never leave the computer. This is the same exception the island's long-press list already has (README 0.6.2,
+handoff 1).
 
 APNs takes HTTP/2 only (httpx with h2) and a token signed with the team's key (ES256, cryptography); both are
 imported only when push is configured, so a relay without them still runs, with push off. The settings come from
@@ -54,6 +58,8 @@ KEEP = {'done': 86400, 'failed': 86400, 'waiting': 3 * 86400}  # how long Apple 
 PHONES = 10                 # an account's phones; the one not seen for longest makes way for a new one
 PER_CHAT = 60               # seconds between two notices of one kind for one conversation
 PER_HOUR = 30               # notices an account gets in an hour
+RING_GAP = 10               # seconds in which an account's events make one sound only (user 10-28)
+NOTICE_CATEGORY = 'teleply.conversation'   # the app registers it: its group summary reads 还有 N 个对话
 SWEEP = 30                  # seconds between looks at which computers to listen to
 TOKEN_AGE = 50 * 60         # a provider token is used this long (APNs: renewed after 20 to 60 minutes)
 SINCE = '10m'               # what a computer is asked for when the relay has not read from it yet (a restart)
@@ -99,6 +105,55 @@ def island_state(state, since, turn, **extra):
 def island_gone(status, reason):
     """Apple says this token is dead: the island is dropped and its update falls back to a notice."""
     return status == 410 or (status == 400 and reason in GONE_REASONS)
+
+
+def chat_tail(chat):
+    """The last six characters of a conversation's id, for a log line that says which one without its title."""
+    return '…' + str(chat)[-6:]
+
+
+def notice_title(title, app, label):
+    """A notice's first line: the conversation's title, or the fallback when the computer has none (user 10-28)."""
+    title = (title or '').strip()
+    if title in ('', '（无标题）'):
+        return f'{APPS.get(app, "")} · {label}'
+    return title
+
+
+def used_text(turn, now):
+    """'用了 6 分钟' for a turn that took a minute or more; '' when it took less or the start is unknown."""
+    try:
+        turn = int(turn)
+        seconds = int(now) - turn
+    except (TypeError, ValueError):
+        return ''
+    if turn <= 0 or seconds < 60:
+        return ''
+    minutes = seconds // 60
+    if minutes < 60:
+        return f'用了 {minutes} 分钟'
+    hours, rest = divmod(minutes, 60)
+    return f'用了 {hours} 小时' + (f' {rest} 分钟' if rest else '')
+
+
+def notice_body(kind, turn, now):
+    """A notice's body: 好了 · 用了 6 分钟 / 在等你选 / 出错停了."""
+    if kind == 'waiting':
+        return '在等你选'
+    if kind == 'failed':
+        return '出错停了'
+    used = used_text(turn, now)
+    return '好了' + (f' · {used}' if used else '')
+
+
+def notice_thread(device):
+    """thread-id: one stack for every notice of one computer. A new notice of a conversation replaces the old one."""
+    return hashlib.sha256(device.encode()).hexdigest()[:24]
+
+
+def notice_collapse(device, app, chat):
+    """apns-collapse-id: one conversation keeps one row (user 10-28)."""
+    return hashlib.sha256(f'{device}|{app}|{chat}'.encode()).hexdigest()[:24]
 
 
 class Apns:
@@ -171,6 +226,7 @@ class Push:
         self.since = {}             # computer -> the id of the last event read from it
         self.sent = {}              # (computer, app, conversation, kind) -> when its last notice went
         self.hours = {}             # account -> when its notices of the last hour went
+        self.rang = {}              # account -> when something last made a sound (RING_GAP)
         self.starts = {}            # (computer, app, conversation) -> when the turn began, for a remote start
         self.away = {}              # computer -> when it was first missed, for 断开了
         self.seen = set()           # computers seen connected since this relay started
@@ -489,36 +545,76 @@ class Push:
             self.starts[conv] = {'since': since, 'title': title}
             if island and now - since < 12 * 3600:  # a turn that began hours ago is not shown as running now
                 await self.update_island(island, 'working', since, island['turn'] or since, alert=False, priority=5)
+                self.decided(kind, app, chat, '岛静默', '在干活，只改岛，不带提醒')
+            else:
+                self.decided(kind, app, chat, '不发', '在干活还没岛，跑过一分钟再远程开')
             return
-        self.starts.pop(conv, None)
+        start = self.starts.pop(conv, None)
+        fallback = ''
+        turn = int((start or {}).get('since') or 0)
         if island:  # 方案一: with an island, the island is the notice (user 10-28: only the island, no second banner)
+            turn = int(island['turn'] or now)
+            loud = self.may_ring(owner, now) and not quiet
             state = {'waiting': 'waiting', 'done': 'done', 'failed': 'failed'}[kind]
-            if await self.update_island(island, state, int(now), island['turn'] or int(now), alert=True, priority=10):
+            if await self.update_island(island, state, int(now), turn, alert=loud, priority=10 if loud else 5):
+                if loud:
+                    self.rang[owner] = now
+                self.decided(kind, app, chat, '岛提醒' if loud else '岛静默', self.why_island(quiet, loud))
                 return
+            fallback = '岛的令牌失效了，改发通知；'
         if quiet:
+            self.decided(kind, app, chat, '不发', fallback + '手机正开着这个对话，也没有岛')
             return
-        await self.notice(owner, device, app, chat, kind, computer['label'], phones, now)
+        loud = self.may_ring(owner, now)
+        went, why = await self.notice(owner, device, app, chat, kind, computer['label'], phones, now, turn, title, loud)
+        if went and loud:
+            self.rang[owner] = now
+        self.decided(kind, app, chat, ('通知响' if loud else '通知静默') if went else '不发', fallback + why)
 
-    async def notice(self, owner, device, app, chat, kind, label, phones, now):
-        """A normal notification on the lock screen, as before 10-28: only for a conversation without a working
-        island (or one whose token Apple says is dead), and never while the phone shows that conversation."""
+    def may_ring(self, owner, now):
+        """One sound an account in RING_GAP seconds (user 10-28): the first of a burst rings, the rest are silent."""
+        last = self.rang.get(owner)
+        return last is None or now - last >= RING_GAP
+
+    def why_island(self, quiet, loud):
+        if quiet:
+            return '手机正开着这个对话，岛静默改状态'
+        if not loud:
+            return f'{RING_GAP} 秒内刚响过，岛静默改状态'
+        return '有岛，只改岛，不发普通通知'
+
+    def decided(self, kind, app, chat, route, why):
+        """One line per decision, for a later 响了两次 (user 10-28): no title, only the end of the conversation's id."""
+        log.info('push: %s %s %s -> %s (%s)', kind, app, chat_tail(chat), route, why)
+
+    async def notice(self, owner, device, app, chat, kind, label, phones, now, turn=0, title='', loud=True):
+        """A normal notification on the lock screen: the conversation's title over 模型 · 电脑 over the state (user
+        10-28), one stack per computer and one row per conversation. Only for a conversation without a working island,
+        and never while the phone shows it. Says whether it went, and why it did not or why it was silent."""
         if not phones:
-            return
+            return False, '这个账号没有登记的手机'
         if now - self.sent.get((device, app, chat, kind), -PER_CHAT) < PER_CHAT:
-            return
+            return False, '同一对话同一种事一分钟内已经发过'
         hour = [t for t in self.hours.get(owner, []) if now - t < 3600]
         if len(hour) >= PER_HOUR:
             self.hours[owner] = hour
-            return
+            return False, '这个账号一小时的通知到上限了'
         self.hours[owner] = hour + [now]
         self.sent = {k: t for k, t in self.sent.items() if now - t < PER_CHAT}
         self.sent[(device, app, chat, kind)] = now
-        thread = hashlib.sha256(f'{device}|{app}|{chat}'.encode()).hexdigest()[:24]
-        payload = {'aps': {'alert': {'title': f'{APPS[app]} · {label}', 'body': WORDS[kind]},
-                           'sound': 'default', 'thread-id': thread},
-                   'teleply': {'d': device, 'a': app, 'c': chat}}
+        fallback = f'{APPS[app]} · {label}'
+        aps = {'alert': {'title': notice_title(title, app, label), 'subtitle': fallback,
+                         'body': notice_body(kind, turn, now)},
+               'thread-id': notice_thread(device), 'category': NOTICE_CATEGORY}
+        if loud:
+            aps['sound'] = 'default'
+        else:
+            aps['interruption-level'] = 'passive'
+        payload = {'aps': aps, 'teleply': {'d': device, 'a': app, 'c': chat}}
+        collapse = notice_collapse(device, app, chat)
         for phone in phones:
-            await self.send(phone, payload, thread, now + KEEP[kind])
+            await self.send(phone, payload, collapse, now + KEEP[kind], priority=10 if loud else 5)
+        return True, '第一件，响一次' if loud else f'{RING_GAP} 秒内刚响过，静默进通知中心'
 
     # -- 灵动岛's own pushes (方案一、四)
 
@@ -607,8 +703,8 @@ class Push:
                            'attributes': {'device': device, 'app': app, 'chat': chat,
                                           'computer': computer['label'], 'title': title},
                            'content-state': island_state('working', int(since), int(since), peers=peers[:3]),
-                           'alert': {'title': f'{APPS[app]} · {computer["label"]}', 'body': '开始干活了',
-                                     'sound': 'default'},
+                           # Apple wants an alert to start an island from afar; it carries no sound (user 10-28).
+                           'alert': {'title': f'{APPS[app]} · {computer["label"]}', 'body': '开始干活了'},
                            'input-push-token': 1}}
         sent = False
         for start in starts:
@@ -618,6 +714,8 @@ class Push:
             elif island_gone(status, reason):
                 with self.store.connect() as db:
                     db.execute('DELETE FROM push_start WHERE token=?', (start['token'],))
+        self.decided('start', app, chat, '远程开岛' if sent else '不发',
+                     '跑过一分钟了，带提醒文字但不带声音' if sent else '启动令牌没能用上')
         return sent
 
     async def sweep_islands(self):
@@ -657,6 +755,7 @@ class Push:
                 if row['state'] == 'offline' and row['saved_state']:
                     await self.update_island(row, row['saved_state'], row['saved_since'] or int(now),
                                              row['saved_turn'] or int(now), alert=False, priority=10, clear_saved=True)
+                    self.decided(row['saved_state'], row['app'], row['chat'], '岛静默', '电脑连回来了，恢复原状态')
             elif device in self.seen:
                 first = self.away.setdefault(device, now)
                 if row['state'] != 'offline' and now - first >= OFFLINE_AFTER:
@@ -664,22 +763,48 @@ class Push:
                         db.execute('UPDATE push_activities SET saved_state=?,saved_since=?,saved_turn=? WHERE id=?',
                                    (row['state'], row['since'], row['turn'], row['id']))
                     await self.update_island(row, 'offline', int(first), row['turn'] or int(first), alert=False, priority=10)
+                    self.decided('offline', row['app'], row['chat'], '岛静默', '电脑断开超过一分钟，变灰，不响')
                 elif row['state'] == 'offline' and now - first >= OFFLINE_END_AFTER:
                     if await self.end_island(row, int(now) + 3600, 'offline'):
                         with self.store.connect() as db:
                             db.execute('DELETE FROM push_activities WHERE id=?', (row['id'],))
+                        self.decided('offline', row['app'], row['chat'], '不发', '断开超过半小时，收起岛，不补通知')
         for row in rows:
             if row['state'] in ('done', 'failed') and now - (row['since'] or now) >= END_AFTER:
                 if await self.end_island(row, int(now)):
                     with self.store.connect() as db:
+                        phones = [dict(r) for r in db.execute('SELECT * FROM push_phones WHERE owner=?', (row['owner'],))]
+                    # The island leaves; a silent notice stays in the notification centre as the record (user 10-28).
+                    recorded = await self.record_notice(row, phones, int(now))
+                    with self.store.connect() as db:
                         db.execute('DELETE FROM push_activities WHERE id=?', (row['id'],))
+                    self.decided(row['state'], row['app'], row['chat'], '通知静默' if recorded else '不发',
+                                 '岛收起了，补一条静默记录' if recorded else '岛收起了，没有登记的手机')
 
-    async def send(self, phone, payload, collapse, expires):
+    async def record_notice(self, row, phones, now):
+        """The record a finished island leaves: a silent notice in the notification centre, with the same stack and
+        row as any other notice of that conversation. It never makes a sound or a banner."""
+        if not phones:
+            return False
+        app, chat, label = row['app'], row['chat'], row['label']
+        fallback = f'{APPS[app]} · {label}'
+        aps = {'alert': {'title': notice_title(row.get('title', ''), app, label), 'subtitle': fallback,
+                         'body': notice_body(row['state'], row['turn'], row['since'] or now)},
+               'thread-id': notice_thread(row['device']), 'category': NOTICE_CATEGORY,
+               'interruption-level': 'passive'}
+        payload = {'aps': aps, 'teleply': {'d': row['device'], 'a': app, 'c': chat}}
+        collapse = notice_collapse(row['device'], app, chat)
+        for phone in phones:
+            await self.send(phone, payload, collapse, now + KEEP.get(row['state'], 86400), priority=5)
+        return True
+
+    async def send(self, phone, payload, collapse, expires, priority=10):
         """To one phone, once more after a moment when Apple or the network had a hiccup. A token Apple says is
-        dead is dropped."""
+        dead is dropped. Priority 5 for a silent notice (user 10-28)."""
         for attempt in (1, 2):
             try:
-                status, reason = await self.sender.send(phone['environment'], phone['token'], payload, collapse, expires)
+                status, reason = await self.sender.send(phone['environment'], phone['token'], payload, collapse, expires,
+                                                        priority=priority)
             except Exception as exc:
                 status, reason = 0, type(exc).__name__
             if attempt == 1 and (status in (0, 429) or status >= 500):
