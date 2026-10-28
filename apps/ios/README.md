@@ -20,7 +20,7 @@
 - **日志**：中转把日志级别设成 INFO，`push:` 开头的决定行以后能在 `journalctl` 里看到；之前只有警告，查不到。
 - 版本 0.6.3。
 
-检查情况：本机 `TeleplyCore` 189 项、Python 109 项全过（新加汇总数字、等你优先、一台电脑一个岛、登记补推、升级清理旧岛、轮询加快）。云端 #56 只编译通过（Mac 上 189 项，11 分钟），只剩 `ChatModel.swift:592` 的旧警告；#57 截图 6 张（浅色、深色 × 锁屏浅色卡片、锁屏深色卡片、紧凑样子），存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae1b584ed4477330bf0ce66\artefacts\shots`。中转和 Windows dev.29 还没更新，TestFlight 待传。没上真机。
+检查情况：本机 `TeleplyCore` 189 项、Python 109 项全过（新加汇总数字、等你优先、一台电脑一个岛、登记补推、升级清理旧岛、轮询加快）。云端 #56 只编译通过（Mac 上 189 项，11 分钟），只剩 `ChatModel.swift:592` 的旧警告；#57 截图 6 张（浅色、深色 × 锁屏浅色卡片、锁屏深色卡片、紧凑样子），存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae1b584ed4477330bf0ce66\artefacts\shots`。中转已更新（10-28 17:41 前后），Windows dev.29 已构建并装到这台电脑（17:45）。TestFlight 待传。没上真机。
 
 ### 留给你在真机上验（0.6.3）
 
