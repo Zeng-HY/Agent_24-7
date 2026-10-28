@@ -46,15 +46,13 @@ struct IslandLiveActivity: Widget {
                             Image(systemName: step)
                                 .font(.system(size: 12, weight: .medium))
                         }
+                        if IslandWords.isStale(context.state, now: Int(Date().timeIntervalSince1970)) {
+                            Text("可能不是最新")
+                                .font(.system(size: 11))
+                                .foregroundStyle(IslandPalette.muted)
+                        }
                     }
                     .foregroundStyle(IslandPalette.ink)
-                }
-                if IslandWords.isStale(context.state, now: Int(Date().timeIntervalSince1970)) {
-                    DynamicIslandExpandedRegion(.center) {
-                        Text("可能不是最新")
-                            .font(.system(size: 11))
-                            .foregroundStyle(IslandPalette.muted)
-                    }
                 }
             } compactLeading: {
                 IslandMark(app: context.attributes.app, size: 17, dot: context.state.status == .waiting)
