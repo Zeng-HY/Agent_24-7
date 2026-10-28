@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.1 构建 16 已传 TestFlight，待真机验；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.2 构建 17 已传 TestFlight，待真机验；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.6.2：一件事只响一次，通知带对话标题叠成一摞，锁屏卡片白底（10-28，构建待传，待真机验）
+## 0.6.2：一件事只响一次，通知带对话标题叠成一摞，锁屏卡片白底（10-28，构建 17 已传 TestFlight，待真机验）
 
 用户 10-28 报：一个任务好了，主屏幕先弹了一条普通通知，又来了一次灵动岛提醒，等于弹了两次；电脑日志 14:00:15 同一秒有两个对话好了，一个走岛、一个走通知。另外要求普通通知带对话标题、同一台电脑的通知叠成一摞；锁屏卡片改成和普通通知一样的白底。下午又补了一条：灵动岛在别的应用上面时被撑成屏幕顶上一整条，把时间、信号、电量都挡住了。
 
@@ -21,7 +21,7 @@
 - 隐私：普通通知的第一行带对话标题，苹果能看到标题；消息内容和命令照旧不经过苹果。这是用户 10-28 明确要的，和长按岛列表的例外一样，README 和交接文档都写明。
 - 版本号 0.6.2。
 
-检查情况：本机 `TeleplyCore` 187 项、Python 103 项全过（新加/改了 10 秒去重、静默通知、标题/副标题/用时、thread-id 和 collapse-id、岛收起补记录、新建对话开岛、前台显示判断、紧凑定宽）。云端 #50（f0d862b）只编译通过，Mac 上 187 项通过；#52（915b5e2）改样子页后再次编过，只剩 `ChatModel.swift:592` 那处旧警告。#53（915b5e2）截图：浅色、深色各拍锁屏浅色卡片、锁屏深色卡片和紧凑样子共 6 张，存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae19cf1c0286510cee7984d\artefacts\shots`。没上真机。
+检查情况：本机 `TeleplyCore` 187 项、Python 103 项全过（新加/改了 10 秒去重、静默通知、标题/副标题/用时、thread-id 和 collapse-id、岛收起补记录、新建对话开岛、前台显示判断、紧凑定宽）。云端 #50（f0d862b）只编译通过，Mac 上 187 项通过；#52（915b5e2）改样子页后再次编过，只剩 `ChatModel.swift:592` 那处旧警告。#53（915b5e2）截图：浅色、深色各拍锁屏浅色卡片、锁屏深色卡片和紧凑样子共 6 张，存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae19cf1c0286510cee7984d\artefacts\shots`。中转已更新到 0.6.2 的包（9e9763f，10-28 15:21 服务器上更新，旧文件在 `/opt/agent-relay-027/previous-20261028-152116`）。#54 那次上传没分到机器、一步没跑就失败（Codemagic 临时故障，不是额度：#53 之后 Billing 还剩 92 分钟）；#55 重试成功，0.6.2（17）上传，Delivery UUID `8f7b7fc5-238a-4ea6-9a29-b7335f572a08`，9 分钟。没上真机。
 
 ### 留给你在真机上验（0.6.2）
 
@@ -530,6 +530,8 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #51 `6ae196d6…` | ios-native-check（shots） | 取消 | 约 2 | 拍之前又补了紧凑岛定宽，取消重来 |
 | #52 `6ae19c65…` | ios-native-check（compile） | 成功 | 2 | 样子页把锁屏卡片放最前、加中性底色衬托（915b5e2）：编过 |
 | #53 `6ae19cf1…` | ios-native-check（shots，浅色和深色样子页） | 成功 | 21 | 6 张：锁屏浅色卡片、深色卡片、紧凑样子 × 浅色/深色；存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae19cf1c0286510cee7984d\artefacts\shots` |
+| #54 `6ae1a2ef…` | ios-native-testflight | 失败（未开始） | 0 | 排队 10 分钟后在分配机器前失败，所有步骤没有开始（Codemagic 临时故障；Billing 还剩 92 分钟） |
+| #55 `6ae1a646…` | ios-native-testflight | 成功 | 9 | 0.6.2（17）上传，Delivery UUID `8f7b7fc5-238a-4ea6-9a29-b7335f572a08`；从 `main` 的 5fcf9e5 构建 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
