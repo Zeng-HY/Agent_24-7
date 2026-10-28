@@ -161,6 +161,7 @@ private struct PeerRow: View {
                 .lineLimit(1)
             Spacer(minLength: 6)
             trailing
+                .frame(width: CGFloat(IslandMetrics.rowTimer), alignment: .trailing)
         }
         .frame(height: 24)
     }
@@ -288,7 +289,8 @@ struct SmallCard: View {
     }
 }
 
-/// The timer, which ticks by itself (no push needed).
+/// The timer, which ticks by itself (no push needed). Its width is capped so a long reading cannot push the title
+/// out of the expanded list or the lock-screen card (0.6.2).
 struct Elapsed: View {
     let since: Int
 
@@ -296,6 +298,8 @@ struct Elapsed: View {
         Text(timerInterval: Date(timeIntervalSince1970: TimeInterval(since))...Date.distantFuture, countsDown: false)
             .monospacedDigit()
             .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: CGFloat(IslandMetrics.rowTimer), alignment: .trailing)
     }
 }
 
@@ -309,8 +313,9 @@ struct Countdown: View {
             Text(timerInterval: now...Date(timeIntervalSince1970: TimeInterval(until)), countsDown: true)
                 .monospacedDigit()
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
         } else {
-            Text("0:00").monospacedDigit()
+            Text("0:00").monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
         }
     }
 }
@@ -385,7 +390,12 @@ struct Trailing: View {
             }
         }
         .lineLimit(1)
-        .frame(minWidth: size * 1.6, alignment: .trailing)
+        .minimumScaleFactor(0.8)
+        .multilineTextAlignment(.trailing)
+        // The compact island's right side is pinned (0.6.2): Apple's timer would otherwise ask for the widest reading
+        // it could ever show and stretch the island across the top of the screen.
+        .frame(width: compact ? CGFloat(IslandMetrics.compactTrailing) : nil, alignment: .trailing)
+        .frame(maxWidth: compact ? nil : CGFloat(IslandMetrics.rowTimer), alignment: .trailing)
     }
 }
 

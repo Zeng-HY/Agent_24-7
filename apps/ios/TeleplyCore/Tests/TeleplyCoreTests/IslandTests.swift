@@ -50,6 +50,14 @@ struct IslandTests {
         #expect(IslandWords.symbol(.working) == nil)
     }
 
+    /// 0.6.2: the compact right side is pinned. Without a limit, `Text(timerInterval:)` asks for the widest reading it
+    /// could show and stretches the island across the top of the screen (over the clock, signal and battery).
+    @Test func theCompactSidesArePinnedSoTheTimerCannotStretchTheIsland() {
+        #expect(IslandMetrics.compactTrailing >= 44)  // "59:59" at 13 points
+        #expect(IslandMetrics.compactTrailing <= 60)  // still one compact block, not a bar
+        #expect(IslandMetrics.rowTimer >= IslandMetrics.compactTrailing)
+    }
+
     @Test func whatIsBeingAskedIsSaidWithoutTheCommand() {
         let permission = IslandState(status: .waiting, since: 10, turn: 0, ask: "a1", askType: "permission", choices: 2)
         #expect(IslandWords.detail(permission, now: 20) == "想运行一条命令")

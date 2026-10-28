@@ -82,16 +82,26 @@ struct IslandPreviewPage: View {
     }
 }
 
-/// The compact island: about 126 × 37 points, black, mark on the left and at most four characters on the right.
+/// The compact island: about 126 × 37 points, black; 遥应's mark on the left, a fixed-width right side (0.6.2) so the
+/// island does not grow with the timer.
 private struct CompactPreview: View {
     let status: IslandStatus
     let state: IslandState
 
     var body: some View {
         HStack(spacing: 0) {
-            SourceMark(app: "claude", size: 15)
+            Image("TeleplyMark")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
+                .foregroundStyle(.white)
             Spacer(minLength: 0)
             trailing
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.trailing)
+                .frame(width: CGFloat(IslandMetrics.compactTrailing), alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .frame(width: 126, height: 37)
