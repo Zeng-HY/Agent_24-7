@@ -80,6 +80,8 @@ public final class ChatModel {
     @ObservationIgnored public var restoreExtras: (ChatKey, JSONValue) throws -> Void = { _, _ in }
     /// A conversation was left with these words in its box (the list's 草稿 follows; not on every key).
     @ObservationIgnored public var draftLeft: (ChatKey, String) -> Void = { _, _ in }
+    /// A send was first taken by the computer (已接收 / 已送达 / 已排队): the island for it starts (AppModel+Island).
+    @ObservationIgnored public var acknowledgedSend: (Submission) -> Void = { _ in }
     /// Asks the phone for a little time in the background while a send is under way (spec 6.10); [expired] runs
     /// when that time is up. Returns the call that gives the time back.
     /// 诊断测速 (开发者选项): a send's time and what it came to, as the web words it.
@@ -635,7 +637,10 @@ public final class ChatModel {
         guard key == record.key else { return }
         let before = submissions.first { $0.request == record.request }?.label
         submissions = ([record] + submissions.filter { $0.request != record.request }).sorted { $0.created > $1.created }
-        if before == "提交中" || before == nil, ["已接收", "已送达", "已排队"].contains(record.label), record.action == "send" { acknowledged += 1 }
+        if before == "提交中" || before == nil, ["已接收", "已送达", "已排队"].contains(record.label), record.action == "send" {
+            acknowledged += 1
+            acknowledgedSend(record)
+        }
     }
 
     /// 核对: reads the receipt of [record] again; never sends it again.

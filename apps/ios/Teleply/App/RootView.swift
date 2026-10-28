@@ -42,11 +42,14 @@ struct RootView: View {
         // moment (inactive) keeps it (plan: 真正退到后台才断开).
         .onChange(of: scenePhase) {
             switch scenePhase {
-            case .active: model.setForeground(true)
+            case .active:
+                model.setForeground(true)
+                Task { await model.islandLaunch() }
             case .background: model.setForeground(false)
             default: break
             }
         }
+        .task { await model.islandLaunch() }
         // A tap on the island opens teleply://open?d=…&a=…&c=… (handoff 5.3): only 遥应's own three ids are taken,
         // and the computer and source are checked once signed in.
         .onOpenURL { url in
@@ -58,6 +61,7 @@ struct RootView: View {
         .onChange(of: model.screen) { before, _ in
             model.resumeNotification()
             if before == .launch || before == .login { model.pushSync() }
+            Task { await model.islandLaunch() }
         }
     }
 

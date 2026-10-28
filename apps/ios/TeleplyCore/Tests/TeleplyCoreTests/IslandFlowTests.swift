@@ -10,13 +10,20 @@ import TeleplyModel
 @MainActor
 final class FakeIsland: IslandPlatform {
     var allowed = true
+    var wantedValue = false
     var tokenValue: String? = String(repeating: "ab", count: 32)
+    var startTokenValue: String? = String(repeating: "cd", count: 32)
     var starts: [(IslandIdentity, IslandState)] = []
+    var snapshots: [IslandSnapshot] = []
     var updates = 0
     var ends = 0
+    var endAlls = 0
+    var handler: (@MainActor @Sendable (IslandEvent) -> Void)?
 
     func enabled() async -> Bool { allowed }
     var environment: String { "production" }
+    func wanted() -> Bool { wantedValue }
+    func setWanted(_ on: Bool) { wantedValue = on }
 
     func start(_ identity: IslandIdentity, _ state: IslandState) async throws -> IslandRef {
         guard allowed else { throw IslandFailure("系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。") }
@@ -25,9 +32,14 @@ final class FakeIsland: IslandPlatform {
     }
 
     func token(_ ref: IslandRef, seconds: Double) async -> String? { tokenValue }
+    func startToken(seconds: Double) async -> String? { startTokenValue }
     func update(_ ref: IslandRef, _ state: IslandState) async { updates += 1 }
     func end(_ ref: IslandRef, _ state: IslandState, dismissIn: TimeInterval) async { ends += 1 }
-    func endAll() async {}
+    func endAll() async { endAlls += 1 }
+
+    func observe(_ handler: @escaping @MainActor @Sendable (IslandEvent) -> Void) { self.handler = handler }
+    func running() async -> [IslandSnapshot] { snapshots }
+    func fire(_ event: IslandEvent) { handler?(event) }
 }
 
 @MainActor
@@ -135,5 +147,74 @@ struct IslandFlowTests {
         await model.islandRelayTest()
         #expect(island.starts.isEmpty)
         #expect(model.island.note?.contains("电脑") == true)
+    }
+
+    // MARK: 阶段一：真实对话的岛
+
+    private func signedIn(_ world: DemoWorld, island: FakeIsland, transport: WatchedTransport) async -> AppModel {
+        let model = makeIslandApp(island: island, transport: transport, world: world)
+        model.start()
+        await model.settle()
+        model.login(name: "账号", password: "密码")
+        await model.settle()
+        model.openNotification(PushTarget(device: DemoData.computerA, app: "codex", chat: "demo")!)
+        await model.settle()
+        island.wantedValue = true
+        await model.islandLaunch()
+        return model
+    }
+
+    @Test func aSendTheComputerTookStartsItsIslandAndRegistersTheToken() async {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        let key = ChatKey(scope: model.scope, device: DemoData.computerA, app: "codex", chat: "demo")
+        let record = Submission(request: "r1", key: key, text: "跑一下", action: "send", turn: "t1", body: "{}", created: 1)
+        model.islandSendStarted(record)
+        for _ in 0..<100 where island.starts.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(island.starts.count == 1)
+        #expect(island.starts.first?.0.chat == "demo" && island.starts.first?.0.app == "codex")
+        for _ in 0..<150 where !model.island.live.values.contains(where: { $0.registered }) {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(model.island.live.values.contains { $0.registered })
+        let paths = await watched.log.items.map(\.url.path)
+        #expect(paths.contains("/account/push/activity"))
+    }
+
+    @Test func aRemoteStartedIslandIsPickedUpAndItsTokenRegistered() async {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        let identity = IslandIdentity(device: DemoData.computerA, app: "claude", chat: "c9", computer: "测试电脑 A", title: "")
+        island.fire(.started(IslandRef(raw: "remote-1"), identity, IslandState(status: .working, since: 1, turn: 1)))
+        for _ in 0..<150 where !model.island.live.values.contains(where: { $0.registered }) {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(model.island.live["remote-1"] != nil)
+        #expect(model.island.live.values.contains { $0.registered })
+        let paths = await watched.log.items.map(\.url.path)
+        #expect(paths.contains("/account/push/activity"))
+    }
+
+    @Test func turningTheSwitchOffEndsEveryIsland() async throws {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        model.island.live["one"] = IslandTrack(identity: IslandIdentity(device: DemoData.computerA, app: "codex", chat: "demo",
+                                                                        computer: "测试电脑 A", title: "原生阅读示例"),
+                                               state: IslandState(status: .working, since: 1, turn: 1))
+        await model.islandSetWanted(false)
+        #expect(island.endAlls == 1)
+        #expect(model.island.live.isEmpty)
+        #expect(!island.wantedValue && !model.island.wanted)
+    }
+
+    @Test func anIslandFinishedLongAgoIsEndedWhenTheAppComesBack() async {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        let identity = IslandIdentity(device: DemoData.computerA, app: "codex", chat: "demo", computer: "测试电脑 A", title: "")
+        island.snapshots = [IslandSnapshot(ref: IslandRef(raw: "old"), identity: identity,
+                                           state: IslandState(status: .done, since: 1, turn: 1))]
+        await model.islandReconcile()
+        #expect(island.ends == 1)
+        #expect(model.island.live["old"] == nil)
     }
 }

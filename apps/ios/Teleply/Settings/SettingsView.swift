@@ -178,6 +178,12 @@ struct DeveloperView: View {
             // 0.6.0 以前只放在这里，且只给试岛用（handoff 1、2）: 试一下灵动岛 needs no relay; 让中转改一下 proves
             // the APNs key accepts the Live Activity topic (3.5). From 0.6.0 the user's switch moves to 手机通知.
             Section {
+                Toggle("灵动岛", isOn: Binding(get: { model.island.wanted }, set: { on in
+                    Task { await model.islandSetWanted(on) }
+                }))
+                Text("打开后，手机上发出去的对话会出现岛；电脑上开始的跑过一分钟也会。0.6.0 以后这个开关会挪到 手机通知。")
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
                 Button("试一下灵动岛") { Task { await model.islandDemo() } }
                     .disabled(model.island.working)
                 Button("让中转改一下") { Task { await model.islandRelayTest() } }
@@ -197,7 +203,7 @@ struct DeveloperView: View {
             } header: {
                 Text("灵动岛")
             } footer: {
-                Text("试验用。岛出现在灵动岛、锁屏和待机显示里，锁屏看得最清楚。")
+                Text("岛出现在灵动岛、锁屏和待机显示里；锁屏上看卡片，灵动岛要解锁回桌面看。")
             }
             Section {
                 Toggle("显示操作耗时", isOn: Binding(get: { speed.enabled }, set: { speed.setEnabled($0) }))

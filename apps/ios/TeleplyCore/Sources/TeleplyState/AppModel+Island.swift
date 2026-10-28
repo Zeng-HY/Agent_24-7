@@ -8,6 +8,202 @@ extension AppModel {
     /// The demo island's conversation id: not a real conversation, only a name on the island and in its URL.
     static let islandDemoChat = "island-demo"
 
+    // MARK: 真实对话的岛（阶段一）
+
+    /// At launch and each return to the front: watch the system's islands and bring the relay up to date. Safe to
+    /// call often; the watching itself starts once.
+    public func islandLaunch() async {
+        island.wanted = services.island.wanted()
+        if !island.observing {
+            island.observing = true
+            services.island.observe { [weak self] event in self?.islandEvent(event) }
+        }
+        guard island.wanted else {
+            // A remote-started island may have arrived while this phone had the switch off: take it down, but leave
+            // 试一下灵动岛's demo alone (it is a developer's tool, not a conversation).
+            for snap in await services.island.running() where snap.identity.chat != Self.islandDemoChat {
+                await services.island.end(snap.ref, snap.state, dismissIn: 0)
+            }
+            return
+        }
+        await islandReadEnabled()
+        guard island.enabled != false, account != nil, !expired, !fixture else { return }
+        await islandReconcile()
+        await islandRegisterStartToken()
+    }
+
+    /// 设置 → 开发者选项 → 灵动岛: the switch (0.6.0 前只在这里，默认关). Off ends every island and forgets its token.
+    public func islandSetWanted(_ on: Bool) async {
+        guard !island.working else { return }
+        island.working = true
+        island.note = nil
+        defer { island.working = false }
+        if on {
+            await islandReadEnabled()
+            guard island.enabled != false else {
+                island.note = "系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。"
+                return
+            }
+        }
+        island.wanted = on
+        services.island.setWanted(on)
+        if on {
+            await islandRegisterStartToken()
+            await islandReconcile()
+            island.note = "打开了。手机发出去的对话会出现岛；电脑上开始的跑过一分钟也会。"
+        } else {
+            await islandStopAll()
+            island.note = "关掉了，所有岛都收起来了。"
+        }
+    }
+
+    /// A message was taken by the computer (已接收 / 已送达 / 已排队): this conversation gets its island.
+    func islandSendStarted(_ record: Submission) {
+        guard island.wanted, !fixture, !expired, account != nil else { return }
+        let identity = IslandIdentity(device: record.device, app: record.app, chat: record.chat,
+                                      computer: computerLabel(record.device), title: chatTitle(record.chat))
+        if let existing = island.live.first(where: { $0.value.identity.device == identity.device
+            && $0.value.identity.app == identity.app && $0.value.identity.chat == identity.chat }) {
+            let now = islandNow(), state = IslandState(status: .working, since: now, turn: now)
+            var track = existing.value
+            track.state = state
+            track.registered = false
+            island.live[existing.key] = track
+            Task { [weak self] in
+                guard let self else { return }
+                await services.island.update(IslandRef(raw: existing.key), state)
+                await islandRegister(IslandRef(raw: existing.key))
+            }
+            return
+        }
+        if island.live.count >= 3 {  // three at most (handoff 5.3); the oldest finished one makes way
+            guard let finished = island.live.first(where: { $0.value.state.status == .done }) else { return }
+            island.live.removeValue(forKey: finished.key)
+            Task { await services.island.end(IslandRef(raw: finished.key), finished.value.state, dismissIn: 0) }
+        }
+        let now = islandNow(), state = IslandState(status: .working, since: now, turn: now)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let ref = try await services.island.start(identity, state)
+                island.live[ref.raw] = IslandTrack(identity: identity, state: state)
+                islandFetchToken(ref)
+            } catch {
+                island.note = describe(error)
+            }
+        }
+    }
+
+    /// What the system says changed: a remote start, a token (new or another), an island gone.
+    func islandEvent(_ event: IslandEvent) {
+        switch event {
+        case let .started(ref, identity, state):
+            guard island.wanted, !fixture, !expired else {
+                Task { await services.island.end(ref, state, dismissIn: 0) }
+                return
+            }
+            island.live[ref.raw] = IslandTrack(identity: identity, state: state)
+            islandFetchToken(ref)
+        case let .token(ref, token):
+            guard var track = island.live[ref.raw] else { return }
+            track.token = token
+            track.registered = false
+            island.live[ref.raw] = track
+            Task { await islandRegister(ref) }
+        case let .dismissed(ref):
+            guard let track = island.live.removeValue(forKey: ref.raw) else { return }
+            Task { await islandUnregister(track) }
+        }
+    }
+
+    /// The token is made a moment after the island starts; then the relay gets it.
+    func islandFetchToken(_ ref: IslandRef) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let token = await services.island.token(ref, seconds: 10) else { return }
+            if var track = island.live[ref.raw] {
+                track.token = token
+                island.live[ref.raw] = track
+            }
+            await islandRegister(ref)
+        }
+    }
+
+    func islandRegister(_ ref: IslandRef) async {
+        guard island.wanted, !fixture, !expired, let track = island.live[ref.raw], let token = track.token else { return }
+        guard account?.devices.contains(where: { $0.id == track.identity.device }) == true else { return }
+        do {
+            try await client.islandRegister(IslandRegistration(
+                token: token, device: track.identity.device, app: track.identity.app, chat: track.identity.chat,
+                environment: services.island.environment, state: track.state.state, since: track.state.since,
+                turn: track.state.turn))
+            if var stored = island.live[ref.raw] {
+                stored.registered = true
+                island.live[ref.raw] = stored
+            }
+        } catch {
+            island.note = describe(error)
+        }
+    }
+
+    func islandUnregister(_ track: IslandTrack) async {
+        guard let token = track.token else { return }
+        try? await client.islandRegister(.unregister(token: token, device: track.identity.device, app: track.identity.app,
+                                                      chat: track.identity.chat, environment: services.island.environment))
+    }
+
+    /// Checks what the system still has against what the app keeps: remote-started islands are picked up, islands
+    /// gone since are dropped, and finished ones that have been out for ten minutes are ended.
+    func islandReconcile() async {
+        guard island.wanted, !fixture, !expired, account != nil else {
+            if !island.wanted { await islandStopAll() }
+            return
+        }
+        let snaps = await services.island.running()
+        let now = islandNow()
+        for snap in snaps where island.live[snap.ref.raw] == nil {
+            island.live[snap.ref.raw] = IslandTrack(identity: snap.identity, state: snap.state)
+            islandFetchToken(snap.ref)
+        }
+        for snap in snaps {
+            guard var track = island.live[snap.ref.raw] else { continue }
+            track.state = snap.state
+            island.live[snap.ref.raw] = track
+        }
+        let refs = Set(snaps.map(\.ref.raw))
+        for key in Array(island.live.keys) where !refs.contains(key) { island.live.removeValue(forKey: key) }
+        for snap in snaps {
+            guard let status = snap.state.status, status == .done || status == .failed else { continue }
+            if now - snap.state.since > 10 * 60 {
+                await services.island.end(snap.ref, snap.state, dismissIn: 0)
+                island.live.removeValue(forKey: snap.ref.raw)
+            }
+        }
+    }
+
+    func islandRegisterStartToken() async {
+        guard island.wanted, !fixture, !expired, account != nil else { return }
+        guard let token = await services.island.startToken(seconds: 5) else { return }
+        try? await client.islandStartToken(IslandStartToken(token: token, environment: services.island.environment))
+    }
+
+    func islandStopAll() async {
+        await services.island.endAll()
+        let tracks = island.live.values
+        island.live.removeAll()
+        for track in tracks { await islandUnregister(track) }
+    }
+
+    private func computerLabel(_ id: String) -> String {
+        account?.devices.first(where: { $0.id == id })?.label ?? device?.label ?? "我的电脑"
+    }
+
+    private func chatTitle(_ id: String) -> String {
+        chats.first(where: { $0.id == id })?.title ?? ""
+    }
+
+    // MARK: 试岛（阶段零留下的开发者选项）
+
     /// 设置 → 开发者选项 → 试一下灵动岛: starts one on this phone only, without the relay (so it also works signed out).
     /// The system shows it in the Dynamic Island when 遥应 is not in front, on the lock screen always.
     public func islandDemo() async {

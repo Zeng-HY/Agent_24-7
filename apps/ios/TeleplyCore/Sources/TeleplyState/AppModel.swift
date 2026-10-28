@@ -207,6 +207,8 @@ public final class AppModel {
         jobs = NewChatJobs(pacer: services.pacer, store: services.store, now: services.now)
         workspace.created = { [weak self] job in self?.jobCreated(job) }
         conversation.draftLeft = { [weak self] key, words in self?.noteDraft(key, words) }
+        // A send the computer took: the island for that conversation starts (阶段一).
+        conversation.acknowledgedSend = { [weak self] record in self?.islandSendStarted(record) }
         jobs.settle = { [weak self] job in
             guard let self, self.screen == .reading, self.chat?.id == job.preview else { return }
             self.finishJob(job)
