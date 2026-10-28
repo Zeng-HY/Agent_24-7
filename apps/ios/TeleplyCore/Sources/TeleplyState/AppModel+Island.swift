@@ -145,9 +145,10 @@ extension AppModel {
         for (key, var track) in island.live {
             track.state.peers = peers
             island.live[key] = track
+            let state = track.state  // taken here: the task must not read a variable the loop goes on changing
             Task { [weak self] in
                 guard let self else { return }
-                await services.island.update(IslandRef(raw: key), track.state)
+                await services.island.update(IslandRef(raw: key), state)
             }
         }
     }
