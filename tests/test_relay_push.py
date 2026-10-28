@@ -379,6 +379,131 @@ class IslandTests(RelayTests):
         self.assertNotIn('chat-1', json.dumps(sent['payload']))
         self.assertEqual(self.activities()[0]['state'], 'done')
 
+    async def test_a_running_turn_updates_its_island_quietly(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.registration(state='working', since='1761629700', turn='1761629700'))
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'chat-1', 'since': 1761629700})
+        self.assertEqual(len(self.sender.sent), 1)
+        sent = self.sender.sent[0]
+        self.assertEqual((sent['push_type'], sent['priority'], sent['topic']),
+                         ('liveactivity', 5, relay_push.ISLAND_TOPIC))
+        self.assertEqual(sent['payload']['aps']['content-state'],
+                         relay_push.island_state('working', 1761629700, 1761629700))
+        self.assertNotIn('alert', sent['payload']['aps'])  # no banner for 在干活
+        self.assertEqual(sent['payload']['aps']['stale-date'], 1761630900)
+
+    async def test_a_finished_turn_changes_the_island_instead_of_notifying(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.registration(state='working', since='1761629700', turn='1761629700'))
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1'})
+        self.assertEqual(len(self.sender.sent), 1)  # user 10-28: only the island, no second banner
+        sent = self.sender.sent[0]
+        self.assertEqual(sent['payload']['aps']['alert']['body'], '有个对话好了')
+        self.assertEqual(sent['payload']['aps']['content-state'],
+                         relay_push.island_state('done', 1761630000, 1761629700))
+        self.assertEqual(self.activities()[0]['state'], 'done')
+
+    async def test_without_an_island_a_finished_turn_is_still_a_notice(self):
+        await self.post('register', {'token': PHONE})
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1'})
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.sender.sent[0]['push_type'], 'alert')
+        self.assertIn('teleply', self.sender.sent[0]['payload'])
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['body'], '有个对话好了')
+
+    async def test_a_dead_island_falls_back_to_a_notice(self):
+        await self.post('register', {'token': PHONE})
+        await self.post('activity', self.registration())
+        self.sender.answers = [(410, 'Unregistered')]
+        await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1'})
+        self.assertEqual([s['push_type'] for s in self.sender.sent], ['liveactivity', 'alert'])
+        self.assertEqual(self.activities(), [])  # the dead island is gone
+
+    async def test_a_turn_running_a_minute_is_started_from_afar_with_the_start_token(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('start-token', {'token': 'ef' * 32, 'environment': 'production'})
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'chat-1', 'since': 1761630000})
+        self.assertEqual(self.sender.sent, [])  # not after the first look
+        self.service.push.clock = lambda: 1761630061.0
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(self.sender.sent), 1)
+        sent = self.sender.sent[0]
+        aps = sent['payload']['aps']
+        self.assertEqual((sent['token'], sent['push_type'], sent['priority']), ('ef' * 32, 'liveactivity', 10))
+        self.assertEqual((aps['event'], aps['attributes-type'], aps['input-push-token']),
+                         ('start', 'IslandAttributes', 1))
+        self.assertEqual(aps['attributes'], {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1',
+                                             'computer': 'alice的电脑', 'title': ''})
+        self.assertEqual(aps['content-state'], relay_push.island_state('working', 1761630000, 1761630000))
+        self.assertEqual(self.service.push.starts, {})  # started once, not every half minute
+
+    async def test_a_finished_island_ends_five_minutes_later(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.registration())
+        await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1'})
+        self.sender.sent.clear()
+        self.service.push.clock = lambda: 1761630301.0
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['event'], 'end')
+        self.assertEqual(self.activities(), [])
+
+    async def test_a_computer_gone_goes_grey_and_comes_back(self):
+        clock = 1761630000.0
+        self.service.push.clock = lambda: clock
+        await self.post('activity', self.registration())
+        self.service.push.seen.add(self.devices[0])
+        connection = self.service.hub.connections[self.devices[0]]
+        await self.service.hub.disconnect(self.devices[0])
+        self.sender.sent.clear()
+        self.service.push.clock = lambda: clock + 1
+        await self.service.push.sweep_islands()  # first miss is remembered
+        self.assertEqual(self.sender.sent, [])
+        self.service.push.clock = lambda: clock + 61
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(self.sender.sent), 1)
+        aps = self.sender.sent[0]['payload']['aps']
+        self.assertEqual(aps['content-state']['state'], 'offline')
+        self.assertNotIn('alert', aps)  # user 10-28: grey, no sound
+        kept = self.activities()[0]
+        self.assertEqual((kept['state'], kept['saved_state']), ('offline', 'working'))
+        self.service.hub.connections[self.devices[0]] = connection  # plugged back in
+        self.sender.sent.clear()
+        self.service.push.clock = lambda: clock + 120
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.sender.sent[0]['payload']['aps']['content-state']['state'], 'working')
+        self.assertEqual(self.activities()[0]['state'], 'working')
+
+    async def test_a_computer_gone_half_an_hour_ends_the_island(self):
+        clock = 1761630000.0
+        self.service.push.clock = lambda: clock
+        await self.post('activity', self.registration())
+        self.service.push.seen.add(self.devices[0])
+        await self.service.hub.disconnect(self.devices[0])
+        self.sender.sent.clear()
+        self.service.push.clock = lambda: clock + 1
+        await self.service.push.sweep_islands()
+        self.service.push.clock = lambda: clock + 61
+        await self.service.push.sweep_islands()  # grey first
+        self.sender.sent.clear()
+        self.service.push.clock = lambda: clock + 1802
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(self.sender.sent), 1)
+        aps = self.sender.sent[0]['payload']['aps']
+        self.assertEqual((aps['event'], aps['content-state']['state']), ('end', 'offline'))
+        self.assertEqual(aps['dismissal-date'], int(clock + 1802) + 3600)
+        self.assertEqual(self.activities(), [])
+
     async def test_the_sample_and_the_relay_agree_on_every_state(self):
         for name, state in self.fixture().items():
             extra = {key: value for key, value in state.items() if key not in ('state', 'since', 'turn')}

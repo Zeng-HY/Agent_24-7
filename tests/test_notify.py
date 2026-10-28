@@ -287,6 +287,44 @@ class Watcher(unittest.TestCase):
         self.assertFalse(self.notifier.relay_on())
         self.assertIsNone(self.notifier.since)
 
+    def test_a_turn_that_begins_is_told_once_with_its_start_and_no_words(self):
+        self.cfg.pop("bark")
+        with self.notifier.relay.listener():
+            self.notifier.look()  # the first look after the relay came: only later turns are new
+            self.turn("task_started", "t1")
+            self.notifier.look()
+            self.notifier.look()  # the same turn, still running: said once
+            self.turn("task_complete", "t1", "好了")
+            self.notifier.look()
+        events = self.notifier.relay.since("all")
+        self.assertEqual([e["kind"] for e in events], ["running", "done"])
+        self.assertEqual({k: events[0][k] for k in ("event", "kind", "app", "chat", "title", "message", "since")},
+                         {"event": "message", "kind": "running", "app": "codex", "chat": "x1", "title": "", "message": "",
+                          "since": int(self.now)})
+        self.assertEqual(self.sent, [])  # 在干活 only changes the island; no banner
+
+    def test_a_turn_already_running_when_the_watch_starts_is_not_replayed(self):
+        self.cfg.pop("bark")
+        self.turn("task_started", "t0")
+        with self.notifier.relay.listener():
+            self.notifier.look()
+            self.notifier.look()
+            self.assertEqual(self.notifier.relay.since("all"), [])
+            self.turn("task_complete", "t0", "好了")
+            self.notifier.look()
+        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["done"])
+
+    def test_deepseek_running_is_told_the_same_way(self):
+        self.cfg.pop("bark")
+        with self.notifier.relay.listener():
+            self.notifier.running_quiet = False
+            item = {"app": "deepseek", "id": "d1", "title": "问点事"}
+            self.notifier._running(item)
+            self.notifier._running(item)
+        self.assertEqual([(e["kind"], e["app"], e["chat"]) for e in self.notifier.relay.since("all")],
+                         [("running", "deepseek", "d1")])
+        self.assertEqual(self.sent, [])
+
     def test_the_relay_hears_failed_and_waiting_and_the_quiet_rules_hold(self):
         item, bark = {"app": "claude", "id": "c1", "title": "部署"}, self.notifier.address()
         with self.notifier.relay.listener():

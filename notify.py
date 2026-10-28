@@ -197,6 +197,9 @@ class Notifier:
         self.since = clock()                         # turns that ended before this are not sent
         self.sizes: dict[str, tuple] = {}            # conversation file -> (size, mtime) when last read
         self.ended: dict[tuple, str] = {}            # (app, id) -> key of its newest turn end seen, sent or not
+        # (app, id) -> when this turn was first seen running; a turn that starts is told to the relay once
+        self.running: dict[tuple, float] = {}
+        self.running_quiet = True                    # the first look after starting records, never sends
         self.open: collections.Counter = collections.Counter()  # (app, id) -> live streams the phone has on it
         self.recent: collections.deque = collections.deque(maxlen=8)  # the last outcomes, for the page
         self.url = ""                                # this computer's https address on Tailscale
@@ -341,15 +344,37 @@ class Notifier:
             self.sizes[str(path)] = (st.st_size, st.st_mtime_ns)
             lines, _ = chats.read_tail(path, TAIL_BYTES)
             end = turn_end(item["app"], lines)
-            if end is None or end["state"] == "running":
-                continue
             conv = (item["app"], item["id"])
+            if end is None:
+                continue
+            if end["state"] == "running":
+                self._running(item)
+                continue
+            self.running.pop(conv, None)
             if self.ended.get(conv) == end["key"]:
                 continue
             self.ended[conv] = end["key"]
             if end["state"] == "stopped" or _seconds(end["time"], st.st_mtime) < self.since:
                 continue
             self._tell(found, item, end)
+        self.running_quiet = False  # from here a turn seen running is a new one, told to the relay
+
+    def _running(self, item: dict) -> None:
+        """A turn began: said to the relay once, so a conversation running for a minute can get an island (方案一).
+        Only the app, the conversation and when it began; never the words. Quiet for turns already running when the
+        watch starts (10-27's rule: nothing is replayed for the past)."""
+        conv = (item["app"], item["id"])
+        if conv in self.running:
+            return
+        start = self.clock()
+        self.running[conv] = start
+        if self.running_quiet or not self.relay_on():
+            return
+        try:
+            self.relay.publish("", "", extra={"kind": "running", "app": item["app"], "chat": item["id"],
+                                              "since": int(start)})
+        except Exception:
+            self.log("通知：在干活没报给中转\n" + traceback.format_exc())
 
     def asking(self, item: dict, text: str) -> None:
         """Claude waits on a question or a permission in the middle of a turn, as Claude Code's hook tells it
@@ -388,10 +413,14 @@ class Notifier:
         interactions=bridge.events.for_session(item['id'])
         questions=(item.get('_values',{}).get('userQuestions') or {}).get('active',[])
         if interactions or questions:
+            self.running.pop(conv, None)
             ids=[v['eventId'] for v in interactions]+[q['callId'] for q in questions]
             key='pending:'+','.join(sorted(ids));text='DeepSeek 有待处理的提问或批准，请打开对话查看。';asks=True
-        elif item.get('_running'):return
+        elif item.get('_running'):
+            self._running(item)
+            return
         else:
+            self.running.pop(conv, None)
             try:page,_=bridge.records(item['id'],limit=5)
             except deepseek_control.DeepSeekError:return
             ends=[v['event'] for v in page['records'] if v.get('event',{}).get('type')=='turn/end']

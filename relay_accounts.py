@@ -65,12 +65,18 @@ class Accounts:
                 -- 灵动岛 (relay_push.py): one row per island's push token, and the phones' push-to-start tokens
                 CREATE TABLE IF NOT EXISTS push_activities(id TEXT PRIMARY KEY, owner TEXT, device TEXT, app TEXT,
                     chat TEXT, token TEXT UNIQUE, environment TEXT, state TEXT, since INTEGER, turn INTEGER,
-                    created REAL, refreshed REAL, result TEXT DEFAULT '');
+                    created REAL, refreshed REAL, result TEXT DEFAULT '',
+                    saved_state TEXT, saved_since INTEGER, saved_turn INTEGER);
                 CREATE INDEX IF NOT EXISTS push_activities_owner ON push_activities(owner);
                 CREATE INDEX IF NOT EXISTS push_activities_chat ON push_activities(device, app, chat);
                 CREATE TABLE IF NOT EXISTS push_start(token TEXT PRIMARY KEY, owner TEXT, environment TEXT,
                     refreshed REAL);
             ''')
+            # A database from 阶段零 has push_activities without the three columns 方案四 keeps the old state in.
+            columns = {row[1] for row in db.execute('PRAGMA table_info(push_activities)')}
+            for name, kind in (('saved_state', 'TEXT'), ('saved_since', 'INTEGER'), ('saved_turn', 'INTEGER')):
+                if name not in columns:
+                    db.execute(f'ALTER TABLE push_activities ADD COLUMN {name} {kind}')
 
     @contextmanager
     def connect(self):
