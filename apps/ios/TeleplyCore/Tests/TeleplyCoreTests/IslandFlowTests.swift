@@ -182,6 +182,37 @@ struct IslandFlowTests {
         #expect(paths.contains("/account/push/activity"))
     }
 
+    @Test func launchRegistersThePushToStartToken() async throws {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        _ = await signedIn(world, island: island, transport: watched)
+        let items = await watched.log.items
+        let started = try #require(items.first { $0.url.path.hasSuffix("/start-token") })
+        let body = try JSONValue.parse(started.body ?? Data())
+        #expect(body["token"].string() == String(repeating: "cd", count: 32))
+    }
+
+    @Test func anIslandDismissedOnTheLockScreenIsUnregistered() async throws {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        let identity = IslandIdentity(device: DemoData.computerA, app: "claude", chat: "c9", computer: "测试电脑 A", title: "")
+        let ref = IslandRef(raw: "gone-1")
+        island.fire(.started(ref, identity, IslandState(status: .working, since: 1, turn: 1)))
+        for _ in 0..<150 where !model.island.live.values.contains(where: { $0.registered }) {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        island.fire(.dismissed(ref))
+        for _ in 0..<100 where model.island.live[ref.raw] != nil { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(model.island.live[ref.raw] == nil)
+        var bodies: [JSONValue] = []
+        for _ in 0..<100 {
+            let items = await watched.log.items.filter { $0.url.path.hasSuffix("/activity") }
+            bodies = items.compactMap { try? JSONValue.parse($0.body ?? Data()) }
+            if bodies.contains(where: { $0["op"].string() == "unregister" }) { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(bodies.contains { $0["op"].string() == "unregister" && $0["chat"].string() == "c9" })
+    }
+
     @Test func atMostThreeIslandsAndAFinishedOneMakesWay() async {
         let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
         let model = await signedIn(world, island: island, transport: watched)
