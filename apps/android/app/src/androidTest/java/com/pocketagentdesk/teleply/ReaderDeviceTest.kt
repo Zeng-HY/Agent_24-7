@@ -18,9 +18,10 @@ class ReaderDeviceTest:ReaderUiScenarios() {
         compose.waitUntil(10000) { !vm.workspace.state.value.busy }
         compose.onNodeWithText("遥应下载测试-",substring=true).performClick()
         compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
-        compose.onNodeWithText("添加到消息").assertExists()
         compose.waitUntil(10000) { !vm.workspace.state.value.busy }
-        compose.onNodeWithText("保存到手机").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("文件菜单").performClick()
+        compose.onNodeWithText("添加到消息").assertExists()
+        compose.onNodeWithText("保存到手机").performClick()
         val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
         var button:android.view.accessibility.AccessibilityNodeInfo?=null
         val until=System.currentTimeMillis()+10000
@@ -39,7 +40,7 @@ class ReaderDeviceTest:ReaderUiScenarios() {
         try { org.junit.Assert.assertEquals("固定测试内容",context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }) }
         finally { android.provider.DocumentsContract.deleteDocument(context.contentResolver,uri) }
         org.junit.Assert.assertEquals(0,vm.workspace.sendExtras().getJSONArray("references").length())
-        compose.onNodeWithText("打开已保存的文件").assertExists()
+        compose.onNodeWithText("已保存到所选位置",substring=true).assertExists()
     }
     @Test fun shareChooserCancellationDoesNotClaimDelivery() {
         launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()
@@ -47,12 +48,13 @@ class ReaderDeviceTest:ReaderUiScenarios() {
         compose.onNodeWithContentDescription("对话菜单").performClick()
         compose.onNodeWithText("对话文件").performClick();compose.waitUntil(10000) { !vm.workspace.state.value.busy }
         compose.onNodeWithText("安全预览.html").performClick();compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
-        compose.onNodeWithText("系统分享").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("文件菜单").performClick()
+        compose.onNodeWithText("系统分享").performClick()
         compose.waitUntil(10000) { !vm.workspace.state.value.busy }
         val automation=InstrumentationRegistry.getInstrumentation().uiAutomation
         automation.waitForIdle(500,5000)
         android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("input keyevent 4")).use { it.readBytes() }
-        compose.waitForIdle();compose.onNodeWithText("系统分享").assertExists()
+        compose.waitForIdle();compose.onNodeWithContentDescription("文件菜单").assertExists()
         org.junit.Assert.assertTrue(vm.workspace.state.value.result.contains("选择器"))
         org.junit.Assert.assertFalse(vm.workspace.state.value.result.contains("分享完成"))
     }

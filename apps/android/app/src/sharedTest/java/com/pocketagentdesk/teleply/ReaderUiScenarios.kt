@@ -323,16 +323,19 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithContentDescription("对话菜单").performClick()
         compose.onNodeWithText("对话文件").performClick();compose.waitUntil(10000) { !vm.workspace.state.value.busy }
         compose.onNodeWithText("安全预览.html").performClick();compose.waitUntil(10000) { vm.workspace.state.value.pane=="file" && !vm.workspace.state.value.busy }
-        // A page that runs no script and loads nothing from the network; the source, as text, one tap away.
+        // The page fills the screen; its source, as text, and saving are under ⋯ (10-28, as WeChat).
         compose.onNodeWithContentDescription("网页预览：安全预览.html").assertExists()
         compose.onNodeWithText("<script>fetch(",substring=true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("文件菜单").performClick()
         compose.onNodeWithText("查看源码").performClick()
         compose.onNodeWithText("<script>fetch(",substring=true).assertExists()
-        compose.onNodeWithText("保存到手机").performScrollTo().assertHasClickAction()
+        compose.onNodeWithContentDescription("文件菜单").performClick()
+        compose.onNodeWithText("查看页面").assertExists()
+        compose.onNodeWithText("保存到手机").assertHasClickAction()
     }
     /**
      * 10-28: Word and Excel are drawn on the phone from the file itself, with no PDF asked for; PowerPoint shows as the PDF
-     * the computer's Office makes (10-27). The buttons take the file itself throughout.
+     * the computer's Office makes (10-27). The file fills the page; ⋯ takes the file itself throughout.
      */
     @Test fun wordAndExcelShowOnThePhoneAndPowerPointAsThePdf() {
         launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()
@@ -347,8 +350,8 @@ abstract class ReaderUiScenarios {
             compose.waitUntil(10000) { !vm.workspace.state.value.busy && vm.workspace.state.value.preview!=null }
             compose.runOnIdle { org.junit.Assert.assertEquals("phone",org.json.JSONObject(vm.workspace.state.value.data).string("preview")) }
             compose.onNodeWithText("正在用电脑上的 Office 转成 PDF…").assertDoesNotExist()
-            compose.onNodeWithText("这类文件不提供内嵌预览，可保存后使用系统应用打开。").assertDoesNotExist()
-            compose.onNodeWithText("保存到手机").performScrollTo().assertIsEnabled()
+            compose.onNodeWithText("用其他应用打开").assertDoesNotExist()
+            menuOffersTheFile()
         }
         compose.runOnIdle { org.junit.Assert.assertEquals(0,world.pdfReads) }
         // PowerPoint: while Office works on the computer, a short note, and the buttons already work on the file itself.
@@ -356,14 +359,20 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("季度汇报.pptx").performScrollTo().performClick()
         compose.waitUntil(10000) { vm.workspace.state.value.converting }
         compose.onNodeWithText("正在用电脑上的 Office 转成 PDF…").assertExists()
-        compose.onNodeWithText("保存到手机").performScrollTo().assertIsEnabled()
-        compose.onNodeWithText("这类文件不提供内嵌预览，可保存后使用系统应用打开。").assertDoesNotExist()
+        menuOffersTheFile()
         compose.runOnIdle { office.complete(Unit) }
         compose.waitUntil(10000) { vm.workspace.state.value.preview!=null }
         compose.onNodeWithText("正在用电脑上的 Office 转成 PDF…").assertDoesNotExist()
-        compose.onNodeWithText("1/1").assertExists()
-        compose.onNodeWithText("系统分享").assertIsEnabled();compose.onNodeWithText("用其他应用打开").assertIsEnabled()
+        menuOffersTheFile()
         compose.runOnIdle { org.junit.Assert.assertEquals("pdf",org.json.JSONObject(vm.workspace.state.value.data).string("preview"));org.junit.Assert.assertEquals(1,world.pdfReads) }
+    }
+    /** The file page's ⋯ saves, shares and opens the file itself; a tap beside it closes it again. */
+    private fun menuOffersTheFile() {
+        compose.onNodeWithContentDescription("文件菜单").performClick()
+        compose.onNodeWithText("保存到手机").assertIsEnabled()
+        compose.onNodeWithText("系统分享").assertIsEnabled();compose.onNodeWithText("用其他应用打开").assertIsEnabled()
+        compose.onRoot().performTouchInput { click(androidx.compose.ui.geometry.Offset(24f,height-24f)) }
+        compose.onNodeWithText("保存到手机").assertDoesNotExist()
     }
     @Test fun claudeSendIsConfirmedFromItsRecord() {
         launch();fixtureList();openChat("Claude 下一步示例","claude-next")

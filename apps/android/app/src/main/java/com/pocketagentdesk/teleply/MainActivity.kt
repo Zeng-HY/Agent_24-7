@@ -197,11 +197,15 @@ class MainActivity : ComponentActivity() {
 /**
  * A page with a glass title bar (spec 4.5): the content scrolls under the bar; the scroll edge keeps the title readable.
  */
-@Composable fun PageFrame(title:String,subtitle:String?,onBack:(()->Unit)?,actions:@Composable RowScope.()->Unit={},notes:@Composable ColumnScope.()->Unit={},content:@Composable ColumnScope.()->Unit) {
+/** [fill]: the content takes the whole page under the bar, edge to edge and not scrolled here (a file shown as WeChat shows one). */
+@Composable fun PageFrame(title:String,subtitle:String?,onBack:(()->Unit)?,actions:@Composable RowScope.()->Unit={},notes:@Composable ColumnScope.()->Unit={},fill:Boolean=false,content:@Composable ColumnScope.()->Unit) {
     val p=LocalTeleply.current;val density=LocalDensity.current
     var bar by remember { mutableStateOf(0.dp) }
-    GlassScreen(Modifier.fillMaxSize().background(p.page),topEdge=bar+12.dp,content={
-        Column(
+    GlassScreen(Modifier.fillMaxSize().background(p.page),topEdge=if(fill) bar else bar+12.dp,content={
+        if(fill) Column(
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal+WindowInsetsSides.Bottom)).padding(top=bar),
+            content=content,
+        ) else Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal+WindowInsetsSides.Bottom))
                 .padding(start=16.dp,end=16.dp,top=bar+8.dp,bottom=24.dp),

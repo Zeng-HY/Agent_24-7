@@ -402,48 +402,175 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
 
 // --- Detail pages: file preview and diff (spec 4.5) -----------------------------------------------------------
 
+/**
+ * A file's page, as WeChat shows a file (user 10-28: "无用边框太多了，不需要什么说明文字你就参考微信的这种设计，占全部
+ * 位置，右上角放三个点"): back, the name, and ⋯ with what can be done with the file; the file itself fills the rest.
+ * Word and Excel drawn here (10-28), a PDF and the computer's PDF of PowerPoint page under page, a picture fitted, HTML
+ * as a page; Markdown to read and other text in a code panel scroll as before. A file it does not show says what it is.
+ * Saving shows how far it got at the bottom.
+ */
 @Composable private fun FilePage(vm:ReaderViewModel,k:ChatKey,data:JSONObject,s:WorkspaceState) {
     val c=vm.workspace;val context=LocalContext.current;val p=LocalTeleply.current
     var pickerKey by remember { mutableStateOf<ChatKey?>(null) }
     var saving by remember { mutableStateOf<JSONObject?>(null) }
     val save=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri -> if(uri!=null && c.state.value.key==pickerKey) saving?.let { c.saveFile(context,uri,it) } }
-    PageFrame(data.string("name").ifBlank { "文件" },"当前文件 · ${operationLabel(data.optJSONObject("meta")?.string("state").orEmpty())}",fileBack(data,c)) {
-        ProgressLine(s.busy,p.line)
-        s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
-        val lower=data.string("name").lowercase()
-        val html=lower.endsWith(".html") || lower.endsWith(".htm")
-        val markdown=lower.endsWith(".md") || lower.endsWith(".markdown")
-        // How the file shows: "phone", Word or Excel drawn here from the file itself (10-28); "pdf", the PDF the computer's
-        // Office makes (PowerPoint, the old .doc and .ppt; 10-27); "failed", neither. The buttons below take the file itself.
-        val shown=data.string("preview")
-        if(s.result.isNotBlank()) {
-            // HTML shows as a page and Markdown as text to read, with 查看源码 beside (web artifact-preview).
-            if(html || markdown) {
-                var rendered by remember(data.string("id")) { mutableStateOf(true) }
-                SegmentedChoice(listOf("page" to if(html) "查看页面" else "阅读视图","source" to "查看源码"),if(rendered) "page" else "source",{ rendered=it=="page" })
-                if(!rendered) CodePanel(data.string("name").ifBlank { "文本" },s.result,"复制文件内容")
-                else if(html) HtmlPreview(s.result,data,vm)
-                else Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
-            } else CodePanel(data.string("name").ifBlank { "文本" },s.result,"复制文件内容")
+    val name=data.string("name").ifBlank { "文件" }
+    val lower=name.lowercase()
+    val html=lower.endsWith(".html") || lower.endsWith(".htm")
+    val markdown=lower.endsWith(".md") || lower.endsWith(".markdown")
+    var rendered by remember(data.string("id")) { mutableStateOf(true) }
+    // How the file shows: "phone", Word or Excel drawn here from the file itself (10-28); "pdf", the PDF the computer's
+    // Office makes (PowerPoint, the old .doc and .ppt; 10-27); "failed", neither.
+    val shown=data.string("preview");val kind=data.string("kind");val bytes=s.preview
+    val meta=data.optJSONObject("meta") ?: JSONObject()
+    val ready=!s.busy && s.error==null
+    val fill=s.converting || (bytes!=null && (shown=="phone" || shown=="pdf" || kind=="pdf" || kind=="image")) || (html && rendered && s.result.isNotBlank())
+    val menus=LocalMenuHost.current;val more=remember { MenuAnchor() }
+    PageFrame(name,null,fileBack(data,c),fill=fill,actions={
+        CapsuleToolbar(Modifier.menuAnchor(more)) {
+            TeleplyIconButton(TeleplyIcons.More,"文件菜单",{
+                menus?.show(MenuRequest(more.bounds,MenuPlacement.BelowEnd,"文件菜单") {
+                    if((html || markdown) && s.result.isNotBlank()) MenuRow(if(rendered) "查看源码" else if(html) "查看页面" else "阅读视图",{ rendered=!rendered },icon=TeleplyIcons.Text)
+                    MenuRow("保存到手机",{ pickerKey=k;saving=JSONObject(s.data);save.launch(name) },icon=TeleplyIcons.Save,enabled=ready && !s.savingFile)
+                    MenuRow("系统分享",{ c.shareFile(context,JSONObject(s.data),false) },icon=TeleplyIcons.Share,enabled=ready && !s.savingFile)
+                    MenuRow("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },icon=TeleplyIcons.Open,enabled=ready && !s.savingFile)
+                    data.optJSONObject("reference")?.let { ref -> MenuRow("添加到消息",{ c.addReference(ref);if(k.chat=="@new") c.panel("new") else c.close() },icon=TeleplyIcons.Plus,enabled=!s.savingFile) }
+                    MenuDivider()
+                    MenuHint(listOf(operationLabel(meta.string("state")),if(meta.has("size")) fileSize(meta.optLong("size")) else "").filter { it.isNotBlank() }.joinToString(" · "))
+                })
+            },style=IconButtonStyle.Plain)
         }
-        s.preview?.let { bytes -> if(shown=="phone") OfficePreview(bytes,data,c::officeFailed) else NativePreview(bytes,if(shown=="pdf") "pdf" else data.string("kind")) }
-        if(s.converting) Row(Modifier.fillMaxWidth().semantics { liveRegion=LiveRegionMode.Polite },verticalAlignment=Alignment.CenterVertically) {
-            CircularProgressIndicator(Modifier.size(16.dp),color=p.accent,strokeWidth=2.dp)
-            Spacer(Modifier.width(8.dp))
-            Text("正在用电脑上的 Office 转成 PDF…",style=MaterialTheme.typography.note,color=p.muted)
+    }) {
+        if(fill) {
+            ProgressLine(s.busy,p.line)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when {
+                    s.converting -> Row(Modifier.align(Alignment.Center).semantics { liveRegion=LiveRegionMode.Polite },verticalAlignment=Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(16.dp),color=p.accent,strokeWidth=2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("正在用电脑上的 Office 转成 PDF…",style=MaterialTheme.typography.note,color=p.muted)
+                    }
+                    bytes!=null && shown=="phone" -> OfficePreview(bytes,data,c::officeFailed,Modifier.fillMaxSize())
+                    bytes!=null && (shown=="pdf" || kind=="pdf") -> PdfPages(bytes)
+                    bytes!=null && kind=="image" -> PicturePreview(bytes)
+                    else -> HtmlPreview(s.result,data,vm,Modifier.fillMaxSize())
+                }
+            }
+            FileStatus(s,c,context,data,Modifier.padding(horizontal=16.dp,vertical=8.dp))
+        } else {
+            ProgressLine(s.busy,p.line)
+            s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
+            if(s.result.isNotBlank()) {
+                if(markdown && rendered) Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
+                else CodePanel(name,s.result,"复制文件内容")
+            } else if(ready) UnshownFile(data,s,c,context)
+            FileStatus(s,c,context,data)
         }
-        if(s.previewNote.isNotBlank()) InfoNote(s.previewNote)
-        if(shown.isEmpty() && (data.optJSONObject("meta")?.optLong("size") ?: 0)>PreviewLimit) InfoNote("文件超过20MB预览上限，可保存后使用系统应用打开。")
-        if(s.transfer.isNotBlank()) Text(s.transfer,style=MaterialTheme.typography.note)
+    }
+}
+
+/** 1.7 KB for 1,757 bytes, as the iPhone writes sizes. */
+fun fileSize(bytes:Long):String = when {
+    bytes<1024 -> "$bytes 字节"
+    bytes<1024L*1024 -> String.format(java.util.Locale.ROOT,"%.1f KB",bytes/1024.0)
+    else -> String.format(java.util.Locale.ROOT,"%.1f MB",bytes/1048576.0)
+}
+
+/** A file the page does not show: what it is and why, and the apps that may show it. */
+@Composable private fun UnshownFile(data:JSONObject,s:WorkspaceState,c:WorkspaceController,context:Context) {
+    val p=LocalTeleply.current
+    val size=data.optJSONObject("meta")?.optLong("size") ?: 0L
+    val why=s.previewNote.ifBlank { s.transfer.takeIf { !s.savingFile && s.savedUri==null && it.startsWith("预览未能加载") }
+        ?: if(size>PreviewLimit) "超过 20MB，不直接显示" else if(data.string("kind")=="text") "文件是空的" else "手机上看不了这类文件" }
+    Column(Modifier.fillMaxWidth().padding(top=72.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        Icon(TeleplyIcons.File,contentDescription=null,tint=p.muted,modifier=Modifier.size(48.dp))
+        Text(data.string("name").ifBlank { "文件" },style=MaterialTheme.typography.bodyLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+        Text("${fileSize(size)} · $why",style=MaterialTheme.typography.note,color=p.muted,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+        PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && !s.savingFile,style=PillStyle.Primary,leading=TeleplyIcons.Open)
+    }
+}
+
+/** At the bottom: a save under way with 取消保存, how it went with 打开已保存的文件, and what went wrong. */
+@Composable private fun FileStatus(s:WorkspaceState,c:WorkspaceController,context:Context,data:JSONObject,modifier:Modifier=Modifier) {
+    val p=LocalTeleply.current
+    val saved=s.transfer.takeIf { s.savingFile || s.savedUri!=null || it.startsWith("保存失败") || it.startsWith("已取消保存") }
+    if(saved==null && s.error==null) return
+    Row(modifier.fillMaxWidth().semantics { liveRegion=LiveRegionMode.Polite },verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+        Text(saved ?: s.error.orEmpty(),style=MaterialTheme.typography.note,color=if(saved==null) p.error else p.text,modifier=Modifier.weight(1f))
         if(s.savingFile) PillButton("取消保存",c::cancelSave,style=PillStyle.Text)
-        s.savedUri?.let { uri -> PillButton("打开已保存的文件",{ c.openSaved(context,uri,data.string("name")) },style=PillStyle.Text) }
-        data.optJSONObject("reference")?.let { ref -> PillButton("添加到消息",{ c.addReference(ref);if(k.chat=="@new") c.panel("new") else c.close() },enabled=!s.savingFile,style=PillStyle.Text) }
-        if(!s.busy && s.error==null) PillButton("保存到手机",{ pickerKey=k;saving=JSONObject(s.data);save.launch(data.string("name").ifBlank { "download" }) },enabled=!s.savingFile,style=PillStyle.Primary,leading=TeleplyIcons.Save,modifier=Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            PillButton("系统分享",{ c.shareFile(context,JSONObject(s.data),false) },enabled=!s.busy && !s.savingFile && s.error==null,leading=TeleplyIcons.Share,modifier=Modifier.weight(1f))
-            PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && !s.savingFile && s.error==null,leading=TeleplyIcons.Open,modifier=Modifier.weight(1f))
+        else s.savedUri?.let { uri -> PillButton("打开",{ c.openSaved(context,uri,data.string("name")) },style=PillStyle.Text) }
+    }
+}
+
+/** One open PDF for [PdfPages]: how many pages, and one page drawn at a time (PdfRenderer opens one page at a time). */
+private class OpenPdf(private val file:java.io.File,private val renderer:android.graphics.pdf.PdfRenderer):java.io.Closeable {
+    val count=renderer.pageCount
+    private var closed=false
+    /** Page [index], [width] pixels wide on white; null once the page has gone. */
+    fun draw(index:Int,width:Int):android.graphics.Bitmap? = synchronized(this) {
+        if(closed) return null
+        renderer.openPage(index).use { page ->
+            android.graphics.Bitmap.createBitmap(width,(width.toFloat()*page.height/page.width).toInt().coerceIn(1,width*4),android.graphics.Bitmap.Config.ARGB_8888).also {
+                it.eraseColor(android.graphics.Color.WHITE);page.render(it,null,null,android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            }
         }
-        if(data.string("kind")=="download" && shown.isEmpty()) InfoNote("这类文件不提供内嵌预览，可保存后使用系统应用打开。")
+    }
+    override fun close() = synchronized(this) { if(!closed) { closed=true;runCatching { renderer.close() };file.delete() } }
+    companion object {
+        fun open(folder:java.io.File,bytes:ByteArray):OpenPdf {
+            val file=java.io.File.createTempFile("preview-",".pdf",folder)
+            try { file.writeBytes(bytes);return OpenPdf(file,android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(file,android.os.ParcelFileDescriptor.MODE_READ_ONLY))) }
+            catch(e:Throwable) { file.delete();throw e }
+        }
+    }
+}
+
+/**
+ * A PDF's pages one under another on grey, each as wide as the screen, drawn as it comes into view (WeChat, 10-28; was
+ * one page at a time with 上一页 and 下一页). The open file goes with the page.
+ */
+@Composable private fun PdfPages(bytes:ByteArray) {
+    val context=LocalContext.current;val p=LocalTeleply.current
+    var pdf by remember(bytes) { mutableStateOf<OpenPdf?>(null) }
+    var failed by remember(bytes) { mutableStateOf(false) }
+    LaunchedEffect(bytes) {
+        val opened=withContext(Dispatchers.IO+kotlinx.coroutines.NonCancellable) { runCatching { OpenPdf.open(context.cacheDir,bytes) }.getOrNull() }
+        if(opened==null) { failed=true;return@LaunchedEffect }
+        pdf=opened
+        try { kotlinx.coroutines.awaitCancellation() } finally { pdf=null;opened.close() }
+    }
+    val open=pdf
+    if(failed) Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=p.muted,modifier=Modifier.padding(16.dp))
+    else if(open!=null) BoxWithConstraints(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(if(p.dark) 0xFF2C2C2E else 0xFFE9E9EC))) {
+        val width=constraints.maxWidth.coerceIn(1,1440)
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(vertical=8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            items(open.count) { index -> PdfPage(open,index,width) }
+        }
+    }
+}
+
+@Composable private fun PdfPage(pdf:OpenPdf,index:Int,width:Int) {
+    var drawn by remember(pdf,index,width) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(pdf,index,width) { drawn=withContext(Dispatchers.IO) { runCatching { pdf.draw(index,width) }.getOrNull() } }
+    val page=drawn
+    if(page!=null) Image(page.asImageBitmap(),contentDescription="第 ${index+1} 页，共 ${pdf.count} 页",modifier=Modifier.fillMaxWidth().aspectRatio(page.width.toFloat()/page.height))
+    else Box(Modifier.fillMaxWidth().aspectRatio(0.707f).background(androidx.compose.ui.graphics.Color.White))
+}
+
+/** A picture fitted to the page, at most 2048 px on its longer side. */
+@Composable private fun PicturePreview(bytes:ByteArray) {
+    var bitmap by remember(bytes) { mutableStateOf<android.graphics.Bitmap?>(null) };var failed by remember(bytes) { mutableStateOf(false) }
+    LaunchedEffect(bytes) {
+        val decoded=withContext(Dispatchers.IO) { runCatching {
+            val info=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true };android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,info)
+            require(info.outWidth>0 && info.outHeight>0)
+            android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,android.graphics.BitmapFactory.Options().apply { inSampleSize=maxOf(1,maxOf(info.outWidth,info.outHeight)/2048) })
+        }.getOrNull() }
+        if(decoded==null) failed=true else bitmap=decoded
+    }
+    Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
+        bitmap?.let { Image(it.asImageBitmap(),contentDescription="文件预览",modifier=Modifier.fillMaxSize(),contentScale=androidx.compose.ui.layout.ContentScale.Fit) }
+        if(failed) Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=LocalTeleply.current.muted)
     }
 }
 
@@ -470,23 +597,4 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
         }
         if(data.has("next") && !data.isNull("next")) PillButton("下一页差异",{ c.diff(data.string("ref"),data.getInt("next")) })
     }
-}
-
-@Composable private fun NativePreview(bytes:ByteArray,kind:String) {
-    var page by remember(bytes) { mutableIntStateOf(0) };var pages by remember(bytes) { mutableIntStateOf(1) }
-    var bitmap by remember(bytes) { mutableStateOf<android.graphics.Bitmap?>(null) };var error by remember(bytes) { mutableStateOf<String?>(null) }
-    val context=LocalContext.current
-    LaunchedEffect(bytes,page) {
-        try { bitmap=withContext(Dispatchers.IO) {
-            if(kind=="pdf") {
-                val temp=java.io.File.createTempFile("preview-",".pdf",context.cacheDir)
-                try { temp.writeBytes(bytes);android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(temp,android.os.ParcelFileDescriptor.MODE_READ_ONLY)).use { renderer -> pages=renderer.pageCount;renderer.openPage(page.coerceIn(0,renderer.pageCount-1)).use { pg -> android.graphics.Bitmap.createBitmap(1000,(1000f*pg.height/pg.width).toInt().coerceIn(1,4096),android.graphics.Bitmap.Config.ARGB_8888).also { it.eraseColor(android.graphics.Color.WHITE);pg.render(it,null,null,android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) } } } } finally { temp.delete() }
-            } else { val info=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true };android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,info);require(info.outWidth>0 && info.outHeight>0);val opts=android.graphics.BitmapFactory.Options().apply { inSampleSize=maxOf(1,maxOf(info.outWidth,info.outHeight)/2048) };android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,opts) ?: throw IllegalArgumentException("图片格式不支持") }
-        } } catch(e:kotlinx.coroutines.CancellationException) { throw e }
-        // Not only a broken file: a page too big for memory, or no PDF renderer here at all, says the same and keeps the page.
-        catch(e:Throwable) { error="无法原生预览，可保存后使用系统应用打开。" }
-    }
-    bitmap?.let { Image(it.asImageBitmap(),contentDescription="文件预览",modifier=Modifier.fillMaxWidth()) }
-    error?.let { Text(it,style=MaterialTheme.typography.note,color=LocalTeleply.current.muted) }
-    if(kind=="pdf") Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) { PillButton("上一页",{ page-- },enabled=page>0,style=PillStyle.Text);Text("${page+1}/$pages",style=MaterialTheme.typography.note);PillButton("下一页",{ page++ },enabled=page+1<pages,style=PillStyle.Text) }
 }

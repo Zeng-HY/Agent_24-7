@@ -9,10 +9,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -20,11 +16,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicInteger
@@ -71,12 +64,12 @@ private val ResourceTypes = mapOf(
  * 查看页面 of an HTML file: the page as a browser shows it, scripts and what it loads from the internet included (the
  * user's choice, 2026-10-24: "可以允许加载html文件，不要禁止"). Its own pictures, styles and scripts beside it come from
  * the files this conversation lists, matched exactly by path. What stays apart: the page gets no cookie of this app
- * and no bridge to it, cannot read the phone's files, and a link opens in the phone's browser when tapped.
+ * and no bridge to it, cannot read the phone's files, and a link opens in the phone's browser when tapped. It fills
+ * what [modifier] gives it (the whole file page since 10-28).
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun HtmlPreview(source: String, file: JSONObject, vm: ReaderViewModel) {
-    val height = (LocalConfiguration.current.screenHeightDp * 0.68f).dp
+fun HtmlPreview(source: String, file: JSONObject, vm: ReaderViewModel, modifier: Modifier = Modifier) {
     val count = remember(source) { AtomicInteger(0) }
     val budget = remember(source) { AtomicLong(32L * 1024 * 1024) }
     val base = remember(file) { previewBase(file.string("path")) }
@@ -125,9 +118,8 @@ fun HtmlPreview(source: String, file: JSONObject, vm: ReaderViewModel) {
                 loadDataWithBaseURL(base, page, "text/html", "utf-8", null)
             }
         },
-        modifier = Modifier.fillMaxWidth().height(height).clip(TeleplyShape.Code).semantics { contentDescription = "网页预览：${file.string("name")}" },
+        modifier = modifier.semantics { contentDescription = "网页预览：${file.string("name")}" },
     )
-    Text("按网页打开：脚本和网上的图片照常加载；它拿不到这个应用的登录信息和手机里的文件，点链接用浏览器打开。", style = MaterialTheme.typography.note, color = LocalTeleply.current.muted)
 }
 
 /** The made-up host Word and Excel files are drawn under: this app's drawing pages (assets/office) and the file itself. */
@@ -150,14 +142,13 @@ fun phoneOffice(name: String): String? = when (name.substringAfterLast('.', "").
  * A Word or Excel file drawn on this phone from the file itself (10-28): docx-preview or SheetJS in a web view, from this
  * app's own copies of them (assets/office, the way the open-source Gander does it). The page loads nothing but those
  * and the file: no internet, no cookie and no bridge to the app; a tapped link opens in the phone's browser. A file it
- * cannot draw sets the page's title, and [failed] runs.
+ * cannot draw sets the page's title, and [failed] runs. It fills what [modifier] gives it.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit) {
+fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit, modifier: Modifier = Modifier) {
     val page = phoneOffice(file.string("name")) ?: return
     val dark = LocalTeleply.current.dark
-    val height = (LocalConfiguration.current.screenHeightDp * 0.72f).dp
     val onFailed by rememberUpdatedState(failed)
     key(bytes) {
         val webView = remember { arrayOfNulls<WebView>(1) }
@@ -204,7 +195,7 @@ fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit) {
                     loadUrl("https://$OfficeHost/$page.html" + if (dark) "?dark=1" else "")
                 }
             },
-            modifier = Modifier.fillMaxWidth().height(height).clip(TeleplyShape.Code),
+            modifier = modifier,
         )
     }
 }
