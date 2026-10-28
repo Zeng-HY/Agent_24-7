@@ -11,6 +11,8 @@ let package = Package(
         .library(name: "TeleplyModel", targets: ["TeleplyModel"]),
         .library(name: "TeleplyState", targets: ["TeleplyState"]),
         .library(name: "TeleplyDemo", targets: ["TeleplyDemo"]),
+        // 灵动岛: pure data and words, shared by the app and its widget extension; no dependency of its own.
+        .library(name: "TeleplyIsland", targets: ["TeleplyIsland"]),
     ],
     dependencies: [
         // Exact commits of the 0.9.0 tags. swift-cmark is listed only to pin what swift-markdown pulls in.
@@ -18,9 +20,10 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-cmark.git", revision: "08ddb528923cc1a6527e02b7a1aee9e516ca749a"),
     ],
     targets: [
-        .target(name: "TeleplyModel", dependencies: [.product(name: "Markdown", package: "swift-markdown")]),
+        .target(name: "TeleplyIsland"),
+        .target(name: "TeleplyModel", dependencies: ["TeleplyIsland", .product(name: "Markdown", package: "swift-markdown")]),
         .target(name: "TeleplyState", dependencies: ["TeleplyModel"], swiftSettings: [.defaultIsolation(MainActor.self)]),
         .target(name: "TeleplyDemo", dependencies: ["TeleplyModel"]),
-        .testTarget(name: "TeleplyCoreTests", dependencies: ["TeleplyModel", "TeleplyState", "TeleplyDemo"]),
+        .testTarget(name: "TeleplyCoreTests", dependencies: ["TeleplyModel", "TeleplyState", "TeleplyDemo", "TeleplyIsland"]),
     ]
 )

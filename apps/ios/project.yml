@@ -27,6 +27,7 @@ targets:
     platform: iOS
     sources:
       - path: Teleply
+      - path: Shared
     dependencies:
       - package: TeleplyCore
         product: TeleplyModel
@@ -34,6 +35,9 @@ targets:
         product: TeleplyState
       - package: TeleplyCore
         product: TeleplyDemo
+      - package: TeleplyCore
+        product: TeleplyIsland
+      - target: TeleplyIslandWidget
     # 遥应通知 through Apple's push service. Every build that reaches a phone is signed with the App Store profile
     # (TestFlight), whose push environment is production; that profile needs Push Notifications on the App ID.
     entitlements:
@@ -56,6 +60,27 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        CODE_SIGN_STYLE: Automatic
+  TeleplyIslandWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: TeleplyIslandWidget
+      - path: Shared
+    dependencies:
+      - package: TeleplyCore
+        product: TeleplyIsland
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pocketagentdesk.teleply.island
+        PRODUCT_NAME: TeleplyIslandWidget
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: TeleplyIslandWidget/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
         CODE_SIGN_STYLE: Automatic
   TeleplyUITests:
     type: bundle.ui-testing

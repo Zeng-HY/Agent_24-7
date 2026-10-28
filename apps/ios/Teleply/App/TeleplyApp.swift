@@ -19,7 +19,8 @@ struct TeleplyApp: App {
             vault: vault,
             transport: LaunchOptions.transport(),
             demo: { DemoHolder.shared.fresh() },
-            push: SystemPush()))
+            push: SystemPush(),
+            island: SystemIsland()))
         PushBridge.shared.attach(model)
         model.conversation.backgroundTime = BackgroundTime.begin
         // 诊断测速 times what carries a message or a file (web: the same requests).

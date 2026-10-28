@@ -148,6 +148,11 @@ public struct DemoTransport: RelayFileTransport {
                 return Self.json(["error": "这部手机还没登记遥应通知，请重新打开"], status: 400)
             }
             return Self.json(["ok": true, "text": "本地示例：刚推了一条"])
+        case "activity", "start-token":
+            // 灵动岛 (relay_push.py): the demo keeps no islands; it only says the request was taken.
+            return Self.json(["ok": true])
+        case "island-test":
+            return Self.json(["ok": true, "text": "本地示例：中转推了一条，看看岛"])
         default:
             return Self.notFound
         }

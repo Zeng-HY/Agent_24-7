@@ -49,12 +49,14 @@ workflows:
     environment:
       xcode: 27.1
       # Code signing identities in the Codemagic team: the Apple Distribution certificate and the App Store
-      # profile "Teleply App Store" for com.pocketagentdesk.teleply (team CPSVJ7235A).
+      # profiles "Teleply App Store" for com.pocketagentdesk.teleply and "Teleply Island App Store" for its widget
+      # extension com.pocketagentdesk.teleply.island (team CPSVJ7235A). xcode-project use-profiles gives each its own.
       ios_signing:
         certificates:
           - teleply_distribution
         provisioning_profiles:
           - teleply_appstore
+          - teleply_island_appstore
     scripts:
       - name: Archive with the next build number and check the IPA
         script: bash apps/ios/scripts/ci-testflight.sh

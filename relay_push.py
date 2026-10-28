@@ -33,10 +33,15 @@ from relay_transport import Refused
 log = logging.getLogger('relay.push')
 
 TOPIC = 'com.pocketagentdesk.teleply'
+# 灵动岛 (Live Activities) pushes go to this topic and header (handoff 5.3). The key is Topic Specific and the
+# developer portal lists themes by Bundle ID, so the topic is the app's plus Apple's suffix; 阶段零 proves it.
+ISLAND_TOPIC = TOPIC + '.push-type.liveactivity'
 HOSTS = {'production': 'api.push.apple.com', 'development': 'api.sandbox.push.apple.com'}
 PLATFORMS = ('ios',)        # an Android channel (Huawei, FCM) would add its own name and sender here
 APPS = {'codex': 'Codex', 'claude': 'Claude', 'deepseek': 'DeepSeek'}
 WORDS = {'done': '有个对话好了', 'failed': '有个对话出错停了', 'waiting': '有个对话在等你处理'}
+ISLAND_STATES = ('working', 'waiting', 'done', 'failed', 'offline', 'limited')
+ISLAND_FIELDS = ('ask', 'askType', 'choices', 'askText', 'askOptions', 'step', 'resets')
 KEEP = {'done': 86400, 'failed': 86400, 'waiting': 3 * 86400}  # how long Apple holds one for a phone that is away
 PHONES = 10                 # an account's phones; the one not seen for longest makes way for a new one
 PER_CHAT = 60               # seconds between two notices of one kind for one conversation
@@ -68,6 +73,19 @@ def short(token):
     return hashlib.sha256(token.encode()).hexdigest()[:8]
 
 
+def island_state(state, since, turn, **extra):
+    """One island's changing part as the extension decodes it (tests/fixtures/island-states.json has the samples).
+
+    Only the fields the state has: a push that leaves one out must not write null into a previous value, and the
+    relay never writes the conversation's words (askText/askOptions are the phone's alone)."""
+    content = {'state': state, 'since': int(since), 'turn': int(turn)}
+    for key in ISLAND_FIELDS:
+        value = extra.get(key)
+        if value is not None:
+            content[key] = value
+    return content
+
+
 class Apns:
     """Sends to Apple: one HTTP/2 connection per host, kept open; the provider token renewed every 50 minutes."""
 
@@ -85,13 +103,15 @@ class Apns:
             self.token = provider_token(self.key, self.key_id, self.team_id, self.made)
         return self.token
 
-    async def send(self, environment, token, payload, collapse, expires):
-        """(status, reason): (200, '') when Apple took it."""
+    async def send(self, environment, token, payload, collapse, expires, push_type='alert', priority=10, topic=None):
+        """(status, reason): (200, '') when Apple took it. Islands pass push_type='liveactivity', their topic and a
+        lower priority for 在干活 (handoff 5.3)."""
         url = f'https://{HOSTS.get(environment, HOSTS["production"])}/3/device/{token}'
         body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         for attempt in (1, 2):
-            headers = {'authorization': 'bearer ' + self.bearer(renew=attempt == 2), 'apns-topic': self.topic,
-                       'apns-push-type': 'alert', 'apns-priority': '10', 'apns-expiration': str(int(expires)),
+            headers = {'authorization': 'bearer ' + self.bearer(renew=attempt == 2),
+                       'apns-topic': topic or self.topic, 'apns-push-type': push_type,
+                       'apns-priority': str(priority), 'apns-expiration': str(int(expires)),
                        'content-type': 'application/json'}
             if collapse:
                 headers['apns-collapse-id'] = collapse
@@ -166,6 +186,12 @@ class Push:
             return {'ok': True}
         if action == 'test':
             return await self.test(owner, data.get('token', '').strip().lower())
+        if action == 'activity':
+            return self.activity(owner, data)
+        if action == 'start-token':
+            return self.start_token(owner, data)
+        if action == 'island-test':
+            return await self.island_test(owner, data)
         raise web.HTTPNotFound()
 
     def register(self, owner, data):
@@ -204,6 +230,117 @@ class Push:
         if status in (400, 410) and reason in ('BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered', 'ExpiredToken'):
             raise ValueError('这部手机的推送令牌已失效，请重新打开遥应通知')
         raise ValueError('苹果没收下这条通知：' + (reason or f'HTTP {status}' if status else '连不上苹果的推送服务'))
+
+    # -- 灵动岛 (handoff 5.3, 阶段零)
+
+    def activity(self, owner, data):
+        """One island's push token, for the account's computer and conversation; op=unregister forgets it."""
+        op = str(data.get('op', 'register'))
+        token = str(data.get('token', '')).strip().lower()
+        device = str(data.get('device', '')).strip().lower()
+        app, chat = data.get('app', ''), data.get('chat', '')
+        environment = data.get('environment', 'production')
+        if op not in ('register', 'unregister'):
+            raise ValueError('不认识的操作')
+        if not TOKEN.fullmatch(token):
+            raise ValueError('岛的推送令牌无效')
+        if not re.fullmatch(r'[0-9a-f]{32}', device):
+            raise ValueError('电脑标识无效')
+        if app not in APPS or not isinstance(chat, str) or not 0 < len(chat) <= 200:
+            raise ValueError('岛的内容无效')
+        if environment not in HOSTS:
+            raise ValueError('推送环境无效')
+        with self.store.connect() as db:
+            if not db.execute('SELECT 1 FROM devices WHERE id=? AND owner=? AND revoked=0', (device, owner)).fetchone():
+                raise ValueError('这台电脑不属于这个账号')
+            if op == 'unregister':
+                db.execute('DELETE FROM push_activities WHERE owner=? AND token=?', (owner, token))
+                return {'ok': True}
+            state = data.get('state', 'working')
+            state = state if state in ISLAND_STATES else 'working'
+            now = self.clock()
+            try:
+                since, turn = int(data.get('since') or now), int(data.get('turn') or now)
+            except (TypeError, ValueError):
+                raise ValueError('岛的时间无效')
+            row = db.execute('SELECT id FROM push_activities WHERE token=?', (token,)).fetchone()
+            if row:  # the same island registered again (its token does not change)
+                db.execute('UPDATE push_activities SET owner=?,device=?,app=?,chat=?,environment=?,state=?,since=?,'
+                           'turn=?,refreshed=? WHERE id=?', (owner, device, app, chat, environment, state, since, turn,
+                                                            now, row['id']))
+            else:
+                db.execute('INSERT INTO push_activities VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                           (secrets.token_hex(16), owner, device, app, chat, token, environment, state, since, turn,
+                            now, now, ''))
+        return {'ok': True}
+
+    def start_token(self, owner, data):
+        """A phone's push-to-start token (remote-started islands, iOS 18): one row per token."""
+        token = str(data.get('token', '')).strip().lower()
+        environment = data.get('environment', 'production')
+        if not TOKEN.fullmatch(token):
+            raise ValueError('推送令牌无效')
+        if environment not in HOSTS:
+            raise ValueError('推送环境无效')
+        with self.store.connect() as db:
+            db.execute('INSERT INTO push_start VALUES (?,?,?,?) ON CONFLICT(token) DO UPDATE SET owner=excluded.owner,'
+                       'environment=excluded.environment,refreshed=excluded.refreshed',
+                       (token, owner, environment, self.clock()))
+        return {'ok': True}
+
+    async def island_test(self, owner, data):
+        """One update to an island this account registered, so the app can prove the key may send the topic 3.5
+        could not settle with a made-up phone. It only ever says 好了."""
+        device, app, chat = str(data.get('device', '')).strip().lower(), data.get('app', ''), data.get('chat', '')
+        with self.store.connect() as db:
+            row = db.execute('SELECT a.*, d.label FROM push_activities a JOIN devices d ON d.id=a.device '
+                             'WHERE a.owner=? AND a.device=? AND a.app=? AND a.chat=? ORDER BY a.refreshed DESC LIMIT 1',
+                             (owner, device, app, chat)).fetchone()
+        if not row:
+            raise ValueError('先在这部手机上开一个岛，再点这个。')
+        now = int(self.clock())
+        payload = {'aps': {'timestamp': now, 'event': 'update',
+                           'content-state': island_state('done', now, row['turn'] or now),
+                           'relevance-score': 10,
+                           'alert': {'title': f'{APPS[row["app"]]} · {row["label"]}', 'body': '好了', 'sound': 'default'}}}
+        status, reason = await self.send_island(dict(row), payload)
+        if status == 200:
+            with self.store.connect() as db:
+                db.execute('UPDATE push_activities SET state=?,since=?,refreshed=? WHERE id=?',
+                           ('done', now, self.clock(), row['id']))
+            return {'ok': True, 'text': '中转推了一条，岛应该变成 ✓ 了'}
+        if status in (400, 410) and reason in ('BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered', 'ExpiredToken'):
+            raise ValueError('苹果不认这个岛的令牌：请关掉试的岛再开一次。')
+        raise ValueError('苹果没收下岛的推送：' + (reason or f'HTTP {status}' if status else '连不上苹果的推送服务')
+                         + '（密钥可能不认灵动岛的主题，见交接 3.5）')
+
+    async def send_island(self, activity, payload, priority=10, push_type='liveactivity'):
+        """A Live Activity push: its own topic and header, 10 minutes to live, a dead token dropped."""
+        expires = self.clock() + 600
+        status, reason = 0, ''
+        for attempt in (1, 2):
+            try:
+                status, reason = await self.sender.send(activity['environment'], activity['token'], payload, '', expires,
+                                                        push_type=push_type, priority=priority, topic=ISLAND_TOPIC)
+            except Exception as exc:  # no answer: tried once more below
+                status, reason = 0, type(exc).__name__
+            if attempt == 1 and (status in (0, 429) or status >= 500):
+                await asyncio.sleep(3)
+                continue
+            break
+        gone = status == 410 or (status == 400 and reason in ('BadDeviceToken', 'DeviceTokenNotForTopic',
+                                                              'Unregistered', 'ExpiredToken'))
+        with self.store.connect() as db:
+            if gone:
+                db.execute('DELETE FROM push_activities WHERE id=?', (activity['id'],))
+            else:
+                result = time.strftime('%m-%d %H:%M', time.localtime(self.clock())) + (
+                    ' ok' if status == 200 else f' {status} {reason}'.rstrip())
+                db.execute('UPDATE push_activities SET result=?,refreshed=? WHERE id=?', (result, self.clock(), activity['id']))
+        if status != 200:
+            log.warning('island: %s %s for island %s%s', status or 'no answer', reason, short(activity['token']),
+                        ' (dropped)' if gone else '')
+        return status, reason
 
     # -- listening to the computers
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import TeleplyModel
 import TeleplyState
 
 /// The window: the opening pages (spec 4.8) or the workspace (the list with the conversation pushed on it, the
@@ -45,6 +46,11 @@ struct RootView: View {
             case .background: model.setForeground(false)
             default: break
             }
+        }
+        // A tap on the island opens teleply://open?d=…&a=…&c=… (handoff 5.3): only 遥应's own three ids are taken,
+        // and the computer and source are checked once signed in.
+        .onOpenURL { url in
+            if let target = PushTarget(url: url) { model.openNotification(target) }
         }
         // A tapped notification waits for the launch or a sign-in (AppModel+Push); signed in, the account gets
         // this phone's 遥应通知 again when it is wanted.

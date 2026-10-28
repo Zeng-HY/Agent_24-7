@@ -42,13 +42,15 @@ public struct AppServices: Sendable {
     public var now: @Sendable () -> Int64
     /// The system's notification switch and push token (遥应通知, AppModel+Push).
     public var push: any PushPlatform
+    /// The system's Live Activities (灵动岛, AppModel+Island).
+    public var island: any IslandPlatform
 
     public init(store: LocalStore, vault: any CookieVault, transport: any RelayTransport, demo: @escaping @Sendable () -> any RelayTransport,
                 pacer: any Pacer = RealPacer(), defaultOrigin: ServiceOrigin = .default,
                 newScope: @escaping @Sendable () -> String = { UUID().uuidString },
                 newID: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
-                push: any PushPlatform = NoPush()) {
+                push: any PushPlatform = NoPush(), island: any IslandPlatform = NoIsland()) {
         self.store = store
         self.vault = vault
         self.transport = transport
@@ -59,6 +61,7 @@ public struct AppServices: Sendable {
         self.newID = newID
         self.now = now
         self.push = push
+        self.island = island
     }
 }
 
@@ -149,6 +152,8 @@ public final class AppModel {
     public let jobs: NewChatJobs
     /// 遥应通知 on this phone (AppModel+Push).
     public let push = PushModel()
+    /// 灵动岛 on this phone (AppModel+Island).
+    public let island = IslandModel()
 
     @ObservationIgnored let services: AppServices
     @ObservationIgnored var client: RelayClient

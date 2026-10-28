@@ -62,6 +62,14 @@ class Accounts:
                     result TEXT DEFAULT '');
                 CREATE INDEX IF NOT EXISTS push_phones_owner ON push_phones(owner);
                 CREATE TABLE IF NOT EXISTS push_events(id TEXT PRIMARY KEY, time REAL);
+                -- 灵动岛 (relay_push.py): one row per island's push token, and the phones' push-to-start tokens
+                CREATE TABLE IF NOT EXISTS push_activities(id TEXT PRIMARY KEY, owner TEXT, device TEXT, app TEXT,
+                    chat TEXT, token TEXT UNIQUE, environment TEXT, state TEXT, since INTEGER, turn INTEGER,
+                    created REAL, refreshed REAL, result TEXT DEFAULT '');
+                CREATE INDEX IF NOT EXISTS push_activities_owner ON push_activities(owner);
+                CREATE INDEX IF NOT EXISTS push_activities_chat ON push_activities(device, app, chat);
+                CREATE TABLE IF NOT EXISTS push_start(token TEXT PRIMARY KEY, owner TEXT, environment TEXT,
+                    refreshed REAL);
             ''')
 
     @contextmanager
@@ -170,6 +178,8 @@ class Accounts:
             db.execute('DELETE FROM sessions WHERE owner=?', (owner,))
             db.execute('DELETE FROM grants WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_phones WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_activities WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_start WHERE owner=?', (owner,))
 
     def reset(self, code, password):
         encoded = password_hash(password)
@@ -180,6 +190,8 @@ class Accounts:
             db.execute('DELETE FROM sessions WHERE owner=?', (owner,))
             db.execute('DELETE FROM grants WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_phones WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_activities WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_start WHERE owner=?', (owner,))
 
     def bind(self, code, label, expected_name):
         if not label.strip() or len(label) > 80:

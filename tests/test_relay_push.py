@@ -43,8 +43,9 @@ class FakeSender:
     def __init__(self, *answers):
         self.sent, self.answers = [], list(answers)
 
-    async def send(self, environment, token, payload, collapse, expires):
-        self.sent.append({'environment': environment, 'token': token, 'payload': payload, 'collapse': collapse, 'expires': expires})
+    async def send(self, environment, token, payload, collapse, expires, push_type='alert', priority=10, topic=None):
+        self.sent.append({'environment': environment, 'token': token, 'payload': payload, 'collapse': collapse, 'expires': expires,
+                          'push_type': push_type, 'priority': priority, 'topic': topic})
         return self.answers.pop(0) if self.answers else (200, '')
 
     async def close(self):
@@ -310,6 +311,111 @@ class WithAppleTests(RelayTests):
         await self.service.hub.disconnect(self.devices[0])
         self.service.push.look()
         self.assertNotIn(self.devices[0], self.service.push.watchers)
+
+
+class IslandTests(RelayTests):
+    """灵动岛 (阶段零): registering an island's token, one update to it with the Live Activity topic, the sample the
+    Swift tests read too."""
+
+    def setUp(self):
+        self.sender = FakeSender()
+
+    def activities(self):
+        with self.store.connect() as db:
+            return [dict(r) for r in db.execute('SELECT * FROM push_activities ORDER BY created')]
+
+    def starts(self):
+        with self.store.connect() as db:
+            return [dict(r) for r in db.execute('SELECT * FROM push_start')]
+
+    @staticmethod
+    def fixture():
+        return json.loads((Path(__file__).resolve().parents[1] / 'tests' / 'fixtures' / 'island-states.json').read_text())
+
+    def registration(self, **changes):
+        data = {'op': 'register', 'token': 'ef' * 32, 'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1',
+                'environment': 'production', 'state': 'working', 'since': 1761629700, 'turn': 1761629700}
+        data.update(changes)
+        data['since'], data['turn'] = str(data['since']), str(data['turn'])  # the account requests take strings
+        return data
+
+    async def test_register_then_one_update_with_the_island_topic_and_the_sample(self):
+        self.service.push.clock = lambda: 1761630000.0
+        self.assertEqual(await self.post('activity', self.registration()), (200, {'ok': True}))
+        kept = self.activities()
+        self.assertEqual(len(kept), 1)
+        self.assertEqual((kept[0]['owner'], kept[0]['device'], kept[0]['app'], kept[0]['chat'], kept[0]['state']),
+                         (self.store.owner(self.tokens[0]), self.devices[0], 'claude', 'chat-1', 'working'))
+        status, answer = await self.post('island-test', {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1'})
+        self.assertEqual((status, answer['ok'], answer['text']), (200, True, '中转推了一条，岛应该变成 ✓ 了'))
+        sent = self.sender.sent[0]
+        self.assertEqual((sent['push_type'], sent['topic'], sent['priority']),
+                         ('liveactivity', 'com.pocketagentdesk.teleply.push-type.liveactivity', 10))
+        self.assertEqual(sent['expires'], 1761630000 + 600)
+        aps = sent['payload']['aps']
+        self.assertEqual((aps['timestamp'], aps['event'], aps['relevance-score']), (1761630000, 'update', 10))
+        self.assertEqual(aps['content-state'], self.fixture()['done'])  # the sample the Swift tests decode
+        self.assertEqual(aps['alert']['body'], '好了')
+        self.assertNotIn('chat-1', json.dumps(sent['payload']))
+        self.assertEqual(self.activities()[0]['state'], 'done')
+
+    async def test_the_sample_and_the_relay_agree_on_every_state(self):
+        for name, state in self.fixture().items():
+            extra = {key: value for key, value in state.items() if key not in ('state', 'since', 'turn')}
+            built = relay_push.island_state(state['state'], state['since'], state['turn'], **extra)
+            self.assertEqual(built, state, name)
+            self.assertTrue(set(state) <= {'state', 'since', 'turn', 'ask', 'askType', 'choices', 'askText', 'askOptions',
+                                           'step', 'resets'})
+
+    async def test_what_is_not_an_island_is_turned_away(self):
+        cases = [(self.registration(device=self.devices[1]), '这台电脑不属于这个账号'),
+                 (self.registration(token='not-hex'), '岛的推送令牌无效'),
+                 (self.registration(app='mail'), '岛的内容无效'),
+                 (self.registration(environment='staging'), '推送环境无效'),
+                 (self.registration(op='dance'), '不认识的操作')]
+        for data, words in cases:
+            status, answer = await self.post('activity', data)
+            self.assertEqual((status, answer['error']), (400, words))
+        self.assertEqual(self.activities(), [])
+        self.assertEqual(await self.post('island-test', {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1'}),
+                         (400, {'error': '先在这部手机上开一个岛，再点这个。'}))
+
+    async def test_the_same_island_registers_again_and_unregisters(self):
+        await self.post('activity', self.registration())
+        await self.post('activity', self.registration(state='waiting', since=1761630000))
+        kept = self.activities()
+        self.assertEqual(len(kept), 1)
+        self.assertEqual((kept[0]['state'], kept[0]['since']), ('waiting', 1761630000))
+        self.assertEqual(await self.post('activity', self.registration(op='unregister')), (200, {'ok': True}))
+        self.assertEqual(self.activities(), [])
+        self.assertEqual((await self.post('island-test', {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1'}))[0], 400)
+
+    async def test_a_dead_island_token_is_dropped(self):
+        self.sender.answers = [(410, 'Unregistered')]
+        await self.post('activity', self.registration())
+        status, answer = await self.post('island-test', {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1'})
+        self.assertEqual(status, 400)
+        self.assertIn('苹果不认这个岛的令牌', answer['error'])
+        self.assertEqual(self.activities(), [])
+        self.assertEqual(len(self.sender.sent), 1)
+
+    async def test_a_topic_the_key_may_not_send_is_said_with_the_handoff_hint(self):
+        self.sender.answers = [(400, 'TopicDisallowed')]
+        await self.post('activity', self.registration())
+        status, answer = await self.post('island-test', {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1'})
+        self.assertEqual(status, 400)
+        self.assertIn('主题', answer['error'])
+        self.assertEqual(len(self.activities()), 1)  # the island is still there to try again
+
+    async def test_a_start_token_is_kept_and_a_new_password_drops_it(self):
+        await self.post('start-token', {'token': 'ef' * 32, 'environment': 'production'})
+        self.assertEqual([(row['owner'], row['environment']) for row in self.starts()],
+                         [(self.store.owner(self.tokens[0]), 'production')])
+        await self.post('start-token', {'token': 'ef' * 32, 'environment': 'development'}, user=1)
+        self.assertEqual([(row['owner'], row['environment']) for row in self.starts()],
+                         [(self.store.owner(self.tokens[1]), 'development')])
+        await asyncio.to_thread(self.store.change_password, self.tokens[1], 'password-for-bob', 'a-new-password-for-bob')
+        self.assertEqual(self.starts(), [])
 
 
 if __name__ == '__main__':

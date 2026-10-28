@@ -37,6 +37,19 @@ check_ipa() {
   [ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$unpacked/entitlements.plist" 2>/dev/null)" = "production" ] ||
     fail "push entitlement (aps-environment production): is the profile made again with Push Notifications on?"
   [ -d "$app/zh-Hans.lproj" ] || fail "Simplified Chinese localization"
+  # 灵动岛: the Live Activity widget extension must be embedded, use the island's App ID and profile, carry the same
+  # version as the app (App Store Connect refuses a mismatch) and be a WidgetKit extension.
+  ext="$app/PlugIns/TeleplyIslandWidget.appex"
+  [ -d "$ext" ] || fail "island widget extension (TeleplyIslandWidget.appex)"
+  extpl="$ext/Info.plist"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extpl")" = "$BUNDLE_ID.island" ] || fail "widget bundle ID"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$extpl")" = "$build" ] || fail "widget build number"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extpl")" = \
+    "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" ] || fail "widget version"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$extpl")" = "com.apple.widgetkit-extension" ] ||
+    fail "widget extension point"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$extpl")" = "1" ] || fail "widget iPhone only"
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "$plist")" = "true" ] || fail "NSSupportsLiveActivities"
   echo "IPA checks passed for build $build"
 }
 

@@ -24,6 +24,17 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.pocketagentdesk.teleply</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>teleply</string>
+			</array>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -34,6 +45,8 @@
 	<string>录音交给电脑上的语音服务转成文字，放进输入框；手机不保存录音。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>这台电脑没开语音时，用 iPhone 自带的语音识别把说的话转成文字，放进输入框。</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

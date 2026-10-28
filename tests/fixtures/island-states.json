@@ -1,0 +1,8 @@
+{
+  "working": {"state": "working", "since": 1761629940, "turn": 1761629940},
+  "waiting": {"state": "waiting", "since": 1761630000, "turn": 1761629700, "ask": "a1b2c3d4", "askType": "permission", "choices": 2},
+  "done": {"state": "done", "since": 1761630000, "turn": 1761629700},
+  "failed": {"state": "failed", "since": 1761630000, "turn": 1761629340},
+  "offline": {"state": "offline", "since": 1761630060, "turn": 1761629700},
+  "limited": {"state": "limited", "since": 1761630000, "turn": 1761629700, "resets": 1761636785}
+}

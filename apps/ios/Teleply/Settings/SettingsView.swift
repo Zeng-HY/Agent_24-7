@@ -175,6 +175,30 @@ struct DeveloperView: View {
                     }
                 }
             }
+            // 0.6.0 以前只放在这里，且只给试岛用（handoff 1、2）: 试一下灵动岛 needs no relay; 让中转改一下 proves
+            // the APNs key accepts the Live Activity topic (3.5). From 0.6.0 the user's switch moves to 手机通知.
+            Section {
+                Button("试一下灵动岛") { Task { await model.islandDemo() } }
+                    .disabled(model.island.working)
+                Button("让中转改一下") { Task { await model.islandRelayTest() } }
+                    .disabled(model.island.working || model.fixture)
+                if model.island.demo != nil {
+                    Button("关掉试的岛") { Task { await model.islandDemoEnd() } }
+                        .disabled(model.island.working)
+                }
+                if model.island.enabled == false {
+                    Text("系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。")
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                }
+                if let note = model.island.note {
+                    Text(note).noteFont().foregroundStyle(Palette.muted)
+                }
+            } header: {
+                Text("灵动岛")
+            } footer: {
+                Text("试验用。岛出现在灵动岛、锁屏和待机显示里，锁屏看得最清楚。")
+            }
             Section {
                 Toggle("显示操作耗时", isOn: Binding(get: { speed.enabled }, set: { speed.setEnabled($0) }))
                 Button("测一下连接") { probe() }
@@ -212,6 +236,7 @@ struct DeveloperView: View {
         .background(Palette.page)
         .navigationTitle("开发者选项")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await model.islandReadEnabled() }
     }
 
     /// 打开本地示例 starts over on the demo: the sheet goes first (this page's own dismiss would only go back).

@@ -19,6 +19,16 @@ for test in ${SHOT_ONLY:-}; do ONLY+=("-only-testing:TeleplyUITests/ScreenshotTo
 cd "$IOS_DIR"
 mkdir -p build
 generate_project
+# The widget extension cannot read the app's Assets.xcassets, so its copies of the marks and colours must stay
+# identical to the app's (handoff 5.4); editing one side only fails here instead of drifting silently.
+compare_island_assets() {
+  local app="$IOS_DIR/Teleply/Resources/Assets.xcassets" ext="$IOS_DIR/TeleplyIslandWidget/Assets.xcassets" name
+  for name in ClaudeMark.imageset CodexMark.imageset DeepSeekMark.imageset ClaudeTint.colorset CodexTint.colorset \
+              DeepSeekTint.colorset AskGo.colorset Success.colorset Danger.colorset Muted.colorset Ink.colorset; do
+    diff -r "$app/$name" "$ext/$name" >/dev/null || { echo "island asset copy differs from the app's: $name" >&2; exit 1; }
+  done
+}
+compare_island_assets
 swift test --package-path TeleplyCore
 
 # The build machine is an M2, so the simulator builds are arm64 only; both architectures doubled the compile.
