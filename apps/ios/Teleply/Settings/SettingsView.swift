@@ -200,6 +200,7 @@ struct DeveloperView: View {
                 if let note = model.island.note {
                     Text(note).noteFont().foregroundStyle(Palette.muted)
                 }
+                NavigationLink("灵动岛样子") { IslandPreviewPage() }
             } header: {
                 Text("灵动岛")
             } footer: {

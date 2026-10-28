@@ -319,6 +319,14 @@ final class ScreenshotTour: XCTestCase {
                         developer.tap()
                         if app.navigationBars["开发者选项"].waitForExistence(timeout: 5) {
                             snap(app, page: "13-developer", variant: variant)
+                            let island = app.buttons["灵动岛样子"].firstMatch
+                            if island.waitForExistence(timeout: 5), reach(app, island) {
+                                island.tap()
+                                if app.navigationBars["灵动岛样子"].waitForExistence(timeout: 5) {
+                                    sleep(1)
+                                    snap(app, page: "27-island", variant: variant)
+                                }
+                            }
                         }
                     }
                 }
