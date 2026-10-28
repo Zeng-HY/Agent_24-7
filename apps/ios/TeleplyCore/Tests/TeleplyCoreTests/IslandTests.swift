@@ -15,7 +15,8 @@ struct IslandTests {
     @Test func theSampleHasOneOfEachStateAndOnlyTheAllowedFields() throws {
         let states = try Self.fixture()
         #expect(Set(states.keys) == Set(IslandStatus.allCases.map(\.rawValue)))
-        let allowed: Set<String> = ["state", "since", "turn", "ask", "askType", "choices", "askText", "askOptions", "step", "resets"]
+        let allowed: Set<String> = ["state", "since", "turn", "ask", "askType", "choices", "askText", "askOptions", "step",
+                                    "resets", "peers"]
         for state in states.values {
             let encoded = try JSONEncoder().encode(state)
             let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -118,13 +119,22 @@ struct IslandTests {
         #expect(IslandURL.list(device: device)?.absoluteString == "teleply://list?d=" + device)
     }
 
+    @Test func theLongPressListDecodesWithModelTitleAndTime() throws {
+        let data = Data(#"{"state":"working","since":1,"turn":1,"peers":[{"app":"deepseek","chat":"c1","title":"改登录页","state":"waiting","since":2,"turn":1}]}"#.utf8)
+        let state = try JSONDecoder().decode(IslandState.self, from: data)
+        let peer = try #require(state.peers?.first)
+        #expect(peer.app == "deepseek" && peer.title == "改登录页" && peer.status == .waiting)
+        #expect(peer.since == 2 && peer.turn == 1)
+    }
+
     @Test func theRegistrationCarriesTheIdsAndTheStateOnly() throws {
         let device = String(repeating: "a", count: 32), token = String(repeating: "ab", count: 32)
         let registration = IslandRegistration(token: token, device: device, app: "claude", chat: "chat-1",
                                               environment: "production", state: "working", since: 1761629940, turn: 1761629940)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(registration)) as? [String: Any])
-        #expect(Set(object.keys) == ["op", "token", "device", "app", "chat", "environment", "state", "since", "turn"])
+        #expect(Set(object.keys) == ["op", "token", "device", "app", "chat", "environment", "state", "since", "turn", "title"])
         #expect(object["op"] as? String == "register" && object["state"] as? String == "working")
-        #expect(!object.keys.contains("title") && !object.keys.contains("message"))
+        #expect(object["title"] as? String == "")  // the title is optional; the app fills it when it knows it
+        #expect(!object.keys.contains("message"))
     }
 }

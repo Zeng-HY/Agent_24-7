@@ -29,9 +29,13 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     public var step: String?
     /// 方案七: Unix seconds the quota comes back.
     public var resets: Int?
+    /// The conversations running on this computer, for the long-press list (user 10-28: every one with its model
+    /// logo, title and time). The relay fills it; the phone also fills its own before the first push.
+    public var peers: [IslandPeer]?
 
     public init(state: String, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
-                askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil) {
+                askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
+                peers: [IslandPeer]? = nil) {
         self.state = state
         self.since = since
         self.turn = turn
@@ -42,16 +46,40 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
         self.askOptions = askOptions
         self.step = step
         self.resets = resets
+        self.peers = peers
     }
 
     /// The usual way to make one: a known state.
     public init(status: IslandStatus, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
-                askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil) {
+                askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
+                peers: [IslandPeer]? = nil) {
         self.init(state: status.rawValue, since: since, turn: turn, ask: ask, askType: askType, choices: choices,
-                  askText: askText, askOptions: askOptions, step: step, resets: resets)
+                  askText: askText, askOptions: askOptions, step: step, resets: resets, peers: peers)
     }
 
     /// Nil for a state this build does not know (drawn as 在干活, still decoded).
+    public var status: IslandStatus? { IslandStatus(rawValue: state) }
+}
+
+/// One running conversation in the long-press list. The title is what the phone or the computer calls it; the relay
+/// carries it only because the user chose titles in the island (10-28).
+public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
+    public var app: String
+    public var chat: String
+    public var title: String
+    public var state: String
+    public var since: Int
+    public var turn: Int
+
+    public init(app: String, chat: String, title: String, state: String, since: Int, turn: Int) {
+        self.app = app
+        self.chat = chat
+        self.title = title
+        self.state = state
+        self.since = since
+        self.turn = turn
+    }
+
     public var status: IslandStatus? { IslandStatus(rawValue: state) }
 }
 
@@ -99,9 +127,11 @@ public nonisolated struct IslandRegistration: Codable, Hashable, Sendable {
     public var state: String
     public var since: Int
     public var turn: Int
+    /// The conversation's title, for the island's long-press list; empty when the phone does not know it.
+    public var title: String
 
     public init(op: String = "register", token: String, device: String, app: String, chat: String, environment: String,
-                state: String, since: Int, turn: Int) {
+                state: String, since: Int, turn: Int, title: String = "") {
         self.op = op
         self.token = token
         self.device = device
@@ -111,6 +141,7 @@ public nonisolated struct IslandRegistration: Codable, Hashable, Sendable {
         self.state = state
         self.since = since
         self.turn = turn
+        self.title = title
     }
 
     /// The island is gone (dismissed, ended, or the setting turned off): the relay forgets its token.

@@ -379,6 +379,17 @@ class IslandTests(RelayTests):
         self.assertNotIn('chat-1', json.dumps(sent['payload']))
         self.assertEqual(self.activities()[0]['state'], 'done')
 
+    async def test_the_long_press_list_has_every_running_conversation_with_its_title(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.registration(chat='c1', token='ef' * 32, title='改登录页'))
+        await self.post('activity', self.registration(chat='c2', token='cd' * 32, title='跑测试'))
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761629700})
+        peers = self.sender.sent[0]['payload']['aps']['content-state']['peers']
+        self.assertEqual({p['chat']: (p['title'], p['state']) for p in peers},
+                         {'c1': ('改登录页', 'working'), 'c2': ('跑测试', 'working')})
+
     async def test_a_running_turn_updates_its_island_quietly(self):
         self.service.push.clock = lambda: 1761630000.0
         await self.post('activity', self.registration(state='working', since='1761629700', turn='1761629700'))
@@ -390,7 +401,9 @@ class IslandTests(RelayTests):
         self.assertEqual((sent['push_type'], sent['priority'], sent['topic']),
                          ('liveactivity', 5, relay_push.ISLAND_TOPIC))
         self.assertEqual(sent['payload']['aps']['content-state'],
-                         relay_push.island_state('working', 1761629700, 1761629700))
+                         relay_push.island_state('working', 1761629700, 1761629700,
+                                                 peers=[{'app': 'claude', 'chat': 'chat-1', 'title': '',
+                                                         'state': 'working', 'since': 1761629700, 'turn': 1761629700}]))
         self.assertNotIn('alert', sent['payload']['aps'])  # no banner for 在干活
         self.assertEqual(sent['payload']['aps']['stale-date'], 1761630900)
 
@@ -404,7 +417,7 @@ class IslandTests(RelayTests):
         sent = self.sender.sent[0]
         self.assertEqual(sent['payload']['aps']['alert']['body'], '有个对话好了')
         self.assertEqual(sent['payload']['aps']['content-state'],
-                         relay_push.island_state('done', 1761630000, 1761629700))
+                         relay_push.island_state('done', 1761630000, 1761629700, peers=[]))
         self.assertEqual(self.activities()[0]['state'], 'done')
 
     async def test_without_an_island_a_finished_turn_is_still_a_notice(self):
@@ -442,7 +455,11 @@ class IslandTests(RelayTests):
                          ('start', 'IslandAttributes', 1))
         self.assertEqual(aps['attributes'], {'device': self.devices[0], 'app': 'claude', 'chat': 'chat-1',
                                              'computer': 'alice的电脑', 'title': ''})
-        self.assertEqual(aps['content-state'], relay_push.island_state('working', 1761630000, 1761630000))
+        self.assertEqual(aps['content-state'],
+                         relay_push.island_state('working', 1761630000, 1761630000,
+                                                 peers=[{'app': 'claude', 'chat': 'chat-1', 'title': '',
+                                                         'state': 'working', 'since': 1761630000,
+                                                         'turn': 1761630000}]))
         self.assertEqual(self.service.push.starts, {})  # started once, not every half minute
 
     async def test_a_quiet_event_changes_the_island_but_shows_no_banner(self):

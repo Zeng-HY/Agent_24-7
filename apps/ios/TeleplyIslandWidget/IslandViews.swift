@@ -68,6 +68,124 @@ struct IslandMark: View {
     }
 }
 
+/// 遥应's own mark, white on the island. The compact island and the minimal circle show this instead of a model's mark
+/// (user 10-28): the model marks are in the long-press list, one per conversation.
+struct BrandMark: View {
+    var size: CGFloat = 17
+    var dot = false
+
+    var body: some View {
+        Image("TeleplyMark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .foregroundStyle(.white)
+            .overlay(alignment: .bottomTrailing) {
+                if dot {
+                    Circle()
+                        .fill(IslandPalette.ask)
+                        .frame(width: size * 0.34, height: size * 0.34)
+                        .offset(x: size * 0.1, y: size * 0.1)
+                }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// The long-press list: every conversation still working or waiting on this computer, with its model, title and
+/// time. A row opens that conversation (`teleply://open…`), the same check as a tapped notification.
+struct PeerList: View {
+    let device: String
+    let state: IslandState
+    let computer: String
+
+    private var peers: [IslandPeer]? {
+        guard let peers = state.peers, !peers.isEmpty else { return nil }
+        return peers
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                BrandMark(size: 12)
+                Text("遥应").font(.system(size: 11, weight: .semibold)).foregroundStyle(IslandPalette.ink)
+                Spacer(minLength: 4)
+                Text("\(peers?.count ?? 1) 个").font(.system(size: 10)).foregroundStyle(IslandPalette.muted)
+            }
+            if let peers {
+                ForEach(peers, id: \.chat) { peer in
+                    PeerRow(device: device, computer: computer, peer: peer)
+                }
+            } else {
+                HStack(spacing: 7) {
+                    BrandMark(size: 13)
+                    Text(IslandWords.detail(state, now: Int(Date().timeIntervalSince1970)))
+                        .font(.system(size: 12)).foregroundStyle(IslandPalette.ink).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Trailing(app: "", state: state, size: 11, compact: true)
+                }
+                .frame(height: 20)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct PeerRow: View {
+    let device: String
+    let computer: String
+    let peer: IslandPeer
+
+    private var title: String {
+        if peer.title.isEmpty { return IslandWords.appName(peer.app) + " · " + computer }
+        return peer.title
+    }
+
+    var body: some View {
+        if let url = IslandURL.open(device: device, app: peer.app, chat: peer.chat), !peer.chat.isEmpty {
+            Link(destination: url) { row }
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 7) {
+            if peer.app.isEmpty {
+                BrandMark(size: 13)
+            } else {
+                IslandMark(app: peer.app, size: 13)
+            }
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundStyle(IslandPalette.ink)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            trailing
+        }
+        .frame(height: 20)
+    }
+
+    @ViewBuilder private var trailing: some View {
+        switch peer.status ?? .working {
+        case .working:
+            Elapsed(since: peer.since)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(IslandPalette.ink)
+        case .waiting:
+            Text("等你").font(.system(size: 11, weight: .semibold)).foregroundStyle(IslandPalette.ask)
+        case .done:
+            Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(IslandPalette.success)
+        case .failed:
+            Image(systemName: "exclamationmark").font(.system(size: 11, weight: .bold)).foregroundStyle(IslandPalette.danger)
+        case .offline, .limited:
+            Text(IslandWords.state(peer.status ?? .working))
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(IslandPalette.muted)
+        }
+    }
+}
+
 /// The lock-screen card (and the .small size StandBy, Apple Watch and CarPlay show).
 struct LockScreenCard: View {
     let attributes: IslandAttributes
@@ -269,7 +387,7 @@ struct Minimal: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            IslandMark(app: app, size: 16, dot: state.status == .waiting)
+            BrandMark(size: 16, dot: state.status == .waiting)
                 .opacity(state.status == .offline ? 0.55 : 1)
             if let symbol = IslandWords.symbol(state.status ?? .working) {
                 Image(systemName: symbol)

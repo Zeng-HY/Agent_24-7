@@ -106,6 +106,7 @@ extension RelayClient {
             // The relay's account requests take strings only (relay_service.data); times are Unix seconds.
             fields["since"] = .string(String(registration.since))
             fields["turn"] = .string(String(registration.turn))
+            fields["title"] = .string(registration.title)
         }
         return .object(fields)
     }

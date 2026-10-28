@@ -72,9 +72,14 @@ extension AppModel {
             track.state = state
             track.registered = false
             island.live[existing.key] = track
+            var withPeers = state
+            withPeers.peers = islandPeers()
+            track.state = withPeers
+            island.live[existing.key] = track
+            islandRefreshPeers()
             Task { [weak self] in
                 guard let self else { return }
-                await services.island.update(IslandRef(raw: existing.key), state)
+                await services.island.update(IslandRef(raw: existing.key), withPeers)
                 await islandRegister(IslandRef(raw: existing.key))
             }
             return
@@ -84,7 +89,11 @@ extension AppModel {
             island.live.removeValue(forKey: finished.key)
             Task { await services.island.end(IslandRef(raw: finished.key), finished.value.state, dismissIn: 0) }
         }
-        let now = islandNow(), state = IslandState(status: .working, since: now, turn: now)
+        let now = islandNow()
+        var state = IslandState(status: .working, since: now, turn: now)
+        var peers = islandPeers()
+        peers.append(islandPeer(identity, state))
+        state.peers = Array(peers.prefix(3))
         Task { [weak self] in
             guard let self else { return }
             await islandEndDemo()  // a left-over 试一下灵动岛 must not sit ahead of the real conversation
@@ -92,8 +101,36 @@ extension AppModel {
                 let ref = try await services.island.start(identity, state)
                 island.live[ref.raw] = IslandTrack(identity: identity, state: state)
                 islandFetchToken(ref)
+                islandRefreshPeers()
             } catch {
                 island.note = describe(error)
+            }
+        }
+    }
+
+    /// The conversations that should appear in the long-press list: still working or waiting, at most three.
+    func islandPeers() -> [IslandPeer] {
+        island.live.values.compactMap { track in
+            guard let status = track.state.status, status == .working || status == .waiting else { return nil }
+            return islandPeer(track.identity, track.state)
+        }
+    }
+
+    func islandPeer(_ identity: IslandIdentity, _ state: IslandState) -> IslandPeer {
+        IslandPeer(app: identity.app, chat: identity.chat, title: identity.title, state: state.state,
+                   since: state.since, turn: state.turn)
+    }
+
+    /// Gives every island the same long-press list after a conversation starts or ends, so the chosen island does
+    /// not keep showing a list that is a moment old.
+    func islandRefreshPeers() {
+        let peers = islandPeers()
+        for (key, var track) in island.live {
+            track.state.peers = peers
+            island.live[key] = track
+            Task { [weak self] in
+                guard let self else { return }
+                await services.island.update(IslandRef(raw: key), track.state)
             }
         }
     }
@@ -106,8 +143,13 @@ extension AppModel {
                 Task { await services.island.end(ref, state, dismissIn: 0) }
                 return
             }
-            island.live[ref.raw] = IslandTrack(identity: identity, state: state)
+            var withPeers = state
+            var peers = islandPeers()
+            peers.append(islandPeer(identity, state))
+            withPeers.peers = Array(peers.prefix(3))
+            island.live[ref.raw] = IslandTrack(identity: identity, state: withPeers)
             islandFetchToken(ref)
+            islandRefreshPeers()
         case let .token(ref, token):
             guard var track = island.live[ref.raw] else { return }
             track.token = token
@@ -116,6 +158,7 @@ extension AppModel {
             Task { await islandRegister(ref) }
         case let .dismissed(ref):
             guard let track = island.live.removeValue(forKey: ref.raw) else { return }
+            islandRefreshPeers()
             Task { await islandUnregister(track) }
         }
     }
@@ -140,7 +183,7 @@ extension AppModel {
             try await client.islandRegister(IslandRegistration(
                 token: token, device: track.identity.device, app: track.identity.app, chat: track.identity.chat,
                 environment: services.island.environment, state: track.state.state, since: track.state.since,
-                turn: track.state.turn))
+                turn: track.state.turn, title: track.identity.title))
             if var stored = island.live[ref.raw] {
                 stored.registered = true
                 island.live[ref.raw] = stored
@@ -263,7 +306,8 @@ extension AppModel {
             }
             try await client.islandRegister(IslandRegistration(token: token, device: device.id, app: identity.app,
                                                                chat: identity.chat, environment: services.island.environment,
-                                                               state: state.state, since: state.since, turn: state.turn))
+                                                               state: state.state, since: state.since, turn: state.turn,
+                                                               title: identity.title))
             island.note = try await client.islandTest(device: device.id, app: identity.app, chat: identity.chat)
         } catch {
             island.note = describe(error)

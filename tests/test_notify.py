@@ -273,9 +273,9 @@ class Watcher(unittest.TestCase):
             self.assertTrue(self.notifier.public()["relay"]["listening"])
         event = self.notifier.relay.since("all")[0]
         self.assertEqual({k: event[k] for k in ("event", "kind", "app", "chat", "title", "message")},
-                         {"event": "message", "kind": "done", "app": "codex", "chat": "x1", "title": "", "message": ""})
-        self.assertNotIn("hunter2", json.dumps(event, ensure_ascii=False))
-        self.assertNotIn("改通知", json.dumps(event, ensure_ascii=False))  # the title stays here too
+                         {"event": "message", "kind": "done", "app": "codex", "chat": "x1", "title": "改通知", "message": ""})
+        self.assertNotIn("hunter2", json.dumps(event, ensure_ascii=False))  # the answer's words stay here
+        # 10-28 the user chose titles in the island's long-press list, so the title goes with the event now.
         self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · 遥应通知已交给中转")
         self.assertEqual(self.sent, [])
         self.turn("task_complete", "t2", "又好了")  # the relay away for a moment: kept for it to read when it is back
@@ -299,8 +299,8 @@ class Watcher(unittest.TestCase):
         events = self.notifier.relay.since("all")
         self.assertEqual([e["kind"] for e in events], ["running", "done"])
         self.assertEqual({k: events[0][k] for k in ("event", "kind", "app", "chat", "title", "message", "since")},
-                         {"event": "message", "kind": "running", "app": "codex", "chat": "x1", "title": "", "message": "",
-                          "since": int(self.now)})
+                         {"event": "message", "kind": "running", "app": "codex", "chat": "x1", "title": "改通知",
+                          "message": "", "since": int(self.now)})
         self.assertEqual(self.sent, [])  # 在干活 only changes the island; no banner
 
     def test_a_turn_already_running_when_the_watch_starts_is_not_replayed(self):

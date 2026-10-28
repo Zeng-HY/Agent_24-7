@@ -372,7 +372,7 @@ class Notifier:
             return
         try:
             self.relay.publish("", "", extra={"kind": "running", "app": item["app"], "chat": item["id"],
-                                              "since": int(start)})
+                                              "since": int(start), "title": chats.one_line(item.get("title") or "", 60)})
         except Exception:
             self.log("通知：在干活没报给中转\n" + traceback.format_exc())
 
@@ -451,7 +451,8 @@ class Notifier:
         if self.relay_on():  # what happened, not what was said: the relay writes the words (relay_push.py)
             kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
             # quiet: the phone has this conversation open, so no banner — but its island still needs the state.
-            self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"], "quiet": bool(why)})
+            self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"],
+                                              "quiet": bool(why), "title": title})
             outcomes.append("遥应通知已交给中转" if self.relay.listening else "中转现在没连着，连上后会补报")
         if why:
             self._note(what, "没推：" + why + ("；只更新岛" if self.relay_on() else ""))

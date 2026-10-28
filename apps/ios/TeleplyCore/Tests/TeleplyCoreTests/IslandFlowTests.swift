@@ -83,7 +83,7 @@ struct IslandFlowTests {
         #expect(first["op"].string() == "register" && first["token"].string() == token)
         #expect(first["device"].string() == device && first["app"].string() == "claude" && first["chat"].string() == chat)
         #expect(first["state"].string() == "working" && first["since"].int64() == 1761629940 && first["turn"].int64() == 1761629940)
-        #expect(!first.has("title") && !first.has("message"))
+        #expect(first["title"].string() == "" && !first.has("message"))
         let second = try JSONValue.parse(sent[1].body ?? Data())
         #expect(second["op"].string() == "unregister" && !second.has("state") && !second.has("since"))
         let test = try JSONValue.parse(sent[3].body ?? Data())

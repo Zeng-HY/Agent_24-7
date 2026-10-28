@@ -27,40 +27,22 @@ struct IslandLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 6) {
-                        IslandMark(app: context.attributes.app, size: 16)
-                        Text(title(context.attributes))
-                            .font(.system(size: 13, weight: .semibold))
-                            .lineLimit(1)
+                    HStack(spacing: 5) {
+                        BrandMark(size: 14)
+                        Text("遥应").font(.system(size: 12, weight: .semibold))
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    ExpandedTrailing(status: context.state.status ?? .working)
+                    Text("\(context.state.peers?.count ?? 1) 个")
+                        .font(.system(size: 11))
+                        .foregroundStyle(IslandPalette.muted)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 6) {
-                        Text(IslandWords.detail(context.state, now: Int(Date().timeIntervalSince1970)))
-                            .font(.system(size: 13))
-                            .lineLimit(1)
-                        if context.state.status == .working || context.state.status == .offline {
-                            Elapsed(since: context.state.since)
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        if let step = IslandWords.stepSymbol(context.state.step) {
-                            Image(systemName: step)
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        if IslandWords.isStale(context.state, now: Int(Date().timeIntervalSince1970)) {
-                            Text("可能不是最新")
-                                .font(.system(size: 11))
-                                .foregroundStyle(IslandPalette.muted)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(IslandPalette.ink)
+                    PeerList(device: context.attributes.device, state: context.state,
+                             computer: context.attributes.computer)
                 }
             } compactLeading: {
-                IslandMark(app: context.attributes.app, size: 17, dot: context.state.status == .waiting)
+                BrandMark(size: 17, dot: context.state.status == .waiting)
             } compactTrailing: {
                 Trailing(app: context.attributes.app, state: context.state, size: 13, compact: true)
             } minimal: {
@@ -72,9 +54,5 @@ struct IslandLiveActivity: Widget {
         }
         // StandBy, Apple Watch's Smart Stack and CarPlay draw the .small size (handoff 方案五).
         .supplementalActivityFamilies([.small])
-    }
-
-    private func title(_ attributes: IslandAttributes) -> String {
-        attributes.title.isEmpty ? "\(IslandWords.appName(attributes.app)) · \(attributes.computer)" : attributes.title
     }
 }

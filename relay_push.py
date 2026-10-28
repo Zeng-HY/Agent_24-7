@@ -91,6 +91,8 @@ def island_state(state, since, turn, **extra):
         value = extra.get(key)
         if value is not None:
             content[key] = value
+    if extra.get('peers') is not None:  # the long-press list (user 10-28: titles in the island)
+        content['peers'] = extra['peers']
     return content
 
 
@@ -258,6 +260,7 @@ class Push:
         device = str(data.get('device', '')).strip().lower()
         app, chat = data.get('app', ''), data.get('chat', '')
         environment = data.get('environment', 'production')
+        title = str(data.get('title', '')).strip()[:200]
         if op not in ('register', 'unregister'):
             raise ValueError('不认识的操作')
         if not TOKEN.fullmatch(token):
@@ -281,16 +284,17 @@ class Push:
                 since, turn = int(data.get('since') or now), int(data.get('turn') or now)
             except (TypeError, ValueError):
                 raise ValueError('岛的时间无效')
-            row = db.execute('SELECT id FROM push_activities WHERE token=?', (token,)).fetchone()
+            row = db.execute('SELECT id,title FROM push_activities WHERE token=?', (token,)).fetchone()
             if row:  # the same island registered again (its token does not change)
                 db.execute('UPDATE push_activities SET owner=?,device=?,app=?,chat=?,environment=?,state=?,since=?,'
-                           'turn=?,refreshed=? WHERE id=?', (owner, device, app, chat, environment, state, since, turn,
-                                                            now, row['id']))
+                           'turn=?,title=?,refreshed=? WHERE id=?',
+                           (owner, device, app, chat, environment, state, since, turn,
+                            title or (row['title'] or ''), now, row['id']))
             else:
                 db.execute('INSERT INTO push_activities (id,owner,device,app,chat,token,environment,state,since,turn,'
-                           'created,refreshed,result) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                           'created,refreshed,result,title) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                            (secrets.token_hex(16), owner, device, app, chat, token, environment, state, since, turn,
-                            now, now, ''))
+                            now, now, '', title))
         return {'ok': True}
 
     def start_token(self, owner, data):
@@ -473,10 +477,16 @@ class Push:
             return
         owner, conv = computer['owner'], (device, app, chat)
         quiet = bool(event.get('quiet'))  # the phone has this conversation open: no banner, but the island still changes
+        title = str(event.get('title', '')).strip()[:200]
+        if island and title:  # the long-press list's title (user 10-28 chose titles in the island)
+            with self.store.connect() as db:
+                db.execute('UPDATE push_activities SET title=? WHERE id=?', (title, island['id']))
+            island = dict(island)
+            island['title'] = title
         if kind == 'running':
             since = event.get('since')
             since = int(since) if isinstance(since, (int, float)) and since > 0 else int(now)
-            self.starts[conv] = since
+            self.starts[conv] = {'since': since, 'title': title}
             if island and now - since < 12 * 3600:  # a turn that began hours ago is not shown as running now
                 await self.update_island(island, 'working', since, island['turn'] or since, alert=False, priority=5)
             return
@@ -515,9 +525,30 @@ class Push:
     def island_since(self, row, now):
         return int(row['since'] or now)
 
+    def peers(self, row, state, since, turn):
+        """The conversations still running on this computer, for the island's long-press list: model, title, state
+        and times. The current island takes the state being pushed; finished ones drop out."""
+        with self.store.connect() as db:
+            rows = [dict(r) for r in db.execute(
+                'SELECT id,app,chat,title,state,since,turn FROM push_activities WHERE owner=? AND device=? '
+                'ORDER BY refreshed DESC', (row['owner'], row['device']))]
+        peers = []
+        for item in rows:
+            current = item['id'] == row['id']
+            status = state if current else item['state']
+            if status not in ('working', 'waiting'):
+                continue
+            peers.append({'app': item['app'], 'chat': item['chat'],
+                          'title': (row.get('title') if current else item['title']) or '',
+                          'state': status,
+                          'since': int(since if current else item['since']),
+                          'turn': int(turn if current else item['turn'])})
+        return peers[:3]
+
     async def update_island(self, row, state, since, turn, alert, priority, clear_saved=False):
         """One update to an island. True when the island took it (or was held back by a limit, which still means the
         notice must not be sent as well); False only when Apple says the token is dead, so the caller falls back."""
+        row = dict(row)
         now = self.clock()
         if not alert and now - self.island_last.get(row['id'], -ISLAND_GAP) < ISLAND_GAP:
             return True  # 在干活 and progress wait their five seconds; a state change does not
@@ -529,7 +560,8 @@ class Push:
         self.island_hours[owner] = hour + [now]
         self.island_last[row['id']] = now
         payload = {'aps': {'timestamp': int(now), 'event': 'update',
-                           'content-state': island_state(state, int(since), int(turn)),
+                           'content-state': island_state(state, int(since), int(turn),
+                                                         peers=self.peers(row, state, since, turn)),
                            'relevance-score': ISLAND_RELEVANCE.get(state, 50)}}
         if state == 'working':
             payload['aps']['stale-date'] = int(now + 15 * 60)
@@ -560,13 +592,21 @@ class Push:
         status, reason = await self.send_island(row, payload, priority=10)
         return status == 200
 
-    async def remote_start(self, device, app, chat, since, computer, starts):
+    async def remote_start(self, device, app, chat, since, computer, starts, title=''):
         """方案一: a turn on the computer has run a minute; start an island from afar with the phone's start token."""
         now = int(self.clock())
+        with self.store.connect() as db:
+            rows = [dict(r) for r in db.execute(
+                'SELECT app,chat,title,state,since,turn FROM push_activities WHERE owner=? AND device=? '
+                'AND state IN ("working","waiting") ORDER BY refreshed DESC LIMIT 2', (computer['owner'], device))]
+        peers = [{'app': r['app'], 'chat': r['chat'], 'title': r['title'] or '', 'state': r['state'],
+                  'since': int(r['since']), 'turn': int(r['turn'])} for r in rows]
+        peers.append({'app': app, 'chat': chat, 'title': title, 'state': 'working', 'since': int(since),
+                      'turn': int(since)})
         payload = {'aps': {'timestamp': now, 'event': 'start', 'attributes-type': 'IslandAttributes',
                            'attributes': {'device': device, 'app': app, 'chat': chat,
-                                          'computer': computer['label'], 'title': ''},
-                           'content-state': island_state('working', int(since), int(since)),
+                                          'computer': computer['label'], 'title': title},
+                           'content-state': island_state('working', int(since), int(since), peers=peers[:3]),
                            'alert': {'title': f'{APPS[app]} · {computer["label"]}', 'body': '开始干活了',
                                      'sound': 'default'},
                            'input-push-token': 1}}
@@ -588,8 +628,9 @@ class Push:
         with self.store.connect() as db:
             rows = [dict(r) for r in db.execute('SELECT a.*, d.label FROM push_activities a '
                                                 'JOIN devices d ON d.id=a.device')]
-        for conv, since in list(self.starts.items()):
+        for conv, start in list(self.starts.items()):
             device, app, chat = conv
+            since = start.get('since', now)
             if now - since < REMOTE_AFTER or device not in connected:
                 continue
             with self.store.connect() as db:
@@ -605,7 +646,7 @@ class Push:
                 if now - since > 10 * 60:
                     self.starts.pop(conv, None)
                 continue
-            if await self.remote_start(device, app, chat, since, computer, starts):
+            if await self.remote_start(device, app, chat, since, computer, starts, start.get('title', '')):
                 self.starts.pop(conv, None)
             elif now - since > 10 * 60:
                 self.starts.pop(conv, None)
