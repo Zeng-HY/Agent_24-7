@@ -147,35 +147,35 @@ private struct PeerRow: View {
     private var row: some View {
         HStack(spacing: 7) {
             if peer.app.isEmpty {
-                BrandMark(size: 13)
+                BrandMark(size: 15)
             } else {
-                IslandMark(app: peer.app, size: 13)
+                IslandMark(app: peer.app, size: 15)
             }
             Text(title)
-                .font(.system(size: 12))
+                .font(.system(size: 14))
                 .foregroundStyle(IslandPalette.ink)
                 .lineLimit(1)
             Spacer(minLength: 6)
             trailing
         }
-        .frame(height: 20)
+        .frame(height: 24)
     }
 
     @ViewBuilder private var trailing: some View {
         switch peer.status ?? .working {
         case .working:
             Elapsed(since: peer.since)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(IslandPalette.ink)
         case .waiting:
-            Text("等你").font(.system(size: 11, weight: .semibold)).foregroundStyle(IslandPalette.ask)
+            Text("等你").font(.system(size: 13, weight: .semibold)).foregroundStyle(IslandPalette.ask)
         case .done:
-            Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(IslandPalette.success)
+            Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(IslandPalette.success)
         case .failed:
-            Image(systemName: "exclamationmark").font(.system(size: 11, weight: .bold)).foregroundStyle(IslandPalette.danger)
+            Image(systemName: "exclamationmark").font(.system(size: 13, weight: .bold)).foregroundStyle(IslandPalette.danger)
         case .offline, .limited:
             Text(IslandWords.state(peer.status ?? .working))
-                .font(.system(size: 11, weight: .medium)).foregroundStyle(IslandPalette.muted)
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(IslandPalette.muted)
         }
     }
 }
@@ -196,39 +196,39 @@ struct LockScreenCard: View {
                 fullCard
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private var fullCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                IslandMark(app: attributes.app, size: 20, dot: state.status == .waiting)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 9) {
+                IslandMark(app: attributes.app, size: 24, dot: state.status == .waiting)
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(IslandPalette.ink)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if let symbol = IslandWords.symbol(state.status ?? .working) {
                     Image(systemName: symbol)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
                                                              app: attributes.app))
                 }
             }
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Text(IslandWords.detail(state, now: now))
-                    .font(.system(size: 13))
+                    .font(.system(size: 15))
                     .foregroundStyle(detailColor)
                     .lineLimit(1)
                 if state.status == .working || state.status == .offline || state.status == nil {
                     Elapsed(since: state.since)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(IslandPalette.ink)
                 }
                 if IslandWords.isStale(state, now: now) {
                     Text("可能不是最新")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(IslandPalette.muted)
                 }
             }
@@ -244,28 +244,36 @@ struct LockScreenCard: View {
     }
 }
 
-/// A tiny card for .small: the same words, without the title.
+/// A tiny card for .small: title, state and timer (Apple Watch's Smart Stack and CarPlay).
 struct SmallCard: View {
     let attributes: IslandAttributes
     let state: IslandState
 
     private var now: Int { Int(Date().timeIntervalSince1970) }
 
+    private var title: String {
+        attributes.title.isEmpty ? "\(IslandWords.appName(attributes.app)) · \(attributes.computer)" : attributes.title
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(IslandPalette.ink)
+                .lineLimit(1)
             HStack(spacing: 6) {
                 IslandMark(app: attributes.app, size: 18, dot: state.status == .waiting)
                 Text(IslandWords.state(state.status ?? .working))
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(IslandPalette.ink)
             }
             if state.status == .working || state.status == .offline || state.status == nil {
                 Elapsed(since: state.since)
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.system(size: 22, weight: .medium))
                     .foregroundStyle(IslandPalette.ink)
             } else if let symbol = IslandWords.symbol(state.status ?? .working) {
                 Image(systemName: symbol)
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
                                                          app: attributes.app))
             }

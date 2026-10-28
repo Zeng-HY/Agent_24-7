@@ -27,14 +27,14 @@ struct IslandLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 5) {
-                        BrandMark(size: 14)
-                        Text("遥应").font(.system(size: 12, weight: .semibold))
+                    HStack(spacing: 6) {
+                        BrandMark(size: 15)
+                        Text("遥应").font(.system(size: 13, weight: .semibold))
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Text("\(context.state.peers?.count ?? 1)")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
                         .fixedSize()
                         .padding(.trailing, 2)
