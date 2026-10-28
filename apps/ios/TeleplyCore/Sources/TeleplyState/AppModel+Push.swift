@@ -28,8 +28,9 @@ extension AppModel {
         }
     }
 
-    /// 打开并试推一条: the system's question (it shows once), this phone's push token kept by the service for the
-    /// account, and one sent to try.
+    /// The 遥应通知 switch turned on: the system's question (it shows once), and this phone's push token kept by the
+    /// service for the account. The switch shows how it went; [push.note] says only what went wrong (user 10-28: a
+    /// plain switch, no words).
     public func pushTurnOn() async {
         guard !push.working else { return }
         push.working = true
@@ -48,27 +49,13 @@ extension AppModel {
             try await client.pushRegister(token: token, environment: services.push.environment, label: services.push.label,
                                           version: services.push.version)
             push.phase = .on
-            push.note = try await client.pushTest(token: token)
         } catch {
             pushFailed(error)
         }
     }
 
-    /// 试推一条.
-    public func pushTest() async {
-        guard !push.working, let token = push.token else { return }
-        push.working = true
-        defer { push.working = false }
-        push.note = nil
-        do {
-            push.note = try await client.pushTest(token: token)
-        } catch {
-            pushFailed(error)
-        }
-    }
-
-    /// 关掉: the service forgets this phone for the account. Bark and the system's switch stay as they are; when the
-    /// service cannot be told, it stays on, to be turned off again.
+    /// The switch turned off: the service forgets this phone for the account. The system's switch stays as it is; when
+    /// the service cannot be told, it stays on, to be turned off again.
     public func pushTurnOff() async {
         guard !push.working else { return }
         push.working = true
@@ -78,7 +65,6 @@ extension AppModel {
             if let token = push.token { try await client.pushUnregister(token: token) }
             services.push.setWanted(false)
             push.phase = .off
-            push.note = "已关掉，这部 iPhone 不再收遥应通知。"
         } catch {
             push.note = describe(error)
         }

@@ -90,7 +90,9 @@ struct PushFlowTests {
         world.state.withLock { $0.pushTokens }
     }
 
-    @Test func turnedOnTheSystemAsksTheServiceKeepsThePhoneAndOneIsTried() async {
+    /// The switch (0.5.6): on asks the system and has the service keep the phone; off has it forget the phone. Neither
+    /// leaves words behind when it works.
+    @Test func turnedOnTheSystemAsksAndTheServiceKeepsThePhoneUntilTurnedOff() async {
         let world = DemoWorld(), push = FakePush()
         let model = await signedIn(world, push: push)
         push.deliver = { [token] in model.pushToken(token) }
@@ -98,16 +100,13 @@ struct PushFlowTests {
         #expect(model.push.phase == .off)
         await model.pushTurnOn()
         #expect(push.registered == 1 && push.on)
-        #expect(model.push.phase == .on)
-        #expect(model.push.note == "本地示例：刚推了一条")
+        #expect(model.push.phase == .on && model.push.note == nil)
         #expect(tokens(world) == [token])
         await model.pushRefresh()
         #expect(model.push.phase == .on)
-        await model.pushTest()
-        #expect(model.push.note == "本地示例：刚推了一条")
         await model.pushTurnOff()
         #expect(model.push.phase == .off && !push.on)
-        #expect(model.push.note == "已关掉，这部 iPhone 不再收遥应通知。")
+        #expect(model.push.note == nil)
         #expect(tokens(world).isEmpty)
     }
 

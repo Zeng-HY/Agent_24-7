@@ -20,15 +20,9 @@ struct SettingsView: View {
                     .listRowBackground(Palette.controlFill)
                 }
                 Section("外观") {
-                    Picker("外观", selection: Binding(get: { model.theme }, set: { model.setAppearance($0) })) {
-                        Text("跟随系统").tag("system")
-                        Text("浅色").tag("light")
-                        Text("深色").tag("dark")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+                    AppearanceChoice(selection: model.theme) { model.setAppearance($0) }
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                 }
                 if model.device != nil {
                     NotifySection(model: model)
@@ -79,6 +73,46 @@ struct SettingsView: View {
 }
 
 /// 开源组件: what the app is built from and where the marks come from (spec 11).
+/// 外观 (web segmented choice; Android SegmentedChoice): one capsule track with a thumb that slides to the choice, each
+/// choice as tall as a list row (user 10-28: "浅色深色的控件不够大，那个滑动按钮调大一些，跟常规切换的大小差不多即可").
+private struct AppearanceChoice: View {
+    let selection: String
+    let choose: (String) -> Void
+    @Environment(\.colorScheme) private var scheme
+    @Namespace private var thumb
+    private static let choices = [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Self.choices, id: \.0) { value, label in
+                let chosen = value == selection
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { choose(value) }
+                } label: {
+                    Text(label)
+                        .font(.body.weight(chosen ? .semibold : .regular))
+                        .foregroundStyle(chosen ? Palette.ink : Palette.muted)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background {
+                            if chosen {
+                                Capsule()
+                                    .fill(scheme == .dark ? Color(red: 0x38 / 255, green: 0x38 / 255, blue: 0x3A / 255) : .white)
+                                    .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.1), radius: 3, y: 1)
+                                    .matchedGeometryEffect(id: "thumb", in: thumb)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(chosen ? [.isSelected] : [])
+            }
+        }
+        .padding(4)
+        .background(Palette.controlFill, in: Capsule())
+    }
+}
+
 private struct LicencesView: View {
     var body: some View {
         ScrollView {
