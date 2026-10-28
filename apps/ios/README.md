@@ -43,7 +43,7 @@
 
 - 云端 #37（89b56df，只编译）：应用、扩展和截图测试包都编过；Mac 上 175 项通过。唯一的警告是 0.5.6 就在的 `ChatModel.swift:590`（`began` 那里）。
 - 云端 #38（c16e1f9，ios-native-testflight）：0.5.6（12）上传成功，Delivery UUID `d7c07f17-4128-45af-b70b-f71904714a1c`，6 分钟；包里的扩展 `TeleplyIslandWidget.appex` 在，Bundle ID、构建号 12、版本 0.5.6 都对，Mac 上 175 项通过。两个描述文件也都对：应用是 `Teleply App Store`（带推送），扩展是 `Teleply Island App Store`（UUID `ca05977e-6836-457e-ad26-3af9afc71f99`）。
-- 本机没拍截图（这台电脑编不了 SwiftUI）；「灵动岛样子」那一页还没做，等阶段一。
+- 本机没拍截图（这台电脑编不了 SwiftUI）；「灵动岛样子」那一页在阶段一做了，还没截图。
 - 真机：10-28 在构建 12 上通过（锁屏卡片和计时、让中转改一下变 ✓；灵动岛本体回桌面也看到了），见下面。
 
 ### 真机验收（阶段零，10-28 通过）
@@ -415,6 +415,8 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #36 `6ae15aee…` | ios-native-check（compile） | 失败 | 3 | 去掉那个 `if`；`ActivityKit` 的 `Activity` 在这个 SDK 里没标 Sendable，`await activity.update/end` 被 Swift 6 拦下 |
 | #37 `6ae15be2…` | ios-native-check（compile） | 成功 | 3 | 用 `@preconcurrency import ActivityKit`；应用、扩展和测试包都编过，Mac 上 175 项通过 |
 | #38 `6ae15eea…` | ios-native-testflight | 成功 | 6（排队 0） | 0.5.6（12）上传，Delivery UUID `d7c07f17-4128-45af-b70b-f71904714a1c`；从 `main` 的 c16e1f9 构建；扩展在包里，Bundle ID、构建号、版本都对；Mac 上 175 项通过 |
+| #39 `6ae1658e…` | ios-native-check（compile） | 成功 | 6 | 阶段一核心（1cfc5e9）：发送开岛、令牌登记、远程开岛、开关；应用和扩展编过，Mac 上 179 项通过 |
+| #40 `6ae167d3…` | ios-native-check（compile） | 成功 | 3 | 「灵动岛样子」预览页（3f768ca）：编过，Mac 上 179 项通过；还没截图 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
