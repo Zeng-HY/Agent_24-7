@@ -1,4 +1,6 @@
-import ActivityKit
+// ActivityKit's `Activity` is not Sendable-annotated in this SDK; every call here stays on the main actor anyway
+// (the class is @MainActor), so the pre-concurrency import keeps Swift 6 from refusing the await.
+@preconcurrency import ActivityKit
 import Foundation
 import TeleplyIsland
 import TeleplyState
