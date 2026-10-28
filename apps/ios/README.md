@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.5 构建 11 已发 TestFlight，待真机验；0.5.6 已改完，按用户的意思先不发；灵动岛阶段零已编过，等苹果后台和真机）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.5 构建 11 已发 TestFlight，待真机验；0.5.6 已改完；灵动岛阶段零已传 TestFlight 构建 12，待真机验）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -42,12 +42,13 @@
 检查情况：
 
 - 云端 #37（89b56df，只编译）：应用、扩展和截图测试包都编过；Mac 上 175 项通过。唯一的警告是 0.5.6 就在的 `ChatModel.swift:590`（`began` 那里）。
+- 云端 #38（c16e1f9，ios-native-testflight）：0.5.6（12）上传成功，Delivery UUID `d7c07f17-4128-45af-b70b-f71904714a1c`，6 分钟；包里的扩展 `TeleplyIslandWidget.appex` 在，Bundle ID、构建号 12、版本 0.5.6 都对，Mac 上 175 项通过。
 - 本机没拍截图（这台电脑编不了 SwiftUI）；「灵动岛样子」那一页还没做，等阶段一。
-- 没上真机，没上传 TestFlight：苹果后台的扩展 App ID 和描述文件还没做，等用户点。
+- 没上真机：等用户装 TestFlight 构建 12 后按下面验。
 
 ### 留给你在真机上验（阶段零）
 
-先做苹果后台那两处、把描述文件传到 Codemagic、上传这一版，再验。按顺序：
+TestFlight 里装 0.5.6（12），然后按顺序：
 
 1. 设置 → 开发者选项 → 灵动岛 → 试一下灵动岛。锁屏：岛出现在灵动岛和锁屏上，计时在走；点它打开遥应。
 2. 同一页点「让中转改一下」：几秒内岛变成 ✓「好了」。这一下证明苹果的推送密钥认灵动岛的主题。如果这里写「苹果没收下…」，把那段字告诉我。
@@ -403,6 +404,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #35 `6ae159ff…` | ios-native-check（compile） | 失败 | 4 | 阶段零第一次（11b4fd8）：应用和扩展编到 `IslandWidgets.swift` 的展开区；`DynamicIslandExpandedContentBuilder` 里不能用包住区域的 `if` |
 | #36 `6ae15aee…` | ios-native-check（compile） | 失败 | 3 | 去掉那个 `if`；`ActivityKit` 的 `Activity` 在这个 SDK 里没标 Sendable，`await activity.update/end` 被 Swift 6 拦下 |
 | #37 `6ae15be2…` | ios-native-check（compile） | 成功 | 3 | 用 `@preconcurrency import ActivityKit`；应用、扩展和测试包都编过，Mac 上 175 项通过 |
+| #38 `6ae15eea…` | ios-native-testflight | 成功 | 6（排队 0） | 0.5.6（12）上传，Delivery UUID `d7c07f17-4128-45af-b70b-f71904714a1c`；从 `main` 的 c16e1f9 构建；扩展在包里，Bundle ID、构建号、版本都对；Mac 上 175 项通过 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
