@@ -6,6 +6,8 @@ import deepseek_control as d
 import chat_projects
 
 SID='session-11111111-1111-1111-1111-111111111111'
+CALLC='call_00_T2mUOm814XYOd5vrQax43388'
+QUESTION=[{'id':'q','options':[{'label':'yes'},{'label':'no'}]}]
 
 class AdapterTests(unittest.TestCase):
     def test_create_uses_workspace_identity_not_cwd_and_confirms_membership(self):
@@ -70,7 +72,79 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(d.DeepSeekError):events.answer('other','event','allowed-once','approval/request')
         self.client.call.assert_not_called()
         result=events.answer(SID,'event','allowed-once','approval/request');self.assertTrue(result['submitted']);self.assertNotIn('accepted',result)
-        with self.assertRaises(d.DeepSeekError):events.answer(SID,'event','allowed-once','approval/request')
+        again=events.answer(SID,'event','allowed-once','approval/request');self.assertTrue(again['already'])
+    def answered_page(self,call=CALLC):
+        return {'records':[{'event':{'type':'tool/result','seq':9,'time':0,'data':{'message':{'toolCallId':call,'isError':False,'content':[]}}}}],'hasMore':False}
+    def test_an_answer_uses_the_event_now_waiting_for_the_same_call(self):
+        events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
+        # the host sends user questions with wait.callId; this one came again with a new eventId
+        events.frame({'type':'waterfall','eventId':'new','agentId':SID,'event':'user-questions/request',
+                      'request':{'questions':QUESTION,'wait':{'callId':CALLC}}})
+        result=self.bridge.answer({'id':SID,'event_id':'old','call_id':CALLC,'answers':[{'id':'q','selected':['yes']}]})
+        self.assertTrue(result['submitted'])
+        self.assertEqual(self.client.call.call_args.args[1]['eventId'],'new')
+        self.assertEqual(events.for_session(SID),[])
+    def test_an_answer_already_in_the_record_is_not_sent_again(self):
+        self.bridge.events.frame({'type':'ready','clientId':'client'})
+        with patch.object(self.bridge,'records',return_value=(self.answered_page(),{})):
+            result=self.bridge.answer({'id':SID,'event_id':'old','call_id':CALLC,'answers':[{'id':'q','selected':['yes']}]})
+        self.assertEqual((result['accepted'],result['already']),(True,True))
+        self.assertIn('已经答过了',result['text'])
+        self.client.call.assert_not_called()
+    def test_the_state_route_also_reports_an_answer_in_the_record(self):
+        self.bridge.events.frame({'type':'ready','clientId':'client'})
+        with patch.object(self.bridge,'state',return_value={'questions':[]}),patch.object(self.bridge,'records',return_value=(self.answered_page(),{})):
+            result=self.bridge.answer({'id':SID,'call_id':CALLC,'answers':[{'id':'q','selected':['yes']}]})
+        self.assertTrue(result['already']);self.client.call.assert_not_called()
+    def test_a_refused_second_answer_in_the_old_state_route_becomes_already(self):
+        self.bridge.events.frame({'type':'ready','clientId':'client'})
+        self.client.call.side_effect=d.DeepSeekError('DeepSeek 未接受此操作；请刷新状态后核对',409)
+        with patch.object(self.bridge,'state',return_value={'questions':[{'callId':CALLC,'questions':QUESTION}]}),patch.object(self.bridge,'records',return_value=(self.answered_page(),{})):
+            result=self.bridge.answer({'id':SID,'call_id':CALLC,'answers':[{'id':'q','selected':['yes']}]})
+        self.assertEqual((result['accepted'],result['already']),(True,True))
+    def test_an_answer_that_is_neither_waiting_nor_recorded_is_refused_with_the_new_words(self):
+        self.bridge.events.frame({'type':'ready','clientId':'client'})
+        with patch.object(self.bridge,'records',return_value=({'records':[],'hasMore':False},{})):
+            with self.assertRaises(d.DeepSeekError) as error:
+                self.bridge.answer({'id':SID,'event_id':'old','call_id':CALLC,'answers':[{'id':'q','selected':['yes']}]})
+        self.assertEqual(error.exception.status,409)
+        self.assertEqual(str(error.exception),'这个问题现在不在等回答了，请刷新后再看')
+    def test_an_answer_is_written_to_the_day_log_without_its_text(self):
+        lines=[];self.bridge.log=lines.append
+        events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
+        events.frame({'type':'waterfall','eventId':'event','agentId':SID,'event':'user-questions/request',
+                      'request':{'questions':QUESTION,'wait':{'callId':CALLC}}})
+        with patch.object(self.bridge,'find',return_value={'id':SID,'title':'灵动岛'}):
+            self.bridge.answer({'id':SID,'event_id':'event','call_id':CALLC,'answers':[{'id':'q','selected':['yes']}]})
+        self.assertEqual(len(lines),1)
+        self.assertIn('DeepSeek「灵动岛」',lines[0]);self.assertIn(CALLC[-6:],lines[0]);self.assertIn('已提交',lines[0])
+        self.assertNotIn('yes',lines[0])
+    def test_a_repeated_approval_is_reported_as_processed(self):
+        events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
+        events.frame({'type':'waterfall','eventId':'approve','agentId':SID,'event':'approval/request',
+                      'request':{'toolName':'pwsh','callId':CALLC}})
+        self.assertTrue(events.answer(SID,'approve','allowed-once','approval/request')['submitted'])
+        again=events.answer(SID,'approve','allowed-once','approval/request')
+        self.assertTrue(again['already']);self.assertIn('已经处理过了',again['text'])
+        self.assertEqual(self.client.call.call_count,1)
+    def test_an_approval_whose_call_already_has_a_result_is_processed(self):
+        events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
+        events.frame({'type':'waterfall','eventId':'approve','agentId':SID,'event':'approval/request',
+                      'request':{'toolName':'pwsh','callId':CALLC}})
+        events.frame({'type':'cancel','eventId':'approve'})
+        with patch.object(self.bridge,'records',return_value=(self.answered_page(),{})):
+            result=events.answer(SID,'approve','allowed-once','approval/request')
+        self.assertTrue(result['already']);self.assertIn('已经处理过了',result['text'])
+        self.client.call.assert_not_called()
+    def test_an_approval_that_vanished_without_a_result_is_refused_with_the_new_words(self):
+        events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
+        events.frame({'type':'waterfall','eventId':'approve','agentId':SID,'event':'approval/request',
+                      'request':{'toolName':'pwsh','callId':CALLC}})
+        events.frame({'type':'cancel','eventId':'approve'})
+        with patch.object(self.bridge,'records',return_value=({'records':[],'hasMore':False},{})):
+            with self.assertRaises(d.DeepSeekError) as error:events.answer(SID,'approve','allowed-once','approval/request')
+        self.assertEqual(error.exception.status,409)
+        self.assertEqual(str(error.exception),'这一步现在不在等处理了，请刷新后再看')
     def test_cancel_removes_approval(self):
         events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
         events.frame({'type':'waterfall','eventId':'event','agentId':SID,'event':'approval/request','request':{}})
@@ -185,7 +259,9 @@ class AdapterTests(unittest.TestCase):
     def test_notification_only_once_for_new_pending_and_completion(self):
         import notify
         from types import SimpleNamespace
-        notifier=SimpleNamespace(ended={},since=100,_tell=Mock())
+        # _deepseek now reports a running turn through Notifier._running (the island's "running" event); this fake
+        # only needs a stand-in for it, plus the running table the pending/done branches pop from.
+        notifier=SimpleNamespace(ended={},since=100,_tell=Mock(),running={},_running=Mock())
         item={'app':'deepseek','id':SID,'status':'running','_running':True,'preview':'done'}
         with patch.object(d,'bridge',return_value=self.bridge):
             notify.Notifier._deepseek(notifier,{},item)

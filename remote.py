@@ -1077,6 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
     server.desktop = chats.Desktop(log, input_lock) if chats else None  # type: ignore[attr-defined]
     server.codex = codex_control.Bridge()  # shares the existing desktop owner's IPC connection
     server.deepseek = deepseek_control.bridge()
+    server.deepseek.log = log  # "回答：…" lines in the day's file, beside "通知：…"
     server.deepseek.uploads = server.codex
     if deepseek_control.HOME.is_dir():server.deepseek.events.start()
     import codex_question_dismiss

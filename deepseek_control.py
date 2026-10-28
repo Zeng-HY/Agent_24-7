@@ -297,12 +297,27 @@ class Client:
         finally:conn.close()
 
 
+QUESTION_ANSWERED='这个问题已经答过了，以 DeepSeek 对话里的为准'
+QUESTION_GONE='这个问题现在不在等回答了，请刷新后再看'
+APPROVAL_DONE='这一步已经处理过了'
+APPROVAL_GONE='这一步现在不在等处理了，请刷新后再看'
+
+
+def request_call(request):
+    """The tool call a waterfall request belongs to: user questions say wait.callId, approvals say callId.
+    The eventId is only the connection's delivery number and changes when the host sends the same step again."""
+    if not isinstance(request,dict):return ''
+    wait=request.get('wait')
+    value=request.get('callId') or request.get('toolCallId') or (wait.get('callId') if isinstance(wait,dict) else None)
+    return value if isinstance(value,str) else ''
+
 class Bridge:
     def __init__(self, client=None, root=None, links=None):
         self.client=client or Client();self.lock=threading.RLock();self.cache=(0,None);self.links=links
         self.root=Path(root or DATA/'attachments');self.root.mkdir(exist_ok=True,parents=True)
         self.db=self.root/'deepseek-requests.sqlite';self.uploads=None
-        self.events=Interactions(self.client)
+        self.log=None  # remote.Log for the day's file: "回答：…" beside the "通知：…" lines
+        self.events=Interactions(self.client,note=self._note_answer,answered=self.answered_in_records)
         self.transcripts={}
         with self._db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, session TEXT, digest TEXT, state TEXT, result TEXT)')
@@ -546,20 +561,95 @@ class Bridge:
             if member and member['id']==workspace['id']:return result
             if time.monotonic()>=deadline:raise DeepSeekError('对话已创建，但尚未确认归入所选工作区；首条消息未发送，请核对',409)
             time.sleep(.2)
+    def _note_answer(self,sid,call,outcome):
+        """One line in the day's log (remote.Log): the app, the conversation, the call's tail and what happened.
+        The answers themselves are never written."""
+        if not self.log:return
+        try:title=self.find(sid).get('title') or '（无标题）'
+        except Exception:title='（无标题）'
+        try:self.log(f'回答：DeepSeek「{title}」{call[-6:] if call else "（无编号）"} {outcome}')
+        except Exception:pass
+    def answered_in_records(self,sid,call,pages=2):
+        """Whether the conversation already holds this call's outcome: answered on another device or a moment
+        ago. One or two newest pages are enough; the record is the authority, the live cards may lag behind it."""
+        if not isinstance(call,str) or not call:return False
+        before=''
+        try:
+            for _ in range(max(1,pages)):
+                page,_=self.records(sid,before,100)
+                if self._answer_record(page,call):return True
+                seqs=[r['event']['seq'] for r in page.get('records') or [] if isinstance(r.get('event'),dict) and 'seq' in r['event']]
+                if not page.get('hasMore') or not seqs:return False
+                nxt=str(min(seqs))
+                if nxt==before:return False
+                before=nxt
+        except DeepSeekError:return False
+        return False
+    @staticmethod
+    def _answer_record(page,call):
+        """A tool/result for the call is the record that closes it; the Harness also logs an admitted answer as a
+        user-question-reply user message, which serves while the tool result is still being written."""
+        for record in (page or {}).get('records') or []:
+            event=record.get('event') if isinstance(record,dict) else None
+            if not isinstance(event,dict):continue
+            data=event.get('data') or {}
+            if event.get('type')=='tool/result':
+                message=data.get('message') if isinstance(data.get('message'),dict) else {}
+                source=message.get('source') if isinstance(message.get('source'),dict) else {}
+                if (message.get('toolCallId') or source.get('callId') or data.get('callId'))==call:return True
+            elif event.get('type')=='user/message':
+                message=data.get('message') if isinstance(data.get('message'),dict) else data
+                source=message.get('source') if isinstance(message.get('source'),dict) else {}
+                if source.get('kind')=='user-question-reply' and source.get('callId')==call:return True
+        return False
+    def _pending_question(self,sid,call,event_id):
+        """The event still waiting for this question. The callId is the question's own identity, so a host that
+        sent it again under a new eventId is still answerable through the event waiting now."""
+        events=[e for e in self.events.for_session(sid) if e['event']=='user-questions/request']
+        if call:
+            same=[e for e in events if request_call(e['request'])==call]
+            if same:return next((e for e in same if e['eventId']==event_id),same[-1])
+        return next((e for e in events if e['eventId']==event_id),None)
     def answer(self,body):
         sid=body.get('id');call=body.get('call_id')
-        if body.get('event_id'):
-            pending=next((e for e in self.events.for_session(sid) if e['eventId']==body['event_id'] and e['request'].get('callId')==call),None)
-            if not pending:raise DeepSeekError('问题已处理或连接已变化，请刷新')
-            validate_answers(pending['request'].get('questions',[]),body.get('answers'))
-            return self.events.answer(sid,body['event_id'],{'answers':body.get('answers',[])},'user-questions/request')
-        state=self.state(sid)
-        question=next((q for q in state['questions'] if q.get('callId')==call),None)
-        if not question:raise DeepSeekError('这个问题已处理或已撤回，请刷新')
-        validate_answers(question['questions'],body.get('answers'))
-        result=self.client.call('userQuestions/answer',{'agentId':sid,'callId':call,'answer':{'answers':body.get('answers',[])}})
-        if result is not True:raise DeepSeekError('问题已变化，请刷新后核对')
-        return {'accepted':True}
+        if not isinstance(call,str):call=''
+        try:
+            if body.get('event_id'):
+                pending=self._pending_question(sid,call,body['event_id'])
+                if pending:
+                    try:
+                        validate_answers(pending['request'].get('questions',[]),body.get('answers'))
+                        result=self.events.answer(sid,pending['eventId'],{'answers':body.get('answers',[])},'user-questions/request')
+                    except DeepSeekError as exc:  # it left between the look and the answer
+                        if exc.status!=409 or not call or not self.answered_in_records(sid,call):raise
+                        result={'accepted':True,'already':True,'text':QUESTION_ANSWERED}
+                    self._note_answer(sid,call,'已答过' if result.get('already') else '已提交')
+                    return result
+                if call and self.answered_in_records(sid,call):
+                    self._note_answer(sid,call,'已答过')
+                    return {'accepted':True,'already':True,'text':QUESTION_ANSWERED}
+                raise DeepSeekError(QUESTION_GONE,409)
+            state=self.state(sid)
+            question=next((q for q in state['questions'] if q.get('callId')==call),None)
+            if question:
+                validate_answers(question['questions'],body.get('answers'))
+                try:result=self.client.call('userQuestions/answer',{'agentId':sid,'callId':call,'answer':{'answers':body.get('answers',[])}})
+                except DeepSeekError:
+                    if not call or not self.answered_in_records(sid,call):raise
+                    result=False
+                if result is True:
+                    self._note_answer(sid,call,'已提交')
+                    return {'accepted':True}
+                if not call or not self.answered_in_records(sid,call):raise DeepSeekError(QUESTION_GONE,409)
+            elif call and self.answered_in_records(sid,call):
+                pass
+            else:
+                raise DeepSeekError(QUESTION_GONE,409)
+            self._note_answer(sid,call,'已答过')
+            return {'accepted':True,'already':True,'text':QUESTION_ANSWERED}
+        except DeepSeekError as exc:
+            if getattr(exc,'status',None)==409:self._note_answer(sid,call,'拒绝：'+str(exc))
+            raise
 
     def transcript(self,sid):
         item=self.find(sid);projection=self.client.call('session/projections',{'request':{'sessionId':sid}})
@@ -593,14 +683,18 @@ def validate_answers(questions,answers):
         if not q.get('multiSelect') and len(selected)>1:raise DeepSeekError('此问题只能选择一个选项',400)
 
 class Interactions:
-    """One event client; answers require a current session + event identity.
+    """One event client; an answer names the waiting event, and the call inside it outlives a resend.
 
     Unknown waterfalls are delegated, never auto-approved. Disconnect clears all
-    cards, and reconnect obtains the host's current pending set.
+    cards, and reconnect obtains the host's current pending set. An answer that
+    arrives after its card left is checked against the conversation's record, so
+    a repeat becomes "already handled" instead of a scary error.
     """
-    def __init__(self,client):
+    def __init__(self,client,note=None,answered=None):
         self.client=client;self.lock=threading.RLock();self.pending={};self.client_id=None
         self.ready=False;self.stopped=threading.Event();self.worker=None;self.socket=None
+        self.note=note;self.answered=answered  # Bridge's log line and record lookup
+        self.recent={};self.done={}  # eventId -> (agentId, callId) and the events this client answered
     def start(self):
         with self.lock:
             if self.worker and self.worker.is_alive():return
@@ -619,18 +713,47 @@ class Interactions:
             elif value.get('type')=='waterfall':
                 if value.get('event') in ('approval/request','user-questions/request'):
                     self.pending[value['eventId']]={k:value[k] for k in ('eventId','agentId','event','request')}
+                    call=request_call(value.get('request'))
+                    if call:self._remember(value['eventId'],value['agentId'],call)
                 elif self.client_id:
                     self.client.call('$events/result',dict(clientId=self.client_id,eventId=value['eventId'],outcome={'kind':'next'}))
+    def _remember(self,eid,sid,call):
+        """Keep the call behind an eventId after the event is gone (answered here, cancelled elsewhere, or the
+        connection was replaced), so a late repeat can be told apart from a step that really vanished."""
+        self.recent.pop(eid,None);self.recent[eid]=(sid,call)
+        if len(self.recent)>100:self.recent.pop(next(iter(self.recent)))
+    def _tell(self,sid,call,outcome,event):
+        if self.note and event=='approval/request':self.note(sid,call,outcome)
     def answer(self,sid,eid,value,event):
+        call='';submitted=False
         with self.lock:
             pending=self.pending.get(eid)
-            if not self.ready or not pending or pending['agentId']!=sid or pending['event']!=event:
-                raise DeepSeekError('操作已撤回、已处理或连接已变化，请刷新')
-            if event=='approval/request' and value not in ('allowed-once','rejected'):raise DeepSeekError('批准选项无效',400)
-            self.client.call('$events/result',dict(clientId=self.client_id,eventId=eid,outcome={'kind':'result','value':value}))
-            self.pending.pop(eid,None)
-            # Host treats late results as no-ops. Do not claim we won a desktop race.
+            if not (self.ready and pending and pending['agentId']==sid and pending['event']==event):
+                # The event is gone (or not this session's/kind): a host resend carries a new eventId for the same
+                # call, so look for the call it names and answer that one instead.
+                entry=self.recent.get(eid);call=entry[1] if entry and entry[0]==sid else ''
+                pending=None
+                if call:
+                    pending=next((v for v in self.pending.values() if v['agentId']==sid and v['event']==event and request_call(v['request'])==call),None)
+                    if pending:eid=pending['eventId']
+            if pending:
+                call=request_call(pending['request'])
+                if event=='approval/request' and value not in ('allowed-once','rejected'):raise DeepSeekError('批准选项无效',400)
+                self.client.call('$events/result',dict(clientId=self.client_id,eventId=eid,outcome={'kind':'result','value':value}))
+                self.pending.pop(eid,None)
+                self.done[eid]=sid
+                if len(self.done)>100:self.done.pop(next(iter(self.done)))
+                submitted=True
+        if submitted:
+            self._tell(sid,call,'已提交',event)
             return {'submitted':True,'text':'已提交选择；以 DeepSeek 对话中的处理结果为准'}
+        done,gone=((APPROVAL_DONE,APPROVAL_GONE) if event=='approval/request' else (QUESTION_ANSWERED,QUESTION_GONE))
+        if self.done.get(eid)==sid or (call and self.answered and self.answered(sid,call)):
+            self._tell(sid,call,'已答过',event)
+            if event=='approval/request':return {'submitted':True,'already':True,'text':done}
+            return {'accepted':True,'already':True,'text':done}
+        self._tell(sid,call,'拒绝：'+gone,event)
+        raise DeepSeekError(gone,409)
     def run(self):
         import websocket
         while not self.stopped.is_set():
