@@ -1,6 +1,6 @@
 # 交接：iPhone 灵动岛（实时活动）
 
-记于 2026-10-28。这份文档写给接手做灵动岛的 agent，假定你没连过 Codemagic、苹果后台和中转服务器。**到目前为止灵动岛一行代码都没写**，手机、中转、电脑端都没改。
+记于 2026-10-28。这份文档写给接手做灵动岛的 agent（用户会交给 DeepSeek 来做）。假定你没连过 Codemagic、苹果后台和中转服务器，也不知道之前的对话：要知道的都写在这里和 `apps/ios/README.md` 里。**到目前为止灵动岛的应用代码一行都没写**，只有第 3.5 节的密钥检查脚本；手机、中转服务、电脑端都没改。
 
 先读第 1 节「规矩」和第 3 节「打通一遍」，再按第 7 节的阶段做。每个阶段开始前，先问第 4 节里属于这个阶段的问题。
 
@@ -19,6 +19,9 @@
 ## 1. 规矩（用户定的，照做）
 
 - **只有 `main` 分支**。改动提交到 `main`，推到 GitHub（`Zeng-HY/Agent_24-7`，远程名 `origin`）。Codemagic 构建的就是 GitHub 上的 `main`。临时分支做完合进 `main`，然后删掉分支和它的工作树。
+- **同一个文件夹里还有别的 agent**：用户另开的会话还在改 iOS 和安卓（0.5.6 之后的问题）。动手前先 `git pull`、看 `git status`。提交时只 `git add` 自己改的文件，不要 `git add -A`，不要还原、覆盖或提交别人的改动。10-28 工作区里的 `tests/test_activity_records.py`（已修改）和 `docs/handoff-domain.md`（未跟踪）都不是灵动岛的，别动。
+- **仓库和草稿区分开**：仓库 `D:\Personal\agent_remote` 里只放要提交的代码和文档改动。笔记、计划、日志、试验脚本、下载的文件、Python 虚拟环境、Swift 的编译目录、Codemagic 的产物、截图、备份，一律放在草稿区 `F:\Android-Dev\work\20261028-dynamic-island\`（没有就新建；那里已有的 `20261028-office-phone` 等文件夹就是这么用的）。项目自己的脚本固定写进仓库的东西（`deploy/relay/pack-027.py` 写 `dist/`，Windows 构建写 `build/`、`dist/`）可以留，这些目录 git 本来就忽略。每次提交前，`git status` 里只能看到这次要提交的文件；用 `git add <文件名>` 一个个加，不要 `git add -A` 或 `git add .`。
+- **版本号**：灵动岛做成以前不动；做成了升到 0.6.0，用户说这算重大更新。细则见第 2 节「版本号怎么走」。
 - **每次都要先问用户**（上一次同意不算这一次）：更新中转服务器；构建、安装或发布 Windows 版本；上传 TestFlight；改 Obsidian 里的设计规范（改前先备份）。苹果后台、Codemagic 网页上的操作由用户来点，你一步步带。iOS 代码提交并推到 `main` 不用问（用户 10-27 同意过）。
 - **真账号只由用户在 iPhone 上用**。你只用本地示例测（调试版启动参数 `-TeleplyDemo`）。不要对用户正式的工作对话发测试指令。
 - **钥匙不打印、不复制、不发到聊天**：Codemagic 令牌（`%USERPROFILE%\.codemagic\token.txt`）、苹果推送密钥 .p8、更新签名钥匙（`C:\Users\39011\.teleply-updates\`）、阿里云 AccessKey、手机的推送令牌。日志里的令牌只写哈希前 8 位（照 `relay_push.short`）。
@@ -33,13 +36,34 @@
   - 给用户的开关放在 设置 → 手机通知；只给开发用的（试岛、看样子）放在 设置 → 开发者选项。
 - **看 Claude 的卡片用 UI Automation 读窗口，不看截图**：试的时候截图被别的应用的窗口盖住过。
 - **记录**：每个 iOS 版本在 `apps/ios/README.md` 顶上写一节：做了什么、检查情况、「留给你在真机上验」。照已有各节的写法。
+- **跟用户说话**：先给结论，再说原因。用大白话，技术词第一次出现时用半句话解释。不用「触发、落地、对齐、闭环、链路、赋能」这类词。要用户做的事，一步一句写清楚。
 
 ## 2. 现在的情况（2026-10-28 查到的）
+
+### 版本和发布
+
+- **iOS 0.5.5**（构建 11）在 TestFlight 上，等用户在真机上验（Office 文件由手机自己显示）。0.5.4、0.5.5 的真机检查清单在 `apps/ios/README.md`。
+- **iOS 0.5.6** 已改完，在 `main` 上（f18038c、e9bbf3d，记录在 efd672f），**没上传**：
+  - 改了什么：文件页照微信铺满屏幕，操作收进右上角的 ⋯；设置里去掉 Bark，「遥应通知」只剩一个绿色开关，没有说明文字；「外观」改成一行三段的选择；语音输入的开关也改成绿色。
+  - 检查到哪：云端 #34 编译和浅色截图通过，Mac 上 `TeleplyCore` 158 项测试通过；没拍深色和最大字号，没上真机。截图测试里「右滑拉出侧栏时那一行不应被打开」偶尔失败（#33），和改动无关。
+  - 为什么没上传：用户说「改完了先不要发布，我还有些其他的问题要你一并修改发布」。0.5.6 在等这些问题一起发，那是另一个会话的活，灵动岛不管。
+- **`project.yml`**：`MARKETING_VERSION: "0.5.6"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
+- **安卓**：同样的文件页和通知开关也改了（03ac35a、583f84f），没发。灵动岛不碰 `apps/android`。
+- **Windows**：0.27.0-dev.26，10-28 发布（GitHub 和阿里云），这台电脑装的就是它。
+- **中转**：0.27 服务，10-26 开通了 iPhone 推送。现在的版本号看手机启动页「服务」后面那一串。
+
+### 版本号怎么走（用户 10-28 定的）
+
+- 灵动岛做成以前，版本号不动（现在是 0.5.6）。要在 TestFlight 上试的构建就用当时的版本号，构建号自动加一。每次上传前都要问用户，因为它会把 `main` 上当时所有的改动一起带上，包括还没发的 0.5.6。
+- 所以 0.6.0 以前，灵动岛的入口只放在 设置 → 开发者选项 里，默认关。这样另一个会话照常发 0.5.x 时，用户看不到半成品。
+- **做成的标准**：第 7 节的阶段零和阶段一，在用户的 iPhone 上验收通过。
+- 做成以后：`MARKETING_VERSION` 改成 `"0.6.0"`（`CURRENT_PROJECT_VERSION` 不用动）；「灵动岛」开关挪到 设置 → 手机通知（默认开不开，按第 4 节问题 4）；在 `apps/ios/README.md` 顶上写「0.6.0：灵动岛」一节，标题行也改；问过用户再上传 TestFlight。
+- 之后的阶段二、三、四，每做成一个加一个小版本：0.6.1、0.6.2、0.6.3。用户另有说法时照用户的。
 
 ### 手机（`apps/ios`）
 
 - 工程由 XcodeGen 生成，描述文件是 `apps/ios/project.yml`。现有两个目标：`Teleply`（应用）和 `TeleplyUITests`（截图测试）。最低 iOS 26，只支持 iPhone，Swift 6，默认主线程（`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`）。
-- 版本 `MARKETING_VERSION: "0.5.6"`。0.5.6 已经改完，按用户的意思还没发 TestFlight（README 顶上一节）。灵动岛从 0.6.0 开始。
+- 版本见上面「版本和发布」。
 - **没有**小组件扩展，没有 `ActivityKit` 代码，没有注册网址协议（URL scheme）。点通知进对话靠通知里的 `teleply` 字段：`TeleplyModel/Push.swift` 的 `PushTarget`，再由 `AppModel.openNotification` 核对账号和电脑后打开。
 - 登录信息在钥匙串里，访问级别是 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`（`Teleply/Platform/KeychainVault.swift:42`）。开机后解锁过一次，锁屏时也读得到。所以岛上的按钮在锁屏时也能发请求。
 - 作答都走 `WorkspaceModel.action(route, body)`（`TeleplyCore/Sources/TeleplyState/WorkspaceModel.swift:481`）：`codex/answer`、`claude/choose`（要电脑给的 `token`）、`deepseek/approval` 等。请求经中转的 `/d/{电脑编号}/…` 到电脑（`TeleplyModel/Relay.swift`）。它从不自己重发：回复丢了就留给用户核对。
@@ -89,10 +113,10 @@ $env:Path = "$s\Toolchains\6.4.1+Asserts\usr\bin;$s\Runtimes\6.4.1\usr\bin;$env:
 $env:SDKROOT = "$s\Platforms\6.4.1\Windows.platform\Developer\SDKs\Windows.sdk"
 ```
 
-  然后在一个带超时的 PowerShell job 里跑测试（有个等实时连接的测试出错时会一直挂着）。`--scratch-path` 指到你自己的临时目录，不要放进仓库：
+  然后在一个带超时的 PowerShell job 里跑测试（有个等实时连接的测试出错时会一直挂着）。`--scratch-path` 指到草稿区，不要放进仓库：
 
 ```powershell
-swift test --package-path apps/ios/TeleplyCore --scratch-path <临时目录>
+swift test --package-path apps/ios/TeleplyCore --scratch-path F:\Android-Dev\work\20261028-dynamic-island\swift-build
 ```
 
   编译时会冒出一串 `WinSDK` / `wchar_t` 提醒和 `.build\debug` 建不了快捷方式的提醒，是工具链自己的，不用管。
@@ -103,7 +127,7 @@ swift test --package-path apps/ios/TeleplyCore --scratch-path <临时目录>
 python -m unittest tests.test_relay_push tests.test_notify tests.test_ntfy_feed tests.test_claude_hooks tests.test_claude_control
 ```
 
-  `test_relay_push` 要 `requirements-relay.txt` 里的 httpx、h2、cryptography，缺了就跳过。建一个临时虚拟环境装上再跑，不要装进仓库的 `.venv`。
+  `test_relay_push` 要 `requirements-relay.txt` 里的 httpx、h2、cryptography，缺了就跳过。在草稿区建一个虚拟环境（例如 `F:\Android-Dev\work\20261028-dynamic-island\relay-venv`），装上 `requirements-relay.txt` 再跑，不要装进仓库的 `.venv`。
 - 小坑：在整个仓库上递归搜索很慢（有很大的目录），搜索时指定子目录或文件。
 
 ### 3.2 Codemagic（云端的 Mac：编译、截图、签名、上传）
@@ -116,20 +140,20 @@ python -m unittest tests.test_relay_push tests.test_notify tests.test_ntfy_feed 
 - **启动构建**：在仓库根目录用 PowerShell。先 `git push`，它构建的是 GitHub 上的 `main`。
 
 ```powershell
-apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-native-check -Mode compile
+apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-native-check -Mode compile -OutDir F:\Android-Dev\work\20261028-dynamic-island\codemagic
 ```
 
 ```powershell
-apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-native-check -Mode shots -Only "testLight"
+apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-native-check -Mode shots -Only "testLight" -OutDir F:\Android-Dev\work\20261028-dynamic-island\codemagic
 ```
 
 ```powershell
-apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-native-testflight
+apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-native-testflight -OutDir F:\Android-Dev\work\20261028-dynamic-island\codemagic
 ```
 
-  也可以把编号放进环境变量 `TELEPLY_CODEMAGIC_APP`，就不用每次写 `-AppId`。脚本每 30 秒报一次状态，结束后把产物下到 `apps/ios/build/codemagic/<构建编号>/`。
+  也可以把编号放进环境变量 `TELEPLY_CODEMAGIC_APP`，就不用每次写 `-AppId`。脚本每 30 秒报一次状态，结束后把产物下到 `-OutDir` 指的文件夹。不写时默认是仓库里的 `apps/ios/build/codemagic/`，所以每次都加上 `-OutDir F:\Android-Dev\work\20261028-dynamic-island\codemagic`。
 - **常见情况**：
-  - 下载产物常超时：`codemagic.ps1 -BuildId <构建编号>` 再取一次。
+  - 下载产物常超时：`codemagic.ps1 -BuildId <构建编号> -OutDir F:\Android-Dev\work\20261028-dynamic-island\codemagic` 再取一次。
   - 构建卡住：`POST https://api.codemagic.io/builds/<构建编号>/cancel`，请求头 `x-auth-token` 填令牌（用脚本读文件，别把令牌写进命令）。
   - 晚上免费 Mac 常排队 30–50 分钟。
   - 构建详情里，产物字段叫 `artefacts`；每一步的日志在 `buildActions[].subactions[].logUrl`。证书、描述文件、密钥的名字没有接口可读，构建开始时才核对。
@@ -452,7 +476,7 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
    - 听远程开的新岛（`Activity<IslandAttributes>.activityUpdates`），登记它的令牌。
    - 收尾：见 5.3 手机的规矩。
 3. `onOpenURL`：只认 `teleply://open?d=…&a=…&c=…`（5.3）。
-4. 设置 → 手机通知 加「灵动岛」开关。系统设置里关了实时活动时（`ActivityAuthorizationInfo().areActivitiesEnabled` 为假），写「去系统设置打开」，照遥应通知那一组的做法。
+4. 「灵动岛」开关：0.6.0 以前放在 设置 → 开发者选项，默认关；升 0.6.0 时挪到 设置 → 手机通知，和「遥应通知」的绿色开关放在一起（第 2 节「版本号怎么走」）。系统设置里关了实时活动时（`ActivityAuthorizationInfo().areActivitiesEnabled` 为假），点开关跳到系统设置里遥应这一页，照「遥应通知」开关的做法。
 5. 开发者选项加「试一下灵动岛」（阶段零就有）和「灵动岛样子」（5.4）。
 6. `TeleplyModel/Push.swift` 加两个请求：`/account/push/activity`、`/account/push/start-token`。
 7. `TeleplyCore` 测试：每种状态的字和颜色角色、相关性、样例 JSON 解码、请求体、最多 3 个岛的取舍。
@@ -610,11 +634,11 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
 
 | 阶段 | 做什么 | 先要 | 发什么 |
 |---|---|---|---|
-| 零：打通 | 3.3 苹果后台两步和 Codemagic 引用名；扩展骨架、「试一下灵动岛」（只在手机上开，不经过中转）；中转能发岛的推送，加 `POST /account/push/island-test`，开发者选项里「让中转改一下」，它成功就证实密钥认灵动岛（3.5） | 用户点苹果后台 | 中转更新；TestFlight 0.6.0 |
-| 一 | 方案一、四、五 | 问题 1–4 | 中转、电脑 dev.27、TestFlight |
-| 二 | 方案二 | 问题 5–6 | 中转、电脑、TestFlight |
-| 三 | 方案三、六 | 问题 7–8 | 中转、电脑、TestFlight |
-| 四 | 方案七 | 问题 9 | 中转、电脑、TestFlight |
+| 零：打通 | 3.3 苹果后台两步和 Codemagic 引用名；扩展骨架、「试一下灵动岛」（只在手机上开，不经过中转）；中转能发岛的推送，加 `POST /account/push/island-test`，开发者选项里「让中转改一下」，它成功就证实密钥认灵动岛（3.5） | 用户点苹果后台 | 中转更新；TestFlight 试验构建（版本号不动） |
+| 一 | 方案一、四、五 | 问题 1–4 | 中转、电脑 dev.27、TestFlight；真机验收通过后升 0.6.0 |
+| 二 | 方案二 | 问题 5–6 | 中转、电脑、TestFlight 0.6.1 |
+| 三 | 方案三、六 | 问题 7–8 | 中转、电脑、TestFlight 0.6.2 |
+| 四 | 方案七 | 问题 9 | 中转、电脑、TestFlight 0.6.3 |
 
 **阶段零的真机验收**：
 
