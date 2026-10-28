@@ -61,8 +61,7 @@ class ReaderDeviceTest:ReaderUiScenarios() {
     @Test fun fixtureSettingsNeverEnablesRealBackgroundWatch() {
         launch();fixtureList();compose.onNodeWithContentDescription("打开导航").performClick()
         compose.onNodeWithContentDescription("设置").performClick()
-        compose.onNodeWithText("本地示例不会启用真实后台任务").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("关注当前会话状态").assertDoesNotExist()
+        compose.onNodeWithText("后台会话检查").performScrollTo().assertIsOff().assertIsNotEnabled()
     }
     @Test fun documentPickerCancelPreservesOrdinaryDraft() {
         launch();fixtureList();compose.onNodeWithText("原生阅读示例").performClick()

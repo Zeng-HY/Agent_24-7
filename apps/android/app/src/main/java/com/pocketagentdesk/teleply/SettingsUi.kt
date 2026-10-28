@@ -62,9 +62,9 @@ fun SwitchRow(title: String, checked: Boolean, enabled: Boolean = true, detail: 
 }
 
 /**
- * 手机通知 → ntfy (web notify-ui.js, as an Android phone shows it): the ntfy app subscribes to the computer itself, so
- * the topic and the computer's own address are shown to copy; 打开并试推一条, 试推一条, 关掉; the last outcomes. Bark is
- * for iPhones and is not shown here.
+ * 手机通知 → ntfy (web notify-ui.js, as an Android phone shows it), as short as on the iPhone (user 10-28: "安卓端也相应
+ * 搞简洁一点"): one switch, whether the phone is listening under it, then the topic and the computer's own address to
+ * copy into the ntfy app. A line under it only when something went wrong. Bark is for iPhones and is not shown here.
  */
 @Composable
 fun NtfySettings(vm: ReaderViewModel, s: ReaderState) {
@@ -73,48 +73,30 @@ fun NtfySettings(vm: ReaderViewModel, s: ReaderState) {
     val scope = rememberCoroutineScope()
     var state by remember(s.device?.id) { mutableStateOf<JSONObject?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
-    suspend fun load() { state = runCatching { vm.deviceCall("notify") }.getOrElse { e -> note = e.message; state } }
+    var failure by remember { mutableStateOf<String?>(null) }
+    suspend fun load() { state = runCatching { vm.deviceCall("notify") }.getOrElse { e -> failure = e.message; state } }
     LaunchedEffect(s.device?.id) { if (s.device != null) load() }
-    fun call(route: String, body: JSONObject) {
-        if (busy) return
-        busy = true
-        scope.launch {
-            note = try { vm.deviceCall(route, body = body).string("text").ifBlank { "好了" } } catch (e: Exception) { e.message ?: "电脑没有回应" }
-            load(); busy = false
-        }
-    }
-    if (s.device == null) { CardSection { CardRow("选好电脑后，可以在这里开关 ntfy 通知", null) }; return }
+    if (s.device == null) return
     val ntfy = state?.optJSONObject("ntfy")
     val on = ntfy?.optBoolean("on") == true
     val topic = ntfy?.string("topic")?.ifBlank { null } ?: "agent-remote"
     val server = ntfy?.string("server").orEmpty()
     CardSection {
-        if (state == null) CardRow("正在读取电脑上的通知设置…", null)
-        else {
-            if (on) { CardRow("已开 · ntfy", null, value = if (ntfy?.optInt("listening") ?: 0 > 0) "手机连着" else "手机没连着"); CardDivider() }
-            CardRow("主题", { clipboard.setText(AnnotatedString(topic)); note = "已复制主题" }, value = topic)
-            CardDivider()
-            CardRow("服务器", if (server.isNotBlank()) ({ clipboard.setText(AnnotatedString(server)); note = "已复制服务器地址" }) else null, value = server.ifBlank { "电脑没有给出地址" })
-            CardDivider()
-            if (on) {
-                CardRow("试推一条", { call("notify/test", JSONObject().put("channel", "ntfy")) }, enabled = !busy)
-                CardDivider()
-                CardRow("关掉", { call("notify/ntfy", JSONObject().put("on", false)) }, enabled = !busy, danger = true)
-            } else CardRow("打开并试推一条", { call("notify/ntfy", JSONObject().put("on", true)) }, enabled = !busy)
+        SwitchRow("ntfy 通知", on, enabled = state != null && !busy, detail = if (!on) null else if ((ntfy?.optInt("listening") ?: 0) > 0) "手机连着" else "手机没连着") { want ->
+            if (busy) return@SwitchRow
+            busy = true
+            failure = null
+            scope.launch {
+                try { vm.deviceCall("notify/ntfy", body = JSONObject().put("on", want)) } catch (e: Exception) { failure = e.message ?: "电脑没有回应" }
+                load(); busy = false
+            }
         }
+        CardDivider()
+        CardRow("主题", { clipboard.setText(AnnotatedString(topic)) }, value = topic)
+        CardDivider()
+        CardRow("服务器", if (server.isNotBlank()) ({ clipboard.setText(AnnotatedString(server)) }) else null, value = server.ifBlank { "电脑没有给出地址" })
     }
-    val explain = when {
-        state == null -> null
-        !on -> "安卓手机用 ntfy App 收。① 装 ntfy（Google Play、F-Droid 都有）；② 在 ntfy 里点 ＋，主题名称填上面的主题，勾上「使用其他服务器」，地址填上面的服务器，点「订阅」；③ 回到这里点「打开并试推一条」。点主题或服务器就能复制。手机上的 Tailscale 要一直连着才收得到。"
-        // Windows dev.22 pushes whether or not someone is at the computer (user 10-27); only the phone open on it holds one back.
-        (ntfy?.optInt("listening") ?: 0) > 0 -> "对话做完时推到 ntfy App。手机正开着那个对话时不推。"
-        else -> "现在没有手机连着：看看 ntfy 里订阅了上面的主题和服务器没有，手机上的 Tailscale 连着没有。" + (ntfy?.string("last_seen")?.takeIf { it.isNotBlank() }?.let { "上次连着是 $it。" } ?: "") + "没连着时做完的对话，连上后会补推（12 小时内的）。"
-    }
-    if (explain != null) Text(explain, style = MaterialTheme.typography.note, color = p.muted)
-    val recent = state?.rows("recent") { it.string("time") + " " + it.string("text") }.orEmpty().take(3)
-    if (recent.isNotEmpty()) Text("最近：" + recent.joinToString("\n"), style = MaterialTheme.typography.note, color = p.muted)
-    note?.let { Text(it, style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+    failure?.let { Text(it, style = MaterialTheme.typography.note, color = p.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
 }
 
 private const val UiPrefs = "teleply_ui"

@@ -116,35 +116,30 @@ class SpeechGate(val key:ChatKey) {
     // 读屏与字号 is gone (0.9): the app follows the system's settings by itself, nothing here to set.
 }
 
-/** This phone's own check of one conversation (a native addition beside ntfy): not real-time, at most every 15 minutes. */
+/**
+ * This phone's own check of one conversation (a native addition beside ntfy; not real-time, at most every 15 minutes),
+ * one switch as short as the rest (user 10-28): on for the conversation open now, off for the one watched; then the
+ * system's notification settings. A line under it only when something went wrong. The local demo never turns it on.
+ */
 @Composable private fun WatchSettings(s:ReaderState,graph:NativeApplication) {
     val context=LocalContext.current
     val p=LocalTeleply.current
     val target by graph.watch.state.collectAsStateWithLifecycle()
-    val scope=rememberCoroutineScope();var note by remember { mutableStateOf("") };var busy by remember { mutableStateOf(false) }
+    val scope=rememberCoroutineScope();var failure by remember { mutableStateOf("") };var busy by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<WatchTarget?>(null) }
-    fun enable(t:WatchTarget) { if(busy) return;busy=true;scope.launch { try { graph.watch.enable(t.origin,t.key);note="后台定期检查已开启。" } catch(e:Exception) { note=e.message ?: "未能开启" } finally { busy=false } } }
-    val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed -> val t=pending;pending=null;if(allowed && t!=null) enable(t) else note="通知未获授权，阅读和草稿不受影响。" }
+    fun enable(t:WatchTarget) { if(busy) return;busy=true;scope.launch { try { graph.watch.enable(t.origin,t.key);failure="" } catch(e:Exception) { failure=e.message ?: "未能开启" } finally { busy=false } } }
+    val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed -> val t=pending;pending=null;if(allowed && t!=null) enable(t) else failure="通知未获授权，阅读和草稿不受影响。" }
+    val device=s.device;val chat=s.chat
     CardSection {
-        CardRow("后台会话检查",null,detail="只看选中的一个会话，最快15分钟一次；省电、离线或强制停止时会更晚，不是实时推送。",value=if(target==null) "未开启" else "已开启")
-        CardDivider()
-        when {
-            s.fixture -> CardRow("本地示例不会启用真实后台任务",null)
-            s.device!=null && s.chat!=null -> CardRow("关注当前会话状态",{
-                val t=WatchTarget(s.origin,ChatKey(s.scope,s.device.id,s.chat.id,s.app),"")
-                if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {pending=t;permission.launch(Manifest.permission.POST_NOTIFICATIONS)}
-                else enable(t)
-            },icon=TeleplyIcons.Bell,enabled=!busy)
-            else -> CardRow("进入需要关注的会话，再从这里或对话菜单开启",null)
-        }
-        if(target!=null && !s.fixture) {
-            CardDivider()
-            CardRow("关闭后台检查",{ graph.watch.disable();note="后台检查已关闭。" },enabled=!busy,danger=true)
-            CardDivider()
-            CardRow("立即核对一次",{ busy=true;scope.launch { try { note=graph.watch.checkOnce() } finally { busy=false } } },enabled=!busy)
+        SwitchRow("后台会话检查",target!=null,enabled=!busy && !s.fixture && (target!=null || (device!=null && chat!=null))) { on ->
+            if(!on) { graph.watch.disable();return@SwitchRow }
+            if(device==null || chat==null) return@SwitchRow
+            val t=WatchTarget(s.origin,ChatKey(s.scope,device.id,chat.id,s.app),"")
+            if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {pending=t;permission.launch(Manifest.permission.POST_NOTIFICATIONS)}
+            else enable(t)
         }
         CardDivider()
         CardRow("系统通知设置",{ context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,context.packageName)) },chevron=true)
     }
-    if(note.isNotBlank()) Text(note,Modifier.semantics { liveRegion=LiveRegionMode.Polite },style=MaterialTheme.typography.note,color=p.muted)
+    if(failure.isNotBlank()) Text(failure,Modifier.semantics { liveRegion=LiveRegionMode.Polite },style=MaterialTheme.typography.note,color=p.error)
 }
