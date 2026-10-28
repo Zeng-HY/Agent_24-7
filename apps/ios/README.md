@@ -417,6 +417,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #38 `6ae15eea…` | ios-native-testflight | 成功 | 6（排队 0） | 0.5.6（12）上传，Delivery UUID `d7c07f17-4128-45af-b70b-f71904714a1c`；从 `main` 的 c16e1f9 构建；扩展在包里，Bundle ID、构建号、版本都对；Mac 上 175 项通过 |
 | #39 `6ae1658e…` | ios-native-check（compile） | 成功 | 6 | 阶段一核心（1cfc5e9）：发送开岛、令牌登记、远程开岛、开关；应用和扩展编过，Mac 上 179 项通过 |
 | #40 `6ae167d3…` | ios-native-check（compile） | 成功 | 3 | 「灵动岛样子」预览页（3f768ca）：编过，Mac 上 179 项通过；还没截图 |
+| #41 `6ae168c4…` | ios-native-testflight | 成功 | 6（排队 0） | 0.5.6（13）上传，Delivery UUID `82f6efcc-5d0f-4003-8492-df6b12c4f9ed`；阶段一：真实对话的岛、远程开启、断开变灰；从 `main` 的 15f0360 构建 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
