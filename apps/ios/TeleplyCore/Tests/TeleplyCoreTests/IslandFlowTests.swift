@@ -182,6 +182,33 @@ struct IslandFlowTests {
         #expect(paths.contains("/account/push/activity"))
     }
 
+    @Test func atMostThreeIslandsAndAFinishedOneMakesWay() async {
+        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        func record(_ chat: String) -> Submission {
+            let key = ChatKey(scope: model.scope, device: DemoData.computerA, app: "codex", chat: chat)
+            return Submission(request: "r-" + chat, key: key, text: "跑一下", action: "send", turn: "t",
+                              body: "{}", created: Int64(Date().timeIntervalSince1970 * 1000))
+        }
+        for (index, chat) in ["c1", "c2", "c3"].enumerated() {
+            model.islandSendStarted(record(chat))
+            for _ in 0..<100 where island.starts.count < index + 1 { try? await Task.sleep(for: .milliseconds(20)) }
+        }
+        #expect(island.starts.count == 3)
+        #expect(model.island.live.count == 3)
+        model.islandSendStarted(record("c4"))  // three running: this one stays a notification
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(island.starts.count == 3)
+        if let key = model.island.live.keys.first, var track = model.island.live[key] {
+            track.state = IslandState(status: .done, since: 1, turn: 1)
+            model.island.live[key] = track
+        }
+        model.islandSendStarted(record("c4"))  // a finished one makes way
+        for _ in 0..<100 where island.starts.count < 4 { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(island.starts.count == 4)
+        #expect(island.ends >= 1)
+    }
+
     @Test func aRemoteStartedIslandIsPickedUpAndItsTokenRegistered() async {
         let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
         let model = await signedIn(world, island: island, transport: watched)
