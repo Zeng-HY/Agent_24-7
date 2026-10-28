@@ -447,14 +447,15 @@ class Notifier:
         title = chats.one_line(item.get("title") or "（无标题）", 40)
         what = f"{app}「{title}」{done}"
         why = self._quiet(item)
-        if why:
-            self._note(what, "没推：" + why)
-            return
         body, subtitle, outcomes = _preview(end["text"]), f"{self.name} · {app} {done}", []
         if self.relay_on():  # what happened, not what was said: the relay writes the words (relay_push.py)
             kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
-            self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"]})
+            # quiet: the phone has this conversation open, so no banner — but its island still needs the state.
+            self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"], "quiet": bool(why)})
             outcomes.append("遥应通知已交给中转" if self.relay.listening else "中转现在没连着，连上后会补报")
+        if why:
+            self._note(what, "没推：" + why + ("；只更新岛" if self.relay_on() else ""))
+            return
         if self.ntfy_on():  # kept for a phone that is away, which gets it when it connects again (ntfy_feed.py)
             self.feed.publish(title, f"{subtitle}\n{body}", click=self.page_url(item))
             outcomes.append("ntfy 已推到" if self.feed.listening else "ntfy 现在没连着，连上后会收到")

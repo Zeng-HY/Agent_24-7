@@ -472,6 +472,7 @@ class Push:
         if not fresh or not computer:
             return
         owner, conv = computer['owner'], (device, app, chat)
+        quiet = bool(event.get('quiet'))  # the phone has this conversation open: no banner, but the island still changes
         if kind == 'running':
             since = event.get('since')
             since = int(since) if isinstance(since, (int, float)) and since > 0 else int(now)
@@ -484,11 +485,13 @@ class Push:
             state = {'waiting': 'waiting', 'done': 'done', 'failed': 'failed'}[kind]
             if await self.update_island(island, state, int(now), island['turn'] or int(now), alert=True, priority=10):
                 return
+        if quiet:
+            return
         await self.notice(owner, device, app, chat, kind, computer['label'], phones, now)
 
     async def notice(self, owner, device, app, chat, kind, label, phones, now):
         """A normal notification on the lock screen, as before 10-28: only for a conversation without a working
-        island (or one whose token Apple says is dead)."""
+        island (or one whose token Apple says is dead), and never while the phone shows that conversation."""
         if not phones:
             return
         if now - self.sent.get((device, app, chat, kind), -PER_CHAT) < PER_CHAT:

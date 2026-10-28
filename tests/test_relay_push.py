@@ -445,6 +445,24 @@ class IslandTests(RelayTests):
         self.assertEqual(aps['content-state'], relay_push.island_state('working', 1761630000, 1761630000))
         self.assertEqual(self.service.push.starts, {})  # started once, not every half minute
 
+    async def test_a_quiet_event_changes_the_island_but_shows_no_banner(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.registration())
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'q1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1', 'quiet': True})
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.sender.sent[0]['push_type'], 'liveactivity')
+        self.assertEqual(self.activities()[0]['state'], 'done')
+
+    async def test_a_quiet_event_without_an_island_sends_nothing(self):
+        await self.post('register', {'token': PHONE})
+        self.sender.sent.clear()
+        await self.service.push.deliver(self.devices[0], {'id': 'q1', 'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'chat-1', 'quiet': True})
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.activities(), [])
+
     async def test_a_finished_island_ends_five_minutes_later(self):
         self.service.push.clock = lambda: 1761630000.0
         await self.post('activity', self.registration())

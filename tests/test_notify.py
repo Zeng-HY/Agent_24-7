@@ -333,8 +333,9 @@ class Watcher(unittest.TestCase):
             with self.notifier.watching("claude", "c1"):
                 self.notifier._tell(bark, item, {"state": "done", "text": "好了"})
             self.notifier._tell(bark, item, {"state": "done", "text": "好了"})
-        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["failed", "waiting", "done"])
-        self.assertEqual(len(self.sent), 3)  # Bark is on here too: the same three
+        self.assertEqual([(e["kind"], e["quiet"]) for e in self.notifier.relay.since("all")],
+                         [("failed", False), ("waiting", False), ("done", True), ("done", False)])
+        self.assertEqual(len(self.sent), 3)  # Bark is on here too: the watched one is not shown, the island is updated
 
     def test_claude_waiting_in_the_middle_of_a_turn_is_sent_as_waiting(self):
         # 10-27: Claude Code's hook tells the service (claude_hooks.py); the record reads as running then
@@ -343,7 +344,8 @@ class Watcher(unittest.TestCase):
             self.notifier.asking(item, "问：先改方案还是先测？")
             with self.notifier.watching("claude", "c1"):  # the phone has it open: it shows the question already
                 self.notifier.asking(item, "Claude 想运行命令：npm test")
-        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["waiting"])
+        self.assertEqual([(e["kind"], e["quiet"]) for e in self.notifier.relay.since("all")],
+                         [("waiting", False), ("waiting", True)])
         (address, title, body), extra = self.sent[0]
         self.assertEqual((title, body, extra["subtitle"]), ("部署", "问：先改方案还是先测？", "家里电脑 · Claude 在等你选"))
         self.assertEqual(len(self.sent), 1)
