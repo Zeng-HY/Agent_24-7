@@ -35,13 +35,17 @@ struct IslandLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Trailing(app: context.attributes.app, state: context.state, size: 15)
+                    ExpandedTrailing(status: context.state.status ?? .working)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 6) {
                         Text(IslandWords.detail(context.state, now: Int(Date().timeIntervalSince1970)))
                             .font(.system(size: 13))
                             .lineLimit(1)
+                        if context.state.status == .working || context.state.status == .offline {
+                            Elapsed(since: context.state.since)
+                                .font(.system(size: 13, weight: .medium))
+                        }
                         if let step = IslandWords.stepSymbol(context.state.step) {
                             Image(systemName: step)
                                 .font(.system(size: 12, weight: .medium))
@@ -52,12 +56,13 @@ struct IslandLiveActivity: Widget {
                                 .foregroundStyle(IslandPalette.muted)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(IslandPalette.ink)
                 }
             } compactLeading: {
                 IslandMark(app: context.attributes.app, size: 17, dot: context.state.status == .waiting)
             } compactTrailing: {
-                Trailing(app: context.attributes.app, state: context.state, size: 13)
+                Trailing(app: context.attributes.app, state: context.state, size: 13, compact: true)
             } minimal: {
                 Minimal(app: context.attributes.app, state: context.state)
             }

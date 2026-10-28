@@ -28,14 +28,25 @@ final class FakeIsland: IslandPlatform {
     func start(_ identity: IslandIdentity, _ state: IslandState) async throws -> IslandRef {
         guard allowed else { throw IslandFailure("系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。") }
         starts.append((identity, state))
-        return IslandRef(raw: "island-\(starts.count)")
+        let ref = IslandRef(raw: "island-\(starts.count)")
+        snapshots.append(IslandSnapshot(ref: ref, identity: identity, state: state))
+        return ref
     }
 
     func token(_ ref: IslandRef, seconds: Double) async -> String? { tokenValue }
     func startToken(seconds: Double) async -> String? { startTokenValue }
-    func update(_ ref: IslandRef, _ state: IslandState) async { updates += 1 }
-    func end(_ ref: IslandRef, _ state: IslandState, dismissIn: TimeInterval) async { ends += 1 }
-    func endAll() async { endAlls += 1 }
+    func update(_ ref: IslandRef, _ state: IslandState) async {
+        updates += 1
+        if let index = snapshots.firstIndex(where: { $0.ref == ref }) { snapshots[index].state = state }
+    }
+    func end(_ ref: IslandRef, _ state: IslandState, dismissIn: TimeInterval) async {
+        ends += 1
+        snapshots.removeAll { $0.ref == ref }
+    }
+    func endAll() async {
+        endAlls += 1
+        snapshots.removeAll()
+    }
 
     func observe(_ handler: @escaping @MainActor @Sendable (IslandEvent) -> Void) { self.handler = handler }
     func running() async -> [IslandSnapshot] { snapshots }

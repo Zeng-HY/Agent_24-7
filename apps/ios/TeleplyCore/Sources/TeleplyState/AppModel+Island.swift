@@ -87,6 +87,7 @@ extension AppModel {
         let now = islandNow(), state = IslandState(status: .working, since: now, turn: now)
         Task { [weak self] in
             guard let self else { return }
+            await islandEndDemo()  // a left-over 试一下灵动岛 must not sit ahead of the real conversation
             do {
                 let ref = try await services.island.start(identity, state)
                 island.live[ref.raw] = IslandTrack(identity: identity, state: state)
@@ -220,6 +221,7 @@ extension AppModel {
             return
         }
         let now = islandNow(), identity = demoIdentity()
+        await islandEndDemo()
         do {
             let state = IslandState(status: .working, since: now, turn: now)
             island.demo = try await services.island.start(identity, state)
@@ -251,14 +253,10 @@ extension AppModel {
             return
         }
         let now = islandNow(), identity = demoIdentity(), state = IslandState(status: .working, since: now, turn: now)
+        await islandEndDemo()
         do {
-            let ref: IslandRef
-            if let existing = island.demo {
-                ref = existing
-            } else {
-                ref = try await services.island.start(identity, state)
-                island.demo = ref
-            }
+            let ref = try await services.island.start(identity, state)
+            island.demo = ref
             guard let token = await services.island.token(ref, seconds: 10) else {
                 island.note = "没拿到这个岛的推送令牌，稍后再试一次。"
                 return
@@ -278,12 +276,17 @@ extension AppModel {
         island.working = true
         island.note = nil
         defer { island.working = false }
-        let now = islandNow()
-        if let ref = island.demo {
-            await services.island.end(ref, IslandState(status: .done, since: now, turn: now), dismissIn: 0)
+        await islandEndDemo()
+        island.note = "试的岛关掉了。"
+    }
+
+    /// Ends every 试一下灵动岛 island the system still has, so an old demo cannot sit in the island ahead of a real
+    /// conversation (or pile up when the button is pressed again).
+    func islandEndDemo() async {
+        for snap in await services.island.running() where snap.identity.chat == Self.islandDemoChat {
+            await services.island.end(snap.ref, snap.state, dismissIn: 0)
         }
         island.demo = nil
-        island.note = "试的岛关掉了。"
     }
 
     /// Whether the system allows Live Activities (the switch in 设置 → 遥应).
@@ -291,10 +294,11 @@ extension AppModel {
         island.enabled = await services.island.enabled()
     }
 
-    /// The computer the demo names: the one in use, or a made-up one that only opens 遥应.
+    /// 试岛 uses the source in use (a DeepSeek conversation's demo shows DeepSeek's mark), and a made-up conversation
+    /// id so it never collides with that conversation's real island.
     private func demoIdentity() -> IslandIdentity {
-        IslandIdentity(device: device?.id ?? String(repeating: "0", count: 32), app: "claude", chat: Self.islandDemoChat,
-                       computer: device?.label ?? "我的电脑", title: "试一下灵动岛")
+        IslandIdentity(device: device?.id ?? String(repeating: "0", count: 32), app: chat == nil ? "claude" : app,
+                       chat: Self.islandDemoChat, computer: device?.label ?? "我的电脑", title: "试一下灵动岛")
     }
 
     private func islandNow() -> Int {

@@ -188,6 +188,31 @@ struct Countdown: View {
     }
 }
 
+/// The expanded island's top-right corner: only a state mark, because 在干活 and its timer belong on the line under
+/// the title (handoff 5.4).
+struct ExpandedTrailing: View {
+    let status: IslandStatus
+
+    var body: some View {
+        switch status {
+        case .done:
+            Image(systemName: "checkmark")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(IslandPalette.success)
+        case .failed:
+            Image(systemName: "exclamationmark")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(IslandPalette.danger)
+        case .waiting:
+            Text("等你")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(IslandPalette.ask)
+        case .working, .offline, .limited:
+            EmptyView()
+        }
+    }
+}
+
 /// The right-hand side of the compact island (compact: true) or of the expanded island.
 struct Trailing: View {
     let app: String
