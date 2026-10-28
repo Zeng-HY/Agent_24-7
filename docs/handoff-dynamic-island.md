@@ -50,9 +50,10 @@
 - **灵动岛阶段零**的代码已在 `main`（11b4fd8、f4d25a5、89b56df，文档 25147e2，中转测试 c16e1f9），云端 #37 只编译通过，Mac 上 `TeleplyCore` 175 项通过；**0.5.6（12）已传 TestFlight**（#38，Delivery UUID `d7c07f17-4128-45af-b70b-f71904714a1c`，6 分钟），**10-28 真机通过**：锁屏卡片和计时、点「让中转改一下」变 ✓、解锁回桌面看到灵动岛。中转已更新，扩展的描述文件已传到 Codemagic（`teleply_island_appstore`）。用户说紧凑的样子不美观，阶段一按 5.4 重新设计。版本号仍是 0.5.6；按第 2 节，0.6.0 要等阶段一也验收通过。
 - **灵动岛阶段一**的代码在 `main`（0ddebaa 电脑/中转、1cfc5e9 手机端、18ed29a 手机开着对话也更新岛、3f768ca 样子预览页、9ea65ae 只给刚发的消息开岛、32a0324/25cd78a 测试、ae00f5e 真机记录、5797efd 试岛用当前来源、eb726c3 遥应标志和长按列表、052df56 开关挪到手机通知、214ae79 卡片加大/手表加标题）：手机发送开岛、电脑报 `running`、中转远程开启/状态更新/断开变灰。Windows **0.27.0-dev.28** 已构建并装到这台电脑（含 DeepSeek 答题修复 `70fe829`）；中转已更新到带标题/长按列表的包。真机 0.5.6（13）验过功能后，用户定了遥应标志/长按列表，并指出锁屏卡片偏矮、手表没标题；现在 **0.6.1（16）** 已上传（#48，Delivery UUID `8644d17c-4f06-422a-84bf-eaedfd8f0c9f`），待真机验。本机 183 项 Swift、99 项 Python 通过。
 - **iOS 0.6.2**（通知去重和样子，10-28）的代码在 `main`（9e9763f 中转、20906da 手机和扩展、d5f3f06 并发警告、f0d862b 紧凑岛定宽、915b5e2 样子页、5fcf9e5 文档）：一阵子只响一次、普通通知带标题并叠成一摞、岛收起补静默记录、锁屏卡片白底、新建对话也开岛、紧凑岛定宽。本机 187 项 Swift、103 项 Python 通过；云端 #50、#52 只编译通过，Mac 上 187 项通过；#53 截图 6 张。**中转已更新**（10-28 15:21，旧文件在 `/opt/agent-relay-027/previous-20261028-152116`）；**Windows 不改**（标题和 running 已经在 dev.28 里）；**0.6.2（17）已传 TestFlight**（#55，Delivery UUID `8f7b7fc5-238a-4ea6-9a29-b7335f572a08`），待真机验。检查清单见 `apps/ios/README.md` 的 0.6.2 一节。
-- **`project.yml`**：`MARKETING_VERSION: "0.6.2"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
+- **iOS 0.6.3**（一台电脑一个岛，10-28）的代码在 `main`（48cbe41 中转和电脑、ad06702 手机和扩展、9bf1574 展开边距，另有手表黑底白字和文档）：按对话汇总计数、长按列表、锁屏、手表；岛登记补推；电脑轮询加快。本机 189 项 Swift、109 项 Python 通过。中转和 Windows dev.29 还没更新，TestFlight 待用户同意后上传；检查清单见 `apps/ios/README.md` 的 0.6.3 一节。
+- **`project.yml`**：`MARKETING_VERSION: "0.6.3"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
 - **安卓**：同样的文件页和通知开关也改了（03ac35a、583f84f），没发。灵动岛不碰 `apps/android`。
-- **Windows**：0.27.0-dev.28 已构建并装到这台电脑（10-28，含 running、标题、DeepSeek 答题修复）；还没发布到 GitHub/阿里云。dev.26 是 10-28 早些时候发布的版本。0.6.2 不需要新版：done / failed / waiting / running 四种事件都已经带标题。
+- **Windows**：0.27.0-dev.28 已构建并装到这台电脑（10-28，含 running、标题、DeepSeek 答题修复）；还没发布到 GitHub/阿里云。dev.26 是 10-28 早些时候发布的版本。0.6.2 不需要新版；0.6.3 起 `notify.py` 的轮询改成有任务 2 秒、空闲 5 秒，要 **dev.29**（待构建、待用户同意安装）。
 - **中转**：0.27 服务，10-26 开通了 iPhone 推送。现在的版本号看手机启动页「服务」后面那一串。0.6.2 的中转改动（9e9763f）还没部署，等用户更新；`deploy/relay/pack-027.py` 和 `update-027.sh` 不用加文件。
 
 ### 版本号怎么走（用户 10-28 定的）
@@ -290,6 +291,8 @@ deploy/windows/build.ps1 -InnoCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC
 
 ### 5.1 一个岛对应一个对话的一轮
 
+> 0.6.3 起改成**一台电脑一个岛**：这台电脑上所有在干活、等你定的对话由这一个岛汇总显示（5.3 的 0.6.3 一节）。下面 5.1–5.3 的早期说明保留，是 0.6.2 及以前的做法。
+
 一个岛从这一轮开始（或手机发出一条）亮起，经过「在等你」、回答，直到「好了」或「出错停了」，几分钟后收起。
 
 这样分的原因：
@@ -334,6 +337,8 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     public var step: String?    // 方案六：edit | run | search | read
     public var resets: Int?     // 方案七：额度恢复的 Unix 秒
     public var peers: [IslandPeer]? // 长按列表：每个在跑的对话的 app / chat / 标题 / 状态 / 时间
+    public var working: Int?        // 0.6.3：一台电脑的岛，几个对话在干活
+    public var waiting: Int?        // 0.6.3：几个在等你定
 }
 
 /// 长按列表的一行（10-28 用户定）。
@@ -417,9 +422,20 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 - 应用在前台时（`UNUserNotificationCenterDelegate.willPresent`）：正看着那个对话什么都不显示；别的页面横幅照常出、不响；被动通知在前台也只进通知中心。
 - 中转每做一次决定写一行日志：事件、来源、对话编号后 6 位、走了哪条路（岛提醒 / 岛静默 / 通知响 / 通知静默 / 不发）和原因；日志里不写标题。
 
+**0.6.3：一台电脑一个岛（10-28 用户定的）**
+
+- 手机在发送被电脑收下时开或更新的是**这台电脑**的岛：`attributes.app`、`chat`、`title` 都是空，只带 `device` 和 `computer`；状态里多了 `working`、`waiting`（两个数）和 `peers` 列表。
+- 中转新表 `push_conversations(device, app, chat, owner, title, state, since, turn, refreshed)` 记下每个对话最后一次事件（running→working、waiting、done、failed），24 小时后清。计数只算 working/waiting；等你定的排最前，标题截到 40 字，列表最多 3 行。
+- 收到事件：先更新对话行；有电脑岛就按汇总更新（`state` 按 waiting > working > done；提醒文字用这个对话的标题和状态，例如「好了 · 用了 6 分钟」）；done/failed **先补一条静默记录**，不等岛收起。没有电脑岛、只有 0.6.2 的一对话一岛时照旧；两种都没有就发普通通知。
+- 所有对话都结束后 `state=done`，5 分钟后收起岛；记录已经在每个对话结束时发过，收起时不再发。
+- 岛登记时中转会补推一次当前状态（`fresh_islands`），修掉「done 先到、令牌后到」导致岛停在 working 的问题。
+- 升级：0.6.3 的手机启动和回前台时结束 `chat` 非空的旧岛；中转收到电脑岛登记时删掉这个 device 下旧的 `app`/`chat` 行。
+- 巡检从 30 秒改成 10 秒；电脑 `notify.py` 有任务在跑时 2 秒看一次、空闲 5 秒（Windows dev.29 起）。远程开岛仍等 1 分钟。
+- 画面：紧凑 1 个对话时照旧，2 个以上「3个工作中」，有等你定的「2个等你定」（橙色优先）；小圆加橙点和小数字；展开第一行汇总、等你定的排最前，左上「遥应」和右上数字加了内边距；锁屏 2 个以上第一行汇总、下面最多 3 行；手表/待机（`.small`）黑底白字。
+
 **手机的规矩**：
 
-- 最多同时开 3 个岛。要开第 4 个时，先结束最早「好了」的那个；都还在干活就不开（通知照来）。
+- 最多同时开 3 个岛（0.6.3 起是 3 台电脑各一个）。要开第 4 个时，先结束最早「好了」的那个；都还在干活就不开（通知照来）。
 - 应用启动和回到前台时，核对 `Activity<IslandAttributes>.activities`：手机知道已经结束超过 10 分钟的岛，自己结束掉；令牌会变，一直听 `pushTokenUpdates`，变了就重新登记。
 - 用户在锁屏上把岛划掉，岛就结束了（`activityStateUpdates` 报 `.dismissed`），手机去中转注销它的令牌。
 - 设置里关掉灵动岛：结束所有岛，注销所有令牌。

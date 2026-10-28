@@ -218,8 +218,10 @@ struct LockScreenCard: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .activityBackgroundTint(IslandPalette.cardBackground)
-        .activitySystemActionForegroundColor(IslandPalette.cardForeground)
+        // The lock-screen card is white (dark) like the lock screen's notifications; the .small size (Apple Watch,
+        // StandBy, CarPlay) stays black, where the white words are legible (user 10-28).
+        .activityBackgroundTint(family == .small ? Color.black : IslandPalette.cardBackground)
+        .activitySystemActionForegroundColor(family == .small ? Color.white : IslandPalette.cardForeground)
     }
 
     private var fullCard: some View {
@@ -335,19 +337,19 @@ struct SmallCard: View {
                 // 0.6.3: several conversations — the count, not one timer, is what the watch shows.
                 Text(line)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(IslandPalette.ink)
+                    .foregroundStyle(IslandPalette.islandInk)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
                 HStack(spacing: 6) {
                     BrandMark(size: 18, dot: waiting)
                     Text("\(count) 个对话")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(IslandPalette.ink)
+                        .foregroundStyle(IslandPalette.islandInk)
                 }
             } else {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(IslandPalette.ink)
+                    .foregroundStyle(IslandPalette.islandInk)
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     if let app = peers.first?.app ?? (attributes.app.isEmpty ? nil : attributes.app) {
@@ -357,12 +359,12 @@ struct SmallCard: View {
                     }
                     Text(IslandWords.state(state.status ?? .working))
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(IslandPalette.ink)
+                        .foregroundStyle(IslandPalette.islandInk)
                 }
                 if state.status == .working || state.status == .offline || state.status == nil {
                     Elapsed(since: state.since)
                         .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(IslandPalette.ink)
+                        .foregroundStyle(IslandPalette.islandInk)
                 } else if let symbol = IslandWords.symbol(state.status ?? .working) {
                     Image(systemName: symbol)
                         .font(.system(size: 20, weight: .bold))
