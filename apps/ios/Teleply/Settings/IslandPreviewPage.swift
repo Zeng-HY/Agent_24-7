@@ -32,6 +32,28 @@ struct IslandPreviewPage: View {
                     .noteFont()
                     .foregroundStyle(Palette.muted)
 
+                // 0.6.2: the lock-screen card first, drawn in both lights on a neutral stage so the white card is
+                // visible against it. The real card sits on the lock screen's wallpaper; this is a sketch.
+                section("锁屏卡片 · 浅色") {
+                    VStack(spacing: 12) {
+                        ForEach(samples) { sample in
+                            LockCardPreview(status: sample.status, state: sample.state, now: now, scheme: .light)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color(white: 0.84), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                }
+
+                section("锁屏卡片 · 深色") {
+                    VStack(spacing: 12) {
+                        ForEach(samples) { sample in
+                            LockCardPreview(status: sample.status, state: sample.state, now: now, scheme: .dark)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color(white: 0.24), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                }
+
                 section("紧凑（灵动岛）") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], alignment: .leading, spacing: 10) {
                         ForEach(samples) { sample in
@@ -47,22 +69,6 @@ struct IslandPreviewPage: View {
                     VStack(spacing: 12) {
                         ForEach(samples) { sample in
                             ExpandedPreview(status: sample.status, state: sample.state, now: now)
-                        }
-                    }
-                }
-
-                section("锁屏卡片 · 浅色") {
-                    VStack(spacing: 12) {
-                        ForEach(samples) { sample in
-                            LockCardPreview(status: sample.status, state: sample.state, now: now, scheme: .light)
-                        }
-                    }
-                }
-
-                section("锁屏卡片 · 深色") {
-                    VStack(spacing: 12) {
-                        ForEach(samples) { sample in
-                            LockCardPreview(status: sample.status, state: sample.state, now: now, scheme: .dark)
                         }
                     }
                 }

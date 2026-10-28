@@ -52,23 +52,24 @@ final class ScreenshotTour: XCTestCase {
         XCTAssertTrue(island.isHittable, "灵动岛样子 could not be reached")
         island.tap()
         XCTAssertTrue(app.navigationBars["灵动岛样子"].waitForExistence(timeout: 10), "灵动岛样子 never opened")
-        snap(app, page: "27-island", variant: variant)
-        // 0.6.2: the lock-screen card in both lights, each section scrolled to.
-        for (title, page) in [("锁屏卡片 · 浅色", "27-island-lock-light"), ("锁屏卡片 · 深色", "27-island-lock-dark")] {
+        // 0.6.2: the lock-screen card in both lights first, then the fixed-width compact island.
+        snap(app, page: "27-island-lock-light", variant: variant)
+        for (title, page) in [("锁屏卡片 · 深色", "27-island-lock-dark"), ("紧凑（灵动岛）", "27-island-compact")] {
             let header = app.staticTexts[title].firstMatch
             XCTAssertTrue(header.waitForExistence(timeout: 5), "\(title) was not on the page")
             _ = reach(app, header)
-            scrollHalfPage(app)  // the header sits at the bottom when reach stops; its cards are under it
+            scrollSlowly(app)  // reach stops when the header is only just on screen; its content is under it
             snap(app, page: page, variant: variant)
         }
         app.terminate()
     }
 
-    /// One short drag up (about 40% of the screen), for bringing what is just under the bottom edge into view.
-    @MainActor private func scrollHalfPage(_ app: XCUIApplication) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        start.press(forDuration: 0.05, thenDragTo: end)
+    /// One short, slow drag up (about a quarter of the screen), for bringing what is just under the bottom edge into
+    /// view without the fling a normal swipe adds.
+    @MainActor private func scrollSlowly(_ app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.46))
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
         sleep(1)
     }
 
