@@ -175,6 +175,8 @@ apps/ios/scripts/codemagic.ps1 -AppId 6ad9f7f9a1287ea2ab55b0a7 -Workflow ios-nat
 4. **改 `codemagic.yaml`**（你来改）：`ios-native-testflight` 的 `ios_signing.provisioning_profiles` 下加一行 `- teleply_island_appstore`。`ci-testflight.sh` 里的 `xcode-project use-profiles` 会按 Bundle ID 给应用和扩展各配一个。
 5. **主应用的 App ID 和描述文件 `teleply_appstore` 不用动**。实时活动不要额外的能力，岛的推送用主应用已有的推送权限。只有将来选了「共享钥匙串」或「共享文件夹」（第 4 节问题 5 的 D、方案三的 B）才要给两个 App ID 都开能力、重做两个描述文件、在 Codemagic 里替换，到时再做。
 
+**10-28 已做**：扩展 App ID `com.pocketagentdesk.teleply.island` 和描述文件 `Teleply Island App Store` 都登记好了，描述文件传到 Codemagic 的引用名是 `teleply_island_appstore`；构建 12 的签名日志里两个描述文件都读到了，包装出来也对。
+
 ### 3.4 中转服务器（用户在阿里云 Workbench 里运行，你写代码和说明）
 
 - **服务器**：阿里云 `8.166.15.235`（广州）。0.27 服务叫 `agent-relay-027.service`，装在 `/opt/agent-relay-027/`，Python 环境 `/opt/agent-relay-027/.venv/`，监听 `127.0.0.1:18771`，前面是 Caddy。推送设置在 `/etc/agent-relay/push.env`（root 0600）。中转只认 `8.166.15.235` 这个地址，不要改（换域名见 `docs/handoff-domain.md`）。
@@ -192,6 +194,7 @@ sudo bash /home/admin/agent-relay-027-new/update-027.sh
 ```
 
   换下的文件留在 `/opt/agent-relay-027/previous-<时间>/`，新的起不来会自动换回。数据库不用动，新表在服务启动时建。
+- **10-28 已更新**：构建 12 上传前，服务器用这个包更新过，换下的文件在 `/opt/agent-relay-027/previous-20261028-103158`；脚本的健康检查通过（`/account` 能打开）。
 - **加了新文件时**：`deploy/relay/pack-027.py` 的 `RELAY`（或 `DEPLOY`）列表和 `deploy/relay/update-027.sh` 的 `files=(…)` **两处都要加**，否则不会打进包，也不会装上。要新的 Python 库就写进 `requirements-relay.txt`，`update-027.sh` 会先装，装不上就什么都不换。
 - **看日志**：请用户运行 `sudo journalctl -u agent-relay-027.service -n 50`，把输出贴回来。日志里没有密钥和完整令牌。
 - 关掉推送的办法在 `deploy/relay/README-027.md`「开启遥应通知」一节末尾。
