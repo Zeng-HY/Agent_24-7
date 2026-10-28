@@ -168,7 +168,8 @@ struct IslandFlowTests {
         let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
         let model = await signedIn(world, island: island, transport: watched)
         let key = ChatKey(scope: model.scope, device: DemoData.computerA, app: "codex", chat: "demo")
-        let record = Submission(request: "r1", key: key, text: "跑一下", action: "send", turn: "t1", body: "{}", created: 1)
+        let record = Submission(request: "r1", key: key, text: "跑一下", action: "send", turn: "t1", body: "{}",
+                                created: Int64(Date().timeIntervalSince1970 * 1000))
         model.islandSendStarted(record)
         for _ in 0..<100 where island.starts.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
         #expect(island.starts.count == 1)

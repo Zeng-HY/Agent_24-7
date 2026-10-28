@@ -60,6 +60,9 @@ extension AppModel {
     /// A message was taken by the computer (已接收 / 已送达 / 已排队): this conversation gets its island.
     func islandSendStarted(_ record: Submission) {
         guard island.wanted, !fixture, !expired, account != nil else { return }
+        // Only a send made now: a receipt read again for an old one (opening the app, a state poll) must not open an
+        // island for a conversation that has long been over.
+        guard services.now() - record.created < 120_000 else { return }
         let identity = IslandIdentity(device: record.device, app: record.app, chat: record.chat,
                                       computer: computerLabel(record.device), title: chatTitle(record.chat))
         if let existing = island.live.first(where: { $0.value.identity.device == identity.device
