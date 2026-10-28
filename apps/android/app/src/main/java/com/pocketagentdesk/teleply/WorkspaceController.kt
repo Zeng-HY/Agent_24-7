@@ -20,7 +20,7 @@ import org.json.JSONObject
 data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null,
                           /** 核对上次操作 reading the computer: the button waits; nothing else does. */
                           val checking:Boolean=false,
-                          /** A Word, Excel or PowerPoint file being turned into PDF on the computer, and why there is none ([previewNote]). */
+                          /** A file being turned into PDF on the computer (PowerPoint, the old .doc and .ppt), and why there is no preview ([previewNote]). */
                           val converting:Boolean=false,val previewNote:String="") {
     /** One Claude button at a time: its click waits for the computer's window. */
     val pressing:Boolean get() = cards.values.any { it.startsWith("pressing:") }
@@ -32,7 +32,7 @@ data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane
  */
 const val ClaudePressLife=120_000L
 
-/** The most a picture or PDF drawn on a file's page may be, the converted PDF of a Word, Excel or PowerPoint file too. */
+/** The most a picture, PDF, Word or Excel file drawn on a file's page may be, the computer's PDF of an Office file too. */
 const val PreviewLimit=20L*1024*1024
 
 /** Why the computer's Office gave no PDF: in its own words when it gave some (10-27). */
@@ -666,9 +666,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         catch(_:Exception) { key?.let { k -> update(k) { it.copy(transfer="文件已保存，手机上暂时没有可用的打开应用") } } }
     }
     /**
-     * A file's page: its words, its picture or PDF drawn here, and since 10-27 a Word, Excel or PowerPoint file as the
-     * PDF the computer's Office makes of it ("preview": "pdf" in the list or meta). 保存到手机, 系统分享 and 用其他应用打开
-     * still take the file itself, and work while the PDF is being made.
+     * A file's page: its words, its picture or PDF drawn here. A Word or Excel file is drawn here from the file itself
+     * (user 10-28: "Word 和 Excel 在手机上直接显示"; [phoneOffice], "preview": "phone"). PowerPoint, the old .doc and .ppt,
+     * and a Word or Excel file over 20 MB show as the PDF the computer's Office makes when it offers one ("preview":
+     * "pdf" in the list or meta, 10-27; kept as "pdf": true). 保存到手机, 系统分享 and 用其他应用打开 take the file
+     * itself, and work while the PDF is being made.
      */
     fun file(file:JSONObject) {
         val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
@@ -677,24 +679,45 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             val q=mapOf("app" to k.app,"id" to k.chat,"file" to file.getString("id"))
             val meta=service.detail(k.device,"file/meta",q)
             val kind=meta.string("kind")
-            val office=kind=="download" && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
-            val data=JSONObject(file.toString()).put("kind",kind).put("meta",meta).apply { if(office) put("preview","pdf") else remove("preview") }.toString()
-            if(office) {
+            val pdf=kind=="download" && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
+            val phone=kind=="download" && phoneOffice(file.string("name").ifBlank { meta.string("name") })!=null && meta.optLong("size")<=PreviewLimit
+            val data=JSONObject(file.toString()).put("kind",kind).put("meta",meta).apply {
+                remove("preview");remove("pdf")
+                if(pdf) put("pdf",true)
+                if(phone) put("preview","phone") else if(pdf) put("preview","pdf")
+            }.toString()
+            if(pdf && !phone) {
                 // The page and its buttons at once; the PDF when Office on the computer has made it (5-30 s the first time).
                 if(g==generation) update(k) { it.copy(data=data,busy=false,converting=true) }
-                val pdf=try { service.filePdf(k.device,k.chat,file.getString("id"),PreviewLimit) }
-                    catch(e:CancellationException) { throw e }
-                    catch(e:Exception) { if(g==generation) update(k) { it.copy(converting=false,previewNote=pdfFailure(e)) };null }
-                if(pdf!=null && g==generation) update(k) { it.copy(converting=false,preview=pdf) }
+                convert(k,service,file.getString("id"),g)
                 return@launchSafe
             }
             var text="";var bytes:ByteArray?=null;var note=""
             try {
                 if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
-                if(kind in listOf("image","pdf") && meta.optLong("size")<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                if((phone || kind in listOf("image","pdf")) && meta.optLong("size")<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
             } catch(e:CancellationException) { throw e } catch(_:Exception) { note="预览未能加载，仍可尝试保存原文件。" }
             if(g==generation) update(k) { it.copy(data=data,result=text,preview=bytes,busy=false,transfer=note) }
         } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false,converting=false) } } }
+    }
+    /** The computer's PDF of a file for the page of generation [g]; the computer's words when it gives none. */
+    private suspend fun convert(k:ChatKey,service:ReadApi,id:String,g:Int) {
+        val pdf=try { service.filePdf(k.device,k.chat,id,PreviewLimit) }
+            catch(e:CancellationException) { throw e }
+            catch(e:Exception) { if(g==generation) update(k) { it.copy(converting=false,previewNote=pdfFailure(e)) };null }
+        if(pdf!=null && g==generation) update(k) { it.copy(converting=false,preview=pdf) }
+    }
+    /**
+     * The phone could not draw the open Word or Excel file (a damaged or protected one): the computer's PDF when it offers
+     * one, as before 10-28; otherwise a line saying so. Once per page; the buttons keep taking the file itself.
+     */
+    fun officeFailed() {
+        val k=key ?: return;val service=api ?: return;val s=state.value;val g=generation
+        val data=JSONObject(s.data)
+        if(s.pane!="file" || data.string("preview")!="phone") return
+        if(!data.optBoolean("pdf")) { update(k) { it.copy(preview=null,data=data.put("preview","failed").toString(),previewNote="手机上显示不了这个文件，可保存后使用系统应用打开。") };return }
+        update(k) { it.copy(preview=null,data=data.put("preview","pdf").toString(),converting=true,previewNote="") }
+        read=launchSafe { convert(k,service,data.getString("id"),g) }
     }
     @Volatile private var listing:Pair<ChatKey,JSONObject>?=null
     /**

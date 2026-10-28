@@ -3,6 +3,7 @@ package com.pocketagentdesk.teleply
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -14,7 +15,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
@@ -124,4 +128,83 @@ fun HtmlPreview(source: String, file: JSONObject, vm: ReaderViewModel) {
         modifier = Modifier.fillMaxWidth().height(height).clip(TeleplyShape.Code).semantics { contentDescription = "网页预览：${file.string("name")}" },
     )
     Text("按网页打开：脚本和网上的图片照常加载；它拿不到这个应用的登录信息和手机里的文件，点链接用浏览器打开。", style = MaterialTheme.typography.note, color = LocalTeleply.current.muted)
+}
+
+/** The made-up host Word and Excel files are drawn under: this app's drawing pages (assets/office) and the file itself. */
+const val OfficeHost = "office.teleply.invalid"
+
+/** The drawing pages' own files, by their ending; nothing else under [OfficeHost] comes from the assets. */
+private val OfficeTypes = mapOf("html" to "text/html", "js" to "text/javascript", "css" to "text/css")
+
+/**
+ * The page that draws a file the computer lists as a download on this phone, by its name: Word or Excel (user 10-28:
+ * "Word 和 Excel 在手机上直接显示"). Null for the rest; PowerPoint and the old .doc and .ppt stay the computer's PDF.
+ */
+fun phoneOffice(name: String): String? = when (name.substringAfterLast('.', "").lowercase()) {
+    "docx", "docm", "dotx" -> "word"
+    "xlsx", "xlsm", "xls", "xlsb", "csv" -> "sheet"
+    else -> null
+}
+
+/**
+ * A Word or Excel file drawn on this phone from the file itself (10-28): docx-preview or SheetJS in a web view, from this
+ * app's own copies of them (assets/office, the way the open-source Gander does it). The page loads nothing but those
+ * and the file: no internet, no cookie and no bridge to the app; a tapped link opens in the phone's browser. A file it
+ * cannot draw sets the page's title, and [failed] runs.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit) {
+    val page = phoneOffice(file.string("name")) ?: return
+    val dark = LocalTeleply.current.dark
+    val height = (LocalConfiguration.current.screenHeightDp * 0.72f).dp
+    val onFailed by rememberUpdatedState(failed)
+    key(bytes) {
+        val webView = remember { arrayOfNulls<WebView>(1) }
+        DisposableEffect(Unit) { onDispose { webView[0]?.apply { stopLoading(); destroy() }; webView[0] = null } }
+        AndroidView(
+            factory = { context ->
+                WebView(context).apply {
+                    webView[0] = this
+                    settings.apply {
+                        javaScriptEnabled = true
+                        javaScriptCanOpenWindowsAutomatically = false
+                        allowFileAccess = false
+                        allowContentAccess = false
+                        setSupportMultipleWindows(false)
+                        setGeolocationEnabled(false)
+                        builtInZoomControls = true
+                        displayZoomControls = false
+                        useWideViewPort = true
+                        // Word is laid out 980 CSS px wide (no viewport line) and shrunk to the screen; Excel at the screen's width.
+                        loadWithOverviewMode = page == "word"
+                    }
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onReceivedTitle(view: WebView, title: String?) { if (title == "teleply:failed") onFailed() }
+                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                            val url = request.url
+                            if (url.host == OfficeHost) return url.fragment == null
+                            if (request.hasGesture() && url.scheme in setOf("http", "https", "mailto")) runCatching { view.context.startActivity(Intent(Intent.ACTION_VIEW, url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            return true
+                        }
+                        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                            val url = request.url
+                            val path = url.path.orEmpty().removePrefix("/")
+                            if (url.host == OfficeHost) {
+                                if (path == "file") return WebResourceResponse("application/octet-stream", null, ByteArrayInputStream(bytes))
+                                val type = OfficeTypes[path.substringAfterLast('.', "")]
+                                if (type != null && ".." !in path) runCatching { view.context.assets.open("office/$path") }.getOrNull()?.let { return WebResourceResponse(type, "utf-8", it) }
+                            }
+                            // Nothing else: a document's own links to the internet are not fetched.
+                            return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                        }
+                    }
+                    loadUrl("https://$OfficeHost/$page.html" + if (dark) "?dark=1" else "")
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(height).clip(TeleplyShape.Code),
+        )
+    }
 }

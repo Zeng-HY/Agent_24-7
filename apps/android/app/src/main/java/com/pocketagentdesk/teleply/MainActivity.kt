@@ -272,7 +272,7 @@ class MainActivity : ComponentActivity() {
     }
     if(archived) ArchivedSheet(vm) { archived=false }
     if(licences) TeleplySheet("开源组件",{ licences=false }) {
-        Text("液态玻璃移植自 Kyant0/AndroidLiquidGlass（Backdrop，Apache-2.0）；CommonMark Java 0.24.0（BSD-2-Clause）；AndroidX、Kotlin、OkHttp（Apache-2.0）；Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。",style=MaterialTheme.typography.bodyMedium,color=LocalTeleply.current.text)
+        Text("液态玻璃移植自 Kyant0/AndroidLiquidGlass（Backdrop，Apache-2.0）；CommonMark Java 0.24.0（BSD-2-Clause）；AndroidX、Kotlin、OkHttp（Apache-2.0）；Word 和 Excel 文件用 docx-preview 0.4.1（Apache-2.0）、JSZip 3.10.2（MIT）、SheetJS 社区版 0.20.3（Apache-2.0）在手机上显示；Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。",style=MaterialTheme.typography.bodyMedium,color=LocalTeleply.current.text)
     }
 }
 

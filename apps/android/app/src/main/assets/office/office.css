@@ -1,0 +1,33 @@
+/* Word and Excel files drawn on the phone (OfficePreview): the pages around them follow the app's light or dark
+   look; the document itself stays as it was written. */
+html, body { margin: 0; }
+body { font: 14px/1.5 sans-serif; color: #1d1d1f; background: #ffffff; -webkit-text-size-adjust: 100%; }
+body.dark { color: #e8e8ea; background: #1c1c1e; }
+#note { margin: 16px; color: #6b7280; }
+body.dark #note { color: #a1a1aa; }
+
+/* Word: white pages on grey, one under another, as wide as the screen (word.js). The page is laid out 980 CSS px wide
+   and shrunk to the screen, about to two fifths, so the note is drawn that much larger. */
+body.word { background: #e9e9ec; }
+body.word.dark { background: #2c2c2e; }
+body.word #note { font-size: 36px; margin: 40px; }
+body.word .docx-wrapper { background: transparent !important; padding: 16px 12px !important; }
+body.word .docx-wrapper > section.docx { flex: none; zoom: var(--page-zoom, 1); margin-bottom: 16px !important;
+                                         box-shadow: 0 1px 6px rgba(0, 0, 0, 0.2) !important; }
+
+/* Excel: the sheets' names in a row of tabs, then the sheet as a table. */
+#tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 6px; overflow-x: auto; padding: 8px; background: inherit;
+        border-bottom: 1px solid #e4e4e7; }
+body.dark #tabs { border-bottom-color: #3f3f46; }
+#tabs[hidden] { display: none; }
+#tabs button { flex: none; font: inherit; color: inherit; background: transparent; border: 1px solid #d4d4d8;
+               border-radius: 999px; padding: 4px 12px; }
+body.dark #tabs button { border-color: #52525b; }
+#tabs button[aria-selected="true"] { color: #ffffff; background: #2563eb; border-color: #2563eb; }
+#grid { padding: 8px; }
+#grid table { border-collapse: collapse; font-size: 13px; }
+#grid td { border: 1px solid #d4d4d8; padding: 3px 8px; white-space: nowrap; vertical-align: top; }
+body.dark #grid td { border-color: #3f3f46; }
+#grid td[data-t="n"] { text-align: right; }
+#grid a { color: #2563eb; }
+body.dark #grid a { color: #8ab4ff; }
