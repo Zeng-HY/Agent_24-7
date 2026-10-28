@@ -77,7 +77,7 @@
 - 表：手机登记 `push_phones`，去重 `push_events`（建表在 `relay_accounts.py:60`）。手机的请求是 `POST /account/push/state|register|unregister|test`（`relay_service.py:272` 转给 `Push.account`）。
 - **阶段零加的岛**：`push_activities`（每个岛的推送令牌、电脑、来源、对话、最后状态；`relay_push.py` 的 `activity`）、`push_start`（远程开启令牌）；请求 `POST /account/push/activity|start-token|island-test`。`Apns.send` 多了 `push_type`、`priority`、`topic` 三个参数，普通通知的默认值不变。`island-test` 用 `liveactivity` 主题给登记过的岛推一条「好了」，苹果拒收时把原因交给手机。
 - 电脑掉线时，中转什么都不发（`relay_push.py` 里没有这段）。它知道哪些电脑在线：`self.hub.connections`（`relay_push.py:246`）。
-- 苹果推送密钥：名字 `TeleplyAPNs`，Production 环境，Topic Specific 类型。后台的主题列表按 Bundle ID 登记，只有 `com.pocketagentdesk.teleply` 一项（10-28 用户截图，400 个名额用了 1 个），灵动岛没有单独一项。**它认不认岛用的主题 `com.pocketagentdesk.teleply.push-type.liveactivity` 还没证实**：大概率认，因为这个主题就是这个 Bundle ID 加后缀；10-28 的假手机测法看不出来，以阶段零的真令牌为准（第 3.5 节）。
+- 苹果推送密钥：名字 `TeleplyAPNs`，Production 环境，Topic Specific 类型。后台的主题列表按 Bundle ID 登记，只有 `com.pocketagentdesk.teleply` 一项（10-28 用户截图，400 个名额用了 1 个），灵动岛没有单独一项。**10-28 已证实它认岛用的主题**：构建 12 上点「让中转改一下」，锁屏卡片从「在干活」变成「✓ 好了 · 用了 1 秒」，说明 `com.pocketagentdesk.teleply.push-type.liveactivity` 被接受，不用换密钥。
 
 ### 电脑端
 
@@ -222,6 +222,8 @@ sudo /opt/agent-relay-027/.venv/bin/python /home/admin/check-island-topic.py
 - 「看不出来」「连不上」或「密钥本身的问题」（退出码 2）：照它说的查。看不出来，就等阶段零用真令牌试。
 
 **10-28 的结果**：三问都回 `400 BadDeviceToken`（HTTP/2），对照也被放行，结论「看不出来」。苹果先查手机，手机是假的就退回，走不到查主题那一步。能确定的只有两件：密钥本身好着，服务器连得上苹果。用户随后在后台看了这把密钥（`TeleplyAPNs`）：主题按 Bundle ID 登记，只有 `com.pocketagentdesk.teleply` 一项，没有灵动岛单独的一项可勾。所以大概率认，但没证实。阶段零里「让中转改一下」成功，就证实了；那时被拒，再按上面「不能发」一条换密钥。
+
+**10-28 真机证实**：构建 12 上点「让中转改一下」，锁屏卡片变成「✓ 好了 · 用了 1 秒」；这一步只能由中转的 APNs 推送做到，说明密钥认这个主题。3.5 的疑问解决，不用换密钥。
 
 ### 3.6 电脑端（Windows）
 
@@ -645,7 +647,7 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
 | 三 | 方案三、六 | 问题 7–8 | 中转、电脑、TestFlight 0.6.2 |
 | 四 | 方案七 | 问题 9 | 中转、电脑、TestFlight 0.6.3 |
 
-**阶段零现在的进度（10-28）**：代码在 `main`（c16e1f9），本机 175 项 Swift 和 85 项 Python 通过，云端 #37 只编译通过。苹果后台两处、描述文件传 Codemagic、中转更新、TestFlight 0.5.6（12）上传都已完成（#38）。只剩用户在 iPhone 上按下面两条验收；验过就按第 2 节升 0.6.0、把开关挪到手机通知，再加 0.6.0 一节。
+**阶段零现在的进度（10-28）**：代码在 `main`（代码提交到 c67ce2c，之后只改文档），本机 175 项 Swift 和 85 项 Python 通过，云端 #37 只编译通过。苹果后台两处、描述文件传 Codemagic、中转更新、TestFlight 0.5.6（12）上传都已完成（#38）。真机第一次：锁屏卡片和计时正常，「让中转改一下」把卡片改成 ✓「好了 · 用了 1 秒」，主题已被证实；灵动岛本体等用户解锁回桌面确认。验过就按第 2 节升 0.6.0、把开关挪到手机通知，再加 0.6.0 一节。
 
 **阶段零的真机验收**：
 
