@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.2 构建 17 已传 TestFlight，待真机验；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.3 构建 18 已传 TestFlight，待真机验；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.6.3：一台电脑一个岛，显示几个对话在工作中 / 等你定（10-28，构建待传）
+## 0.6.3：一台电脑一个岛，显示几个对话在工作中 / 等你定（10-28，构建 18 已传 TestFlight）
 
 用户 10-28 下午定了：几个对话同时跑时，岛上写「x 个对话工作中 / x 个对话等你定」，不要一个对话一个岛；又要求推送快一点、展开岛边上的字别被裁掉、手表卡片黑底白字。英文版放到 0.6.4。
 
@@ -20,7 +20,7 @@
 - **日志**：中转把日志级别设成 INFO，`push:` 开头的决定行以后能在 `journalctl` 里看到；之前只有警告，查不到。
 - 版本 0.6.3。
 
-检查情况：本机 `TeleplyCore` 189 项、Python 109 项全过（新加汇总数字、等你优先、一台电脑一个岛、登记补推、升级清理旧岛、轮询加快）。云端 #56 只编译通过（Mac 上 189 项，11 分钟），只剩 `ChatModel.swift:592` 的旧警告；#57 截图 6 张（浅色、深色 × 锁屏浅色卡片、锁屏深色卡片、紧凑样子），存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae1b584ed4477330bf0ce66\artefacts\shots`。中转已更新（10-28 17:41 前后），Windows dev.29 已构建并装到这台电脑（17:45）。TestFlight 待传。没上真机。
+检查情况：本机 `TeleplyCore` 189 项、Python 109 项全过（新加汇总数字、等你优先、一台电脑一个岛、登记补推、升级清理旧岛、轮询加快）。云端 #56 只编译通过（Mac 上 189 项，11 分钟），只剩 `ChatModel.swift:592` 的旧警告；#57 截图 6 张（浅色、深色 × 锁屏浅色卡片、锁屏深色卡片、紧凑样子），存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae1b584ed4477330bf0ce66\artefacts\shots`。中转已更新（10-28 17:41 前后），Windows dev.29 已构建并装到这台电脑（17:45）。#58 上传 0.6.3（18），Delivery UUID `638c72d7-e28b-4e28-a0f6-dd46131f77a5`，38 分钟（排队约 28）。没上真机。
 
 ### 留给你在真机上验（0.6.3）
 
@@ -564,6 +564,7 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #55 `6ae1a646…` | ios-native-testflight | 成功 | 9 | 0.6.2（17）上传，Delivery UUID `8f7b7fc5-238a-4ea6-9a29-b7335f572a08`；从 `main` 的 5fcf9e5 构建 |
 | #56 `6ae1b300…` | ios-native-check（compile） | 成功 | 11（排队约 7） | 0.6.3 一台电脑一个岛（45bea5e）：应用和扩展编过，Mac 上 189 项通过；只剩 `ChatModel.swift:592` 的旧警告 |
 | #57 `6ae1b584…` | ios-native-check（shots，浅色和深色样子页） | 成功 | 32（排队约 12） | 6 张：锁屏浅色卡片、深色卡片、紧凑样子 × 浅色/深色；汇总样张有「2个工作中」「1个等你定」；存 `F:\Android-Dev\work\20261028-notice-062\codemagic\6ae1b584ed4477330bf0ce66\artefacts\shots` |
+| #58 `6ae1c47d…` | ios-native-testflight | 成功 | 38（排队约 28） | 0.6.3（18）上传，Delivery UUID `638c72d7-e28b-4e28-a0f6-dd46131f77a5`；从 `main` 的 dab281f 构建 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
