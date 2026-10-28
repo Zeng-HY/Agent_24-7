@@ -33,9 +33,13 @@ struct IslandLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text("\(context.state.peers?.count ?? 1) 个")
-                        .font(.system(size: 11))
+                    Text("\(context.state.peers?.count ?? 1)")
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .fixedSize()
+                        .padding(.trailing, 2)
                         .foregroundStyle(IslandPalette.muted)
+                        .accessibilityLabel("\(context.state.peers?.count ?? 1) 个对话")
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     PeerList(device: context.attributes.device, state: context.state,

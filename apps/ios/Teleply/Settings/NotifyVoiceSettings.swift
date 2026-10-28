@@ -18,6 +18,11 @@ struct NotifySection: View {
             Toggle("遥应通知", isOn: Binding(get: { push.phase == .on }, set: { switchTo($0) }))
                 .tint(.green)
                 .disabled(push.working || push.phase == .checking || push.phase == .unavailable)
+            Toggle("灵动岛", isOn: Binding(get: { model.island.wanted }, set: { on in
+                Task { await model.islandSetWanted(on) }
+            }))
+            .tint(.green)
+            .disabled(push.phase != .on || model.island.working)
         } header: {
             Text("手机通知")
         } footer: {
@@ -41,6 +46,7 @@ struct NotifySection: View {
         }
         Task {
             if on { await model.pushTurnOn() } else { await model.pushTurnOff() }
+            await model.islandLaunch()  // 0.6.0: a fresh install follows 遥应通知
         }
     }
 }

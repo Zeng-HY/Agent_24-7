@@ -33,7 +33,11 @@ final class SystemIsland: IslandPlatform {
         #endif
     }
 
-    func wanted() -> Bool { UserDefaults.standard.bool(forKey: Self.wantedKey) }
+    func wanted() -> Bool {
+        // 0.6.0: islands follow 遥应通知 until the user touches this switch (then the choice is kept).
+        if let stored = UserDefaults.standard.object(forKey: Self.wantedKey) as? Bool { return stored }
+        return UserDefaults.standard.bool(forKey: "teleply.push.wanted")
+    }
     func setWanted(_ on: Bool) { UserDefaults.standard.set(on, forKey: Self.wantedKey) }
 
     func start(_ identity: IslandIdentity, _ state: IslandState) async throws -> IslandRef {

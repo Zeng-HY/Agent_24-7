@@ -107,12 +107,6 @@ struct PeerList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 5) {
-                BrandMark(size: 12)
-                Text("遥应").font(.system(size: 11, weight: .semibold)).foregroundStyle(IslandPalette.ink)
-                Spacer(minLength: 4)
-                Text("\(peers?.count ?? 1) 个").font(.system(size: 10)).foregroundStyle(IslandPalette.muted)
-            }
             if let peers {
                 ForEach(peers, id: \.chat) { peer in
                     PeerRow(device: device, computer: computer, peer: peer)

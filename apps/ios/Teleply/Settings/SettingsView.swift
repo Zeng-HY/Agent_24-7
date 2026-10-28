@@ -175,15 +175,8 @@ struct DeveloperView: View {
                     }
                 }
             }
-            // 0.6.0 以前只放在这里，且只给试岛用（handoff 1、2）: 试一下灵动岛 needs no relay; 让中转改一下 proves
-            // the APNs key accepts the Live Activity topic (3.5). From 0.6.0 the user's switch moves to 手机通知.
+            // 0.6.0：开关已挪到 手机通知；这里只留试岛和排查用的按钮。
             Section {
-                Toggle("灵动岛", isOn: Binding(get: { model.island.wanted }, set: { on in
-                    Task { await model.islandSetWanted(on) }
-                }))
-                Text("打开后，手机上发出去的对话会出现岛；电脑上开始的跑过一分钟也会。0.6.0 以后这个开关会挪到 手机通知。")
-                    .noteFont()
-                    .foregroundStyle(Palette.muted)
                 Button("试一下灵动岛") { Task { await model.islandDemo() } }
                     .disabled(model.island.working)
                 Button("让中转改一下") { Task { await model.islandRelayTest() } }
