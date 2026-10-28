@@ -87,8 +87,19 @@ final class PushBridge {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+        Self.registerCategories()
         if SystemPush().wanted() { application.registerForRemoteNotifications() }
         return true
+    }
+
+    /// The relay's notices all arrive in one category, so the lock screen groups one computer's notices in one stack
+    /// and its summary reads 还有 N 个对话 (PushNotice.summaryFormat; user 10-28). Registered at every launch: the
+    /// system keeps categories per app, but a phone restored from a backup has none.
+    private static func registerCategories() {
+        let category = UNNotificationCategory(identifier: PushNotice.category, actions: [], intentIdentifiers: [],
+                                             hiddenPreviewsBodyPlaceholder: nil,
+                                             categorySummaryFormat: PushNotice.summaryFormat, options: [])
+        UNUserNotificationCenter.current().setNotificationCategories([category])
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -100,17 +111,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
-/// What iOS asks about a notification of 遥应's: whether to show it while 遥应 is in front (not while it shows that
-/// very conversation), and what a tap opens. The SDK calls these off the main actor; they hop there. The
-/// completion-handler forms on purpose: Xcode 27.1 crashes compiling the async forms of Objective-C delegate methods.
+/// What iOS asks about a notification of 遥应's: whether to show it while 遥应 is in front (a banner without a sound,
+/// and nothing at all while it shows that very conversation; user 10-28), and what a tap opens. The SDK calls these
+/// off the main actor; they hop there. The completion-handler forms on purpose: Xcode 27.1 crashes compiling the
+/// async forms of Objective-C delegate methods.
 nonisolated final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate, Sendable {
     static let shared = NotificationDelegate()
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void) {
         let target = PushTarget(userInfo: notification.request.content.userInfo)
+        let passive = notification.request.content.interruptionLevel == .passive
         Task { @MainActor in
-            completionHandler(PushBridge.shared.showing(target) ? [] : [.banner, .list, .sound])
+            switch PushNotice.foreground(showing: PushBridge.shared.showing(target), passive: passive) {
+            case .none: completionHandler([])
+            case .list: completionHandler([.list])  // a silent one only joins the notification centre
+            case .banner: completionHandler([.banner, .list])  // no .sound: the app is open, so it stays quiet
+            }
         }
     }
 

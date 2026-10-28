@@ -44,6 +44,10 @@ enum Palette {
     static let scrim = Color("Scrim")
     static let groupPressed = Color("GroupPressed")
     static let codexBadge = Color("CodexBadge")
+    /// The lock-screen card's own background and system-action colour (0.6.2): white on light, dark on dark, like the
+    /// lock screen's notifications. The island extension keeps identical copies; ci-check.sh compares them.
+    static let cardBackground = Color("CardBackground")
+    static let cardForeground = Color("CardForeground")
 
     /// The source marks (web sidebar .mark; Android Brand.kt).
     static func tint(_ app: String) -> Color {

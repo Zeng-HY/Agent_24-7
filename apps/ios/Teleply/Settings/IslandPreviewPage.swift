@@ -51,10 +51,18 @@ struct IslandPreviewPage: View {
                     }
                 }
 
-                section("锁屏卡片") {
+                section("锁屏卡片 · 浅色") {
                     VStack(spacing: 12) {
                         ForEach(samples) { sample in
-                            LockCardPreview(status: sample.status, state: sample.state, now: now)
+                            LockCardPreview(status: sample.status, state: sample.state, now: now, scheme: .light)
+                        }
+                    }
+                }
+
+                section("锁屏卡片 · 深色") {
+                    VStack(spacing: 12) {
+                        ForEach(samples) { sample in
+                            LockCardPreview(status: sample.status, state: sample.state, now: now, scheme: .dark)
                         }
                     }
                 }
@@ -149,11 +157,13 @@ private struct ExpandedPreview: View {
     }
 }
 
-/// The lock-screen card: follows the system's appearance, about the width of the screen minus its margins.
+/// The lock-screen card: drawn once in light and once in dark (0.6.2), white or dark like the lock screen's own
+/// notifications, about the width of the screen minus its margins.
 private struct LockCardPreview: View {
     let status: IslandStatus
     let state: IslandState
     let now: Int
+    let scheme: ColorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -177,7 +187,7 @@ private struct LockCardPreview: View {
             }
         }
         .padding(14)
-        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Palette.line, lineWidth: 0.5))
+        .background(Palette.cardBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .environment(\.colorScheme, scheme)
     }
 }

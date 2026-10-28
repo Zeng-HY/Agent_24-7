@@ -65,6 +65,23 @@ extension AppModel {
         guard services.now() - record.created < 120_000 else { return }
         let identity = IslandIdentity(device: record.device, app: record.app, chat: record.chat,
                                       computer: computerLabel(record.device), title: chatTitle(record.chat))
+        islandStart(identity)
+    }
+
+    /// 新建对话's first message was accepted (0.6.2): the conversation the computer made gets its island too. Before
+    /// this only a send made inside an existing conversation did, so a conversation started on the phone had none.
+    func islandNewChatStarted(_ job: NewJob) {
+        guard island.wanted, !fixture, !expired, account != nil, let device, job.accepted else { return }
+        let made = job.pending["app"].string()
+        let title = job.pending["title"].string()
+        let words = oneLine(job.text, limit: 40)
+        let identity = IslandIdentity(device: device.id, app: made.isEmpty ? job.app : made, chat: job.createdID,
+                                      computer: device.label, title: title.isEmpty ? words : title)
+        islandStart(identity)
+    }
+
+    /// Starts this conversation's island, or turns the one it already has back to 在干活.
+    func islandStart(_ identity: IslandIdentity) {
         if let existing = island.live.first(where: { $0.value.identity.device == identity.device
             && $0.value.identity.app == identity.app && $0.value.identity.chat == identity.chat }) {
             let now = islandNow(), state = IslandState(status: .working, since: now, turn: now)

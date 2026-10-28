@@ -24,7 +24,8 @@ generate_project
 compare_island_assets() {
   local app="$IOS_DIR/Teleply/Resources/Assets.xcassets" ext="$IOS_DIR/TeleplyIslandWidget/Assets.xcassets" name
   for name in ClaudeMark.imageset CodexMark.imageset DeepSeekMark.imageset TeleplyMark.imageset ClaudeTint.colorset CodexTint.colorset \
-              DeepSeekTint.colorset AskGo.colorset Success.colorset Danger.colorset Muted.colorset Ink.colorset; do
+              DeepSeekTint.colorset AskGo.colorset Success.colorset Danger.colorset Muted.colorset Ink.colorset \
+              CardBackground.colorset CardForeground.colorset; do
     diff -r "$app/$name" "$ext/$name" >/dev/null || { echo "island asset copy differs from the app's: $name" >&2; exit 1; }
   done
 }

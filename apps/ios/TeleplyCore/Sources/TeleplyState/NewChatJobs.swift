@@ -20,6 +20,9 @@ public final class NewChatJobs {
     }
     /// An accepted job whose page is on screen: open its conversation.
     @ObservationIgnored public var settle: (NewJob) -> Void = { _ in }
+    /// A job the computer accepted (0.6.2): its conversation exists, so it gets an island like any other send, even
+    /// when its page is not the one open. Called once per job.
+    @ObservationIgnored public var accepted: (NewJob) -> Void = { _ in }
     /// 诊断测速 (开发者选项): a first message's time and what it came to.
     @ObservationIgnored public var timed: (_ label: String, _ elapsed: Duration, _ outcome: String) -> Void = { _, _, _ in }
 
@@ -161,12 +164,16 @@ public final class NewChatJobs {
                     fields["message"] = "服务器尚无提交记录。可继续发送同一请求，不会重复创建。"
                     pending = .object(fields)
                 }
+                let was = now.state
                 now.pending = pending
                 now.note = ""
                 self.put(now)
                 switch now.state {
                 case "accepted":
                     done = true
+                    // A first message is taken like any other send: its island starts (user 10-28; before 0.6.2 only
+                    // a send inside an existing conversation did).
+                    if was != "accepted" { self.accepted(now) }
                     if self.onScreen == now.preview { self.settle(now) }
                 case "failed":
                     done = true

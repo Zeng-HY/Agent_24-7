@@ -37,6 +37,34 @@ public struct PushTarget: Sendable, Equatable {
     }
 }
 
+/// 遥应通知 and how the app presents them (relay_push.py, 0.6.2). The relay sends every notice with [category], so the
+/// lock screen groups one computer's notices in one stack and the group's summary reads [summaryFormat] (Apple's
+/// categorySummaryFormat; "%u" is how many are under it). While 遥应 is in front the app shows a banner without a
+/// sound, and not even that for the conversation on screen; a passive one (silent, the rest of a burst) never pops a
+/// banner (user 10-28).
+public enum PushNotice {
+    /// Same string as relay_push.NOTICE_CATEGORY.
+    public static let category = "teleply.conversation"
+    public static let summaryFormat = "还有 %u 个对话"
+
+    /// What the app shows for a notice that arrives while it is in front.
+    public enum Foreground: Sendable, Equatable {
+        /// The conversation on screen: nothing at all.
+        case none
+        /// A silent notice (passive, no sound): only the notification centre, no banner.
+        case list
+        /// Another page: the banner (and the list), never a sound.
+        case banner
+    }
+
+    /// [showing]: 遥应 is in front showing this very conversation (AppModel.isShowing). [passive]: the notice is one
+    /// of a burst's silent ones (user 10-28): even in front it does not pop a banner.
+    public static func foreground(showing: Bool, passive: Bool = false) -> Foreground {
+        if showing { return .none }
+        return passive ? .list : .banner
+    }
+}
+
 /// 遥应通知 for this account as the service sees it (POST /account/push/state): whether it can send at all (an
 /// APNs key on the server), whether it has this phone's token, and how many phones the account has.
 public struct PushStatus: Sendable, Equatable {

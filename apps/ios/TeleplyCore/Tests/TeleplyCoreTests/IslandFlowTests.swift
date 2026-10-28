@@ -193,6 +193,28 @@ struct IslandFlowTests {
         #expect(paths.contains("/account/push/activity"))
     }
 
+    @Test func aConversationStartedFromThePhonesNewChatSheetGetsItsIslandToo() async {
+        let world = DemoWorld(), island = FakeIsland(), watched = WatchedTransport(world: world)
+        let model = await signedIn(world, island: island, transport: watched)
+        // 新建对话 → 创建并发送 (0.6.2: this used to be the one send that started no island).
+        model.startNew(app: "codex", folder: "D:/fixture")
+        await model.applying?.value
+        await model.workspace.settle()
+        model.workspace.edit("first_message", "写一个测试")
+        model.workspace.create()
+        await model.workspace.settle()
+        await model.settle()
+        for _ in 0..<8 where !island.starts.contains(where: { $0.0.chat == "fixture-new-1" }) {
+            if let job = model.jobs.jobs.first { model.jobs.check(job) }
+            await model.jobs.settle()
+            await model.settle()
+        }
+        let started = island.starts.first { $0.0.chat == "fixture-new-1" }
+        #expect(started?.0.app == "codex")
+        #expect(started?.0.title == "写一个测试")
+        #expect(started?.1.status == .working)
+    }
+
     @Test func launchRegistersThePushToStartToken() async throws {
         let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
         _ = await signedIn(world, island: island, transport: watched)

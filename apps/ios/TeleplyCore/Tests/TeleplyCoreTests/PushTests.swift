@@ -39,6 +39,24 @@ func makePushApp(world: DemoWorld = DemoWorld(), push: FakePush) -> AppModel {
                                    demo: { DemoTransport() }, pacer: IdlePacer(), newScope: { "scope-1" }, push: push))
 }
 
+/// 0.6.2: the category the relay's notices carry (their group summary in the notification centre) and what the app
+/// shows when one arrives while it is in front.
+struct PushNoticeTests {
+    @Test func aNoticeCarriesTheCategoryWhoseSummaryCountsTheStack() {
+        // relay_push.NOTICE_CATEGORY and the app's UNNotificationCategory identifier must be this same string.
+        #expect(PushNotice.category == "teleply.conversation")
+        #expect(PushNotice.summaryFormat == "还有 %u 个对话")
+    }
+
+    @Test func inFrontTheBannerShowsQuietlyAndNeverForTheConversationOnScreen() {
+        #expect(PushNotice.foreground(showing: true) == .none)
+        #expect(PushNotice.foreground(showing: false) == .banner)
+        // A burst's later notices are passive: in front too, they only join the notification centre (user 10-28).
+        #expect(PushNotice.foreground(showing: false, passive: true) == .list)
+        #expect(PushNotice.foreground(showing: true, passive: true) == .none)
+    }
+}
+
 /// What a notification of 遥应's own carries, and how the phone asks the service about it (relay_push.py).
 struct PushRequestTests {
     let device = String(repeating: "a", count: 32)

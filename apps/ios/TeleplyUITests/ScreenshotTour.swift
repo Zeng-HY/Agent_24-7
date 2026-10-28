@@ -20,6 +20,58 @@ final class ScreenshotTour: XCTestCase {
                  extra: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
     }
 
+    /// 0.6.2's 灵动岛样子 only, in both lights: the lock-screen card is white on light and dark on dark, so the two
+    /// screenshots are what the user looks at. The whole tour takes minutes; this is the one page.
+    @MainActor func testIslandLight() throws { try islandPreview(variant: "light", appearance: "light") }
+    @MainActor func testIslandDark() throws { try islandPreview(variant: "dark", appearance: "dark") }
+
+    @MainActor private func islandPreview(variant: String, appearance: String) throws {
+        continueAfterFailure = true
+        let app = launch(appearance: appearance, extra: ["-TeleplyDemo"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons["连接测试电脑 A"]
+        if connect.waitForExistence(timeout: 5) { connect.tap() }
+        let menu = app.buttons["打开导航"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 15), "the list never showed")
+        menu.tap()
+        let gear = app.buttons["设置"].firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 10), "设置 was not in the sidebar")
+        gear.tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10), "设置 never opened")
+        app.swipeUp()
+        let developer = app.buttons["开发者选项"].firstMatch
+        for _ in 0..<3 where !developer.isHittable { app.swipeUp() }
+        XCTAssertTrue(developer.isHittable, "开发者选项 could not be reached")
+        developer.tap()
+        XCTAssertTrue(app.navigationBars["开发者选项"].waitForExistence(timeout: 10), "开发者选项 never opened")
+        let island = app.buttons["灵动岛样子"].firstMatch
+        for _ in 0..<3 where !island.isHittable { app.swipeUp() }
+        XCTAssertTrue(island.isHittable, "灵动岛样子 could not be reached")
+        island.tap()
+        XCTAssertTrue(app.navigationBars["灵动岛样子"].waitForExistence(timeout: 10), "灵动岛样子 never opened")
+        snap(app, page: "27-island", variant: variant)
+        // 0.6.2: the lock-screen card in both lights, each section scrolled to.
+        for (title, page) in [("锁屏卡片 · 浅色", "27-island-lock-light"), ("锁屏卡片 · 深色", "27-island-lock-dark")] {
+            let header = app.staticTexts[title].firstMatch
+            XCTAssertTrue(header.waitForExistence(timeout: 5), "\(title) was not on the page")
+            _ = reach(app, header)
+            scrollHalfPage(app)  // the header sits at the bottom when reach stops; its cards are under it
+            snap(app, page: page, variant: variant)
+        }
+        app.terminate()
+    }
+
+    /// One short drag up (about 40% of the screen), for bringing what is just under the bottom edge into view.
+    @MainActor private func scrollHalfPage(_ app: XCUIApplication) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        sleep(1)
+    }
+
     @MainActor private func tour(variant: String, appearance: String, extra: [String] = []) throws {
         continueAfterFailure = true
 

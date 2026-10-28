@@ -213,6 +213,8 @@ public final class AppModel {
             guard let self, self.screen == .reading, self.chat?.id == job.preview else { return }
             self.finishJob(job)
         }
+        // 0.6.2: a first message from 新建对话 is a send too, so its conversation gets an island when it is accepted.
+        jobs.accepted = { [weak self] job in self?.islandNewChatStarted(job) }
     }
 
     // MARK: Operations

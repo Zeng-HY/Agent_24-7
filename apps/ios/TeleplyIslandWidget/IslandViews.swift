@@ -14,6 +14,10 @@ enum IslandPalette {
     static let danger = Color("Danger")
     static let muted = Color("Muted")
     static let ink = Color("Ink")
+    /// The lock-screen card is white on light and dark on dark, like the lock screen's own notifications (0.6.2,
+    /// user 10-28): the same colour the card's system action (its ✕) takes.
+    static let cardBackground = Color("CardBackground")
+    static let cardForeground = Color("CardForeground")
 
     static func source(_ app: String) -> Color {
         switch app {
@@ -180,7 +184,8 @@ private struct PeerRow: View {
     }
 }
 
-/// The lock-screen card (and the .small size StandBy, Apple Watch and CarPlay show).
+/// The lock-screen card (and the .small size StandBy, Apple Watch and CarPlay show). It is white on light and dark on
+/// dark, like a notification on the lock screen (0.6.2, user 10-28); the Dynamic Island itself stays black.
 struct LockScreenCard: View {
     let attributes: IslandAttributes
     let state: IslandState
@@ -198,6 +203,8 @@ struct LockScreenCard: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        .activityBackgroundTint(IslandPalette.cardBackground)
+        .activitySystemActionForegroundColor(IslandPalette.cardForeground)
     }
 
     private var fullCard: some View {
