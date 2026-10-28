@@ -47,6 +47,7 @@
   - 改了什么：文件页照微信铺满屏幕，操作收进右上角的 ⋯；设置里去掉 Bark，「遥应通知」只剩一个绿色开关，没有说明文字；「外观」改成一行三段的选择；语音输入的开关也改成绿色。
   - 检查到哪：云端 #34 编译和浅色截图通过，Mac 上 `TeleplyCore` 158 项测试通过；没拍深色和最大字号，没上真机。截图测试里「右滑拉出侧栏时那一行不应被打开」偶尔失败（#33），和改动无关。
   - 为什么没上传：用户说「改完了先不要发布，我还有些其他的问题要你一并修改发布」。0.5.6 在等这些问题一起发，那是另一个会话的活，灵动岛不管。
+- **灵动岛阶段零**的代码已在 `main`（11b4fd8、f4d25a5、89b56df），云端 #37 只编译通过，Mac 上 `TeleplyCore` 175 项通过；**没上传 TestFlight**，还在等苹果后台的扩展 App ID 和描述文件（3.3）。这一版只加了扩展骨架、开发者选项里的试岛和「让中转改一下」，版本号仍是 0.5.6。真机验过后才算阶段零做成，阶段一从那里接着做。
 - **`project.yml`**：`MARKETING_VERSION: "0.5.6"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
 - **安卓**：同样的文件页和通知开关也改了（03ac35a、583f84f），没发。灵动岛不碰 `apps/android`。
 - **Windows**：0.27.0-dev.26，10-28 发布（GitHub 和阿里云），这台电脑装的就是它。
@@ -62,9 +63,9 @@
 
 ### 手机（`apps/ios`）
 
-- 工程由 XcodeGen 生成，描述文件是 `apps/ios/project.yml`。现有两个目标：`Teleply`（应用）和 `TeleplyUITests`（截图测试）。最低 iOS 26，只支持 iPhone，Swift 6，默认主线程（`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`）。
+- 工程由 XcodeGen 生成，描述文件是 `apps/ios/project.yml`。现在三个目标：`Teleply`（应用）、`TeleplyIslandWidget`（灵动岛的扩展，Bundle ID `com.pocketagentdesk.teleply.island`）和 `TeleplyUITests`（截图测试）。最低 iOS 26，只支持 iPhone，Swift 6，默认主线程（`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`）。
 - 版本见上面「版本和发布」。
-- **没有**小组件扩展，没有 `ActivityKit` 代码，没有注册网址协议（URL scheme）。点通知进对话靠通知里的 `teleply` 字段：`TeleplyModel/Push.swift` 的 `PushTarget`，再由 `AppModel.openNotification` 核对账号和电脑后打开。
+- **阶段零加的**：扩展入口在 `TeleplyIslandWidget/IslandWidgets.swift`，画面在 `IslandViews.swift`；应用和扩展共用 `Shared/IslandAttributes.swift`；纯逻辑在 `TeleplyCore/Sources/TeleplyIsland`。`Info.plist` 加了 `NSSupportsLiveActivities` 和网址协议 `teleply`（`teleply://open?d=…&a=…&c=…`，`PushTarget(url:)` 校验）。开发者选项的三行在 `SettingsView.swift`，动作在 `AppModel+Island.swift`。点通知进对话仍靠通知里的 `teleply` 字段：`TeleplyModel/Push.swift` 的 `PushTarget`，再由 `AppModel.openNotification` 核对账号和电脑后打开。
 - 登录信息在钥匙串里，访问级别是 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`（`Teleply/Platform/KeychainVault.swift:42`）。开机后解锁过一次，锁屏时也读得到。所以岛上的按钮在锁屏时也能发请求。
 - 作答都走 `WorkspaceModel.action(route, body)`（`TeleplyCore/Sources/TeleplyState/WorkspaceModel.swift:481`）：`codex/answer`、`claude/choose`（要电脑给的 `token`）、`deepseek/approval` 等。请求经中转的 `/d/{电脑编号}/…` 到电脑（`TeleplyModel/Relay.swift`）。它从不自己重发：回复丢了就留给用户核对。
 - 推送相关：`Teleply/Platform/Push.swift`（权限、令牌、点通知），`TeleplyState/PushModel.swift`，`TeleplyModel/Push.swift`（`/account/push/*` 请求）。
@@ -74,6 +75,7 @@
 - 中转对每台在线、账号下有登记手机的电脑，经隧道读它的事件流 `GET /api/notify/push`（一行一个 JSON）。事件只有三种：`done`、`failed`、`waiting`，带 `app` 和 `chat`（`deliver`，`relay_push.py:294`）。不认识的事件直接丢掉。
 - 中转自己写字（`WORDS`），用普通通知发给苹果：请求头 `apns-push-type: alert`、`apns-priority: 10`，主题 `com.pocketagentdesk.teleply`（`Apns.send`，`relay_push.py:88`）。同一个对话的同一种事 60 秒内只发一次；一个账号一小时最多 30 条。
 - 表：手机登记 `push_phones`，去重 `push_events`（建表在 `relay_accounts.py:60`）。手机的请求是 `POST /account/push/state|register|unregister|test`（`relay_service.py:272` 转给 `Push.account`）。
+- **阶段零加的岛**：`push_activities`（每个岛的推送令牌、电脑、来源、对话、最后状态；`relay_push.py` 的 `activity`）、`push_start`（远程开启令牌）；请求 `POST /account/push/activity|start-token|island-test`。`Apns.send` 多了 `push_type`、`priority`、`topic` 三个参数，普通通知的默认值不变。`island-test` 用 `liveactivity` 主题给登记过的岛推一条「好了」，苹果拒收时把原因交给手机。
 - 电脑掉线时，中转什么都不发（`relay_push.py` 里没有这段）。它知道哪些电脑在线：`self.hub.connections`（`relay_push.py:246`）。
 - 苹果推送密钥：名字 `TeleplyAPNs`，Production 环境，Topic Specific 类型。后台的主题列表按 Bundle ID 登记，只有 `com.pocketagentdesk.teleply` 一项（10-28 用户截图，400 个名额用了 1 个），灵动岛没有单独一项。**它认不认岛用的主题 `com.pocketagentdesk.teleply.push-type.liveactivity` 还没证实**：大概率认，因为这个主题就是这个 Bundle ID 加后缀；10-28 的假手机测法看不出来，以阶段零的真令牌为准（第 3.5 节）。
 
@@ -639,6 +641,8 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
 | 二 | 方案二 | 问题 5–6 | 中转、电脑、TestFlight 0.6.1 |
 | 三 | 方案三、六 | 问题 7–8 | 中转、电脑、TestFlight 0.6.2 |
 | 四 | 方案七 | 问题 9 | 中转、电脑、TestFlight 0.6.3 |
+
+**阶段零现在的进度（10-28）**：代码已在 `main`（89b56df），云端 #37 编过，本机 175 项 Swift 和 84 项 Python 通过。还没做的：用户在苹果后台登记扩展 App ID、做描述文件、传到 Codemagic（3.3 的 1–3 步），然后更新中转（3.4）和上传 TestFlight（3.7，先问）。做完这几步，按下面的两条真机验收。
 
 **阶段零的真机验收**：
 

@@ -1,4 +1,4 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.5 构建 11 已发 TestFlight，待真机验；0.5.6 已改完，按用户的意思先不发）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.5.5 构建 11 已发 TestFlight，待真机验；0.5.6 已改完，按用户的意思先不发；灵动岛阶段零已编过，等苹果后台和真机）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -24,6 +24,34 @@
 - **TestFlight**：工作流 `ios-native-testflight`。用 Codemagic 团队里的 App Store Connect 密钥 `Teleply Codemagic`（App Manager），证书引用名 `teleply_distribution`（Apple Distribution，到期 2027-10-26），描述文件引用名 `teleply_appstore`（Apple 后台名 `Teleply App Store`，App Store 类型）；Team ID `CPSVJ7235A`，Apple App ID `6826968427`。这些名字 Codemagic 的接口读不到，构建开始时才核对。上传前会核对包里的 Bundle ID、构建号、加密声明、图标、隐私清单和简体中文；只进内部测试（App Store Connect 里的内部测试组开了自动分发），不提交审核。证书别重新生成：数量有上限，重新生成还得重做描述文件。
 - 本机启动构建：`apps/ios/scripts/codemagic.ps1 -ListApps` 找到应用编号，再 `codemagic.ps1 -AppId <编号> -Workflow ios-native-check -Mode shots`。令牌放在 `%USERPROFILE%\.codemagic\token.txt`。构建的是 GitHub 上的 `main` 分支，先推送（10-27 起只留 `main`，`ios-native` 已合进去并删掉）。
 - Codemagic 免费额度每月 500 分钟；每次构建的实际分钟数记在下面。头两周用掉一半以上，就把检查构建挪到 GitHub Actions。
+
+## 阶段零：灵动岛打通（10-28，版本号仍是 0.5.6，未上传）
+
+按交接文档第 7 节从零开始。这一阶段只证明整条路是通的：手机能自己开一个岛，中转能改它；跟着对话走的岛在阶段一。
+
+做了什么：
+
+- **工程里多了个小组件扩展** `TeleplyIslandWidget`（Bundle ID `com.pocketagentdesk.teleply.island`）：灵动岛、锁屏卡片、待机显示和手表/车机的 `.small` 样子都在这一版里。应用和扩展共用 `Shared/IslandAttributes.swift`；状态、文字、颜色角色、相关性、网址和请求体放在新的 `TeleplyIsland` 模块，这台电脑上能测。
+- **状态和文字**：在干活、在等你、好了、出错停了、断开了、额度用完；紧凑、最小、展开、锁屏各有样子，计时用系统自己走的 `Text(timerInterval:)`，不靠推送。
+- **设置里的入口**：`Info.plist` 加了 `NSSupportsLiveActivities` 和网址协议 `teleply`。设置 → 开发者选项 → 灵动岛 有三行：试一下灵动岛（只在本机开，不经过中转）、让中转改一下（把岛的令牌登记到中转，请中转推一条 ✓ 好了）、关掉试的岛。0.6.0 以前入口只在这里。
+- **点岛进对话**：`teleply://open?d=…&a=…&c=…`，应用照点通知的规矩核对账号、电脑和来源，再打开对话。
+- **中转**：新表 `push_activities`（每个岛的令牌和最后状态）、`push_start`（远程开启令牌）；新请求 `POST /account/push/activity`、`/start-token`、`/island-test`。岛的推送用 `apns-push-type: liveactivity`、主题 `com.pocketagentdesk.teleply.push-type.liveactivity`、10 分钟过期。`island-test` 只推「好了」，苹果拒收时把原因交给手机，所以「让中转改一下」成功就证明密钥认这个主题（交接 3.5 没证成的那个问题）。
+- **Codemagic**：TestFlight 工作流加了 `teleply_island_appstore`；`ci-testflight.sh` 会拦下扩展没进包、Bundle ID / 构建号 / 版本不对、不是 WidgetKit 扩展、不是 iPhone only、应用没开实时活动；`ci-check.sh` 比较扩展里的图标和颜色副本和应用里的是否一样。
+- **测试**：这台电脑 `TeleplyCore` 175 项通过（新加 11 项岛的文字、样例、网址、请求体，6 项试岛和让中转改一下）；Python 84 项通过（中转 18 项，其他 66 项）。中转的新测试核对请求头、主题、样例 JSON、令牌失效和账号清理。
+
+检查情况：
+
+- 云端 #37（89b56df，只编译）：应用、扩展和截图测试包都编过；Mac 上 175 项通过。唯一的警告是 0.5.6 就在的 `ChatModel.swift:590`（`began` 那里）。
+- 本机没拍截图（这台电脑编不了 SwiftUI）；「灵动岛样子」那一页还没做，等阶段一。
+- 没上真机，没上传 TestFlight：苹果后台的扩展 App ID 和描述文件还没做，等用户点。
+
+### 留给你在真机上验（阶段零）
+
+先做苹果后台那两处、把描述文件传到 Codemagic、上传这一版，再验。按顺序：
+
+1. 设置 → 开发者选项 → 灵动岛 → 试一下灵动岛。锁屏：岛出现在灵动岛和锁屏上，计时在走；点它打开遥应。
+2. 同一页点「让中转改一下」：几秒内岛变成 ✓「好了」。这一下证明苹果的推送密钥认灵动岛的主题。如果这里写「苹果没收下…」，把那段字告诉我。
+3. 到系统设置 → 遥应 → 实时活动 关掉，再回开发者选项点「试一下灵动岛」：应提示去系统设置打开；打开后再试，能开。
 
 ## 0.5.6：文件页照微信铺满屏幕，设置里去掉 Bark（10-28 改完，按用户的意思先不发 TestFlight）
 
@@ -372,6 +400,9 @@ Codemagic 构建记录（分钟数按构建开始到结束）：
 | #32 `6ae137d0…` | ios-native-testflight | 成功 | 5（排队 0） | 0.5.5（11）上传，Delivery UUID `e119f368-417c-4459-9abc-f43103d96236`；从 `main` 的 969b396 构建 |
 | #33 `6ae140a9…` | ios-native-check（shots，浅色） | 失败 | 约 6 | 0.5.6 文件页（f18038c）：界面编译通过，Mac 上 158 项通过；截图测试在“右滑拉侧栏时那一行被打开”一步失败（0.4.1 修过，偶尔还会出现），没拍到文件页 |
 | #34 `6ae14457…` | ios-native-check（shots，浅色） | 成功 | 9（排队 0） | 0.5.6 文件页和设置（e9bbf3d）：全部通过；文件页铺满、⋯ 菜单、设置的开关和外观都拍到，截图存 `F:\Android-Dev\work\ios-056-screens` |
+| #35 `6ae159ff…` | ios-native-check（compile） | 失败 | 4 | 阶段零第一次（11b4fd8）：应用和扩展编到 `IslandWidgets.swift` 的展开区；`DynamicIslandExpandedContentBuilder` 里不能用包住区域的 `if` |
+| #36 `6ae15aee…` | ios-native-check（compile） | 失败 | 3 | 去掉那个 `if`；`ActivityKit` 的 `Activity` 在这个 SDK 里没标 Sendable，`await activity.update/end` 被 Swift 6 拦下 |
+| #37 `6ae15be2…` | ios-native-check（compile） | 成功 | 3 | 用 `@preconcurrency import ActivityKit`；应用、扩展和测试包都编过，Mac 上 175 项通过 |
 
 10-26 一天用了约 170 分钟（每月 500）。照计划“头两周用掉一半以上就把检查构建挪到 GitHub Actions”，阶段 4 开始前就该挪：要你在这台电脑上登录一次 GitHub 命令行工具。
 
