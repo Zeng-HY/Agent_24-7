@@ -38,7 +38,8 @@ import chats
 import machines
 import ntfy_feed
 
-POLL_SECONDS = 10
+POLL_SECONDS = 5   # between looks while nothing runs (user 10-28: pushes felt slow at 10 s)
+POLL_FAST = 2      # between looks while any turn is running
 TAIL_BYTES = 256 << 10  # how much of a grown file is read; a turn's end is the last thing written
 LIMIT = 30              # conversations of each app looked at, newest first
 DEFAULT_SERVER = "https://api.day.app"
@@ -309,15 +310,19 @@ class Notifier:
     def close(self) -> None:
         self.stopped.set()
 
+    def _poll_seconds(self) -> float:
+        """2 s while a turn runs, 5 s otherwise: the record's next change reaches the relay and the island sooner."""
+        return POLL_FAST if self.running else POLL_SECONDS
+
     def _run(self) -> None:
         self.page_url()  # the Tailscale name takes up to 5 s to read; not when the first notification is due
         trouble = ""
-        while not self.stopped.wait(POLL_SECONDS):
+        while not self.stopped.wait(self._poll_seconds()):
             try:
                 self.look()
                 trouble = ""
             except Exception as exc:
-                if str(exc) != trouble:  # once for each kind of trouble, not every 10 s
+                if str(exc) != trouble:  # once for each kind of trouble, not every few seconds
                     trouble = str(exc)
                     self.log("通知：读对话出错\n" + traceback.format_exc())
 

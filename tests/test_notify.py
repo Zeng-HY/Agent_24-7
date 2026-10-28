@@ -137,6 +137,12 @@ class Watcher(unittest.TestCase):
         with self.codex.open("a", encoding="utf-8") as f:
             f.write(codex_line(kind, ts, turn_id=turn_id, last_agent_message=text) + "\n")
 
+    def test_the_look_quickens_while_a_turn_runs(self):
+        self.assertEqual(self.notifier._poll_seconds(), notify.POLL_SECONDS)
+        self.notifier.running[("codex", "thread-9")] = self.now
+        self.assertEqual(self.notifier._poll_seconds(), notify.POLL_FAST)
+        self.assertLess(notify.POLL_FAST, notify.POLL_SECONDS)
+
     def test_a_turn_that_ends_is_sent_once_with_a_link_to_it(self):
         self.notifier.look()  # what had ended before the service started is not sent
         self.assertEqual(self.sent, [])

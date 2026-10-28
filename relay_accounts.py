@@ -69,6 +69,11 @@ class Accounts:
                     saved_state TEXT, saved_since INTEGER, saved_turn INTEGER, title TEXT DEFAULT '');
                 CREATE INDEX IF NOT EXISTS push_activities_owner ON push_activities(owner);
                 CREATE INDEX IF NOT EXISTS push_activities_chat ON push_activities(device, app, chat);
+                -- 0.6.3: one island per computer; these are the conversations its counts and list are made of
+                CREATE TABLE IF NOT EXISTS push_conversations(device TEXT, app TEXT, chat TEXT, owner TEXT,
+                    title TEXT DEFAULT '', state TEXT, since INTEGER, turn INTEGER, refreshed REAL,
+                    PRIMARY KEY(device, app, chat));
+                CREATE INDEX IF NOT EXISTS push_conversations_device ON push_conversations(device);
                 CREATE TABLE IF NOT EXISTS push_start(token TEXT PRIMARY KEY, owner TEXT, environment TEXT,
                     refreshed REAL);
             ''')
@@ -186,6 +191,7 @@ class Accounts:
             db.execute('DELETE FROM grants WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_phones WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_activities WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_conversations WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_start WHERE owner=?', (owner,))
 
     def reset(self, code, password):
@@ -198,6 +204,7 @@ class Accounts:
             db.execute('DELETE FROM grants WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_phones WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_activities WHERE owner=?', (owner,))
+            db.execute('DELETE FROM push_conversations WHERE owner=?', (owner,))
             db.execute('DELETE FROM push_start WHERE owner=?', (owner,))
 
     def bind(self, code, label, expected_name):
