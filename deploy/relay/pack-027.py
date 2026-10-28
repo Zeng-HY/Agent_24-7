@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RELAY = ['relay_service.py', 'relay_identity.py', 'relay_accounts.py', 'relay_mail.py', 'relay_transport.py', 'relay_pages.py',
          'relay_push.py', 'windows-version.json', 'relay_routing.js', 'relay_account.html', 'relay_account.css', 'relay_account.js',
          'requirements-relay.txt']
-DEPLOY = ['stage-027.sh', 'update-027.sh', 'switch-027.py', 'configure-mail.py', 'configure-push.py', 'agent-relay-027.service',
-          'README-027.md']
+DEPLOY = ['stage-027.sh', 'update-027.sh', 'switch-027.py', 'configure-mail.py', 'configure-push.py', 'check-island-topic.py',
+          'agent-relay-027.service', 'README-027.md']
 
 
 def main():
