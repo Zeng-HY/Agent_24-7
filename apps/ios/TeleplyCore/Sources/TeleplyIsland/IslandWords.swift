@@ -153,6 +153,7 @@ public enum IslandWords {
 
     /// One sentence for VoiceOver, e.g. "Claude 在干活，已经 4 分 31 秒".
     public static func accessibility(app: String, state: IslandState, now: Int) -> String {
+        if let line = aggregate(state) { return "遥应，" + line }
         let name = appName(app), word = self.state(state.status ?? .working), elapsed = duration(now - state.since)
         switch state.status ?? .working {
         case .working, .offline, .failed:
@@ -164,5 +165,44 @@ public enum IslandWords {
         case .limited:
             return "\(name)额度用完，" + countdown((state.resets ?? now) - now) + " 后恢复"
         }
+    }
+
+    // MARK: 0.6.3：一台电脑一个岛
+
+    /// How many conversations of this computer the island counts; nil on a 0.6.2 island that names one conversation.
+    public static func counts(_ state: IslandState) -> (working: Int, waiting: Int, total: Int)? {
+        guard state.working != nil || state.waiting != nil else { return nil }
+        let working = max(0, state.working ?? 0), waiting = max(0, state.waiting ?? 0)
+        return (working, waiting, working + waiting)
+    }
+
+    /// The compact island's right side when several conversations are counted: "3个工作中" / "2个等你定". nil when
+    /// one or none runs, where the timer or the state mark says it better.
+    public static func compactCount(_ state: IslandState) -> String? {
+        guard let counts = counts(state) else { return nil }
+        if counts.waiting > 0 { return "\(counts.waiting)个等你定" }
+        if counts.working >= 2 { return "\(counts.working)个工作中" }
+        return nil
+    }
+
+    /// The expanded island's and the lock-screen card's first line: "3 个对话工作中 · 1 个等你定"; nil when nothing
+    /// is running or waiting.
+    public static func aggregate(_ state: IslandState) -> String? {
+        guard let counts = counts(state), counts.total > 0 else { return nil }
+        var parts: [String] = []
+        if counts.working > 0 { parts.append("\(counts.working) 个对话工作中") }
+        if counts.waiting > 0 { parts.append("\(counts.waiting) 个对话等你定") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The one conversation a one-conversation island shows: its peer, when the relay sent the list.
+    public static func only(_ state: IslandState) -> IslandPeer? {
+        guard let counts = counts(state), counts.total == 1 else { return nil }
+        return state.peers?.first
+    }
+
+    /// A conversation's title on the island: its own, or 模型 · 电脑 when it has none.
+    public static func title(_ peer: IslandPeer, computer: String) -> String {
+        peer.title.isEmpty ? "\(appName(peer.app)) · \(computer)" : peer.title
     }
 }

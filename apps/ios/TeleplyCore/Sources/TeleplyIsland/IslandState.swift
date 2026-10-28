@@ -32,10 +32,14 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     /// The conversations running on this computer, for the long-press list (user 10-28: every one with its model
     /// logo, title and time). The relay fills it; the phone also fills its own before the first push.
     public var peers: [IslandPeer]?
+    /// 0.6.3: one island per computer. How many of its conversations are working, and how many are waiting for the
+    /// user; both are nil on an island from an older relay (one per conversation).
+    public var working: Int?
+    public var waiting: Int?
 
     public init(state: String, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
                 askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
-                peers: [IslandPeer]? = nil) {
+                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil) {
         self.state = state
         self.since = since
         self.turn = turn
@@ -47,14 +51,17 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
         self.step = step
         self.resets = resets
         self.peers = peers
+        self.working = working
+        self.waiting = waiting
     }
 
     /// The usual way to make one: a known state.
     public init(status: IslandStatus, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
                 askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
-                peers: [IslandPeer]? = nil) {
+                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil) {
         self.init(state: status.rawValue, since: since, turn: turn, ask: ask, askType: askType, choices: choices,
-                  askText: askText, askOptions: askOptions, step: step, resets: resets, peers: peers)
+                  askText: askText, askOptions: askOptions, step: step, resets: resets, peers: peers,
+                  working: working, waiting: waiting)
     }
 
     /// Nil for a state this build does not know (drawn as 在干活, still decoded).

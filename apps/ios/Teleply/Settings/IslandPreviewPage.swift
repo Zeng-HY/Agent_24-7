@@ -7,28 +7,43 @@ struct IslandPreviewPage: View {
     private let now = Int(Date().timeIntervalSince1970)
 
     private struct Sample: Identifiable {
+        let id: String
         let status: IslandStatus
         let state: IslandState
-        var id: String { status.rawValue }
+        var caption: String { IslandWords.state(status) }
+    }
+
+    /// 0.6.3's list samples: three conversations, one of them waiting.
+    private var several: [IslandPeer] {
+        [IslandPeer(app: "deepseek", chat: "c3", title: "选方案", state: "waiting", since: now - 30, turn: now - 200),
+         IslandPeer(app: "codex", chat: "c2", title: "跑测试", state: "working", since: now - 200, turn: now - 200),
+         IslandPeer(app: "claude", chat: "c1", title: "改登录页", state: "working", since: now - 300, turn: now - 300)]
     }
 
     private var samples: [Sample] {
         [
-            Sample(status: .working, state: IslandState(status: .working, since: now - 271, turn: now - 271)),
-            Sample(status: .waiting, state: IslandState(status: .waiting, since: now - 30, turn: now - 180,
-                                                       askType: "permission", choices: 2)),
-            Sample(status: .done, state: IslandState(status: .done, since: now - 5, turn: now - 377)),
-            Sample(status: .failed, state: IslandState(status: .failed, since: now - 20, turn: now - 300)),
-            Sample(status: .offline, state: IslandState(status: .offline, since: now - 185, turn: now - 400)),
-            Sample(status: .limited, state: IslandState(status: .limited, since: now - 30, turn: now - 300,
-                                                       resets: now + 7985)),
+            Sample(id: "working", status: .working, state: IslandState(status: .working, since: now - 271, turn: now - 271)),
+            Sample(id: "waiting", status: .waiting, state: IslandState(status: .waiting, since: now - 30, turn: now - 180,
+                                                                      askType: "permission", choices: 2)),
+            Sample(id: "done", status: .done, state: IslandState(status: .done, since: now - 5, turn: now - 377)),
+            Sample(id: "failed", status: .failed, state: IslandState(status: .failed, since: now - 20, turn: now - 300)),
+            Sample(id: "offline", status: .offline, state: IslandState(status: .offline, since: now - 185, turn: now - 400)),
+            Sample(id: "limited", status: .limited, state: IslandState(status: .limited, since: now - 30, turn: now - 300,
+                                                                      resets: now + 7985)),
+            // 0.6.3: one island for the whole computer
+            Sample(id: "several-working", status: .working,
+                   state: IslandState(status: .working, since: now - 200, turn: now - 200,
+                                      peers: Array(several.suffix(2)), working: 2, waiting: 0)),
+            Sample(id: "several-waiting", status: .waiting,
+                   state: IslandState(status: .waiting, since: now - 30, turn: now - 200, peers: several,
+                                      working: 2, waiting: 1)),
         ]
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("真机上灵动岛一次只显示最要紧的一个；这里是各种状态的样子，尺寸是按苹果的规格近似画的。")
+                Text("真机上遥应一台电脑一个岛；同时有几个对话时，紧凑样子显示个数。这里是各种状态的样子，尺寸是按苹果的规格近似画的。")
                     .noteFont()
                     .foregroundStyle(Palette.muted)
 
@@ -59,7 +74,8 @@ struct IslandPreviewPage: View {
                         ForEach(samples) { sample in
                             VStack(spacing: 4) {
                                 CompactPreview(status: sample.status, state: sample.state)
-                                Text(IslandWords.state(sample.status)).captionFont().foregroundStyle(Palette.muted)
+                                Text(IslandWords.compactCount(sample.state) ?? sample.caption)
+                                    .captionFont().foregroundStyle(Palette.muted)
                             }
                         }
                     }
@@ -116,19 +132,25 @@ private struct CompactPreview: View {
     }
 
     @ViewBuilder private var trailing: some View {
-        switch status {
-        case .working:
-            Text("4:31").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white)
-        case .waiting:
-            Text("等你").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.askGo)
-        case .done:
-            Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.success)
-        case .failed:
-            Image(systemName: "exclamationmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.danger)
-        case .offline:
-            Text("断开").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted)
-        case .limited:
-            Text("2:13").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(Palette.askGo)
+        if let count = IslandWords.compactCount(state) {
+            Text(count)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle((state.waiting ?? 0) > 0 ? Palette.askGo : .white)
+        } else {
+            switch status {
+            case .working:
+                Text("4:31").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white)
+            case .waiting:
+                Text("等你").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.askGo)
+            case .done:
+                Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.success)
+            case .failed:
+                Image(systemName: "exclamationmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.danger)
+            case .offline:
+                Text("断开").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted)
+            case .limited:
+                Text("2:13").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(Palette.askGo)
+            }
         }
     }
 }
@@ -141,14 +163,38 @@ private struct ExpandedPreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                SourceMark(app: "claude", size: 16)
-                Text("Claude · 我的电脑").font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Spacer(minLength: 8)
-                trailing
+            if let counts = IslandWords.counts(state), counts.total >= 2 {
+                HStack(spacing: 8) {
+                    Image("TeleplyMark")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 15, height: 15)
+                    Text(IslandWords.aggregate(state) ?? "")
+                        .font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Spacer(minLength: 8)
+                }
+                ForEach(Array((state.peers ?? []).prefix(3)), id: \.chat) { peer in
+                    HStack(spacing: 8) {
+                        SourceMark(app: peer.app, size: 13)
+                        Text(peer.title.isEmpty ? IslandWords.appName(peer.app) : peer.title)
+                            .font(.system(size: 12)).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(peer.status == .waiting ? "等你" : "4:31")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(peer.status == .waiting ? Palette.askGo : .white)
+                    }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    SourceMark(app: "claude", size: 16)
+                    Text("Claude · 我的电脑").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Spacer(minLength: 8)
+                    trailing
+                }
+                Text(IslandWords.detail(state, now: now)).font(.system(size: 13)).foregroundStyle(.white)
+                    .lineLimit(1)
             }
-            Text(IslandWords.detail(state, now: now)).font(.system(size: 13)).foregroundStyle(.white)
-                .lineLimit(1)
         }
         .padding(14)
         .frame(width: 340, alignment: .leading)
@@ -183,22 +229,47 @@ private struct LockCardPreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                SourceMark(app: "claude", size: 20)
-                Text("Claude · 我的电脑").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
-                Spacer(minLength: 8)
-                if let symbol = IslandWords.symbol(status) {
-                    Image(systemName: symbol).font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(IslandWords.colorRole(status) == .success ? Palette.success
-                                         : IslandWords.colorRole(status) == .danger ? Palette.danger : Palette.muted)
+            if let counts = IslandWords.counts(state), counts.total >= 2 {
+                HStack(spacing: 8) {
+                    Image("TeleplyMark")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(Palette.ink)
+                    Text(IslandWords.aggregate(state) ?? "")
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Spacer(minLength: 8)
                 }
-            }
-            HStack(spacing: 6) {
-                Text(IslandWords.detail(state, now: now)).font(.system(size: 13))
-                    .foregroundStyle(IslandWords.colorRole(status) == .muted ? Palette.muted : Palette.ink)
-                    .lineLimit(1)
-                if status == .working || status == .offline {
-                    Text("4:31").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(Palette.ink)
+                ForEach(Array((state.peers ?? []).prefix(3)), id: \.chat) { peer in
+                    HStack(spacing: 7) {
+                        SourceMark(app: peer.app, size: 15)
+                        Text(peer.title.isEmpty ? IslandWords.appName(peer.app) : peer.title)
+                            .font(.system(size: 13)).foregroundStyle(Palette.ink).lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(peer.status == .waiting ? "等你" : "4:31")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(peer.status == .waiting ? Palette.askGo : Palette.ink)
+                    }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    SourceMark(app: "claude", size: 20)
+                    Text("Claude · 我的电脑").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Spacer(minLength: 8)
+                    if let symbol = IslandWords.symbol(status) {
+                        Image(systemName: symbol).font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(IslandWords.colorRole(status) == .success ? Palette.success
+                                             : IslandWords.colorRole(status) == .danger ? Palette.danger : Palette.muted)
+                    }
+                }
+                HStack(spacing: 6) {
+                    Text(IslandWords.detail(state, now: now)).font(.system(size: 13))
+                        .foregroundStyle(IslandWords.colorRole(status) == .muted ? Palette.muted : Palette.ink)
+                        .lineLimit(1)
+                    if status == .working || status == .offline {
+                        Text("4:31").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(Palette.ink)
+                    }
                 }
             }
         }

@@ -18,6 +18,8 @@ enum IslandPalette {
     /// user 10-28): the same colour the card's system action (its ✕) takes.
     static let cardBackground = Color("CardBackground")
     static let cardForeground = Color("CardForeground")
+    /// On the Dynamic Island itself, always white: the island is black whatever the phone's appearance (0.6.3).
+    static let islandInk = Color.white
 
     static func source(_ app: String) -> Color {
         switch app {
@@ -98,7 +100,8 @@ struct BrandMark: View {
 }
 
 /// The long-press list: every conversation still working or waiting on this computer, with its model, title and
-/// time. A row opens that conversation (`teleply://open…`), the same check as a tapped notification.
+/// time. 0.6.3: a first line counts them; a row opens that conversation (`teleply://open…`), the same check as a
+/// tapped notification.
 struct PeerList: View {
     let device: String
     let state: IslandState
@@ -111,15 +114,24 @@ struct PeerList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
+            if let line = IslandWords.aggregate(state) {
+                Text(line)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(IslandPalette.islandInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
             if let peers {
                 ForEach(peers, id: \.chat) { peer in
                     PeerRow(device: device, computer: computer, peer: peer)
                 }
+            } else if let peer = IslandWords.only(state) {
+                PeerRow(device: device, computer: computer, peer: peer)
             } else {
                 HStack(spacing: 7) {
                     BrandMark(size: 13)
                     Text(IslandWords.detail(state, now: Int(Date().timeIntervalSince1970)))
-                        .font(.system(size: 12)).foregroundStyle(IslandPalette.ink).lineLimit(1)
+                        .font(.system(size: 12)).foregroundStyle(IslandPalette.islandInk).lineLimit(1)
                     Spacer(minLength: 6)
                     Trailing(app: "", state: state, size: 11, compact: true)
                 }
@@ -134,6 +146,8 @@ private struct PeerRow: View {
     let device: String
     let computer: String
     let peer: IslandPeer
+    /// White on the black island; the lock-screen card's own ink on its white or dark background (0.6.3).
+    var ink = IslandPalette.islandInk
 
     private var title: String {
         if peer.title.isEmpty { return IslandWords.appName(peer.app) + " · " + computer }
@@ -157,7 +171,7 @@ private struct PeerRow: View {
             }
             Text(title)
                 .font(.system(size: 14))
-                .foregroundStyle(IslandPalette.ink)
+                .foregroundStyle(ink)
                 .lineLimit(1)
             Spacer(minLength: 6)
             trailing
@@ -171,7 +185,7 @@ private struct PeerRow: View {
         case .working:
             Elapsed(since: peer.since)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(IslandPalette.ink)
+                .foregroundStyle(ink)
         case .waiting:
             Text("等你").font(.system(size: 13, weight: .semibold)).foregroundStyle(IslandPalette.ask)
         case .done:
@@ -209,9 +223,20 @@ struct LockScreenCard: View {
     }
 
     private var fullCard: some View {
+        Group {
+            if count >= 2 {
+                aggregateCard  // 0.6.3: several conversations on this computer, counted and listed
+            } else {
+                singleCard
+            }
+        }
+    }
+
+    /// One conversation (or none left): the 0.6.2 card, its title and mark from the one peer when the relay sent it.
+    private var singleCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 9) {
-                IslandMark(app: attributes.app, size: 24, dot: state.status == .waiting)
+                mark
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(IslandPalette.ink)
@@ -221,7 +246,7 @@ struct LockScreenCard: View {
                     Image(systemName: symbol)
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
-                                                             app: attributes.app))
+                                                             app: peer?.app ?? attributes.app))
                 }
             }
             HStack(spacing: 7) {
@@ -243,12 +268,46 @@ struct LockScreenCard: View {
         }
     }
 
+    /// Several conversations: the count line first, then up to three of them with title, state and timer (0.6.3).
+    private var aggregateCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 9) {
+                BrandMark(size: 24, dot: waiting)
+                Text(IslandWords.aggregate(state) ?? "")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(IslandPalette.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 8)
+            }
+            ForEach(peers.prefix(3), id: \.chat) { peer in
+                PeerRow(device: attributes.device, computer: attributes.computer, peer: peer, ink: IslandPalette.ink)
+            }
+        }
+    }
+
+    private var peers: [IslandPeer] { state.peers ?? [] }
+    private var count: Int { IslandWords.counts(state)?.total ?? peers.count }
+    private var waiting: Bool { (state.waiting ?? 0) > 0 || state.status == .waiting }
+    private var peer: IslandPeer? { IslandWords.only(state) ?? peers.first }
+
+    @ViewBuilder private var mark: some View {
+        if let app = peer?.app ?? (attributes.app.isEmpty ? nil : attributes.app) {
+            IslandMark(app: app, size: 24, dot: waiting)
+        } else {
+            BrandMark(size: 24, dot: waiting)
+        }
+    }
+
     private var title: String {
-        attributes.title.isEmpty ? "\(IslandWords.appName(attributes.app)) · \(attributes.computer)" : attributes.title
+        if let peer { return IslandWords.title(peer, computer: attributes.computer) }
+        if !attributes.title.isEmpty { return attributes.title }
+        if attributes.app.isEmpty { return "遥应 · \(attributes.computer)" }
+        return "\(IslandWords.appName(attributes.app)) · \(attributes.computer)"
     }
 
     private var detailColor: Color {
-        IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: attributes.app)
+        IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: peer?.app ?? attributes.app)
     }
 }
 
@@ -259,31 +318,57 @@ struct SmallCard: View {
 
     private var now: Int { Int(Date().timeIntervalSince1970) }
 
+    private var peers: [IslandPeer] { state.peers ?? [] }
+    private var count: Int { IslandWords.counts(state)?.total ?? peers.count }
+    private var waiting: Bool { (state.waiting ?? 0) > 0 || state.status == .waiting }
+
     private var title: String {
-        attributes.title.isEmpty ? "\(IslandWords.appName(attributes.app)) · \(attributes.computer)" : attributes.title
+        if let peer = IslandWords.only(state) ?? peers.first { return IslandWords.title(peer, computer: attributes.computer) }
+        if !attributes.title.isEmpty { return attributes.title }
+        return attributes.app.isEmpty ? "遥应 · \(attributes.computer)"
+            : "\(IslandWords.appName(attributes.app)) · \(attributes.computer)"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(IslandPalette.ink)
-                .lineLimit(1)
-            HStack(spacing: 6) {
-                IslandMark(app: attributes.app, size: 18, dot: state.status == .waiting)
-                Text(IslandWords.state(state.status ?? .working))
-                    .font(.system(size: 15, weight: .semibold))
+            if count >= 2, let line = IslandWords.aggregate(state) {
+                // 0.6.3: several conversations — the count, not one timer, is what the watch shows.
+                Text(line)
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(IslandPalette.ink)
-            }
-            if state.status == .working || state.status == .offline || state.status == nil {
-                Elapsed(since: state.since)
-                    .font(.system(size: 22, weight: .medium))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                HStack(spacing: 6) {
+                    BrandMark(size: 18, dot: waiting)
+                    Text("\(count) 个对话")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(IslandPalette.ink)
+                }
+            } else {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(IslandPalette.ink)
-            } else if let symbol = IslandWords.symbol(state.status ?? .working) {
-                Image(systemName: symbol)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
-                                                         app: attributes.app))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if let app = peers.first?.app ?? (attributes.app.isEmpty ? nil : attributes.app) {
+                        IslandMark(app: app, size: 18, dot: waiting)
+                    } else {
+                        BrandMark(size: 18, dot: waiting)
+                    }
+                    Text(IslandWords.state(state.status ?? .working))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(IslandPalette.ink)
+                }
+                if state.status == .working || state.status == .offline || state.status == nil {
+                    Elapsed(since: state.since)
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(IslandPalette.ink)
+                } else if let symbol = IslandWords.symbol(state.status ?? .working) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
+                                                             app: peers.first?.app ?? attributes.app))
+                }
             }
         }
     }
@@ -356,37 +441,43 @@ struct Trailing: View {
 
     var body: some View {
         Group {
-            switch state.status ?? .working {
-            case .working:
-                Elapsed(since: state.since)
-                    .font(.system(size: size, weight: .medium))
-                    .foregroundStyle(IslandPalette.ink)
-            case .offline:
-                if compact {
-                    Text("断开")
-                        .font(.system(size: size, weight: .medium))
-                        .foregroundStyle(IslandPalette.muted)
-                } else {
+            if let text = IslandWords.compactCount(state) {  // 0.6.3: several conversations, counted
+                Text(text)
+                    .font(.system(size: size, weight: .semibold))
+                    .foregroundStyle((state.waiting ?? 0) > 0 ? IslandPalette.ask : IslandPalette.islandInk)
+            } else {
+                switch state.status ?? .working {
+                case .working:
                     Elapsed(since: state.since)
                         .font(.system(size: size, weight: .medium))
-                        .foregroundStyle(IslandPalette.muted)
+                        .foregroundStyle(IslandPalette.islandInk)
+                case .offline:
+                    if compact {
+                        Text("断开")
+                            .font(.system(size: size, weight: .medium))
+                            .foregroundStyle(IslandPalette.muted)
+                    } else {
+                        Elapsed(since: state.since)
+                            .font(.system(size: size, weight: .medium))
+                            .foregroundStyle(IslandPalette.muted)
+                    }
+                case .waiting:
+                    Text("等你")
+                        .font(.system(size: size, weight: .semibold))
+                        .foregroundStyle(IslandPalette.ask)
+                case .limited:
+                    Countdown(until: state.resets ?? now)
+                        .font(.system(size: size, weight: .medium))
+                        .foregroundStyle(IslandPalette.ask)
+                case .done:
+                    Image(systemName: "checkmark")
+                        .font(.system(size: size, weight: .bold))
+                        .foregroundStyle(IslandPalette.success)
+                case .failed:
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: size, weight: .bold))
+                        .foregroundStyle(IslandPalette.danger)
                 }
-            case .waiting:
-                Text("等你")
-                    .font(.system(size: size, weight: .semibold))
-                    .foregroundStyle(IslandPalette.ask)
-            case .limited:
-                Countdown(until: state.resets ?? now)
-                    .font(.system(size: size, weight: .medium))
-                    .foregroundStyle(IslandPalette.ask)
-            case .done:
-                Image(systemName: "checkmark")
-                    .font(.system(size: size, weight: .bold))
-                    .foregroundStyle(IslandPalette.success)
-            case .failed:
-                Image(systemName: "exclamationmark")
-                    .font(.system(size: size, weight: .bold))
-                    .foregroundStyle(IslandPalette.danger)
             }
         }
         .lineLimit(1)
@@ -404,11 +495,18 @@ struct Minimal: View {
     let app: String
     let state: IslandState
 
+    private var total: Int { IslandWords.counts(state)?.total ?? 0 }
+
     var body: some View {
         HStack(spacing: 2) {
-            BrandMark(size: 16, dot: state.status == .waiting)
+            BrandMark(size: 16, dot: (state.waiting ?? 0) > 0 || state.status == .waiting)
                 .opacity(state.status == .offline ? 0.55 : 1)
-            if let symbol = IslandWords.symbol(state.status ?? .working) {
+            if total >= 2 {  // 0.6.3: how many conversations are behind this circle
+                Text("\(total)")
+                    .font(.system(size: 10, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(IslandPalette.islandInk)
+            } else if let symbol = IslandWords.symbol(state.status ?? .working) {
                 Image(systemName: symbol)
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: app))

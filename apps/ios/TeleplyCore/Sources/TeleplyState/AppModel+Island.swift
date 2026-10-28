@@ -57,15 +57,19 @@ extension AppModel {
         }
     }
 
-    /// A message was taken by the computer (已接收 / 已送达 / 已排队): this conversation gets its island.
+    /// A message was taken by the computer (已接收 / 已送达 / 已排队): this computer's island starts or is brought
+    /// back to 在干活 (0.6.3: one island for the whole computer).
     func islandSendStarted(_ record: Submission) {
         guard island.wanted, !fixture, !expired, account != nil else { return }
         // Only a send made now: a receipt read again for an old one (opening the app, a state poll) must not open an
         // island for a conversation that has long been over.
         guard services.now() - record.created < 120_000 else { return }
-        let identity = IslandIdentity(device: record.device, app: record.app, chat: record.chat,
-                                      computer: computerLabel(record.device), title: chatTitle(record.chat))
-        islandStart(identity)
+        let now = islandNow()
+        let identity = IslandIdentity(device: record.device, app: "", chat: "", computer: computerLabel(record.device),
+                                      title: "")
+        let peer = IslandPeer(app: record.app, chat: record.chat, title: chatTitle(record.chat), state: "working",
+                              since: now, turn: now)
+        islandStart(identity, peer)
     }
 
     /// 新建对话's first message was accepted (0.6.2): the conversation the computer made gets its island too. Before
@@ -75,42 +79,47 @@ extension AppModel {
         let made = job.pending["app"].string()
         let title = job.pending["title"].string()
         let words = oneLine(job.text, limit: 40)
-        let identity = IslandIdentity(device: device.id, app: made.isEmpty ? job.app : made, chat: job.createdID,
-                                      computer: device.label, title: title.isEmpty ? words : title)
-        islandStart(identity)
+        let now = islandNow()
+        let identity = IslandIdentity(device: device.id, app: "", chat: "", computer: device.label, title: "")
+        let peer = IslandPeer(app: made.isEmpty ? job.app : made, chat: job.createdID,
+                              title: title.isEmpty ? words : title, state: "working", since: now, turn: now)
+        islandStart(identity, peer)
     }
 
-    /// Starts this conversation's island, or turns the one it already has back to 在干活.
-    func islandStart(_ identity: IslandIdentity) {
-        if let existing = island.live.first(where: { $0.value.identity.device == identity.device
-            && $0.value.identity.app == identity.app && $0.value.identity.chat == identity.chat }) {
-            let now = islandNow(), state = IslandState(status: .working, since: now, turn: now)
+    /// Starts this computer's island, or updates the one it already has: the new conversation joins its list and
+    /// 在干活 count. The relay's next push replaces these local numbers with the computer's own (0.6.3).
+    func islandStart(_ identity: IslandIdentity, _ peer: IslandPeer) {
+        if let existing = island.live.first(where: { $0.value.identity.device == identity.device }) {
+            var state = existing.value.state
+            var peers = state.peers ?? []
+            let known = peers.contains { $0.app == peer.app && $0.chat == peer.chat }
+            if let index = peers.firstIndex(where: { $0.app == peer.app && $0.chat == peer.chat }) {
+                peers[index] = peer
+            } else {
+                peers.insert(peer, at: 0)
+            }
+            state.peers = Array(peers.prefix(3))
+            if !known { state.working = max(1, (state.working ?? max(0, peers.count - 1)) + 1) }
+            state.waiting = max(0, state.waiting ?? 0)
+            state.state = (state.waiting ?? 0) > 0 ? "waiting" : "working"
             var track = existing.value
             track.state = state
             track.registered = false
             island.live[existing.key] = track
-            var withPeers = state
-            withPeers.peers = islandPeers()
-            track.state = withPeers
-            island.live[existing.key] = track
-            islandRefreshPeers()
             Task { [weak self] in
                 guard let self else { return }
-                await services.island.update(IslandRef(raw: existing.key), withPeers)
+                await services.island.update(IslandRef(raw: existing.key), state)
                 await islandRegister(IslandRef(raw: existing.key))
             }
             return
         }
-        if island.live.count >= 3 {  // three at most (handoff 5.3); the oldest finished one makes way
+        if island.live.count >= 3 {  // three computers at most; the oldest finished one makes way
             guard let finished = island.live.first(where: { $0.value.state.status == .done }) else { return }
             island.live.removeValue(forKey: finished.key)
             Task { await services.island.end(IslandRef(raw: finished.key), finished.value.state, dismissIn: 0) }
         }
-        let now = islandNow()
-        var state = IslandState(status: .working, since: now, turn: now)
-        var peers = islandPeers()
-        peers.append(islandPeer(identity, state))
-        state.peers = Array(peers.prefix(3))
+        let state = IslandState(status: .working, since: peer.since, turn: peer.turn, peers: [peer], working: 1,
+                                waiting: 0)
         Task { [weak self] in
             guard let self else { return }
             await islandEndDemo()  // a left-over 试一下灵动岛 must not sit ahead of the real conversation
@@ -118,37 +127,8 @@ extension AppModel {
                 let ref = try await services.island.start(identity, state)
                 island.live[ref.raw] = IslandTrack(identity: identity, state: state)
                 islandFetchToken(ref)
-                islandRefreshPeers()
             } catch {
                 island.note = describe(error)
-            }
-        }
-    }
-
-    /// The conversations that should appear in the long-press list: still working or waiting, at most three.
-    func islandPeers() -> [IslandPeer] {
-        island.live.values.compactMap { track in
-            guard let status = track.state.status, status == .working || status == .waiting else { return nil }
-            return islandPeer(track.identity, track.state)
-        }
-    }
-
-    func islandPeer(_ identity: IslandIdentity, _ state: IslandState) -> IslandPeer {
-        IslandPeer(app: identity.app, chat: identity.chat, title: identity.title, state: state.state,
-                   since: state.since, turn: state.turn)
-    }
-
-    /// Gives every island the same long-press list after a conversation starts or ends, so the chosen island does
-    /// not keep showing a list that is a moment old.
-    func islandRefreshPeers() {
-        let peers = islandPeers()
-        for (key, var track) in island.live {
-            track.state.peers = peers
-            island.live[key] = track
-            let state = track.state  // taken here: the task must not read a variable the loop goes on changing
-            Task { [weak self] in
-                guard let self else { return }
-                await services.island.update(IslandRef(raw: key), state)
             }
         }
     }
@@ -161,13 +141,8 @@ extension AppModel {
                 Task { await services.island.end(ref, state, dismissIn: 0) }
                 return
             }
-            var withPeers = state
-            var peers = islandPeers()
-            peers.append(islandPeer(identity, state))
-            withPeers.peers = Array(peers.prefix(3))
-            island.live[ref.raw] = IslandTrack(identity: identity, state: withPeers)
+            island.live[ref.raw] = IslandTrack(identity: identity, state: state)  // the relay's list comes with it
             islandFetchToken(ref)
-            islandRefreshPeers()
         case let .token(ref, token):
             guard var track = island.live[ref.raw] else { return }
             track.token = token
@@ -176,7 +151,6 @@ extension AppModel {
             Task { await islandRegister(ref) }
         case let .dismissed(ref):
             guard let track = island.live.removeValue(forKey: ref.raw) else { return }
-            islandRefreshPeers()
             Task { await islandUnregister(track) }
         }
     }
@@ -226,18 +200,28 @@ extension AppModel {
         }
         let snaps = await services.island.running()
         let now = islandNow()
-        for snap in snaps where island.live[snap.ref.raw] == nil {
+        var kept: [IslandSnapshot] = []
+        for snap in snaps {
+            // 0.6.3 upgrade: the per-conversation islands of 0.6.2 give way to one island for the whole computer.
+            if !snap.identity.chat.isEmpty && snap.identity.chat != Self.islandDemoChat {
+                await services.island.end(snap.ref, snap.state, dismissIn: 0)
+                island.live.removeValue(forKey: snap.ref.raw)
+            } else {
+                kept.append(snap)
+            }
+        }
+        for snap in kept where island.live[snap.ref.raw] == nil {
             island.live[snap.ref.raw] = IslandTrack(identity: snap.identity, state: snap.state)
             islandFetchToken(snap.ref)
         }
-        for snap in snaps {
+        for snap in kept {
             guard var track = island.live[snap.ref.raw] else { continue }
             track.state = snap.state
             island.live[snap.ref.raw] = track
         }
-        let refs = Set(snaps.map(\.ref.raw))
+        let refs = Set(kept.map(\.ref.raw))
         for key in Array(island.live.keys) where !refs.contains(key) { island.live.removeValue(forKey: key) }
-        for snap in snaps {
+        for snap in kept {
             guard let status = snap.state.status, status == .done || status == .failed else { continue }
             if now - snap.state.since > 10 * 60 {
                 await services.island.end(snap.ref, snap.state, dismissIn: 0)

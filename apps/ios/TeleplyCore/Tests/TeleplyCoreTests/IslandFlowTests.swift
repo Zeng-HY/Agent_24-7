@@ -184,7 +184,10 @@ struct IslandFlowTests {
         model.islandSendStarted(record)
         for _ in 0..<100 where island.starts.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
         #expect(island.starts.count == 1)
-        #expect(island.starts.first?.0.chat == "demo" && island.starts.first?.0.app == "codex")
+        // 0.6.3: one island names the whole computer; the conversation is in its list.
+        #expect(island.starts.first?.0.chat == "" && island.starts.first?.0.app == "")
+        #expect(island.starts.first?.0.device == DemoData.computerA)
+        #expect(island.starts.first?.1.peers?.first?.chat == "demo")
         for _ in 0..<150 where !model.island.live.values.contains(where: { $0.registered }) {
             try? await Task.sleep(for: .milliseconds(20))
         }
@@ -204,14 +207,18 @@ struct IslandFlowTests {
         model.workspace.create()
         await model.workspace.settle()
         await model.settle()
-        for _ in 0..<8 where !island.starts.contains(where: { $0.0.chat == "fixture-new-1" }) {
+        for _ in 0..<8 where !island.starts.contains(where: { $0.0.chat == "" }) {
             if let job = model.jobs.jobs.first { model.jobs.check(job) }
             await model.jobs.settle()
             await model.settle()
         }
-        let started = island.starts.first { $0.0.chat == "fixture-new-1" }
-        #expect(started?.0.app == "codex")
-        #expect(started?.0.title == "写一个测试")
+        let started = island.starts.first { $0.0.chat == "" }
+        #expect(started?.0.app == "")
+        #expect(started?.0.device == DemoData.computerA)
+        let peer = started?.1.peers?.first
+        #expect(peer?.app == "codex")
+        #expect(peer?.chat == "fixture-new-1")
+        #expect(peer?.title == "写一个测试")
         #expect(started?.1.status == .working)
     }
 
@@ -246,31 +253,44 @@ struct IslandFlowTests {
         #expect(bodies.contains { $0["op"].string() == "unregister" && $0["chat"].string() == "c9" })
     }
 
-    @Test func atMostThreeIslandsAndAFinishedOneMakesWay() async {
-        let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
-        let model = await signedIn(world, island: island, transport: watched)
+    @Test func severalSendsOnOneComputerShareItsIsland() async {
+        let world = DemoWorld(), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: WatchedTransport(world: world))
         func record(_ chat: String) -> Submission {
             let key = ChatKey(scope: model.scope, device: DemoData.computerA, app: "codex", chat: chat)
             return Submission(request: "r-" + chat, key: key, text: "跑一下", action: "send", turn: "t",
                               body: "{}", created: Int64(Date().timeIntervalSince1970 * 1000))
         }
-        for (index, chat) in ["c1", "c2", "c3"].enumerated() {
-            model.islandSendStarted(record(chat))
-            for _ in 0..<100 where island.starts.count < index + 1 { try? await Task.sleep(for: .milliseconds(20)) }
-        }
-        #expect(island.starts.count == 3)
-        #expect(model.island.live.count == 3)
-        model.islandSendStarted(record("c4"))  // three running: this one stays a notification
+        model.islandSendStarted(record("c1"))
+        for _ in 0..<100 where island.starts.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
+        model.islandSendStarted(record("c2"))
+        model.islandSendStarted(record("c3"))
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(island.starts.count == 3)
-        if let key = model.island.live.keys.first, var track = model.island.live[key] {
-            track.state = IslandState(status: .done, since: 1, turn: 1)
-            model.island.live[key] = track
-        }
-        model.islandSendStarted(record("c4"))  // a finished one makes way
-        for _ in 0..<100 where island.starts.count < 4 { try? await Task.sleep(for: .milliseconds(20)) }
-        #expect(island.starts.count == 4)
-        #expect(island.ends >= 1)
+        #expect(island.starts.count == 1)  // 0.6.3: one island for this whole computer
+        #expect(model.island.live.count == 1)
+        let track = model.island.live.values.first
+        #expect(track?.state.working == 3)  // before the relay's own numbers arrive
+        #expect(track?.state.peers?.count == 3)
+        #expect(track?.state.peers?.first?.chat == "c3")
+    }
+
+    @Test func thePerConversationIslandsOf062AreEndedWhen063Starts() async throws {
+        let world = DemoWorld(), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: WatchedTransport(world: world))
+        island.snapshots = [
+            IslandSnapshot(ref: IslandRef(raw: "old"),
+                           identity: IslandIdentity(device: DemoData.computerA, app: "codex", chat: "demo",
+                                                    computer: "测试电脑 A", title: "旧岛"),
+                           state: IslandState(status: .done, since: 1, turn: 1)),
+            IslandSnapshot(ref: IslandRef(raw: "new"),
+                           identity: IslandIdentity(device: DemoData.computerA, app: "", chat: "",
+                                                    computer: "测试电脑 A", title: ""),
+                           state: IslandState(status: .working, since: 2, turn: 2, working: 2, waiting: 0)),
+        ]
+        await model.islandReconcile()
+        #expect(island.ends == 1)
+        #expect(model.island.live["old"] == nil)
+        #expect(model.island.live["new"] != nil)
     }
 
     @Test func aRemoteStartedIslandIsPickedUpAndItsTokenRegistered() async {

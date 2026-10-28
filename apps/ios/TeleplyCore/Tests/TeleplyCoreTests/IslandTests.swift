@@ -54,8 +54,31 @@ struct IslandTests {
     /// could show and stretches the island across the top of the screen (over the clock, signal and battery).
     @Test func theCompactSidesArePinnedSoTheTimerCannotStretchTheIsland() {
         #expect(IslandMetrics.compactTrailing >= 44)  // "59:59" at 13 points
-        #expect(IslandMetrics.compactTrailing <= 60)  // still one compact block, not a bar
-        #expect(IslandMetrics.rowTimer >= IslandMetrics.compactTrailing)
+        #expect(IslandMetrics.compactTrailing <= 80)  // still one compact block, not a bar
+        #expect(IslandMetrics.compactTrailing >= 60)  // 0.6.3: five characters ("3个工作中")
+        #expect(IslandMetrics.rowTimer >= IslandMetrics.compactTrailing - 12)
+    }
+
+    /// 0.6.3: one island for a whole computer counts its conversations; one conversation still shows its own timer.
+    @Test func severalConversationsAreCountedAndOneIsStillItself() {
+        let one = IslandState(status: .working, since: 1761629880, turn: 1761629880, working: 1, waiting: 0)
+        #expect(IslandWords.compactCount(one) == nil)  // one conversation: the timer says it better
+        #expect(IslandWords.aggregate(one) == "1 个对话工作中")
+        #expect(IslandWords.only(one)?.chat == nil)  // no peers sent: nothing to name
+        let busy = IslandState(status: .working, since: 1761630000, turn: 1761630000, working: 3, waiting: 0)
+        #expect(IslandWords.compactCount(busy) == "3个工作中")
+        #expect(IslandWords.aggregate(busy) == "3 个对话工作中")
+        let mixed = IslandState(status: .waiting, since: 1761630000, turn: 1761630000, working: 2, waiting: 1)
+        #expect(IslandWords.compactCount(mixed) == "1个等你定")  // waiting wins
+        #expect(IslandWords.aggregate(mixed) == "2 个对话工作中 · 1 个对话等你定")
+        #expect(IslandWords.compactCount(IslandState(status: .done, since: 1, turn: 1, working: 0, waiting: 0)) == nil)
+        let peer = IslandPeer(app: "codex", chat: "c1", title: "改登录页", state: "working", since: 1, turn: 1)
+        let single = IslandState(status: .working, since: 1, turn: 1, peers: [peer], working: 1, waiting: 0)
+        #expect(IslandWords.only(single)?.chat == "c1")
+        #expect(IslandWords.title(peer, computer: "我的电脑") == "改登录页")
+        #expect(IslandWords.title(IslandPeer(app: "codex", chat: "c", title: "", state: "working", since: 1, turn: 1),
+                                  computer: "我的电脑") == "Codex · 我的电脑")
+        #expect(IslandWords.aggregate(IslandState(status: .working, since: 1, turn: 1)) == nil)  // a 0.6.2 island
     }
 
     @Test func whatIsBeingAskedIsSaidWithoutTheCommand() {
