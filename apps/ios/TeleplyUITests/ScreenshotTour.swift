@@ -153,7 +153,7 @@ final class ScreenshotTour: XCTestCase {
             }
         }
 
-        // 0.4.1: ＋ → 从电脑选择文件 → a folder → a file's page (save, Quick Look, 添加到消息).
+        // 0.4.1: ＋ → 从电脑选择文件 → a folder → a file's page; 0.5.6: its ⋯ holds save, Quick Look and 添加到消息.
         if plus.waitForExistence(timeout: 5), plus.isHittable {
             plus.tap()
             let pick = app.buttons["从电脑选择文件"].firstMatch
@@ -166,11 +166,17 @@ final class ScreenshotTour: XCTestCase {
                     if file.waitForExistence(timeout: 10) {
                         snap(app, page: "28-computer-folder", variant: variant)
                         file.tap()
-                        let add = app.buttons["添加到消息"].firstMatch
-                        XCTAssertTrue(add.waitForExistence(timeout: 10), "a computer file did not open its page")
-                        if add.exists {
+                        let menu = app.buttons["文件菜单"].firstMatch
+                        XCTAssertTrue(menu.waitForExistence(timeout: 10), "a computer file did not open its page")
+                        if menu.exists {
                             snap(app, page: "29-computer-file", variant: variant)
-                            if reach(app, add) { add.tap() }
+                            menu.tap()
+                            let add = app.buttons["添加到消息"].firstMatch
+                            XCTAssertTrue(add.waitForExistence(timeout: 5), "the file's ⋯ had no 添加到消息")
+                            if add.exists {
+                                snap(app, page: "29b-file-menu", variant: variant)
+                                add.tap()
+                            }
                         }
                     }
                 }

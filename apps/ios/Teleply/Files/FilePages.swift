@@ -111,13 +111,13 @@ struct FilesSheet: View {
     }
 }
 
-/// A file's page (spec 4.5; web artifact-preview.js; Android FilePage): the system back and a centred title, the
-/// file as it is now, 保存到文件 and 分享 at the top right. HTML opens as a page with 查看源码 beside it, Markdown as text
-/// to read; other text in a code panel; a picture in the page, larger in Quick Look. A PDF, and a Word, Excel or
-/// PowerPoint file, a sound or a video up to 20 MB, fill the page as the phone itself shows them, the way 快速查看 does
-/// (user 10-28: "点开直接调用快速预览，不要这样转换了，下载按钮在右上角"); the computer's PDF of an Office file is for the
-/// web and Android. A file the page does not show offers Quick Look when the system can show it. A download shows how
-/// far it got and can be stopped; a saved file can be opened from where it went. A computer file's page also adds it
+/// A file's page (spec 4.5; web artifact-preview.js; Android FilePage), as WeChat shows a file (user 10-28: "无用边框
+/// 太多了，不需要什么说明文字你就参考微信的这种设计，占全部位置，右上角放三个点"): the system back, the name, and ⋯ at
+/// the top right with what can be done with the file; the file itself fills the rest. A PDF, and a Word, Excel or
+/// PowerPoint file, a sound or a video up to 20 MB, as the phone shows them (PDFPreview, DocumentPreview); a picture
+/// fitted to the page, larger in Quick Look; HTML as a page; Markdown to read; other text in a code panel. A file the
+/// page does not show says what it is, with Quick Look when the system can show it. A download shows how far it got at
+/// the bottom and can be stopped; a saved file can be opened from there for a moment. A computer file's ⋯ also adds it
 /// to the message.
 struct FilePage: View {
     let model: AppModel
@@ -137,46 +137,57 @@ struct FilePage: View {
         let meta = data["meta"]
         let name = data["name"].string().isEmpty ? "文件" : data["name"].string()
         let kind = meta["kind"].string()
+        let lower = name.lowercased()
+        let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
+        let text = workspace.fileText
+        let picture = kind == "image" ? workspace.preview.flatMap { UIImage(contentsOfFile: $0.path) } : nil
         Group {
             if let shown = workspace.preview, kind == "pdf" || kind == "download" {
-                VStack(alignment: .leading, spacing: 12) {
-                    facts(meta)
-                    Group {
-                        if kind == "pdf" {
-                            PDFPreview(url: shown)
-                        } else {
-                            DocumentPreview(url: shown)
-                                .id(shown)
-                        }
+                Group {
+                    if kind == "pdf" {
+                        PDFPreview(url: shown)
+                    } else {
+                        DocumentPreview(url: shown)
+                            .id(shown)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
-                    footer(name)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .ignoresSafeArea(edges: .bottom)
+            } else if let preview = workspace.preview, let picture {
+                Button { quickLook = preview } label: {
+                    Image(uiImage: picture)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("图片：\(name)，点按放大"))
+            } else if html && rendered && !text.isEmpty {
+                HtmlPreview(model: model, source: text, file: data)
+                    .ignoresSafeArea(edges: .bottom)
+                    .accessibilityLabel(Text("网页预览：" + name))
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        facts(meta)
-                        scrolled(name, kind: kind)
-                        footer(name)
+                        scrolled(name, picture: picture)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.page)
+        .overlay(alignment: .bottom) { status() }
         .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("保存到文件", systemImage: "square.and.arrow.down") { copy { saving = $0 } }
-                    .disabled(workspace.transferring || workspace.paneBusy)
-                Button("分享", systemImage: "square.and.arrow.up") { copy { sharing = $0 } }
-                    .disabled(workspace.transferring || workspace.paneBusy)
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    actions(name, meta: meta)
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel(Text("文件菜单"))
             }
         }
         .quickLookPreview($quickLook)
@@ -204,127 +215,126 @@ struct FilePage: View {
         }
     }
 
-    /// 当前文件 · its state · its size.
-    private func facts(_ meta: JSONValue) -> some View {
-        Text("当前文件 · " + operationLabel(meta["state"].string()) + (meta.has("size") ? " · " + byteSize(meta["size"].int64()) : ""))
-            .captionFont()
-            .foregroundStyle(Palette.muted)
-    }
-
-    /// What the page shows in its own scrolling: while it loads, what went wrong, the text, the picture, or what can be
-    /// done with a file it does not show.
+    /// ⋯: how to show the text of HTML or Markdown, then what to do with the file itself; its state and size above.
     @ViewBuilder
-    private func scrolled(_ name: String, kind: String) -> some View {
+    private func actions(_ name: String, meta: JSONValue) -> some View {
         let workspace = model.workspace
         let lower = name.lowercased()
         let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
         let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
+        let busy = workspace.transferring || workspace.paneBusy
+        Section(operationLabel(meta["state"].string()) + (meta.has("size") ? " · " + byteSize(meta["size"].int64()) : "")) {
+            if (html || markdown) && !workspace.fileText.isEmpty {
+                Button(rendered ? "查看源码" : html ? "查看页面" : "阅读视图",
+                       systemImage: rendered ? "chevron.left.forwardslash.chevron.right" : "doc.richtext") { rendered.toggle() }
+            }
+            Button("保存到文件", systemImage: "square.and.arrow.down") { copy { saving = $0 } }
+                .disabled(busy)
+            Button("分享", systemImage: "square.and.arrow.up") { copy { sharing = $0 } }
+                .disabled(busy)
+            if Self.quickLooks(lower) {
+                Button("用快速查看打开", systemImage: "eye") { copy { quickLook = $0 } }
+                    .disabled(busy)
+            }
+            if workspace.data["reference"].isObject {
+                Button("添加到消息", systemImage: "plus.circle") { workspace.addComputerFile() }
+                    .disabled(workspace.transferring)
+            }
+        }
+    }
+
+    /// What the page shows in its own scrolling: while it loads, what went wrong, the text, or a file it does not show.
+    @ViewBuilder
+    private func scrolled(_ name: String, picture: UIImage?) -> some View {
+        let workspace = model.workspace
+        let lower = name.lowercased()
+        let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
         let loaded = !workspace.paneBusy && workspace.paneError == nil
         let text = workspace.fileText
-        let picture = kind == "image" ? workspace.preview.flatMap { UIImage(contentsOfFile: $0.path) } : nil
-        if workspace.paneBusy { ProgressView().frame(maxWidth: .infinity) }
+        if workspace.paneBusy { ProgressView().frame(maxWidth: .infinity).padding(.top, 40) }
         if let error = workspace.paneError {
             Text(error)
                 .noteFont()
                 .foregroundStyle(Palette.danger)
         }
         if !text.isEmpty {
-            if html || markdown {
-                Picker("显示", selection: $rendered) {
-                    Text(html ? "查看页面" : "阅读视图").tag(true)
-                    Text("查看源码").tag(false)
-                }
-                .pickerStyle(.segmented)
-                if !rendered {
-                    CodePanel(label: name, code: text, copyLabel: "复制文件内容")
-                } else if html {
-                    HtmlPreview(model: model, source: text, file: workspace.data)
-                        .frame(height: 520)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Palette.codeEdge, lineWidth: 1))
-                        .accessibilityLabel(Text("网页预览：" + name))
-                    Text("按网页打开：脚本和网上的图片照常加载；它拿不到这个应用的登录信息和手机里的文件，点链接用 Safari 打开。")
-                        .noteFont()
-                        .foregroundStyle(Palette.muted)
-                } else {
-                    MarkdownView(source: text)
-                }
+            if markdown && rendered {
+                MarkdownView(source: text)
             } else {
                 CodePanel(label: name, code: text, copyLabel: "复制文件内容")
             }
-        }
-        if let preview = workspace.preview, let picture {
-            Button { quickLook = preview } label: {
-                Image(uiImage: picture)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("图片：\(name)，点按放大"))
+        } else if loaded && picture == nil {
+            unshown(name, size: workspace.data["meta"]["size"].int64())
         }
         if !workspace.fileNote.isEmpty {
             Text(workspace.fileNote)
                 .noteFont()
                 .foregroundStyle(Palette.muted)
-        }
-        if loaded && text.isEmpty && picture == nil {
-            unshown(lower, size: workspace.data["meta"]["size"].int64())
+                .frame(maxWidth: .infinity)
         }
     }
 
-    /// 添加到消息 on a computer file's page, then the download under way or how the save went.
+    /// A file the page does not show: what it is, and Quick Look when the system can show it, else other apps.
     @ViewBuilder
-    private func footer(_ name: String) -> some View {
-        let workspace = model.workspace
-        if workspace.data["reference"].isObject {
-            Button("添加到消息", systemImage: "plus.circle") { workspace.addComputerFile() }
-                .buttonStyle(PillStyle(wide: true))
-                .disabled(workspace.transferring)
-        }
-        transferLine(name)
-    }
-
-    /// A file the page does not show: Quick Look when the system can show it; saving and sharing are at the top right.
-    @ViewBuilder
-    private func unshown(_ lower: String, size: Int64) -> some View {
-        let looks = Self.quickLooks(lower)
-        if looks {
-            Button("用快速查看打开", systemImage: "eye") { copy { quickLook = $0 } }
-                .buttonStyle(PillStyle(wide: true))
-                .disabled(model.workspace.transferring)
-        }
-        Text(!looks ? "这类文件手机上看不了，可以点右上角保存到文件，或分享给其他应用打开。"
-             : size > RelayClient.previewLimit ? "文件超过 20MB，不直接显示；可以用快速查看打开，或点右上角保存到文件、分享。"
-             : "可以用快速查看打开，或点右上角保存到文件、分享。")
-            .noteFont()
-            .foregroundStyle(Palette.muted)
-    }
-
-    /// How far a download got, with 取消; then how the save or share went.
-    @ViewBuilder
-    private func transferLine(_ name: String) -> some View {
-        let workspace = model.workspace
-        if workspace.transferring {
-            HStack(spacing: 12) {
-                ProgressView()
-                Text(workspace.transfer.isEmpty ? "正在准备…" : workspace.transfer)
-                    .noteFont()
-                    .monospacedDigit()
-                    .foregroundStyle(Palette.muted)
-                Spacer(minLength: 0)
-                Button("取消") { workspace.cancelCopy() }
-                    .buttonStyle(PillStyle(kind: .text))
-            }
-        } else if let note {
-            Text(note)
-                .noteFont()
+    private func unshown(_ name: String, size: Int64) -> some View {
+        let looks = Self.quickLooks(name.lowercased())
+        let why = size > RelayClient.previewLimit ? "超过 20MB，不直接显示" : looks ? "这里不直接显示" : "手机上看不了这类文件"
+        VStack(spacing: 12) {
+            Image(systemName: "doc")
+                .font(.system(size: 44))
                 .foregroundStyle(Palette.muted)
-                .task(id: note) { AccessibilityNotification.Announcement(note).post() }
-            if saved != nil && note.hasPrefix("已保存到所选位置") {
-                Button("打开已保存的文件", systemImage: "eye") { openSaved() }
-                    .buttonStyle(PillStyle(kind: .text))
+            Text(name)
+                .bodyFont()
+                .foregroundStyle(Palette.ink)
+                .multilineTextAlignment(.center)
+            Text(byteSize(size) + " · " + why)
+                .captionFont()
+                .foregroundStyle(Palette.muted)
+            Button(looks ? "用快速查看打开" : "用其他应用打开", systemImage: looks ? "eye" : "square.and.arrow.up") {
+                copy { url in if looks { quickLook = url } else { sharing = url } }
+            }
+            .buttonStyle(PillStyle(kind: .primary))
+            .disabled(model.workspace.transferring)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 72)
+    }
+
+    /// At the bottom, over the file: how far a download got, with 取消; then for a moment how the save or share went.
+    @ViewBuilder
+    private func status() -> some View {
+        let workspace = model.workspace
+        if workspace.transferring || note != nil {
+            HStack(spacing: 12) {
+                if workspace.transferring {
+                    ProgressView()
+                    Text(workspace.transfer.isEmpty ? "正在准备…" : workspace.transfer)
+                        .noteFont()
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.ink)
+                    Button("取消") { workspace.cancelCopy() }
+                        .buttonStyle(PillStyle(kind: .text))
+                } else if let note {
+                    Text(note)
+                        .noteFont()
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(2)
+                    if saved != nil && note.hasPrefix("已保存到所选位置") {
+                        Button("打开") { openSaved() }
+                            .buttonStyle(PillStyle(kind: .text))
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .glassEffect(.regular, in: .capsule)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+            .task(id: note) {
+                guard let shown = note else { return }
+                AccessibilityNotification.Announcement(shown).post()
+                try? await Task.sleep(for: .seconds(6))
+                if note == shown { note = nil }
             }
         }
     }
@@ -337,7 +347,7 @@ struct FilePage: View {
             .contains(String(name[name.index(after: dot)...]))
     }
 
-    /// A copy of the file to hand to the system; one at a time, its download shown on the page.
+    /// A copy of the file to hand to the system; one at a time, its download shown at the bottom.
     private func copy(_ then: @escaping (URL) -> Void) {
         guard !model.workspace.transferring else { return }
         note = nil
