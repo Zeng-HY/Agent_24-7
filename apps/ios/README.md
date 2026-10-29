@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.4 待上传；0.6.3 构建 18 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.4 构建 19 已传 TestFlight，待真机验；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.6.4：用时准、岛及时、看得到在思考（10-29，待上传）
+## 0.6.4：用时准、岛及时、看得到在思考（10-29，构建 19 已传 TestFlight）
 
 用户 10-29 报：0.6.3 每个任务好了岛上都写「用了 1 秒」「用了 2 秒」；有项目在干活，岛上看不到进度；对话里也没有 GPT 客户端那样的「正在思考 3 分 12 秒」。查下来是三件事：电脑只看记录最后 256KB，一轮的开始记录常在几百 KB 到十几 MB 之前，看不到；中转在全部结束时把这一轮的时间换成了「现在」；岛和通知没有本轮真正的开始、结束时间。
 
@@ -20,7 +20,7 @@
 - **状态接口**：`/api/<来源>/state`、`/api/chats`、`/api/chat` 都带本轮开始、结束和动作；网页和安卓界面这次不改。
 - 版本 0.6.4。
 
-检查情况：本机 `TeleplyCore` 191 项、Python 174 项全过（新加开始记录离末尾 400KB、电脑中途重启、done 带起止时间、快照恢复和远程开岛、全部结束时保留刚结束的对话、状态变化 10 / 进度 5、进度 15 秒）。云端 `ios-native-check` 只编译通过（构建 `6ae338ce3e9be9cf26505d04`，6 分钟，Mac 上 191 项通过，只剩 `ChatModel.swift:592` 的旧警告）；截图构建 `6ae33cfd8e64ccacf5b3b1ef` 通过（11 分钟，8 张）：浅色、深色各拍锁屏浅色卡片、锁屏深色卡片和紧凑样子共 6 张，另加 `27-running-list-light`（列表「运行中 · 3 分 15 秒」）、`27-running-chat-light`（「正在跑命令 · 3 分 21 秒」）。截图在 `F:\Android-Dev\work\20261029-island-064\codemagic\6ae33cfd8e64ccacf5b3b1ef\artefacts\shots`。中转已更新（10-29 20:50，旧文件 `/opt/agent-relay-027/previous-20261029-205052`）；Windows `0.27.0-dev.30`（30）已构建并装到这台电脑（20:55，`dist/AgentRemote-0.27.0-dev.30-Setup.exe`，SHA256 `DD1A17E4…`），已连回中转；已发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.30`（21:07 前后，三个文件都在，阿里云和 GitHub 的清单一致）。
+检查情况：本机 `TeleplyCore` 191 项、Python 174 项全过（新加开始记录离末尾 400KB、电脑中途重启、done 带起止时间、快照恢复和远程开岛、全部结束时保留刚结束的对话、状态变化 10 / 进度 5、进度 15 秒）。云端 `ios-native-check` 只编译通过（构建 `6ae338ce3e9be9cf26505d04`，6 分钟，Mac 上 191 项通过，只剩 `ChatModel.swift:592` 的旧警告）；截图构建 `6ae33cfd8e64ccacf5b3b1ef` 通过（11 分钟，8 张）：浅色、深色各拍锁屏浅色卡片、锁屏深色卡片和紧凑样子共 6 张，另加 `27-running-list-light`（列表「运行中 · 3 分 15 秒」）、`27-running-chat-light`（「正在跑命令 · 3 分 21 秒」）。截图在 `F:\Android-Dev\work\20261029-island-064\codemagic\6ae33cfd8e64ccacf5b3b1ef\artefacts\shots`。中转已更新（10-29 20:50，旧文件 `/opt/agent-relay-027/previous-20261029-205052`）；Windows `0.27.0-dev.30`（30）已构建并装到这台电脑（20:55，`dist/AgentRemote-0.27.0-dev.30-Setup.exe`，SHA256 `DD1A17E4…`），已连回中转；已发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.30`（21:07 前后，三个文件都在，阿里云和 GitHub 的清单一致）。0.6.4（19）已上传 TestFlight（#`6ae3436e79b17edbd333b902`，12 分钟，Delivery UUID `f47e104a-5e30-4d12-8f0b-0298748688db`）。
 
 ### 留给你在真机上验（0.6.4）
 
