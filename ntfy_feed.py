@@ -56,20 +56,23 @@ class Feed:
     def __init__(self, topic: str = TOPIC, clock=time.time) -> None:
         self.topic, self.clock = topic, clock
         self.messages: collections.deque = collections.deque(maxlen=KEEP_COUNT)  # (number, message), oldest first
+        self.fresh: collections.deque = collections.deque(maxlen=KEEP_COUNT)     # not kept for a reconnect (0.6.4)
         self.count = 0          # messages published since the service started; a message's number
         self.listening = 0      # connections open now (a stream or a WebSocket)
         self.last_seen = 0.0    # when a phone last connected, asked or went away
         self.changed = threading.Condition()
 
-    def publish(self, title: str, message: str, click: str = "", priority: int = 3, extra: dict | None = None) -> dict:
-        """A message; [extra] fields ride along (notify.py's events for the relay: kind, app, chat)."""
+    def publish(self, title: str, message: str, click: str = "", priority: int = 3, extra: dict | None = None,
+                keep: bool = True) -> dict:
+        """A message; [extra] fields ride along (notify.py's events for the relay: kind, app, chat). [keep] False:
+        a stream open now sees it, but a later reconnect is not given it (snapshot and step, 0.6.4)."""
         msg = {"id": _new_id(), "time": int(self.clock()), "event": "message", "topic": self.topic,
                "title": title, "message": message, "priority": priority, **(extra or {})}
         if click:
             msg["click"] = click
         with self.changed:
             self.count += 1
-            self.messages.append((self.count, msg))
+            (self.messages if keep else self.fresh).append((self.count, msg))
             self.changed.notify_all()
         return msg
 
@@ -102,11 +105,13 @@ class Feed:
             return self.count, self.since(since)
 
     def wait(self, seen: int, timeout: float) -> tuple[list[dict], int]:
-        """The messages after number `seen`, waiting up to `timeout` seconds for one; and the newest number."""
+        """The messages after number `seen`, waiting up to `timeout` seconds for one; and the newest number. Includes
+        the not-kept ones published meanwhile, so a stream open now still receives snapshots and progress."""
         with self.changed:
             if self.count == seen:
                 self.changed.wait(timeout)
-            return [m for n, m in self.messages if n > seen], self.count
+            rows = sorted([(n, m) for n, m in (*self.messages, *self.fresh) if n > seen], key=lambda v: v[0])
+            return [m for _, m in rows], self.count
 
     @contextlib.contextmanager
     def listener(self):

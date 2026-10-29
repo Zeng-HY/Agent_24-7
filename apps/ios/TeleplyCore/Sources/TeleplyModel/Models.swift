@@ -40,6 +40,11 @@ public struct Chat: Sendable, Equatable, Identifiable {
     public var children: [Chat] = []
     public var childCount: Int = 0
     public var childRunning: Int = 0
+    /// 0.6.4: the running turn's own start and end, Unix seconds (0 when the computer does not know).
+    public var turnStarted: Int64 = 0
+    public var turnEnded: Int64 = 0
+    /// 0.6.4: what it is doing (edit | run | search | read).
+    public var step: String = ""
 
     public init(id: String, title: String) {
         self.id = id
@@ -63,6 +68,9 @@ public struct Message: Sendable, Equatable, Identifiable {
     public var details: JSONValue = [:]
     public var phase: String = ""
     public var request: String = ""
+    /// 0.6.4: the turn this message belongs to, Unix seconds of its start and end.
+    public var turnStarted: Int64 = 0
+    public var turnEnded: Int64 = 0
 
     public init(id: String, role: String, text: String) {
         self.id = id
@@ -143,6 +151,9 @@ public func parseChat(_ json: JSONValue) throws -> Chat {
     chat.children = try json["children"].array.map(parseChat)
     chat.childCount = json["child_count"].int()
     chat.childRunning = json["child_running"].int()
+    chat.turnStarted = json["turn_started"].int64()
+    chat.turnEnded = json["turn_ended"].int64()
+    chat.step = json["step"].string()
     return chat
 }
 
@@ -166,6 +177,8 @@ public func parseMessage(_ json: JSONValue) throws -> Message {
     message.details = .object(details)
     message.phase = json["phase"].string()
     message.request = json["client_request_id"].string()
+    message.turnStarted = json["turn_started"].int64()
+    message.turnEnded = json["turn_ended"].int64()
     return message
 }
 

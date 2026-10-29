@@ -183,9 +183,20 @@ private struct PeerRow: View {
     @ViewBuilder private var trailing: some View {
         switch peer.status ?? .working {
         case .working:
-            Elapsed(since: peer.since)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ink)
+            HStack(spacing: 4) {
+                if let name = IslandWords.stepName(peer.step) {
+                    HStack(spacing: 2) {
+                        if let symbol = IslandWords.stepSymbol(peer.step) {
+                            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                        }
+                        Text(name).font(.system(size: 12)).lineLimit(1)
+                    }
+                    .foregroundStyle(ink.opacity(0.8))
+                }
+                Elapsed(since: peer.since)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ink)
+            }
         case .waiting:
             Text("等你").font(.system(size: 13, weight: .semibold)).foregroundStyle(IslandPalette.ask)
         case .done:
@@ -218,8 +229,8 @@ struct LockScreenCard: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        // The lock-screen card is white (dark) like the lock screen's notifications; the .small size (Apple Watch,
-        // StandBy, CarPlay) stays black, where the white words are legible (user 10-28).
+        // 0.6.4: the lock-screen card is translucent like the lock screen's own notifications, so the wallpaper shows
+        // through in light and dark; the .small size (Apple Watch, StandBy, CarPlay) stays black for legibility.
         .activityBackgroundTint(family == .small ? Color.black : IslandPalette.cardBackground)
         .activitySystemActionForegroundColor(family == .small ? Color.white : IslandPalette.cardForeground)
     }
@@ -252,6 +263,11 @@ struct LockScreenCard: View {
                 }
             }
             HStack(spacing: 7) {
+                if state.status == .working, let symbol = IslandWords.stepSymbol(state.step) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(detailColor)
+                }
                 Text(IslandWords.detail(state, now: now))
                     .font(.system(size: 15))
                     .foregroundStyle(detailColor)
@@ -291,7 +307,7 @@ struct LockScreenCard: View {
     private var peers: [IslandPeer] { state.peers ?? [] }
     private var count: Int { IslandWords.counts(state)?.total ?? peers.count }
     private var waiting: Bool { (state.waiting ?? 0) > 0 || state.status == .waiting }
-    private var peer: IslandPeer? { IslandWords.only(state) ?? peers.first }
+    private var peer: IslandPeer? { IslandWords.cardPeer(state) }
 
     @ViewBuilder private var mark: some View {
         if let app = peer?.app ?? (attributes.app.isEmpty ? nil : attributes.app) {
@@ -325,7 +341,7 @@ struct SmallCard: View {
     private var waiting: Bool { (state.waiting ?? 0) > 0 || state.status == .waiting }
 
     private var title: String {
-        if let peer = IslandWords.only(state) ?? peers.first { return IslandWords.title(peer, computer: attributes.computer) }
+        if let peer = IslandWords.cardPeer(state) ?? peers.first { return IslandWords.title(peer, computer: attributes.computer) }
         if !attributes.title.isEmpty { return attributes.title }
         return attributes.app.isEmpty ? "遥应 · \(attributes.computer)"
             : "\(IslandWords.appName(attributes.app)) · \(attributes.computer)"

@@ -1,4 +1,5 @@
 import SwiftUI
+import TeleplyIsland
 import TeleplyModel
 
 /// A row's state colour (Android ChatRow): running green, waiting orange, failed red, unknown amber.
@@ -49,9 +50,7 @@ struct ChatRow: View {
                         if !ago.isEmpty { time(ago) }
                     }
                 }
-                let state = Text(Labels.status(chat.status))
-                    .noteFont(chat.status == "running" || chat.status == "waiting" ? .semibold : .regular)
-                    .foregroundStyle(statusColor(chat.status))
+                let state = stateView
                 if large {
                     state
                     if !detail.isEmpty {
@@ -107,6 +106,17 @@ struct ChatRow: View {
             .lineLimit(1)
     }
 
+    /// 0.6.4: a running row ticks by itself, from the computer's turn start: "运行中 · 3 分 12 秒".
+    @ViewBuilder private var stateView: some View {
+        if chat.status == "running" && chat.turnStarted > 0 {
+            RunningStatus(started: Int(chat.turnStarted))
+        } else {
+            Text(Labels.status(chat.status))
+                .noteFont(chat.status == "running" || chat.status == "waiting" ? .semibold : .regular)
+                .foregroundStyle(statusColor(chat.status))
+        }
+    }
+
     private var detail: String {
         var text: String
         if chat.group {
@@ -122,6 +132,25 @@ struct ChatRow: View {
             text += chat.parentTitle.isEmpty ? " · 未分组" : " · 属于「\(chat.parentTitle)」"
         }
         return text
+    }
+}
+
+/// 0.6.4: the list row's running line, ticking by itself from the computer's turn start. Its width is pinned so a
+/// longer reading cannot push the preview or the time of day around.
+struct RunningStatus: View {
+    let started: Int
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(IslandWords.runningLine(started: started, now: Int(context.date.timeIntervalSince1970)))
+                .font(.system(size: 13, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Palette.success)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(width: 112, alignment: .leading)
+        }
+        .accessibilityLabel("运行中")
     }
 }
 

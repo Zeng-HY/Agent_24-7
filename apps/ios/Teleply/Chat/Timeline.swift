@@ -1,5 +1,6 @@
 import QuickLook
 import SwiftUI
+import TeleplyIsland
 import TeleplyModel
 import TeleplyState
 import UIKit
@@ -13,6 +14,9 @@ nonisolated struct ProcessGroup: Equatable, Sendable {
     let live: Bool
     /// The run ends in a question or approval waiting for an answer.
     let waiting: Bool
+    /// 0.6.4: the turn's own start and end, Unix seconds; 0 when the computer did not say.
+    let turnStarted: Int
+    let turnEnded: Int
 }
 
 /// What a message is in the timeline, in the order Android decides it.
@@ -69,7 +73,10 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
             continue
         }
         var end = start
-        while end + 1 < count, isProcess(messages[end + 1]) { end += 1 }
+        // 0.6.4: a new turn always starts a new fold, so its 思考了 is that turn's own time.
+        while end + 1 < count, isProcess(messages[end + 1]),
+              messages[end + 1].turnStarted == 0 || messages[start].turnStarted == 0
+                || messages[end + 1].turnStarted == messages[start].turnStarted { end += 1 }
         for index in start...end { runOf[index] = (start, end) }
         start = end + 1
     }
@@ -86,7 +93,9 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
         if app == "codex", let plan = codexPlan(raw, for: message) { return .codexPlan(plan) }
         if let run = runOf[index] {
             let last = run.start > lastUser && messages[(run.end + 1)...].allSatisfy { isProcess($0) || $0.role == "event" }
-            let group = ProcessGroup(key: messages[run.start].id, steps: run.end - run.start + 1, live: running && last, waiting: asking && last)
+            let first = messages[run.start], finish = messages[run.end]
+            let group = ProcessGroup(key: first.id, steps: run.end - run.start + 1, live: running && last, waiting: asking && last,
+                                     turnStarted: Int(first.turnStarted), turnEnded: Int(finish.turnEnded))
             return .process(group, first: index == run.start)
         }
         if message.kind.contains("question") || message.kind.contains("approval") { return .question(approval: message.kind.contains("approval")) }
@@ -246,6 +255,16 @@ private struct ProcessHeader: View {
     let open: Bool
     let toggle: () -> Void
 
+    /// 0.6.4: a finished turn says how long it thought, from the record's own start and end.
+    private var title: String {
+        if group.waiting { return "需要你回答 · \(group.steps) 步" }
+        if group.live { return "正在处理 · \(group.steps) 步" }
+        if group.turnStarted > 0, group.turnEnded >= group.turnStarted {
+            return IslandWords.thoughtLine(started: group.turnStarted, ended: group.turnEnded)
+        }
+        return "处理过程 · \(group.steps) 步"
+    }
+
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 6) {
@@ -253,9 +272,10 @@ private struct ProcessHeader: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Palette.muted)
                     .rotationEffect(.degrees(open ? 90 : 0))
-                Text((group.waiting ? "需要你回答" : group.live ? "正在处理" : "处理过程") + " · \(group.steps) 步")
+                Text(title)
                     .processFont()
                     .foregroundStyle(group.waiting ? Palette.askGo : Palette.muted)
+                    .monospacedDigit()
             }
             .frame(minHeight: 36)
             .padding(.trailing, 8)

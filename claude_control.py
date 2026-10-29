@@ -494,6 +494,11 @@ class Controller:
             item=chats.find('claude',tid)
             try:data=self.desktop.run(self._read,item,timeout=12)
             except Exception as exc:data={'available':False,'reason':plain_error(exc),'settings':settings(item),'actions':[]}
+            try:
+                info=chats.summary(item)
+                data={**data,'turn_started':info.get('turn_started',0),'turn_ended':info.get('turn_ended',0),
+                      'step':info.get('step','') if data.get('running') else ''}
+            except (OSError,chats.ChatError):pass
             self.cache[tid]=(time.monotonic(),data)
             if len(self.cache)>20:self.cache.pop(next(iter(self.cache)))
             return self._held(tid,data)

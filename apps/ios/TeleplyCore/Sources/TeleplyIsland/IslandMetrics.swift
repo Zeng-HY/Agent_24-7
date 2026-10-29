@@ -9,6 +9,7 @@ public enum IslandMetrics {
     /// one computer's island shows when several conversations run. The short states (等你 / ✓ / ! / 断开) use the same
     /// width, so the island's length does not change with its state.
     public static let compactTrailing: Double = 66
-    /// A timer in the expanded list or on the lock-screen card: never wider than this, so the title keeps its room.
-    public static let rowTimer: Double = 54
+    /// A step icon and two words plus the timer in the expanded list or on the lock-screen card (0.6.4): wide enough
+    /// for "改文件 1:02:03" without pushing the title out.
+    public static let rowTimer: Double = 112
 }

@@ -222,7 +222,8 @@ public struct RelayClient: Sendable {
                                       query: [("app", app), ("id", chat), ("n", "60"), ("before", before), ("around", around)]))
         guard page["id"].string() == chat, page["app"].string() == app else { throw ReadFailure("对话身份不匹配") }
         var meta: [String: JSONValue] = [:]
-        for key in ["title", "folder", "cwd", "status", "runtime"] where page.has(key) { meta[key] = page[key] }
+        for key in ["title", "folder", "cwd", "status", "runtime", "turn_started", "turn_ended", "turn_status", "step"]
+            where page.has(key) { meta[key] = page[key] }
         return Page(items: try page["messages"].array.map(parseMessage), cursor: Self.cursor(page), hasMore: page["has_more"].bool(),
                     hasNewer: page["has_newer"].bool(), reset: page["reset"].bool(), meta: .object(meta))
     }

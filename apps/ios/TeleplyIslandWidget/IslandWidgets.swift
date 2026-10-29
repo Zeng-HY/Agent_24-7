@@ -23,7 +23,8 @@ struct IslandLiveActivity: Widget {
                 .widgetURL(openURL(context))
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(IslandWords.accessibility(app: context.attributes.app, state: context.state,
-                                                              now: Int(Date().timeIntervalSince1970)))
+                                                              now: Int(Date().timeIntervalSince1970),
+                                                              computer: context.attributes.computer))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {

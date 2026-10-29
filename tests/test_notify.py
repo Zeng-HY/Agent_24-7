@@ -306,19 +306,106 @@ class Watcher(unittest.TestCase):
         self.assertEqual([e["kind"] for e in events], ["running", "done"])
         self.assertEqual({k: events[0][k] for k in ("event", "kind", "app", "chat", "title", "message", "since")},
                          {"event": "message", "kind": "running", "app": "codex", "chat": "x1", "title": "改通知",
-                          "message": "", "since": int(self.now)})
+                          "message": "", "since": 1_800_000_010})
+        self.assertEqual(events[0]["started_source"], "记录")
         self.assertEqual(self.sent, [])  # 在干活 only changes the island; no banner
 
-    def test_a_turn_already_running_when_the_watch_starts_is_not_replayed(self):
+    def test_a_turn_already_running_when_the_watch_starts_is_told_once_with_its_record_start(self):
+        # 0.6.4: a relay or watch restart no longer hides turns that were already running (10-29).
         self.cfg.pop("bark")
         self.turn("task_started", "t0")
         with self.notifier.relay.listener():
             self.notifier.look()
             self.notifier.look()
-            self.assertEqual(self.notifier.relay.since("all"), [])
+            events = self.notifier.relay.since("all")
+            self.assertEqual([e["kind"] for e in events], ["running"])
+            self.assertEqual(events[0]["since"], 1_800_000_010)
             self.turn("task_complete", "t0", "好了")
             self.notifier.look()
-        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["done"])
+        self.assertEqual([e["kind"] for e in self.notifier.relay.since("all")], ["running", "done"])
+
+    # -- 0.6.4: real times, incremental reads, snapshots and progress
+
+    def test_a_start_far_from_the_end_is_still_seen_with_its_own_time(self):
+        self.cfg.pop("bark")
+        self.turn("task_started", "big", ts="2027-01-15T08:00:10Z")
+        filler = json.dumps({"timestamp": "2027-01-15T08:02:00Z", "type": "response_item",
+                             "payload": {"type": "message", "role": "assistant", "phase": "commentary",
+                                         "content": [{"type": "output_text", "text": "x" * 2000}]}})
+        with self.codex.open("a", encoding="utf-8") as f:
+            for _ in range(200):  # ~400 KB: the old last-256KB read could not see the start
+                f.write(filler + "\n")
+        self.assertGreater(self.codex.stat().st_size, 256 << 10)
+        with self.notifier.relay.listener():
+            self.notifier.look()
+        events = [e for e in self.notifier.relay.wait(0, 0)[0] if e.get("kind") == "running"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual((events[0]["since"], events[0]["started_source"]), (1_800_000_010, "记录"))
+
+    def test_a_restart_in_the_middle_of_a_turn_still_reports_the_real_start(self):
+        self.cfg.pop("bark")
+        self.turn("task_started", "mid", ts="2027-01-15T08:00:10Z")
+        with self.notifier.relay.listener():
+            self.notifier.look()
+        restarted = notify.Notifier(self.cfg, "家里电脑", self.logged.append,
+                                    lambda: self.saved.append(dict(self.cfg)), clock=lambda: self.now,
+                                    sender=lambda *a, **k: self.sent.append((a, k)),
+                                    page_url=lambda: "https://pc.example.ts.net/")
+        with restarted.relay.listener():
+            restarted.look()
+        events = [e for e in restarted.relay.wait(0, 0)[0] if e.get("kind") == "running"]
+        self.assertEqual([(e["since"], e["started_source"]) for e in events], [(1_800_000_010, "记录")])
+
+    def test_done_carries_the_records_start_and_end(self):
+        self.cfg.pop("bark")
+        self.turn("task_started", "t9", ts="2027-01-15T08:00:10Z")
+        with self.notifier.relay.listener():
+            self.notifier.look()
+            self.turn("task_complete", "t9", "好了", ts="2027-01-15T08:04:22Z")
+            self.notifier.look()
+        done = [e for e in self.notifier.relay.wait(0, 0)[0] if e.get("kind") == "done"][-1]
+        self.assertEqual((done["started"], done["ended"], done["started_source"]),
+                         (1_800_000_010, 1_800_000_262, "记录"))
+
+    def test_a_snapshot_and_progress_are_not_kept_for_a_reconnect(self):
+        self.cfg.pop("bark")
+        self.turn("task_started", "t8", ts="2027-01-15T08:00:10Z")
+        tool = json.dumps({"timestamp": "2027-01-15T08:00:20Z", "type": "response_item",
+                           "payload": {"type": "custom_tool_call", "name": "exec",
+                                       "input": "text(await tools.exec_command({cmd:\"dir\"}))", "status": "completed"}})
+        with self.notifier.relay.listener():
+            self.notifier.look()
+            with self.codex.open("a", encoding="utf-8") as f:
+                f.write(tool + "\n")
+            self.notifier.look()
+        messages = self.notifier.relay.wait(0, 0)[0]
+        self.assertIn("snapshot", [m.get("kind") for m in messages])
+        self.assertIn("step", [m.get("kind") for m in messages])
+        kept = self.notifier.relay.since("all")
+        self.assertNotIn("snapshot", [m.get("kind") for m in kept])
+        self.assertNotIn("step", [m.get("kind") for m in kept])
+        self.assertEqual([m.get("kind") for m in kept], ["running"])
+
+    def test_a_step_is_told_at_most_once_every_fifteen_seconds(self):
+        self.cfg.pop("bark")
+        self.turn("task_started", "t7", ts="2027-01-15T08:00:10Z")
+
+        def tool(name, argument):
+            return json.dumps({"timestamp": "2027-01-15T08:00:20Z", "type": "response_item",
+                               "payload": {"type": "custom_tool_call", "name": name, "input": argument,
+                                           "status": "completed"}})
+        with self.notifier.relay.listener():
+            self.notifier.look()
+            with self.codex.open("a", encoding="utf-8") as f:
+                f.write(tool("exec", "apply_patch") + "\n")
+            self.notifier.look()  # edit
+            with self.codex.open("a", encoding="utf-8") as f:
+                f.write(tool("exec", "dir") + "\n")
+            self.notifier.look()  # run, too soon
+            self.now += 16
+            self.notifier.look()  # the same run is now old enough to be told
+        steps = [m for m in self.notifier.relay.wait(0, 0)[0] if m.get("kind") == "step"]
+        self.assertEqual([m["step"] for m in steps], ["edit", "run"])
 
     def test_deepseek_running_is_told_the_same_way(self):
         self.cfg.pop("bark")

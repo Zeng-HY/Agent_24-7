@@ -16,17 +16,26 @@ struct IslandPreviewPage: View {
     /// 0.6.3's list samples: three conversations, one of them waiting.
     private var several: [IslandPeer] {
         [IslandPeer(app: "deepseek", chat: "c3", title: "选方案", state: "waiting", since: now - 30, turn: now - 200),
-         IslandPeer(app: "codex", chat: "c2", title: "跑测试", state: "working", since: now - 200, turn: now - 200),
-         IslandPeer(app: "claude", chat: "c1", title: "改登录页", state: "working", since: now - 300, turn: now - 300)]
+         IslandPeer(app: "codex", chat: "c2", title: "跑测试", state: "working", since: now - 200, turn: now - 200,
+                    step: "run"),
+         IslandPeer(app: "claude", chat: "c1", title: "改登录页", state: "working", since: now - 300, turn: now - 300,
+                    step: "edit")]
     }
 
     private var samples: [Sample] {
         [
-            Sample(id: "working", status: .working, state: IslandState(status: .working, since: now - 271, turn: now - 271)),
+            Sample(id: "working", status: .working, state: IslandState(status: .working, since: now - 271, turn: now - 271,
+                                                                      step: "run")),
             Sample(id: "waiting", status: .waiting, state: IslandState(status: .waiting, since: now - 30, turn: now - 180,
                                                                       askType: "permission", choices: 2)),
-            Sample(id: "done", status: .done, state: IslandState(status: .done, since: now - 5, turn: now - 377)),
-            Sample(id: "failed", status: .failed, state: IslandState(status: .failed, since: now - 20, turn: now - 300)),
+            Sample(id: "done", status: .done, state: IslandState(status: .done, since: now - 245, turn: now - 377,
+                                                                 peers: [IslandPeer(app: "claude", chat: "c1",
+                                                                                    title: "这是一个 word 的双语文件…",
+                                                                                    state: "done", since: now - 5,
+                                                                                    turn: now - 377, ended: now - 5)],
+                                                                 ended: now - 5)),
+            Sample(id: "failed", status: .failed, state: IslandState(status: .failed, since: now - 20, turn: now - 300,
+                                                                     ended: now - 20)),
             Sample(id: "offline", status: .offline, state: IslandState(status: .offline, since: now - 185, turn: now - 400)),
             Sample(id: "limited", status: .limited, state: IslandState(status: .limited, since: now - 30, turn: now - 300,
                                                                       resets: now + 7985)),
@@ -180,6 +189,9 @@ private struct ExpandedPreview: View {
                         Text(peer.title.isEmpty ? IslandWords.appName(peer.app) : peer.title)
                             .font(.system(size: 12)).lineLimit(1)
                         Spacer(minLength: 8)
+                        if peer.status == .working, let name = IslandWords.stepName(peer.step) {
+                            Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.8))
+                        }
                         Text(peer.status == .waiting ? "等你" : "4:31")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(peer.status == .waiting ? Palette.askGo : .white)
@@ -188,7 +200,8 @@ private struct ExpandedPreview: View {
             } else {
                 HStack(spacing: 8) {
                     SourceMark(app: "claude", size: 16)
-                    Text("Claude · 我的电脑").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(IslandWords.cardPeer(state).map { IslandWords.title($0, computer: "我的电脑") } ?? "Claude · 我的电脑")
+                        .font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     Spacer(minLength: 8)
                     trailing
                 }
@@ -247,6 +260,9 @@ private struct LockCardPreview: View {
                         Text(peer.title.isEmpty ? IslandWords.appName(peer.app) : peer.title)
                             .font(.system(size: 13)).foregroundStyle(Palette.ink).lineLimit(1)
                         Spacer(minLength: 6)
+                        if peer.status == .working, let name = IslandWords.stepName(peer.step) {
+                            Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.ink.opacity(0.8))
+                        }
                         Text(peer.status == .waiting ? "等你" : "4:31")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(peer.status == .waiting ? Palette.askGo : Palette.ink)
@@ -255,7 +271,8 @@ private struct LockCardPreview: View {
             } else {
                 HStack(spacing: 8) {
                     SourceMark(app: "claude", size: 20)
-                    Text("Claude · 我的电脑").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Text(IslandWords.cardPeer(state).map { IslandWords.title($0, computer: "我的电脑") } ?? "Claude · 我的电脑")
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
                     Spacer(minLength: 8)
                     if let symbol = IslandWords.symbol(status) {
                         Image(systemName: symbol).font(.system(size: 14, weight: .bold))
@@ -264,6 +281,10 @@ private struct LockCardPreview: View {
                     }
                 }
                 HStack(spacing: 6) {
+                    if status == .working, let symbol = IslandWords.stepSymbol(state.step) {
+                        Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Palette.ink)
+                    }
                     Text(IslandWords.detail(state, now: now)).font(.system(size: 13))
                         .foregroundStyle(IslandWords.colorRole(status) == .muted ? Palette.muted : Palette.ink)
                         .lineLimit(1)

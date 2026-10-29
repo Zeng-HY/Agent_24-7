@@ -27,6 +27,8 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     public var askOptions: [String]?
     /// 方案六: edit | run | search | read.
     public var step: String?
+    /// 0.6.4: Unix seconds the turn ended; "用了 4 分钟" counts from turn to here, not to the clock.
+    public var ended: Int?
     /// 方案七: Unix seconds the quota comes back.
     public var resets: Int?
     /// The conversations running on this computer, for the long-press list (user 10-28: every one with its model
@@ -39,7 +41,7 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
 
     public init(state: String, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
                 askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
-                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil) {
+                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil, ended: Int? = nil) {
         self.state = state
         self.since = since
         self.turn = turn
@@ -49,6 +51,7 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
         self.askText = askText
         self.askOptions = askOptions
         self.step = step
+        self.ended = ended
         self.resets = resets
         self.peers = peers
         self.working = working
@@ -58,10 +61,10 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     /// The usual way to make one: a known state.
     public init(status: IslandStatus, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
                 askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
-                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil) {
+                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil, ended: Int? = nil) {
         self.init(state: status.rawValue, since: since, turn: turn, ask: ask, askType: askType, choices: choices,
                   askText: askText, askOptions: askOptions, step: step, resets: resets, peers: peers,
-                  working: working, waiting: waiting)
+                  working: working, waiting: waiting, ended: ended)
     }
 
     /// Nil for a state this build does not know (drawn as 在干活, still decoded).
@@ -77,14 +80,20 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
     public var state: String
     public var since: Int
     public var turn: Int
+    /// 0.6.4: what it is doing (edit | run | search | read), and when the turn ended for a finished one.
+    public var step: String?
+    public var ended: Int?
 
-    public init(app: String, chat: String, title: String, state: String, since: Int, turn: Int) {
+    public init(app: String, chat: String, title: String, state: String, since: Int, turn: Int,
+                step: String? = nil, ended: Int? = nil) {
         self.app = app
         self.chat = chat
         self.title = title
         self.state = state
         self.since = since
         self.turn = turn
+        self.step = step
+        self.ended = ended
     }
 
     public var status: IslandStatus? { IslandStatus(rawValue: state) }

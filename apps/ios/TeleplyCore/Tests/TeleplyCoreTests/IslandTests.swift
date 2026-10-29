@@ -16,7 +16,7 @@ struct IslandTests {
         let states = try Self.fixture()
         #expect(Set(states.keys) == Set(IslandStatus.allCases.map(\.rawValue)))
         let allowed: Set<String> = ["state", "since", "turn", "ask", "askType", "choices", "askText", "askOptions", "step",
-                                    "resets", "peers"]
+                                    "ended", "resets", "peers", "working", "waiting"]
         for state in states.values {
             let encoded = try JSONEncoder().encode(state)
             let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -98,6 +98,38 @@ struct IslandTests {
         #expect(IslandWords.duration(60) == "1 分")
         #expect(IslandWords.duration(3780) == "1 小时 3 分")
         #expect(IslandWords.duration(3600) == "1 小时")
+    }
+
+    /// 0.6.4: a finished turn stops at the record's end; the clock moving on must not make 用时 grow on the lock screen.
+    @Test func howLongItTookEndsAtTheRecordsEnd() {
+        let done = IslandState(status: .done, since: 1761630000, turn: 1761629700, ended: 1761630000)
+        #expect(IslandWords.detail(done, now: 1761639999) == "好了 · 用了 5 分")
+        let last = IslandPeer(app: "codex", chat: "c1", title: "这是一个 word 的双语文件…", state: "done",
+                              since: 1761630000, turn: 1761629700, ended: 1761630000)
+        let state = IslandState(status: .done, since: 1761630000, turn: 1761629700,
+                                peers: [last], working: 0, waiting: 0, ended: 1761630000)
+        #expect(IslandWords.finished(state)?.title == "这是一个 word 的双语文件…")
+        #expect(IslandWords.cardPeer(state)?.chat == "c1")
+        #expect(IslandWords.title(last, computer: "我的电脑") == "这是一个 word 的双语文件…")
+    }
+
+    /// 0.6.4 方案六: the four actions, and the live/finished words on the conversation page and list.
+    @Test func theStepNamesAndTheLiveLines() {
+        #expect(IslandWords.stepName("edit") == "改文件")
+        #expect(IslandWords.stepName("run") == "跑命令")
+        #expect(IslandWords.stepName("search") == "查资料")
+        #expect(IslandWords.stepName("read") == "读文件")
+        #expect(IslandWords.stepName(nil) == nil)
+        #expect(IslandWords.stepSymbol("edit") == "pencil")
+        #expect(IslandWords.stepSymbol("run") == "terminal")
+        #expect(IslandWords.stepSymbol("search") == "magnifyingglass")
+        #expect(IslandWords.stepSymbol("read") == "doc.text")
+        let working = IslandState(status: .working, since: 1761629700, turn: 1761629700, step: "run")
+        #expect(IslandWords.detail(working, now: 1761629700) == "跑命令")
+        #expect(IslandWords.thinkingLine(step: nil, started: 1761629700, now: 1761629892) == "正在思考 · 3 分 12 秒")
+        #expect(IslandWords.thinkingLine(step: "run", started: 1761629700, now: 1761629892) == "正在跑命令 · 3 分 12 秒")
+        #expect(IslandWords.thoughtLine(started: 1761629700, ended: 1761629892) == "思考了 3 分 12 秒")
+        #expect(IslandWords.runningLine(started: 1761629700, now: 1761629892) == "运行中 · 3 分 12 秒")
     }
 
     @Test func theQuotaComesBackInACountdown() {

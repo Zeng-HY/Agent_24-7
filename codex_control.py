@@ -640,8 +640,16 @@ class Bridge:
             except ControlError:
                 queued, queue_available = [], False
             self.reconcile_pending(tid)
+            latest = turns[-1] if turns else {}
+            started = int((latest.get("turnStartedAtMs") or 0) / 1000)
+            ended = int(started + (latest.get("durationMs") or 0) / 1000) if started and latest.get("status") != "inProgress" else 0
+            try:
+                path = chats.conv_path(item)
+                step = chats.tail_step("codex", path) if path and is_running(state) else ""
+            except (OSError, chats.ChatError):step = ""
             return {"available": True, "settings": selected_settings(state), "running": is_running(state),
                     "active_turn_id": turns[-1].get("turnId") if is_running(state) and turns else None,
+                    "turn_started": started, "turn_ended": ended, "step": step,
                     "recent_turns": [{"id":t.get("turnId"),"status":t.get("status")} for t in turns[-4:]],
                     "questions": qs, "plan": latest_plan(state), "catalog": catalog(),
                     "queued": queued, "queue_available": queue_available,

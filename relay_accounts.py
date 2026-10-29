@@ -72,6 +72,7 @@ class Accounts:
                 -- 0.6.3: one island per computer; these are the conversations its counts and list are made of
                 CREATE TABLE IF NOT EXISTS push_conversations(device TEXT, app TEXT, chat TEXT, owner TEXT,
                     title TEXT DEFAULT '', state TEXT, since INTEGER, turn INTEGER, refreshed REAL,
+                    ended INTEGER DEFAULT 0, step TEXT DEFAULT '', started_source TEXT DEFAULT '',
                     PRIMARY KEY(device, app, chat));
                 CREATE INDEX IF NOT EXISTS push_conversations_device ON push_conversations(device);
                 CREATE TABLE IF NOT EXISTS push_start(token TEXT PRIMARY KEY, owner TEXT, environment TEXT,
@@ -83,6 +84,11 @@ class Accounts:
                                ('title', "TEXT DEFAULT ''")):
                 if name not in columns:
                     db.execute(f'ALTER TABLE push_activities ADD COLUMN {name} {kind}')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(push_conversations)')}
+            for name, kind in (('ended', 'INTEGER DEFAULT 0'), ('step', "TEXT DEFAULT ''"),
+                               ('started_source', "TEXT DEFAULT ''")):
+                if name not in columns:
+                    db.execute(f'ALTER TABLE push_conversations ADD COLUMN {name} {kind}')
 
     @contextmanager
     def connect(self):

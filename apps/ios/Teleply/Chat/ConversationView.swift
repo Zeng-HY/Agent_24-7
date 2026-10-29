@@ -87,6 +87,11 @@ struct ConversationView: View {
                     UserBubble(message: Message(id: record.request, role: "user", text: record.text), actions: actions, receipt: record.label, sending: true)
                         .padding(.top, 16)
                 }
+                // 0.6.4: where the answer will appear, like the GPT app's 正在思考, with the turn's own timer.
+                if control.running && !control.questions {
+                    ThinkingRow(step: model.turnStep, started: model.turnStarted)
+                        .id("thinking")
+                }
             }
             .scrollTargetLayout()
             .frame(maxWidth: 820)
@@ -120,6 +125,7 @@ struct ConversationView: View {
         .toolbarRole(.editor)
         .onChange(of: model.scrollRevision, initial: true) { restore() }
         .onChange(of: model.conversation.revision) { follow() }
+        .onChange(of: control.running) { if $0 { follow() } }
         .onChange(of: model.messages.first?.id) { keepPlace() }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
         .sheet(isPresented: Binding(get: { sharing != nil }, set: { if !$0 { sharing = nil } })) {

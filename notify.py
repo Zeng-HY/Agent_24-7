@@ -40,7 +40,9 @@ import ntfy_feed
 
 POLL_SECONDS = 5   # between looks while nothing runs (user 10-28: pushes felt slow at 10 s)
 POLL_FAST = 2      # between looks while any turn is running
-TAIL_BYTES = 256 << 10  # how much of a grown file is read; a turn's end is the last thing written
+HISTORY_BYTES = 64 << 20  # the first look reads back this far for the last start and end (0.6.4)
+SNAPSHOT_EVERY = 60       # a running conversation's record reaches the relay this often (0.6.4)
+STEP_GAP = 15             # seconds between two progress events of one conversation (0.6.4)
 LIMIT = 30              # conversations of each app looked at, newest first
 DEFAULT_SERVER = "https://api.day.app"
 # The Codex threads a person talks in: the desktop's and the command line's, started by the user, by this service's
@@ -184,6 +186,147 @@ def _seconds(ts: str, fallback: float) -> float:
         return fallback
 
 
+def _unix(ts: str) -> int | None:
+    """A record's ISO time as Unix seconds; None when it has none (0.6.4: times come from the record)."""
+    try:
+        return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+    except (ValueError, AttributeError):
+        return None
+
+
+# 0.6.4 方案六: the kind of work a tool call is, from its recorded name (never its arguments' words). Checked against
+# real records on this computer: Claude names Bash/PowerShell/Edit/Write/Read/Grep/Glob/WebSearch/WebFetch; Codex
+# writes every command as a custom tool call named exec, and patches/searches run inside it.
+CLAUDE_STEPS = {"Bash": "run", "PowerShell": "run", "Edit": "edit", "Write": "edit", "MultiEdit": "edit",
+                "NotebookEdit": "edit", "Read": "read", "Grep": "read", "Glob": "read",
+                "WebSearch": "search", "WebFetch": "search"}
+CODEX_STEPS = {"exec": "run", "shell": "run", "exec_command": "run", "apply_patch": "edit",
+               "web_search": "search", "search": "search", "js": "run"}
+DEEPSEEK_STEPS = {"pwsh": "run", "shell": "run", "bash": "run", "terminal": "run", "exec": "run",
+                  "apply_patch": "edit", "edit": "edit", "write": "edit", "write_file": "edit",
+                  "read": "read", "read_file": "read", "grep": "read", "glob": "read",
+                  "web_search": "search", "web_fetch": "search", "fetch": "search"}
+
+
+def record_step(app: str, name: str, argument: str = "") -> str | None:
+    """edit | run | search | read for one tool call, or None when it is not one of the four (0.6.4)."""
+    name = (name or "").strip()
+    if app == "claude":
+        return CLAUDE_STEPS.get(name)
+    if app == "deepseek":
+        return DEEPSEEK_STEPS.get(name.rsplit(".", 1)[-1])
+    if app != "codex":
+        return None
+    action = CODEX_STEPS.get(name)
+    if name == "exec":  # Codex's one command tool; a patch or a web search runs through it
+        text = (argument or "").lower()
+        if "apply_patch" in text or "*** begin patch" in text:
+            return "edit"
+        if "web_search" in text or "search_query" in text or "web.run" in text:
+            return "search"
+        return "run"
+    return action
+
+
+def new_scan(app: str) -> dict:
+    """What one conversation's turn looks like while its record is read a piece at a time (0.6.4)."""
+    return {"app": app, "state": None, "started": "", "ended": "", "latest": "", "key": "", "text": "", "action": "",
+            "asks": set(), "answer_id": "", "last_kind": None, "last_stop": None}
+
+
+def scan_lines(scan: dict, lines: list[bytes]) -> dict:
+    """Read record lines into [scan]; the state after them is the newest turn's, with the record's own times."""
+    for raw in lines:
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeError):
+            continue
+        if scan["app"] == "codex":
+            _scan_codex(scan, rec)
+        else:
+            _scan_claude(scan, rec)
+    return scan
+
+
+def _scan_codex(scan: dict, rec: dict) -> None:
+    kind = rec.get("type")
+    payload = rec.get("payload") or {}
+    ts = rec.get("timestamp") or ""
+    if ts:
+        scan["latest"] = ts
+    event = payload.get("type") if kind == "event_msg" else None
+    if event == "task_started":
+        scan.update(state="running", started=ts, ended="", key=payload.get("turn_id") or ts, text="", action="")
+    elif event in ("task_complete", "turn_aborted"):
+        scan.update(state="stopped" if event == "turn_aborted" else "done", ended=ts,
+                    key=payload.get("turn_id") or scan["key"] or ts,
+                    text=chats.codex_answer(payload.get("last_agent_message") or "") if event == "task_complete"
+                    else scan["text"], action="")
+    elif kind == "response_item":
+        ptype = payload.get("type")
+        if ptype in ("function_call", "custom_tool_call"):
+            step = record_step("codex", str(payload.get("name") or ""), str(payload.get("input") or ""))
+            if step:
+                scan["action"] = step
+        elif ptype == "item_completed" and (payload.get("item") or {}).get("type") == "CommandExecution":
+            scan["action"] = "run"
+
+
+def _scan_claude(scan: dict, rec: dict) -> None:
+    kind = rec.get("type")
+    if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
+        return
+    ts = rec.get("timestamp") or ""
+    if ts:
+        scan["latest"] = ts
+    message = rec.get("message") or {}
+    content = message.get("content")
+    blocks = content if isinstance(content, list) else []
+    if kind == "user":
+        tool_results = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_result"]
+        if tool_results:
+            asked = any(b.get("tool_use_id") in scan["asks"] for b in tool_results)
+            if asked and scan["state"] == "running":
+                scan.update(state="done", ended=ts, action="")
+            return
+        text = _claude_text(content).strip()
+        if not text:
+            return
+        if text.startswith("[Request interrupted"):
+            scan.update(state="stopped", ended=ts, action="")
+            return
+        scan.update(state="running", started=ts, ended="", key=rec.get("uuid") or ts, text="", action="")
+        return
+    # assistant: an answer may be written as several records under one message id (thinking, then text)
+    key = message.get("id") or rec.get("uuid") or ts
+    if key != scan.get("answer_id"):
+        scan["answer_id"], scan["text"] = key, ""
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use":
+            box = chats._claude_next(block)
+            if box and box.get("ask"):
+                scan["asks"].add(block.get("id"))
+            step = record_step("claude", str(block.get("name") or ""))
+            if step and scan["state"] == "running":
+                scan["action"] = step
+        elif block.get("type") == "text" and (block.get("text") or "").strip():
+            scan["text"] = (scan.get("text", "") + "\n" + block["text"].strip()).strip()
+    if rec.get("isApiErrorMessage"):
+        scan.update(state="failed", ended=ts, key=key, action="")
+        return
+    stop = message.get("stop_reason")
+    if stop in (None, "tool_use"):
+        if scan["state"] is None:
+            scan["state"] = "running"
+        return
+    scan.update(state="done", ended=ts, key=key, action="")
+    scan["last_kind"] = "assistant"
+
+
 # ---------------------------------------------------------------- the watcher
 
 
@@ -197,10 +340,18 @@ class Notifier:
         self.lock = threading.Lock()
         self.since = clock()                         # turns that ended before this are not sent
         self.sizes: dict[str, tuple] = {}            # conversation file -> (size, mtime) when last read
+        self.reads: dict[tuple, dict] = {}           # (app, id) -> {offset, scan}: read only what was added
         self.ended: dict[tuple, str] = {}            # (app, id) -> key of its newest turn end seen, sent or not
-        # (app, id) -> when this turn was first seen running; a turn that starts is told to the relay once
-        self.running: dict[tuple, float] = {}
-        self.running_quiet = True                    # the first look after starting records, never sends
+        # (app, id) -> {since, key, title, source}; also decides the 2 s poll while a turn runs
+        self.running: dict[tuple, dict] = {}
+        # (app, id) -> the running one has been told to the relay on its current connection
+        self.reported_running: set = set()
+        self.waiting: dict[tuple, dict] = {}         # (app, id) -> {since, title}: a question waits for the user
+        self.steps: dict[tuple, tuple] = {}          # (app, id) -> (action, when it was last told)
+        self.last_snapshot = 0.0
+        self.relay_was_on = False
+        self.relay_was_listening = False
+        self.running_quiet = True                    # kept for older callers; running is now always reported (0.6.4)
         self.open: collections.Counter = collections.Counter()  # (app, id) -> live streams the phone has on it
         self.recent: collections.deque = collections.deque(maxlen=8)  # the last outcomes, for the page
         self.url = ""                                # this computer's https address on Tailscale
@@ -328,58 +479,164 @@ class Notifier:
 
     def look(self) -> None:
         found = self.address()
-        if found is None and not self.ntfy_on() and not self.relay_on():
+        on = self.relay_on()
+        listening = self.relay.listening > 0
+        if listening and not self.relay_was_listening:  # the relay came (back): running turns and a snapshot again
+            self.reported_running.clear()
+            self.steps.clear()
+            self.last_snapshot = 0
+        self.relay_was_listening = listening
+        self.relay_was_on = on
+        if found is None and not self.ntfy_on() and not on:
             self.since = None  # nothing to send to; once Bark, ntfy or the relay is on, only later turns count
             return
         if self.since is None:
             self._count_from_now()
         for item in self._conversations():
-            if item['app']=='deepseek':
-                self._deepseek(found,item)
+            if item['app'] == 'deepseek':
+                self._deepseek(found, item)
                 continue
-            path = chats.conv_path(item)
-            if path is None:
+            scan = self._scan_file(item)
+            if scan is None or scan.get("state") is None:
                 continue
-            try:
-                st = path.stat()
-            except OSError:
-                continue
-            if self.sizes.get(str(path)) == (st.st_size, st.st_mtime_ns):
-                continue
-            self.sizes[str(path)] = (st.st_size, st.st_mtime_ns)
-            lines, _ = chats.read_tail(path, TAIL_BYTES)
-            end = turn_end(item["app"], lines)
             conv = (item["app"], item["id"])
-            if end is None:
+            title = chats.one_line(item.get("title") or "", 60)
+            latest = _unix(scan.get("latest"))
+            if scan["state"] == "running" and latest and self.clock() - latest > chats.STALE_SECONDS:
+                # a record left "running" by a crash or a killed app: not a turn doing work now (same 20 min as lists)
+                self.running.pop(conv, None)
+                self.waiting.pop(conv, None)
                 continue
-            if end["state"] == "running":
-                self._running(item)
+            if scan["state"] == "running":
+                self.waiting.pop(conv, None)
+                self._running(item, scan)
+                self._step(item, scan, on)
                 continue
-            self.running.pop(conv, None)
-            if self.ended.get(conv) == end["key"]:
+            previous = self.running.pop(conv, None) or {}
+            self.waiting.pop(conv, None)
+            self.reported_running.discard(conv)
+            key = scan.get("key") or scan.get("ended") or ""
+            if self.ended.get(conv) == key:
                 continue
-            self.ended[conv] = end["key"]
-            if end["state"] == "stopped" or _seconds(end["time"], st.st_mtime) < self.since:
+            self.ended[conv] = key
+            ended = _unix(scan.get("ended"))
+            if scan["state"] == "stopped" or (ended is not None and ended < self.since):
                 continue
-            self._tell(found, item, end)
-        self.running_quiet = False  # from here a turn seen running is a new one, told to the relay
+            answer = scan.get("text") or ""
+            started = _unix(scan.get("started")) or previous.get("since") or 0
+            source = "记录" if _unix(scan.get("started")) else ("不知道" if not started else "电脑注意到")
+            self._tell(found, item, {"state": scan["state"], "key": key, "time": scan.get("ended") or "",
+                                     "text": answer, "started": int(started or self.clock()),
+                                     "ended": int(ended or self.clock()), "started_source": source})
+        self.running_quiet = False
+        self._snapshot()
 
-    def _running(self, item: dict) -> None:
-        """A turn began: said to the relay once, so a conversation running for a minute can get an island (方案一).
-        Only the app, the conversation and when it began; never the words. Quiet for turns already running when the
-        watch starts (10-27's rule: nothing is replayed for the past)."""
+    def _scan_file(self, item: dict) -> dict | None:
+        """The conversation's newest turn, read from where the file was last read to (0.6.4). The first look goes back
+        up to HISTORY_BYTES, so a start record far from the end is still seen; after that only the added bytes are read."""
+        path = chats.conv_path(item)
+        if path is None:
+            return None
         conv = (item["app"], item["id"])
-        if conv in self.running:
-            return
-        start = self.clock()
-        self.running[conv] = start
-        if self.running_quiet or not self.relay_on():
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        slot = self.reads.get(conv)
+        if slot and st.st_ino == slot.get("inode") and st.st_dev == slot.get("dev") and st.st_size >= slot["offset"]:
+            if st.st_size == slot["offset"]:
+                return slot["scan"]
+            try:
+                with path.open("rb") as f:
+                    f.seek(slot["offset"])
+                    data = f.read(st.st_size - slot["offset"])
+            except OSError:
+                return slot["scan"]
+            cut = data.rfind(b"\n")
+            if cut >= 0:
+                scan_lines(slot["scan"], data[:cut + 1].splitlines())
+                slot["offset"] += cut + 1
+            self.sizes[str(path)] = (st.st_size, st.st_mtime_ns)
+            return slot["scan"]
+        start = max(0, st.st_size - HISTORY_BYTES)
+        try:
+            with path.open("rb") as f:
+                f.seek(start)
+                data = f.read(st.st_size - start)
+        except OSError:
+            return None
+        shift = 0
+        if start:
+            first = data.find(b"\n")
+            shift = first + 1 if first >= 0 else len(data)
+            data = data[shift:]
+        complete = data.rfind(b"\n") + 1
+        scan = new_scan(item["app"])
+        scan_lines(scan, data[:complete].splitlines())
+        self.reads[conv] = {"offset": start + shift + complete, "inode": st.st_ino, "dev": st.st_dev, "scan": scan}
+        self.sizes[str(path)] = (st.st_size, st.st_mtime_ns)
+        return scan
+
+    def _running(self, item: dict, scan: dict | None = None) -> None:
+        """A turn is running: told to the relay with the record's real start, once per relay connection (0.6.4).
+        Only the app, the conversation and when it began; never the words."""
+        conv = (item["app"], item["id"])
+        scan = scan or {}
+        record_start = _unix(scan.get("started"))
+        previous = self.running.get(conv, {}).get("since")
+        since = record_start or previous or int(self.clock())
+        source = "记录" if record_start else ("电脑注意到" if previous else "不知道")
+        self.running[conv] = {"since": int(since), "key": scan.get("key") or "", "source": source,
+                              "title": chats.one_line(item.get("title") or "", 60)}
+        if not self.relay_on() or conv in self.reported_running:
             return
         try:
             self.relay.publish("", "", extra={"kind": "running", "app": item["app"], "chat": item["id"],
-                                              "since": int(start), "title": chats.one_line(item.get("title") or "", 60)})
+                                              "since": int(since), "started": int(since), "started_source": source,
+                                              "title": chats.one_line(item.get("title") or "", 60)},
+                               keep=True)
+            self.reported_running.add(conv)
         except Exception:
             self.log("通知：在干活没报给中转\n" + traceback.format_exc())
+
+    def _step(self, item: dict, scan: dict, on: bool) -> None:
+        """方案六: the action changed (at most once in STEP_GAP seconds). Progress is not kept for a reconnect."""
+        action = scan.get("action")
+        if not action:
+            return
+        conv = (item["app"], item["id"])
+        last = self.steps.get(conv)
+        if last and (last[0] == action or self.clock() - last[1] < STEP_GAP):
+            return
+        self.steps[conv] = (action, self.clock())
+        if not on:
+            return
+        try:
+            self.relay.publish("", "", extra={"kind": "step", "app": item["app"], "chat": item["id"], "step": action,
+                                              "since": int(self.running.get(conv, {}).get("since") or self.clock()),
+                                              "title": chats.one_line(item.get("title") or "", 60)}, keep=False)
+        except Exception:
+            self.log("通知：进度没报给中转\n" + traceback.format_exc())
+
+    def _snapshot(self) -> None:
+        """Every 60 s (and once when the relay connects): all running and waiting conversations on this computer, so a
+        relay that restarted can rebuild them. Not kept for a reconnect (0.6.4)."""
+        if not self.relay_on() or self.clock() - self.last_snapshot < SNAPSHOT_EVERY:
+            return
+        items = []
+        for conv, info in self.running.items():
+            items.append({"app": conv[0], "chat": conv[1], "state": "working", "started": int(info["since"]),
+                          "since": int(info["since"]), "title": info.get("title", ""),
+                          "step": (self.steps.get(conv) or ("", ""))[0]})
+        for conv, info in self.waiting.items():
+            items.append({"app": conv[0], "chat": conv[1], "state": "waiting", "started": int(info["since"]),
+                          "since": int(info["since"]), "title": info.get("title", ""),
+                          "step": (self.steps.get(conv) or ("", ""))[0]})
+        try:
+            self.relay.publish("", "", extra={"kind": "snapshot", "items": items}, keep=False)
+            self.last_snapshot = self.clock()
+        except Exception:
+            self.log("通知：快照没报给中转\n" + traceback.format_exc())
 
     def asking(self, item: dict, text: str) -> None:
         """Claude waits on a question or a permission in the middle of a turn, as Claude Code's hook tells it
@@ -388,8 +645,13 @@ class Notifier:
         found = self.address()
         if found is None and not self.ntfy_on() and not self.relay_on():
             return
+        conv = (item["app"], item["id"])
+        started = int(self.running.get(conv, {}).get("since") or self.clock())
         try:
-            self._tell(found, item, {"state": "done", "key": "", "time": "", "text": text, "asks": True})
+            self._tell(found, item, {"state": "done", "key": "", "time": "", "text": text, "asks": True,
+                                     "started": started, "ended": int(self.clock()),
+                                     "started_source": "记录" if self.running.get(conv, {}).get("source") == "记录"
+                                     else "电脑注意到" if self.running.get(conv) else "不知道"})
         except Exception:
             self.log("通知：Claude 在等回答，没推出去\n" + traceback.format_exc())
 
@@ -397,6 +659,9 @@ class Notifier:
         self.since = self.clock()
         self.sizes.clear()
         self.ended.clear()
+        self.reads.clear()
+        self.reported_running.clear()
+        self.steps.clear()
 
     def _conversations(self) -> list[dict]:
         try:
@@ -410,34 +675,80 @@ class Notifier:
         return codex + chats.claude_sessions(LIMIT) + deepseek_control.catalog()[:LIMIT]
 
     def _deepseek(self,found,item):
+        """DeepSeek's Harness keeps turn/start and turn/end events with their own times; read them, not the clock."""
         import deepseek_control
-        if item.get('status')=='unknown':return
-        bridge=deepseek_control.bridge()
-        conv=('deepseek',item['id']);initial=conv not in self.ended
-        if initial:self.ended[conv]='observed'
-        interactions=bridge.events.for_session(item['id'])
-        questions=(item.get('_values',{}).get('userQuestions') or {}).get('active',[])
+        if item.get('status') == 'unknown':
+            return
+        bridge = deepseek_control.bridge()
+        conv = ('deepseek', item['id'])
+        initial = conv not in self.ended
+        if initial:
+            self.ended[conv] = 'observed'
+        now = int(getattr(self, "clock", time.time)())
+        events = []
+        try:
+            page, _ = bridge.records(item['id'], limit=100)
+            events = [v.get('event') for v in page.get('records', []) if v.get('event')]
+        except deepseek_control.DeepSeekError:
+            pass
+        starts = [e.get('time', 0) / 1000 for e in events if e.get('type') == 'turn/start' and e.get('time')]
+        starts = [int(v) for v in starts if v > 0]
+        ends = [e for e in events if e.get('type') == 'turn/end']
+        action = ""
+        for event in reversed(events):
+            if event.get('type') == 'tool/call':
+                name = (event.get('data') or {}).get('name') or ""
+                action = record_step("deepseek", str(name)) or action
+                if action:
+                    break
+        interactions = bridge.events.for_session(item['id'])
+        questions = (item.get('_values', {}).get('userQuestions') or {}).get('active', [])
+        waiting = getattr(self, "waiting", None)
         if interactions or questions:
             self.running.pop(conv, None)
-            ids=[v['eventId'] for v in interactions]+[q['callId'] for q in questions]
-            key='pending:'+','.join(sorted(ids));text='DeepSeek 有待处理的提问或批准，请打开对话查看。';asks=True
+            ids = [v['eventId'] for v in interactions] + [q['callId'] for q in questions]
+            key = 'pending:' + ','.join(sorted(ids))
+            text = 'DeepSeek 有待处理的提问或批准，请打开对话查看。'
+            asks = True
+            started = starts[-1] if starts else int(self.running.get(conv, {}).get('since') or now)
+            if waiting is not None:
+                waiting[conv] = {"since": started, "title": chats.one_line(item.get('title') or "", 60)}
+            end = dict(key=key, state='done', text=text, asks=asks, started=started, ended=now,
+                       started_source='记录' if starts else '不知道')
         elif item.get('_running'):
-            self._running(item)
+            if waiting is not None:
+                waiting.pop(conv, None)
+            started = starts[-1] if starts else None
+            self._running(item, {"started": datetime.fromtimestamp(started).isoformat() if started else "",
+                                 "key": str(starts[-1]) if starts else "", "action": action})
+            if action and hasattr(self, "_step"):
+                self._step(item, {"action": action}, self.relay_on())
             return
         else:
             self.running.pop(conv, None)
-            try:page,_=bridge.records(item['id'],limit=5)
-            except deepseek_control.DeepSeekError:return
-            ends=[v['event'] for v in page['records'] if v.get('event',{}).get('type')=='turn/end']
-            if not ends:return
-            end=ends[-1]
-            if end.get('time',0)/1000<self.since or end.get('data',{}).get('reason',{}).get('kind')!='completed':return
-            key=str(end['seq']);text=item.get('preview','');asks=False
-        old=self.ended.get(conv)
-        self.ended[conv]=key
-        if old==key:return
-        if asks and initial:return  # establish pending baseline; no replay of pre-start questions
-        self._tell(found,item,dict(key=key,state='done',text=text,asks=asks))
+            if waiting is not None:
+                waiting.pop(conv, None)
+            if not ends:
+                return
+            end_event = ends[-1]
+            ended = int(end_event.get('time', 0) / 1000) if end_event.get('time') else now
+            if ended < self.since or (end_event.get('data', {}).get('reason', {}).get('kind') != 'completed'):
+                return
+            key = str(end_event.get('seq'))
+            text = item.get('preview', '')
+            asks = False
+            started = starts[-1] if starts else int(self.running.get(conv, {}).get('since') or 0)
+            end = dict(key=key, state='done', text=text, asks=asks, started=started or ended, ended=ended,
+                       started_source='记录' if starts else ('电脑注意到' if started else '不知道'))
+        old = self.ended.get(conv)
+        self.ended[conv] = end['key']
+        if old == end['key']:
+            return
+        if asks and initial:
+            return  # establish pending baseline; no replay of pre-start questions
+        if asks and waiting is not None:
+            waiting[conv] = {"since": end['started'], "title": chats.one_line(item.get('title') or "", 60)}
+        self._tell(found, item, end)
 
     def _quiet(self, item: dict) -> str:
         """Why this turn's end is not sent, or ''."""
@@ -453,11 +764,18 @@ class Notifier:
         what = f"{app}「{title}」{done}"
         why = self._quiet(item)
         body, subtitle, outcomes = _preview(end["text"]), f"{self.name} · {app} {done}", []
+        conv = (item["app"], item["id"])
+        if end.get("asks"):
+            self.waiting[conv] = {"since": int(end.get("started") or self.clock()), "title": title}
         if self.relay_on():  # what happened, not what was said: the relay writes the words (relay_push.py)
             kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
             # quiet: the phone has this conversation open, so no banner — but its island still needs the state.
             self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"],
-                                              "quiet": bool(why), "title": title})
+                                              "quiet": bool(why), "title": title,
+                                              "started": int(end.get("started") or 0),
+                                              "ended": int(end.get("ended") or self.clock()),
+                                              "started_source": end.get("started_source") or "不知道"},
+                               keep=True)
             outcomes.append("遥应通知已交给中转" if self.relay.listening else "中转现在没连着，连上后会补报")
         if why:
             self._note(what, "没推：" + why + ("；只更新岛" if self.relay_on() else ""))

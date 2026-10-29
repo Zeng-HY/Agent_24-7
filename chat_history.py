@@ -162,7 +162,9 @@ class History:
         page=items[:limit];out=[]
         for item in page:
             if item.get('kind'):out.append(self.child_row(item));continue
-            info=chats.summary(item);row=chats.public(item)|{'status':info['status'],'preview':info['preview']}
+            info=chats.summary(item);row=chats.public(item)|{'status':info['status'],'preview':info['preview'],
+                'turn_started':info.get('turn_started') or item.get('turn_started',0),
+                'turn_ended':info.get('turn_ended',0),'step':info.get('step','') or item.get('step','')}
             if item.get('group'):row['group']=True
             if item.get('children'):
                 kids=item['children']
@@ -223,10 +225,25 @@ class History:
                 at=self._at(entry,around)
                 if at is not None:end=min(len(rows),at+limit//2+1)
             start=max(0,end-limit);page=rows[start:end]
-            return chats.public(item)|{'messages':[self.public_message(m) for m in page], 'status':chats._status(entry.state,entry.mtime/1e9),
+            turns=entry.context.get('activity_turns',{})
+            current=entry.context.get('activity_turn')
+            clock=turns.get(current) or next((turns.get(m.get('activity_turn')) for m in reversed(page)
+                                              if turns.get(m.get('activity_turn'))),{})
+            def seconds(value):
+                return int(value/1000) if isinstance(value,(int,float)) and value>0 else 0
+            items=[]
+            for m in page:
+                tr=turns.get(m.get('activity_turn')) or {}
+                timed={**m,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
+                items.append(self.public_message(timed))
+            return chats.public(item)|{'messages':items, 'status':chats._status(entry.state,entry.mtime/1e9),
                 'size':entry.size,'runtime':chats.runtime_info(app,entry.path),'modified':entry.mtime//1000000,
-                'activity_turns':{k:v for k,v in entry.context.get('activity_turns',{}).items() if k == entry.context.get('activity_turn') or k in {m.get('activity_turn') for m in page}},
-                'activity_current':entry.context.get('activity_turn'),
+                # 0.6.4: the turn's own times, Unix seconds; each message of that turn carries them too.
+                'turn_started':seconds(clock.get('started_at')),'turn_ended':seconds(clock.get('ended_at')),
+                'turn_status':clock.get('status',''),
+                'step':entry.state.get('step','') if chats._status(entry.state,entry.mtime/1e9)=='running' else '',
+                'activity_turns':{k:v for k,v in turns.items() if k == current or k in {m.get('activity_turn') for m in page}},
+                'activity_current':current,
                 'has_more':start>0,'next_cursor':page[0]['id'] if start>0 and page else None,'has_newer':end<len(rows),'reset':reset,'total':len(rows)}
     @staticmethod
     def _at(entry,mid):

@@ -37,15 +37,16 @@ public enum IslandWords {
         }
     }
 
-    /// The line under the title on the expanded island and the lock-screen card. `now` is Unix seconds.
+    /// The line under the title on the expanded island and the lock-screen card. `now` is Unix seconds. 0.6.4: a
+    /// finished turn's 用时 ends at the record's end, not at the clock, so it does not keep growing on the lock screen.
     public static func detail(_ state: IslandState, now: Int) -> String {
         switch state.status ?? .working {
         case .working:
-            return "在干活"
+            return stepName(state.step) ?? "在干活"
         case .waiting:
             return ask(state) ?? "在等你选"
         case .done:
-            return "好了 · 用了 " + duration(now - state.turn)
+            return "好了 · 用了 " + duration((state.ended ?? now) - state.turn)
         case .failed:
             return "出错停了"
         case .offline:
@@ -53,6 +54,33 @@ public enum IslandWords {
         case .limited:
             return "额度用完 · " + countdown((state.resets ?? now) - now) + " 后恢复"
         }
+    }
+
+    /// 方案六: the two-character name of what the computer is doing. nil when it is not known.
+    public static func stepName(_ step: String?) -> String? {
+        switch step {
+        case "edit": return "改文件"
+        case "run": return "跑命令"
+        case "search": return "查资料"
+        case "read": return "读文件"
+        case "think": return "思考"
+        default: return nil
+        }
+    }
+
+    /// 0.6.4: the conversation page's live line, e.g. "正在跑命令 · 3 分 12 秒" / "正在思考 · 3 分 12 秒".
+    public static func thinkingLine(step: String?, started: Int, now: Int) -> String {
+        "正在" + (stepName(step) ?? "思考") + " · " + duration(now - started)
+    }
+
+    /// 0.6.4: a finished turn's fold, e.g. "思考了 3 分 12 秒".
+    public static func thoughtLine(started: Int, ended: Int) -> String {
+        "思考了 " + duration(ended - started)
+    }
+
+    /// 0.6.4: a running row in the conversation list, e.g. "运行中 · 3 分 12 秒".
+    public static func runningLine(started: Int, now: Int) -> String {
+        "运行中 · " + duration(now - started)
     }
 
     /// 方案二: what is being asked, in words that say nothing of the command itself.
@@ -152,8 +180,9 @@ public enum IslandWords {
     }
 
     /// One sentence for VoiceOver, e.g. "Claude 在干活，已经 4 分 31 秒".
-    public static func accessibility(app: String, state: IslandState, now: Int) -> String {
+    public static func accessibility(app: String, state: IslandState, now: Int, computer: String = "") -> String {
         if let line = aggregate(state) { return "遥应，" + line }
+        if let peer = finished(state) { return "遥应，\(title(peer, computer: computer))" }
         let name = appName(app), word = self.state(state.status ?? .working), elapsed = duration(now - state.since)
         switch state.status ?? .working {
         case .working, .offline, .failed:
@@ -161,7 +190,7 @@ public enum IslandWords {
         case .waiting:
             return "\(name)\(word)，" + (ask(state) ?? "")
         case .done:
-            return "\(name)好了，用了 " + duration(now - state.turn)
+            return "\(name)好了，用了 " + duration((state.ended ?? now) - state.turn)
         case .limited:
             return "\(name)额度用完，" + countdown((state.resets ?? now) - now) + " 后恢复"
         }
@@ -199,6 +228,17 @@ public enum IslandWords {
     public static func only(_ state: IslandState) -> IslandPeer? {
         guard let counts = counts(state), counts.total == 1 else { return nil }
         return state.peers?.first
+    }
+
+    /// 0.6.4: with nothing running, the relay sends the one that just finished; the card keeps its title and 用时.
+    public static func finished(_ state: IslandState) -> IslandPeer? {
+        guard let counts = counts(state), counts.total == 0, let peers = state.peers, peers.count == 1 else { return nil }
+        return peers.first
+    }
+
+    /// The card's conversation: the one running, or the one that just finished.
+    public static func cardPeer(_ state: IslandState) -> IslandPeer? {
+        only(state) ?? finished(state) ?? state.peers?.first
     }
 
     /// A conversation's title on the island: its own, or 模型 · 电脑 when it has none.

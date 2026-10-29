@@ -8,10 +8,16 @@ public struct Control: Sendable, Equatable {
     /// Recent turns by id: inProgress, completed, interrupted, failed.
     public var turns: [String: String] = [:]
     public var questions = false
+    /// 0.6.4: the running turn's start and end from the computer, Unix seconds; 0 when it does not know.
+    public var turnStarted = 0
+    public var turnEnded = 0
+    /// 0.6.4: edit | run | search | read.
+    public var step = ""
     public var raw: JSONValue = [:]
 
     public init(available: Bool = false, running: Bool = false, turn: String = "", queueAvailable: Bool = false,
-                queued: [Queued] = [], turns: [String: String] = [:], questions: Bool = false, raw: JSONValue = [:]) {
+                queued: [Queued] = [], turns: [String: String] = [:], questions: Bool = false, raw: JSONValue = [:],
+                turnStarted: Int = 0, turnEnded: Int = 0, step: String = "") {
         self.available = available
         self.running = running
         self.turn = turn
@@ -20,6 +26,9 @@ public struct Control: Sendable, Equatable {
         self.turns = turns
         self.questions = questions
         self.raw = raw
+        self.turnStarted = turnStarted
+        self.turnEnded = turnEnded
+        self.step = step
     }
 }
 
@@ -62,7 +71,10 @@ public func parseControl(_ json: JSONValue) -> Control {
         queued: json["queued"].array.map { Queued(id: $0["id"].string(), text: $0["text"].string(), status: $0["status"].string()) },
         turns: turns,
         questions: !json["questions"].array.isEmpty || json["prompt"].isObject || !json["interactions"].array.isEmpty,
-        raw: json)
+        raw: json,
+        turnStarted: json["turn_started"].int(),
+        turnEnded: json["turn_ended"].int(),
+        step: json["step"].string())
 }
 
 /// One frame of the live stream: the snapshot (seq 1) or an update with only the changed messages.

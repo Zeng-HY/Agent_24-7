@@ -129,6 +129,16 @@ public final class AppModel {
     public internal(set) var pageMeta: JSONValue = [:]
     /// The conversation's runtime (context ring, 会话状态).
     public var runtime: JSONValue { pageMeta["runtime"] }
+    /// 0.6.4: the running turn's start, from the source's state (a poll) or the page that was read. 0 when unknown.
+    public var turnStarted: Int {
+        let live = conversation.control.turnStarted
+        return live > 0 ? live : Int(pageMeta["turn_started"].int())
+    }
+    /// 0.6.4: edit | run | search | read for the running turn, when the computer knows it.
+    public var turnStep: String {
+        let live = conversation.control.step
+        return live.isEmpty ? pageMeta["step"].string() : live
+    }
     public internal(set) var hits: [Message] = []
     public internal(set) var hitCursor: String?
     public internal(set) var hitMore = false

@@ -106,6 +106,8 @@ def enrich(app, raw, messages, context):
             if block.get('type') == 'tool_use':
                 args = block.get('input') or {}
                 name = block.get('name', '')
+                if name.endswith('ccd_turn__wrap_up') and str(args.get('ask') or '').strip():
+                    context.setdefault('activity_asks', set()).add(block.get('id'))
                 if name in ('Edit', 'Write', 'Read', 'Bash', 'Grep', 'Glob'):
                     # Find by the existing visible label; special question/plan cards stay separate.
                     m = next((m for m in messages if m['role'] == 'tool' and not m.get('source_id') and m['text'].startswith(name + '：')), None)
@@ -135,9 +137,36 @@ def enrich(app, raw, messages, context):
                     if block.get('is_error'):
                         m['_changes'] = []
                     m['result'] = str(block.get('content') or '')[:16000]
-        # Claude has no reliable source turn clock here. Group by explicit user records only.
-        if any(m['role'] == 'user' for m in messages):
-            context['activity_turn'] = 'user:' + str(record.get('uuid') or ts)
+        # 0.6.4: Claude's own records give the turn's start and end. A user line that is only a tool result belongs to
+        # the turn already running; a real question starts a new one; a final answer, an API error or an answered
+        # next-step box ends it.
+        kind = record.get('type')
+        text = ''
+        if isinstance(blocks, list):
+            text = '\n'.join(str(b.get('text') or '') for b in blocks
+                             if isinstance(b, dict) and b.get('type') == 'text').strip()
+        if isinstance((record.get('message') or {}).get('content'), str):
+            text = str(record['message']['content']).strip()
+        current = context.get('activity_turn')
+        clocks = context.setdefault('activity_turns', {})
+        if kind == 'user' and not record.get('isSidechain') and not record.get('isMeta'):
+            tool_results = [b for b in blocks if isinstance(b, dict) and b.get('type') == 'tool_result']
+            asks = context.setdefault('activity_asks', set())
+            if any(b.get('tool_use_id') in asks for b in tool_results):
+                if current in clocks:
+                    clocks[current].update(status='completed', ended_at=milliseconds(ts))
+            elif text.startswith('[Request interrupted'):
+                if current in clocks:
+                    clocks[current].update(status='stopped', ended_at=milliseconds(ts))
+            elif text and not record.get('isCompactSummary'):
+                context['activity_turn'] = 'user:' + str(record.get('uuid') or ts)
+                clocks[context['activity_turn']] = {'status': 'running', 'started_at': milliseconds(ts), 'pauses': []}
+        elif kind == 'assistant' and current in clocks:
+            message = record.get('message') or {}
+            if record.get('isApiErrorMessage'):
+                clocks[current].update(status='failed', ended_at=milliseconds(ts))
+            elif message.get('stop_reason') not in (None, 'tool_use'):
+                clocks[current].update(status='completed', ended_at=milliseconds(ts))
         turn = context.get('activity_turn')
     else:
         turn = None

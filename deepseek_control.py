@@ -174,6 +174,7 @@ def organize(rows,members,links=None,pinned=()):
         title=label or r['title'] or folder(r) or ('子智能体' if r['subagent'] else '新对话')
         return {'app':'deepseek','id':r['id'],'title':title[:120],'kind':'subagent' if r['subagent'] else 'script',
                 'parent':parent,'cwd':r['cwd'],'folder':folder(r),'updated':r['updated'],'status':r['status'],
+                'turn_started':r.get('turn_started') or 0,'step':r.get('step') or '',
                 '_running':r['running'],'_values':r['values']}
     kids={};ungrouped=[];index={}
     for r in rows:
@@ -191,6 +192,7 @@ def organize(rows,members,links=None,pinned=()):
         item={'app':'deepseek','id':r['id'],'title':r['title'] or '新对话','cwd':r['cwd'],'folder':folder(r),
               'updated':max([r['updated']]+[c['updated'] for c in own]),'pinned':r['id'] in pinned,'status':r['status'],
               'preview':str(last.get('response') or last.get('prompt') or '')[:150],
+              'turn_started':r.get('turn_started') or 0,'step':r.get('step') or '',
               'workspace':(members or {}).get(r['id']),'children':own,'_values':r['values'],'_running':r['running']}
         top.append(item);index[r['id']]=item
     ungrouped.sort(key=lambda c:(-c['updated'],c['id']))
@@ -340,9 +342,14 @@ class Bridge:
                 if not isinstance(row,dict) or not row.get('sessionId') or row.get('blank') or row.get('sessionId') in archived:continue
                 sid=str(row['sessionId']);v=(row.get('projections') or {}).get('values') or {};cwd=row.get('cwd') or v.get('workingDirectory') or ''
                 status='waiting' if (v.get('userQuestions') or {}).get('active') or self.events.for_session(sid) else 'running' if row.get('running') else 'idle'
-                rows.append({'id':sid,'cwd':str(cwd),'updated':int(row.get('updatedAt') or 0),'running':bool(row.get('running')),'status':status,
+                entry={'id':sid,'cwd':str(cwd),'updated':int(row.get('updatedAt') or 0),'running':bool(row.get('running')),'status':status,
                              'title':str(v.get('title') or ''),'values':v,'parent':str(row.get('parentSessionId') or ''),
-                             'subagent':row.get('origin')=='subagent'})
+                             'subagent':row.get('origin')=='subagent'}
+                if entry['running']:  # 0.6.4: the list's timer needs the turn's own start
+                    outline=v.get('turnOutline') or []
+                    try:entry['turn_started'],_,entry['step']=self._turn_times(sid,(outline[-1] or {}).get('seq') if outline else 0)
+                    except DeepSeekError:pass
+                rows.append(entry)
             value=organize(rows,workspace_members(),self.links or parent_links(),pinned)
             self.cache=(time.monotonic(),value)
             return value
@@ -379,14 +386,39 @@ class Bridge:
             rows.append({'id':child,'label':(state['title'] or '子智能体')[:60],'mode':'','title':state['title'],
                          'running':state['running'],'created':0,'updated':state['updated']})
         return rows
+    def _turn_times(self,sid,start_seq=0,records=None):
+        """The newest turn/start and turn/end events as Unix seconds, and the latest tool action (0.6.4)."""
+        if records is not None:
+            events=[v.get('event') or {} for v in records]
+        else:
+            try:page,_=self.records(sid,limit=100)
+            except Exception:return 0,0,''
+            events=[v.get('event') or {} for v in page.get('records',[])]
+            if start_seq and not any(e.get('type')=='turn/start' for e in events):
+                try:earlier,_=self.records(sid,before=str(int(start_seq)+1),limit=5)
+                except Exception:earlier={}
+                events=[v.get('event') or {} for v in earlier.get('records',[])]+events
+        starts=[int(e['time']/1000) for e in events if e.get('type')=='turn/start' and e.get('time')]
+        ends=[int(e['time']/1000) for e in events if e.get('type')=='turn/end' and e.get('time')]
+        from chats import _step_of
+        step=''
+        for e in reversed(events):
+            if e.get('type')=='tool/call':
+                step=_step_of('deepseek',str((e.get('data') or {}).get('name') or ''))
+                if step:break
+        return (starts[-1] if starts else 0),(ends[-1] if ends else 0),step
     def state(self,sid):
         item=self.find(sid);p=self.client.call('session/projections',{'request':{'sessionId':sid}})
         if not p or p.get('kind')!='sequenced':raise DeepSeekError('DeepSeek 对话需要在电脑上升级记录格式',409)
         v=p['values'];selection=(v.get('modelSelection') or {}).get('next') or {}
         outline=v.get('turnOutline') or []
         preset=current_permission(v)
+        started,ended,step=(0,0,'')
+        if item.get('_running') or outline:
+            started,ended,step=self._turn_times(sid,(outline[-1] or {}).get('seq') if outline else 0)
         return {'available':True,'id':sid,'running':item.get('_running',False),'status':item['status'],
             'turn_id':str(outline[-1]['turn']) if outline else None,
+            'turn_started':started,'turn_ended':ended,'step':step if item.get('_running') else '',
             'settings':selection,'questions':(v.get('userQuestions') or {}).get('active',[]),
             'inbox':v.get('inbox',{}),'queued':queued_messages(v.get('inbox')),
             'permission':preset or '','permission_name':permission_name(preset),'permission_available':preset is not None,
@@ -452,7 +484,11 @@ class Bridge:
             if row.get('role')!='subagent':continue
             live=by_child.get(row.get('child'))
             if live is not None:row['status']='running' if live['running'] else 'done'
+        outline=v.get('turnOutline') or []
+        started,ended,step=self._turn_times(sid,(outline[-1] or {}).get('seq') if outline else 0,
+                                           records=page.get('records',[]))
         return {k:val for k,val in item.items() if not k.startswith('_')}|{'messages':rows,'subagents':subs,
+            'turn_started':started,'turn_ended':ended,'step':step if item.get('_running') else '',
             'size':p['asOfSeq'],'modified':item.get('updated',0),'runtime':{'model':selection.get('model'),'effort':selection.get('reasoningEffort')},
             'has_more':bool(page['hasMore'] and seqs),'next_cursor':str(min(seqs)) if seqs and page['hasMore'] else None,
             'has_newer':bool(before),'reset':False,'total':len(rows)}

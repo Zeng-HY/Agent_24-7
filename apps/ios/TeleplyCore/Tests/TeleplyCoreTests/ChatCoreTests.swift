@@ -69,11 +69,14 @@ struct ChatCoreTests {
 
     @Test func controlReadsTurnsQueueAndQuestions() throws {
         let state = try JSONValue.parse(Data("""
-        {"available":true,"running":true,"turn_id":"t1","queue_available":true,"queued":[{"id":"q","text":"排队","status":"queued"}],
+        {"available":true,"running":true,"turn_id":"t1","turn_started":1761629700,"step":"run",
+         "queue_available":true,"queued":[{"id":"q","text":"排队","status":"queued"}],
          "recent_turns":[{"id":"t0","status":"completed"}],"prompt":{}}
         """.utf8))
         let control = parseControl(state)
         #expect(control.turn == "t1")
+        #expect(control.turnStarted == 1761629700)
+        #expect(control.step == "run")
         #expect(control.queued == [Queued(id: "q", text: "排队", status: "queued")])
         #expect(control.turns == ["t0": "completed"])
         #expect(control.questions)

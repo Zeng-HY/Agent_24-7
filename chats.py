@@ -536,9 +536,34 @@ def _codex_delegation(item: dict) -> dict | None:
             "origin": "other_chat", "source_thread_id": match[1]}
 
 
+_STEPS = {
+    'claude': {'Bash': 'run', 'PowerShell': 'run', 'Edit': 'edit', 'Write': 'edit', 'MultiEdit': 'edit',
+               'NotebookEdit': 'edit', 'Read': 'read', 'Grep': 'read', 'Glob': 'read',
+               'WebSearch': 'search', 'WebFetch': 'search'},
+    'codex': {'exec': 'run', 'shell': 'run', 'exec_command': 'run', 'apply_patch': 'edit',
+              'web_search': 'search', 'search': 'search', 'js': 'run'},
+    'deepseek': {'pwsh': 'run', 'shell': 'run', 'bash': 'run', 'terminal': 'run', 'exec': 'run',
+                 'apply_patch': 'edit', 'edit': 'edit', 'write': 'edit', 'write_file': 'edit',
+                 'read': 'read', 'read_file': 'read', 'grep': 'read', 'glob': 'read',
+                 'web_search': 'search', 'web_fetch': 'search', 'fetch': 'search'},
+}
+
+
+def _step_of(app: str, name: str, argument: str = '') -> str:
+    """edit | run | search | read for a recorded tool call, from its name only (0.6.4). '' for anything else."""
+    action = _STEPS.get(app, {}).get((name or '').rsplit('.', 1)[-1])
+    if app == 'codex' and name == 'exec':
+        text = (argument or '').lower()
+        if 'apply_patch' in text or '*** begin patch' in text:
+            return 'edit'
+        if 'web_search' in text or 'search_query' in text or 'web.run' in text:
+            return 'search'
+    return action or ''
+
+
 def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
     msgs: list[dict] = []
-    state = {"running": None, "turn_time": ""}
+    state = {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
     saw_items = False
     for raw in lines:
         if b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]:
@@ -554,6 +579,9 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
             if kind=='message' and payload.get('role')=='assistant' and payload.get('phase') in ('commentary','final_answer'):
                 text=codex_answer(_join_text(payload.get('content')).strip())
                 if text:msgs.append({'role':'assistant','text':text,'time':ts,'phase':payload['phase'],'source_id':payload.get('id'),'public_response':True})
+            elif kind in ('function_call','custom_tool_call'):
+                step=_step_of('codex',str(payload.get('name') or ''),str(payload.get('input') or ''))
+                if step:state['step']=step
             continue
         if ts:
             state["latest_event_time"] = ts
@@ -585,10 +613,10 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
                 msgs.append({"role": "tool", "text": f"{label}：" + "；".join(str(q) for q in queries if q)[:160],
                              "time": ts})
         elif kind == "task_started":
-            state.update(running=True, turn_time=ts)
+            state.update(running=True, turn_time=ts, turn_started=ts, turn_ended='', step='')
             if payload.get('turn_id'):state['current_turn_id']=payload['turn_id']
         elif kind in ("task_complete", "turn_aborted"):
-            state.update(running=False, turn_time=ts)
+            state.update(running=False, turn_time=ts, turn_ended=ts, step='')
             if payload.get('turn_id'):state['current_turn_id']=payload['turn_id']
         elif kind == "user_message":  # older Codex versions
             msgs.append({"role": "user", "text": clean_codex_user(payload.get("message") or ""), "time": ts, "legacy": True,
@@ -734,7 +762,7 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
     """context: kept by a caller that reads a record a line at a time (chat_history.Transcript), for what one line needs
     to know of earlier ones."""
     msgs: list[dict] = []
-    state = {"running": None, "title": ""}
+    state = {"running": None, "title": "", "turn_started": "", "turn_ended": "", "step": ""}
     last_kind, last_stop = None, None
     # next-step boxes with a question: the turn ends at their result, the record's last line (10-16)
     asks = context.setdefault("asks", set()) if context is not None else set()
@@ -777,9 +805,14 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                 last_kind = "user" if text else ("tool_result" if blocks else last_kind)
                 if not text and any(isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in asks for b in blocks):
                     last_kind = "asked"  # read as running before 10-16: the phone offered 停止这一轮 for a turn long over
+                    state["turn_ended"], state["step"] = ts, ""
             if text:
                 if text.startswith("[Request interrupted"):
                     last_kind, last_stop = "interrupted", None
+                    state["turn_ended"] = ts
+                    state["step"] = ""
+                else:
+                    state["turn_started"], state["turn_ended"], state["step"] = ts, "", ""
                 notice = task_notice(text)
                 msgs.append({"role": "event", "text": notice, "time": ts} if notice else {"role": "user", "text": text, "time": ts})
         else:
@@ -800,10 +833,18 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                     card = _claude_plan(block) or _claude_next(block) or _claude_task(block)
                     if card and card["role"] == "next" and card["ask"]:
                         asks.add(block.get("id"))
+                    if not card:
+                        step = _step_of("claude", str(block.get("name") or ""))
+                        if step:
+                            state["step"] = step
                     msgs.append({**card, "time": ts} if card else {"role": "tool", "text": _claude_tool(block), "time": ts})
     mark_open_next(msgs)
     if last_kind is not None:
         state["running"] = not (last_kind in ("interrupted", "asked", "command_done") or (last_kind == "assistant" and last_stop not in (None, "tool_use")))
+        if last_kind == "assistant" and last_stop not in (None, "tool_use"):
+            state["turn_ended"], state["step"] = ts, ""
+        elif last_kind == "interrupted":
+            state["turn_ended"], state["step"] = ts, ""
     return msgs, state
 
 
@@ -862,11 +903,16 @@ def _status(state: dict, mtime: float) -> str:
 
 
 _summary_cache: dict[str, tuple[tuple, dict]] = {}
+_started_cache: dict[str, str] = {}  # conversation file -> its running turn's start (0.6.4; a long turn stays cheap)
 
 
 def summary(item: dict) -> dict:
     """Status and last line of one conversation, read from the end of its file (cached by size)."""
-    if item['app']=='deepseek':return {'status':item.get('status','unknown'),'preview':item.get('preview','')}
+    if not item.get('app'):
+        return {'status':item.get('status','unknown'),'preview':item.get('preview',''),
+                'turn_started':0,'turn_ended':0,'step':''}
+    if item['app']=='deepseek':return {'status':item.get('status','unknown'),'preview':item.get('preview',''),
+                                      'turn_started':0,'turn_ended':0,'step':''}
     path = conv_path(item)
     if path is None:
         return {"status": "unknown", "preview": "", "path_missing": True}
@@ -884,15 +930,44 @@ def summary(item: dict) -> dict:
         msgs, state = _parse(item["app"], lines)
         have_message=any(m["role"] in ("user", "assistant") for m in msgs)
         have_status=item['app']!='codex' or state.get('running') is not None
-        if (have_message and have_status) or at_start or nbytes >= (8 << 20):
+        # 0.6.4: a running turn whose start record is farther back still needs its own start for the timer. Once
+        # found it is kept by file, so a growing turn does not rescan tens of megabytes on every list poll.
+        key_path = str(path)
+        if state.get('turn_started'):
+            _started_cache[key_path] = state['turn_started']
+        elif state.get('running') and key_path in _started_cache:
+            state['turn_started'] = _started_cache[key_path]
+        elif state.get('running') is False:
+            _started_cache.pop(key_path, None)
+        need_start=bool(state.get('running')) and not state.get('turn_started')
+        if (have_message and have_status and not need_start) or at_start or nbytes >= (64 << 20):
             break
-        nbytes *= 4
+        nbytes = min(nbytes * 4, 64 << 20)
     last = next((m for m in reversed(msgs) if m["role"] in ("user", "assistant")), None)
     prefix = "来自其他对话：" if last and last.get("origin") == "other_chat" else "你：" if last and last["role"] == "user" else ""
-    out = {"status": _status(state, st.st_mtime), "modified": int(st.st_mtime * 1000),
-           "preview": prefix + one_line(plain(last["text"]), 90) if last else ""}
+    status = _status(state, st.st_mtime)
+    def unix(value):
+        try:
+            return int(_seconds(value))
+        except (TypeError, ValueError, AttributeError):
+            return 0
+    out = {"status": status, "modified": int(st.st_mtime * 1000),
+           "preview": prefix + one_line(plain(last["text"]), 90) if last else "",
+           # 0.6.4: the turn's own start and end, Unix seconds, for the phone's timer. 0 when the record has none.
+           "turn_started": unix(state.get("turn_started")), "turn_ended": unix(state.get("turn_ended")),
+           "step": state.get("step", "") if status == "running" else ""}
     _summary_cache[str(path)] = (key, out)
     return out
+
+
+def tail_step(app: str, path: Path) -> str:
+    """The latest tool action from the last 256 KB only (0.6.4: the state API's 动作, without the long start scan)."""
+    try:
+        lines, _ = read_tail(path, 256 << 10)
+        _, state = _parse(app, lines)
+    except (OSError, ValueError):
+        return ''
+    return state.get('step', '') if state.get('running') else ''
 
 
 def public(item: dict) -> dict:
@@ -987,9 +1062,12 @@ def list_conversations(app: str = "all", limit: int = 40) -> list[dict]:
     for item in items:
         s = summary(item)
         item["status"], item["preview"] = s["status"], s["preview"]
+        item["turn_started"], item["turn_ended"] = s["turn_started"], s["turn_ended"]
+        item["step"] = s["step"]
         item["updated"] = max(item["updated"], s.get("modified") or 0)
     items.sort(key=lambda x: -x["updated"])
-    return [public(i) | {"status": i["status"], "preview": i["preview"]} for i in items[:limit]]
+    return [public(i) | {"status": i["status"], "preview": i["preview"], "turn_started": i["turn_started"],
+                        "turn_ended": i["turn_ended"], "step": i["step"]} for i in items[:limit]]
 
 
 def conversation(app: str, conv_id: str, n: int = 60) -> dict:
