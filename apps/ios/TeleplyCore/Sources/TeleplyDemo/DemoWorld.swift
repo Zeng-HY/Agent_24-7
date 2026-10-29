@@ -144,7 +144,8 @@ public final class DemoWorld: Sendable {
         fields["running"] = .bool(run)
         fields["active_turn_id"] = .string(run ? turn : "")
         fields["turn_id"] = .string(turn)
-        let started = fixtureRunning ? Int(DemoData.now / 1000 - 192) : (state.turnStarted[app] ?? Int(DemoData.now / 1000))
+        let started = fixtureRunning ? DemoData.startedSeconds
+            : (state.turnStarted[app] ?? Int(Date().timeIntervalSince1970))
         fields["turn_started"] = .number(Double(run ? started : 0))
         fields["turn_ended"] = .number(0)
         fields["step"] = .string(run ? "run" : "")
@@ -589,6 +590,8 @@ public final class DemoWorld: Sendable {
 enum DemoData {
     /// Fixed clock so the demo reads the same every time (2026-10-24 12:00 UTC), in milliseconds.
     static let now: Int64 = 1_792_843_200_000
+    /// 0.6.4: the running sample's turn began this many seconds before the demo opened (the phone's clock, not `now`).
+    static let startedSeconds = Int(Date().timeIntervalSince1970) - 192
     static let computerA = String(repeating: "a", count: 32)
     static let computerB = String(repeating: "b", count: 32)
     static let offline = String(repeating: "c", count: 32)
@@ -614,7 +617,9 @@ enum DemoData {
         row("demo", "原生阅读示例", "测试项目", "Markdown、表格和代码", "idle", "codex", now - 60_000),
         // 0.6.4: a running row for the screenshots and the timer test: 3 分 12 秒 before this build's clock.
         row("running-demo", "运行中示例", "测试项目", "正在跑命令", "running", "codex", now - 120_000,
-            ["turn_started": .number(Double(now / 1000 - 192)), "step": "run"]),
+            // The timer runs on the phone's clock, so this sample starts three minutes before the app opens, not
+            // before the fixed demo date (which made the screenshot read 120 小时).
+            ["turn_started": .number(Double(startedSeconds)), "step": "run"]),
         row("claude-demo", "Claude 选项示例", "测试项目", "请选择发布说明的格式", "waiting", "claude", now - 600_000),
         row("deepseek-demo", "DeepSeek 批准示例", "固定测试项目", "批准这一步吗？", "waiting", "deepseek", now - 1_800_000,
             ["children": .array(Array(deepseekChildren.prefix(2))), "child_count": 3, "child_running": 1]),

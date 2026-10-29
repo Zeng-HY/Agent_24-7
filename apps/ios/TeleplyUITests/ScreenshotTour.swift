@@ -80,7 +80,9 @@ final class ScreenshotTour: XCTestCase {
         XCTAssertTrue(running.waitForExistence(timeout: 10), "the running row never showed")
         snap(app, page: "27-running-list", variant: variant)
         running.tap()
-        XCTAssertTrue(app.navigationBars["运行中示例"].waitForExistence(timeout: 10), "the running conversation never opened")
+        // The navigation bar's identifier is not the title on this iOS; the page's own title text is.
+        XCTAssertTrue(app.staticTexts["运行中示例"].firstMatch.waitForExistence(timeout: 10),
+                      "the running conversation never opened")
         snap(app, page: "27-running-chat", variant: variant)
         app.terminate()
     }
