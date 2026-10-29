@@ -10,7 +10,9 @@ Tailscale (ntfy_feed.py); turned on on the page, kept as "ntfy": true. Both can 
 reads GET /api/notify/push (ntfy_feed.relay_stream) and is told only which app, which conversation and whether it is
 done, failed or waiting; it writes the words and asks Apple to deliver them (relay_push.py).
 
-Every 10 s the newest conversations are looked at, and a file that grew is read from its end. A turn that ended there
+Every 2 s while a turn runs (5 s when not) the newest conversations are looked at. Since 0.6.4 each file is read from
+where the last look stopped, so every start and end record is seen once; the first look goes back up to 64 MB for the
+newest turn, and a turn's own timestamps (never the clock) say when it began and ended. A turn that ended there
 after this service started (Codex: task_complete; Claude: an answer that stopped for good, not to use a tool) is sent
 once, with the conversation's title and the start of its last answer; tapping it opens that conversation on this
 computer's page. Not sent: turns the user stopped, and turns that end while the phone has that conversation open (its
@@ -685,6 +687,7 @@ class Notifier:
         if initial:
             self.ended[conv] = 'observed'
         now = int(getattr(self, "clock", time.time)())
+        previous = (getattr(self, "running", {}) or {}).get(conv, {})
         events = []
         try:
             page, _ = bridge.records(item['id'], limit=100)
@@ -710,7 +713,7 @@ class Notifier:
             key = 'pending:' + ','.join(sorted(ids))
             text = 'DeepSeek 有待处理的提问或批准，请打开对话查看。'
             asks = True
-            started = starts[-1] if starts else int(self.running.get(conv, {}).get('since') or now)
+            started = int(previous.get('since') or (starts[-1] if starts else now))
             if waiting is not None:
                 waiting[conv] = {"since": started, "title": chats.one_line(item.get('title') or "", 60)}
             end = dict(key=key, state='done', text=text, asks=asks, started=started, ended=now,
@@ -718,7 +721,7 @@ class Notifier:
         elif item.get('_running'):
             if waiting is not None:
                 waiting.pop(conv, None)
-            started = starts[-1] if starts else None
+            started = int(previous.get('since') or (starts[-1] if starts else 0)) or None
             self._running(item, {"started": datetime.fromtimestamp(started).isoformat() if started else "",
                                  "key": str(starts[-1]) if starts else "", "action": action})
             if action and hasattr(self, "_step"):
@@ -737,7 +740,7 @@ class Notifier:
             key = str(end_event.get('seq'))
             text = item.get('preview', '')
             asks = False
-            started = starts[-1] if starts else int(self.running.get(conv, {}).get('since') or 0)
+            started = int(previous.get('since') or (starts[-1] if starts else 0))
             end = dict(key=key, state='done', text=text, asks=asks, started=started or ended, ended=ended,
                        started_source='记录' if starts else ('电脑注意到' if started else '不知道'))
         old = self.ended.get(conv)

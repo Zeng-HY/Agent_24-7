@@ -16,7 +16,7 @@ struct ThinkingRow: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Palette.muted)
             if started > 0 {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
+                TimelineView(.periodic(from: Date.now, by: 1)) { context in
                     Text(IslandWords.thinkingLine(step: step,
                                                   started: started,
                                                   now: Int(context.date.timeIntervalSince1970)))

@@ -141,7 +141,7 @@ struct RunningStatus: View {
     let started: Int
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        TimelineView(.periodic(from: Date.now, by: 1)) { context in
             Text(IslandWords.runningLine(started: started, now: Int(context.date.timeIntervalSince1970)))
                 .font(.system(size: 13, weight: .semibold))
                 .monospacedDigit()

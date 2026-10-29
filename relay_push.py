@@ -1027,7 +1027,7 @@ class Push:
         # 0.6.4: a remote start comes from the conversations the relay knows, not from memory, so it survives a restart.
         with self.store.connect() as db:
             waiting_start = [dict(r) for r in db.execute(
-                'SELECT * FROM push_conversations WHERE state IN ("working","waiting") AND turn<=? '
+                'SELECT * FROM push_conversations WHERE state="working" AND turn<=? '
                 'ORDER BY refreshed DESC', (int(now) - REMOTE_AFTER,))]
         for conv in waiting_start:
             device, app, chat = conv['device'], conv['app'], conv['chat']

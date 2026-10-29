@@ -41,6 +41,8 @@ public final class DemoWorld: Sendable {
         // What sending changes (Android FixtureWorld): a turn per source, its queue, receipts by request id.
         var running: [String: Bool] = [:]
         var turns: [String: String] = [:]
+        /// 0.6.4: when each source's running turn began, Unix seconds.
+        var turnStarted: [String: Int] = [:]
         var turnCount = 0
         var queues: [String: [Queued]] = [:]
         var receipts: [String: JSONValue] = [:]
@@ -112,13 +114,14 @@ public final class DemoWorld: Sendable {
 
     private static func control(_ state: State, app: String, chat: String) -> JSONValue {
         let queued = state.queues[app] ?? []
-        let run = state.running[app] == true
-        let turn = state.turns[app] ?? ""
+        let fixtureRunning = chat == "running-demo"  // 0.6.4: the list's running row, also on its page
+        let run = state.running[app] == true || fixtureRunning
+        let turn = state.turns[app] ?? (fixtureRunning ? "fixture-running" : "")
         var fields = DemoData.state(app: app, chat: chat).object
         // The cards as far as they have been answered; a conversation the demo just made has nothing waiting.
         let made = state.created.contains { $0.row["id"].string() == chat }
         switch app {
-        case _ where made:
+        case _ where made || fixtureRunning:
             fields["prompt"] = nil
             fields["interactions"] = []
             fields["questions"] = []
@@ -141,6 +144,10 @@ public final class DemoWorld: Sendable {
         fields["running"] = .bool(run)
         fields["active_turn_id"] = .string(run ? turn : "")
         fields["turn_id"] = .string(turn)
+        let started = fixtureRunning ? Int(DemoData.now / 1000 - 192) : (state.turnStarted[app] ?? Int(DemoData.now / 1000))
+        fields["turn_started"] = .number(Double(run ? started : 0))
+        fields["turn_ended"] = .number(0)
+        fields["step"] = .string(run ? "run" : "")
         fields["queue_available"] = true
         fields["recent_turns"] = turn.isEmpty ? [] : [["id": .string(turn), "status": .string(run ? "inProgress" : "interrupted")]]
         switch app {
@@ -204,6 +211,7 @@ public final class DemoWorld: Sendable {
                     if state.running[app] != true {
                         state.turnCount += 1
                         state.turns[app] = "fixture-turn-\(state.turnCount)"
+                        state.turnStarted[app] = Int(Date().timeIntervalSince1970)
                     }
                     state.running[app] = true
                     delivery = "accepted"
@@ -284,7 +292,11 @@ public final class DemoWorld: Sendable {
                 var fields = row.object
                 switch row["id"].string() {
                 case "demo":
-                    if state.running["codex"] == true { fields["status"] = "running" }
+                    if state.running["codex"] == true {
+                        fields["status"] = "running"
+                        fields["turn_started"] = .number(Double(state.turnStarted["codex"] ?? Int(DemoData.now / 1000)))
+                        fields["step"] = "run"
+                    }
                 case "claude-demo":
                     if state.claudeStep >= 2 {
                         fields["status"] = "idle"
@@ -600,6 +612,9 @@ enum DemoData {
     /// The first list page (Android FixtureWorld.all()), newest first.
     static let firstPage: [JSONValue] = [
         row("demo", "原生阅读示例", "测试项目", "Markdown、表格和代码", "idle", "codex", now - 60_000),
+        // 0.6.4: a running row for the screenshots and the timer test: 3 分 12 秒 before this build's clock.
+        row("running-demo", "运行中示例", "测试项目", "正在跑命令", "running", "codex", now - 120_000,
+            ["turn_started": .number(Double(now / 1000 - 192)), "step": "run"]),
         row("claude-demo", "Claude 选项示例", "测试项目", "请选择发布说明的格式", "waiting", "claude", now - 600_000),
         row("deepseek-demo", "DeepSeek 批准示例", "固定测试项目", "批准这一步吗？", "waiting", "deepseek", now - 1_800_000,
             ["children": .array(Array(deepseekChildren.prefix(2))), "child_count": 3, "child_running": 1]),

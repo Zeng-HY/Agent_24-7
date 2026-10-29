@@ -64,6 +64,27 @@ final class ScreenshotTour: XCTestCase {
         app.terminate()
     }
 
+    /// 0.6.4: the list's running row and the conversation page's 正在思考 line, from the demo's fixed running turn.
+    @MainActor func testRunningLight() throws { try runningShots(variant: "light", appearance: "light") }
+
+    @MainActor private func runningShots(variant: String, appearance: String) throws {
+        continueAfterFailure = true
+        let app = launch(appearance: appearance, extra: ["-TeleplyDemo"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons["连接测试电脑 A"]
+        if connect.waitForExistence(timeout: 5) { connect.tap() }
+        let running = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "运行中示例")).firstMatch
+        XCTAssertTrue(running.waitForExistence(timeout: 10), "the running row never showed")
+        snap(app, page: "27-running-list", variant: variant)
+        running.tap()
+        XCTAssertTrue(app.navigationBars["运行中示例"].waitForExistence(timeout: 10), "the running conversation never opened")
+        snap(app, page: "27-running-chat", variant: variant)
+        app.terminate()
+    }
+
     /// One short, slow drag up (about a quarter of the screen), for bringing what is just under the bottom edge into
     /// view without the fling a normal swipe adds.
     @MainActor private func scrollSlowly(_ app: XCUIApplication) {

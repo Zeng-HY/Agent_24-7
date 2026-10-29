@@ -51,7 +51,8 @@
 - **灵动岛阶段一**的代码在 `main`（0ddebaa 电脑/中转、1cfc5e9 手机端、18ed29a 手机开着对话也更新岛、3f768ca 样子预览页、9ea65ae 只给刚发的消息开岛、32a0324/25cd78a 测试、ae00f5e 真机记录、5797efd 试岛用当前来源、eb726c3 遥应标志和长按列表、052df56 开关挪到手机通知、214ae79 卡片加大/手表加标题）：手机发送开岛、电脑报 `running`、中转远程开启/状态更新/断开变灰。Windows **0.27.0-dev.28** 已构建并装到这台电脑（含 DeepSeek 答题修复 `70fe829`）；中转已更新到带标题/长按列表的包。真机 0.5.6（13）验过功能后，用户定了遥应标志/长按列表，并指出锁屏卡片偏矮、手表没标题；现在 **0.6.1（16）** 已上传（#48，Delivery UUID `8644d17c-4f06-422a-84bf-eaedfd8f0c9f`），待真机验。本机 183 项 Swift、99 项 Python 通过。
 - **iOS 0.6.2**（通知去重和样子，10-28）的代码在 `main`（9e9763f 中转、20906da 手机和扩展、d5f3f06 并发警告、f0d862b 紧凑岛定宽、915b5e2 样子页、5fcf9e5 文档）：一阵子只响一次、普通通知带标题并叠成一摞、岛收起补静默记录、锁屏卡片白底、新建对话也开岛、紧凑岛定宽。本机 187 项 Swift、103 项 Python 通过；云端 #50、#52 只编译通过，Mac 上 187 项通过；#53 截图 6 张。**中转已更新**（10-28 15:21，旧文件在 `/opt/agent-relay-027/previous-20261028-152116`）；**Windows 不改**（标题和 running 已经在 dev.28 里）；**0.6.2（17）已传 TestFlight**（#55，Delivery UUID `8f7b7fc5-238a-4ea6-9a29-b7335f572a08`），待真机验。检查清单见 `apps/ios/README.md` 的 0.6.2 一节。
 - **iOS 0.6.3**（一台电脑一个岛，10-28）的代码在 `main`（48cbe41 中转和电脑、ad06702 手机和扩展、9bf1574 展开边距、45bea5e 手表黑底和文档）：按对话汇总计数、长按列表、锁屏、手表；岛登记补推；电脑轮询加快。本机 189 项 Swift、109 项 Python 通过；#56 编译通过，Mac 上 189 项；#57 截图 6 张。**中转已更新**（10-28 17:41 前后）、**Windows dev.29 已装**；**0.6.3（18）已传 TestFlight**（#58，Delivery UUID `638c72d7-e28b-4e28-a0f6-dd46131f77a5`），待真机验。检查清单见 `apps/ios/README.md` 的 0.6.3 一节。
-- **`project.yml`**：`MARKETING_VERSION: "0.6.3"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
+- **iOS 0.6.4**（用时准、岛及时、看得到在思考，10-29）的代码在 `main`（e500236 电脑/中转/手机/测试）：电脑按位置增量读记录、用记录里的开始和结束时间；中转保存起止时间、全部结束时保留刚结束的对话、快照补漏、远程开岛查数据库；岛和会话页显示动作与「正在思考」计时。本机 191 项 Swift、174 项 Python 全过。中转和 Windows 版还没更新；Codemagic 编译和截图结果见 `apps/ios/README.md` 的 0.6.4 一节。
+- **`project.yml`**：`MARKETING_VERSION: "0.6.4"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
 - **安卓**：同样的文件页和通知开关也改了（03ac35a、583f84f），没发。灵动岛不碰 `apps/android`。
 - **Windows**：**0.27.0-dev.29 已构建并装到这台电脑**（10-28 17:45，`dist/AgentRemote-0.27.0-dev.29-Setup.exe`，SHA256 `78F60041…`）：`notify.py` 有任务时 2 秒、空闲 5 秒看一次记录。还没发布到 GitHub/阿里云（要发布再问用户）。dev.28 是 10-28 早些时候的版本，也是 0.6.2 用的那版（标题和 running 已经在里面）。
 - **中转**：0.27 服务，10-26 开通了 iPhone 推送。现在的版本号看手机启动页「服务」后面那一串。**0.6.3 的中转已部署**（10-28 17:41 前后，包 `dist/agent-relay-0.27.0-dev.zip`，SHA256 `B80272DF…`）：新表 `push_conversations`、一台电脑一个岛、岛登记补推、日志级别 INFO。0.6.2 手机仍按旧的一对话一岛工作。
@@ -83,7 +84,7 @@
 
 ### 电脑端
 
-- `notify.py` 的 `Notifier` 每 10 秒（`POLL_SECONDS`）看每个应用最新的 30 个对话，读记录末尾，判断这一轮的状态（`turn_end`：running / stopped / failed / done）。**只在一轮停下时报**，正在跑的跳过（`notify.py:343-352`）。报给中转是 `self.relay.publish("", "", extra={"kind": …, "app": …, "chat": …})`（`notify.py:426-427`）。
+- `notify.py` 的 `Notifier` 有任务在跑时每 2 秒（`POLL_FAST`）、空闲每 5 秒（`POLL_SECONDS`）看每个应用最新的 30 个对话。0.6.4 起每个文件记住上次读到的位置，变长只读新增部分；第一次往回读最多 64MB。开始、结束时间从记录里读（Codex 的 `task_started`/`task_complete`，Claude 的用户消息/最后回答，DeepSeek 的 `turn/start`/`turn/end`）。报给中转是 `self.relay.publish("", "", extra={"kind": …, "app": …, "chat": …, "since"/"started"/"ended": …})`；running 在电脑启动和中转重连后会再报一次，已经结束的轮次不补报。有对话在跑时每 60 秒发一个 `snapshot`，另有动作变化时的 `step`；这两种不留着给断线补读。
 - 给中转的事件流和给 ntfy 应用的是两个（`self.relay` 和 `self.feed`），新事件只进 `self.relay`。事件流最多留 100 条、12 小时（`ntfy_feed.py` 的 `KEEP_COUNT`、`KEEP_SECONDS`），给断线后补读。
 - Claude 的问题和权限确认经 Claude Code 的 hook 进来（`claude_hooks.py`），由 `Notifier.asking` 报成 `waiting`（`notify.py:354`）。hook 最多等一小时（`HOOK_TIMEOUT = 3600`）。每个问题有一个随机编号 `Ask.id`（不含内容），手机的每次点按都要带上电脑给的 `stamp`，旧画面上的点按会被拒。
 - Claude 桌面版的 Usage 按钮写着每周额度，例如 `Usage: Weekly · all models: 48%, Resets Sat 3:00 PM`（`claude_control.py:97` 的说明）。电脑现在只读上下文，这一段没读。额度用完时 Claude 窗口有一条提示条，现在被当成「不是问题」跳过（`claude_control.py:361`）。
@@ -335,8 +336,9 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     public var askText: String?     // 方案二 B：只由手机自己写，中转从不填
     public var askOptions: [String]? // 方案二 B：同上
     public var step: String?    // 方案六：edit | run | search | read
+    public var ended: Int?      // 0.6.4：这一轮结束的 Unix 秒；好了一轮的用时按 ended - turn 算
     public var resets: Int?     // 方案七：额度恢复的 Unix 秒
-    public var peers: [IslandPeer]? // 长按列表：每个在跑的对话的 app / chat / 标题 / 状态 / 时间
+    public var peers: [IslandPeer]? // 长按列表：每个在跑的对话的 app / chat / 标题 / 状态 / 时间 / 动作
     public var working: Int?        // 0.6.3：一台电脑的岛，几个对话在干活
     public var waiting: Int?        // 0.6.3：几个在等你定
 }
@@ -349,6 +351,8 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
     public var state: String
     public var since: Int
     public var turn: Int
+    public var step: String?    // 0.6.4：这个对话正在做什么
+    public var ended: Int?      // 0.6.4：已结束那一轮的结束时间
 }
 ```
 
@@ -357,6 +361,7 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 几条死规矩：
 
 - **时间一律用 Unix 秒的整数，不用 `Date`**。岛的推送内容由系统用默认的 JSON 解码器读，`Date` 会被当成「从 2001 年起的秒数」，和中转写的对不上。画面里再换成 `Date(timeIntervalSince1970:)`。推送里的 `aps.timestamp` 是 Unix 秒。
+- **用时以记录为准（0.6.4）**：一轮的开始、结束从 Codex / Claude / DeepSeek 的记录里读（`notify.py` 的 `scan_lines`；状态接口的 `turn_started` / `turn_ended`），不用电脑注意到的时刻，也不用手机的钟。记录里没有时才写「电脑注意到」或「不知道」，中转和日志都要能看出是哪一种。手机的计时只从电脑给的这个开始时间走。
 - **以后加的字段一律是可选类型**，老中转发来的推送才解得开。
 - 键名就是 Swift 里的属性名，不做下划线转换。
 - 中转和手机共用一份样例 `tests/fixtures/island-states.json`：中转的测试核对自己发的内容和它一致，Swift 测试解码同一个文件。两边对不上，测试就失败。
@@ -370,18 +375,18 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 | 电脑上开始的一轮，跑过 1 分钟 | 电脑报 `running` → 中转 | 中转「远程开启」（push-to-start），标题为空 |
 | 在等你 / 好了 / 出错停了 | 电脑 → 中转 | 中转更新岛，带提醒 |
 | 电脑断开、连回 | 中转 | 中转更新岛 |
-| 好了以后 5 分钟 | 中转 | 中转结束这个岛 |
+| 好了以后 2 分钟 | 中转 | 中转结束这个岛 |
 | 用户在岛上回答 | 手机 | 手机经中转直接问电脑（不经过苹果），答上了手机自己改岛 |
 
 **中转发岛的规矩**：
 
 - 请求头 `apns-push-type: liveactivity`，主题 `com.pocketagentdesk.teleply.push-type.liveactivity`。
-- 优先级：在等你、好了、出错停了、断开用 10；在干活、进度用 5。10 秒里已经响过一次时，那一次状态变化不带提醒、用 5。苹果限制优先级 10 的次数，超了会被压下；优先级 5 的不算。
-- 每个岛最多 5 秒一次更新；进度最多 15 秒一次；一个账号的岛推送一小时最多 120 条（和普通通知的 30 条分开算）。
+- 优先级（0.6.4 起）：开始、在等你、好了、出错、断开这些**状态和计数的变化用 10**，不带提醒也马上送；只有进度用 5，同一个对话至少隔 15 秒。10 秒里已经响过一次时，那一次状态变化只是不带提醒，优先级仍是 10。苹果限制优先级 10 的次数，超了会被压下；优先级 5 的不算。
+- 每个岛最多 5 秒一次更新；进度最多 15 秒一次；一个账号的岛推送一小时最多 120 条（和普通通知的 30 条分开算）。干活久没有变化时每 10 分钟刷新一次（`ISLAND_REFRESH`）。
 - `aps.timestamp` 填当时的 Unix 秒。苹果丢掉比上一条旧的更新，所以顺序乱不了。
 - 在干活的更新带 `stale-date`（现在加 15 分钟）。过了这个时间还没新消息，岛上写「可能不是最新」。
 - 苹果说令牌失效（410，或 400 `BadDeviceToken`），就删掉这个岛的记录；这时如果是在等你、好了、出错停了，改发普通通知。
-- **好了或出错 5 分钟后**：发 `end` 结束岛，再补一条静默记录通知（见下），然后删掉登记。
+- **好了或出错 2 分钟后**（0.6.4，原 5 分钟）：发 `end` 结束岛，再补一条静默记录通知（见下），然后删掉登记。
 - 远程开岛（push-to-start）必须带 `alert`，但不带 `sound`，所以不响（0.6.2，用户 10-28）。
 - 推送示例（以苹果文档为准，见第 10 节）：
 
@@ -418,7 +423,7 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 - 推送带 `category: teleply.conversation`；应用启动时用 `UNNotificationCategory` 注册这个类别，`categorySummaryFormat` 写「还有 %u 个对话」，叠起来那一摞的标题就是它。
 - **一阵子只响一次**：同一个账号 10 秒内接连来的事，不管是不是同一个对话、走岛还是走通知，只有第一件响和弹。后面的：岛改成不带 `alert` 的静默更新（优先级 5）；普通通知改成 `interruption-level: passive`、不带 `sound`，只进通知中心。中转按账号记最后一次真响的时间。
 - 同一对话同一种事 60 秒内仍只发一条；一个账号一小时最多 30 条通知。
-- 岛在「好了 / 出错」5 分钟后收起时，中转补一条被动通知当记录（`interruption-level: passive`，无 `sound`，优先级 5）；用户自己划掉的岛不补，断开超过半小时收起的岛也不补。
+- 岛在「好了 / 出错」2 分钟后收起时，中转补一条被动通知当记录（`interruption-level: passive`，无 `sound`，优先级 5）；用户自己划掉的岛不补，断开超过半小时收起的岛也不补。
 - 应用在前台时（`UNUserNotificationCenterDelegate.willPresent`）：正看着那个对话什么都不显示；别的页面横幅照常出、不响；被动通知在前台也只进通知中心。
 - 中转每做一次决定写一行日志：事件、来源、对话编号后 6 位、走了哪条路（岛提醒 / 岛静默 / 通知响 / 通知静默 / 不发）和原因；日志里不写标题。
 
@@ -427,11 +432,21 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 - 手机在发送被电脑收下时开或更新的是**这台电脑**的岛：`attributes.app`、`chat`、`title` 都是空，只带 `device` 和 `computer`；状态里多了 `working`、`waiting`（两个数）和 `peers` 列表。
 - 中转新表 `push_conversations(device, app, chat, owner, title, state, since, turn, refreshed)` 记下每个对话最后一次事件（running→working、waiting、done、failed），24 小时后清。计数只算 working/waiting；等你定的排最前，标题截到 40 字，列表最多 3 行。
 - 收到事件：先更新对话行；有电脑岛就按汇总更新（`state` 按 waiting > working > done；提醒文字用这个对话的标题和状态，例如「好了 · 用了 6 分钟」）；done/failed **先补一条静默记录**，不等岛收起。没有电脑岛、只有 0.6.2 的一对话一岛时照旧；两种都没有就发普通通知。
-- 所有对话都结束后 `state=done`，5 分钟后收起岛；记录已经在每个对话结束时发过，收起时不再发。
+- 所有对话都结束后带上刚结束的那个对话（标题、状态、开始、结束），`state=done`，2 分钟后收起岛；记录已经在每个对话结束时发过，收起时不再发。
 - 岛登记时中转会补推一次当前状态（`fresh_islands`），修掉「done 先到、令牌后到」导致岛停在 working 的问题。
 - 升级：0.6.3 的手机启动和回前台时结束 `chat` 非空的旧岛；中转收到电脑岛登记时删掉这个 device 下旧的 `app`/`chat` 行。
 - 巡检从 30 秒改成 10 秒；电脑 `notify.py` 有任务在跑时 2 秒看一次、空闲 5 秒（Windows dev.29 起）。远程开岛仍等 1 分钟。
 - 画面：紧凑 1 个对话时照旧，2 个以上「3个工作中」，有等你定的「2个等你定」（橙色优先）；小圆加橙点和小数字；展开第一行汇总、等你定的排最前，左上「遥应」和右上数字加了内边距；锁屏 2 个以上第一行汇总、下面最多 3 行；手表/待机（`.small`）黑底白字。
+
+**0.6.4：时间以记录为准，岛及时变，看得到进度（10-29）**
+
+- **时间**：电脑报的 `running.since`、`done/failed.started/ended` 都来自记录；中转 `remember()` 优先用它们，没有才退回现在的做法。岛的 `ended` 让「用了 N 分」在结束后不再变长；没有对话在动时，`aggregate()` 带上刚结束的那一个（`peers` 里一行，`working/waiting=0`），锁屏卡片显示它的标题和真实用时。
+- **电脑读法**：每个对话文件记住上次读到的位置，变长只读新增部分；第一次往回读最多 64MB 找最近一次开始和结束。电脑启动或中转重新连上时，正在跑的轮次用真实开始时间再报一次；只对已经结束的轮次不补报。记录停在「running」但 20 分钟没有新内容，不当成在干活。
+- **快照**：`{"kind":"snapshot","items":[…]}`，有对话在跑时每 60 秒（以及刚启动、刚连上中转）发一次；中转用它补上漏掉的对话，连续两次快照都没有、状态又不是等你的，记成 `gone`（不响、不补记录）。快照和进度用 `Feed.publish(keep=False)`，不留给断线补读。
+- **远程开岛**：中转不再靠内存里的 `self.starts`，`sweep_islands()` 查 `push_conversations` 里「在干活/等你超过 60 秒、这台电脑还没有岛」的，中转重启也能开。
+- **进度**：`{"kind":"step","step":"edit|run|search|read"}`，电脑在动作变了才报、同一对话至少 15 秒；中转也守 15 秒，优先级 5、不带提醒。`content-state.step` 和每个 `peers[].step` 是可选字段，老手机解得开。
+- **状态接口**：`/api/<来源>/state`、`/api/chats`（`turn_started`、`turn_ended`、`step`）、`/api/chat`（顶层和每条消息的 `turn_started`/`turn_ended`、`step`）都带本轮时间；单位是 Unix 秒。网页和安卓界面这一步不改。
+- **iPhone**：锁屏卡片半透明（`CardBackground` 68%），浅色、深色都透壁纸；长按和锁屏每个在干活的对话后面有动作图标 + 两个字 + 计时；会话页最下面「正在思考 · 3 分 12 秒」，跑完的折叠条「思考了 3 分 12 秒」，列表行「运行中 · 3 分 12 秒」。计时全用电脑给的本轮开始时间。
 
 **手机的规矩**：
 
@@ -648,11 +663,13 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 
 **真机验收**：iPhone 锁屏后横放在充电器上：岛的卡片放大，字清楚。有 Apple Watch 的话：抬腕转表冠，智能叠放里有它。
 
-### 方案六：看得懂的进度（阶段三）
+### 方案六：看得懂的进度（阶段三；0.6.4 已做）
+
+**状态（10-29）**：已做。电脑从新增记录里认动作，动作变了才报（同一对话至少 15 秒）；中转优先级 5、不带提醒、也守 15 秒；岛的展开列表和锁屏卡片显示图标 + 两个字，紧凑只留计时；会话页和列表另有「正在思考 / 思考了 / 运行中」计时（见 0.6.4 一节）。还没上真机。
 
 **目标**：在干活时，岛上换一个小图标说它在做什么，不滚日志。
 
-**电脑**（`notify.py`）：这一轮在跑时，从记录末尾（它本来就读）找最后一次工具调用，换成四种之一：
+**电脑**（`notify.py`）：这一轮在跑时，从新增记录（不再是只读末尾）找最后一次工具调用，换成四种之一：
 
 - Claude（记录里 `tool_use` 的名字）：`Bash` → run；`Edit`、`Write`、`MultiEdit`、`NotebookEdit` → edit；`Read`、`Grep`、`Glob` → read；`WebSearch`、`WebFetch` → search；别的不报。
 - Codex（`response_item` 里的函数调用名）：执行命令的（如 `shell`、`exec_command`）→ run；`apply_patch` → edit；网页搜索 → search。**先只读地看几份真实的 Codex 记录，核对名字再写**。
