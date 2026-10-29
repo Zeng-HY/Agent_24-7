@@ -7710,6 +7710,46 @@
           }
         }
       }
+    },
+    "子对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sub-chats"
+          }
+        }
+      }
+    },
+    "个": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "items"
+          }
+        }
+      }
+    },
+    "个运行中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "running"
+          }
+        }
+      }
+    },
+    "收起子对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide Sub-chats"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -256,7 +256,7 @@ struct ModeMenu: View {
                 let chosen = saved["settings"].isObject ? saved["settings"] : current
                 let mode = chosen["mode"].string().isEmpty ? "default" : chosen["mode"].string()
                 ForEach([("default", "普通执行", nil), ("plan", "计划", "先出计划，你确认后再执行")] as [(String, String, String?)], id: \.0) { value, label, detail in
-                    CheckRow(title: label, detail: detail, on: mode == value) {
+                    CheckRow(title: L(label), detail: detail.map(L), on: mode == value) {
                         guard mode != value else { return }
                         var next = chosen.object
                         next["mode"] = .string(value)

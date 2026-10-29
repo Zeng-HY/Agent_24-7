@@ -319,7 +319,7 @@ private struct SourceChips: View {
     var body: some View {
         let known = model.knownApps
         let apps = known ?? (model.listSource == "all" ? [] : [model.listSource])
-        let options = [("all", "全部")] + apps.map { ($0, Labels.sourceName($0)) }
+        let options = [("all", L("全部"))] + apps.map { ($0, Labels.sourceName($0)) }
         HStack(spacing: 8) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {

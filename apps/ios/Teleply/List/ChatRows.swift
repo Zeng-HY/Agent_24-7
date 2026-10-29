@@ -163,7 +163,8 @@ struct FoldRow: View {
 
     var body: some View {
         Button(action: toggle) {
-            Text((open ? "▾ 收起子对话" : "▸ 子对话 \(count) 个") + (running > 0 ? " · \(running) 个运行中" : ""))
+            Text((open ? "▾ " + L("收起子对话") : "▸ " + L("子对话") + " \(count) " + L("个"))
+                 + (running > 0 ? " · \(running) " + L("个运行中") : ""))
                 .noteFont(.medium)
                 .foregroundStyle(Palette.accent)
                 .frame(maxWidth: .infinity, alignment: .leading)

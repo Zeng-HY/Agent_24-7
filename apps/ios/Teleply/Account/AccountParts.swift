@@ -133,7 +133,7 @@ private struct AccountButtonBody: View {
 
 /// A small grey button under the form (web .text-button).
 struct AccountTextButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let action: () -> Void
 
     var body: some View {

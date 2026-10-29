@@ -183,7 +183,7 @@ struct ComposerCard: View {
         let canSend = chat.ready && reachable && !chat.submitting && (!words.isEmpty || extras) && words.count <= 20_000
         // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
         let newPage = isNewPage(chat.key?.chat)
-        let prompt = newPage ? "可以先写下一条，创建完成后发送" : chat.hint.isEmpty ? "输入消息…" : chat.hint
+        let prompt = newPage ? L("可以先写下一条，创建完成后发送") : chat.hint.isEmpty ? L("输入消息…") : chat.hint
         VStack(alignment: .leading, spacing: 0) {
             StatusLine(model: model, voice: voice)
             // While recording, the card shows what is heard in place of the box (web: the box becomes the recorder).

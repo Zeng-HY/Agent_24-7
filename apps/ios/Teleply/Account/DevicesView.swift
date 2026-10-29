@@ -23,7 +23,7 @@ struct DevicesView: View {
                         .rise(0)
                 }
                 if model.fixture {
-                    Text("本地示例 · 固定数据 · 未连接真实服务")
+                    Text(L("本地示例 · 固定数据 · 未连接真实服务"))
                         .scaledFont(13, relativeTo: .footnote)
                         .foregroundStyle(AccountPalette.muted)
                         .padding(.top, 8)
@@ -156,7 +156,7 @@ private struct DeviceRow: View {
                 if device.connectable {
                     Circle().fill(AccountPalette.online).frame(width: 7, height: 7)
                 }
-                Text((device.connectable ? "在线" : "离线") + (current ? " · 当前" : ""))
+                Text((device.connectable ? L("在线") : L("离线")) + (current ? L(" · 当前") : ""))
                     .scaledFont(13, relativeTo: .footnote)
                     .foregroundStyle(AccountPalette.muted)
             }
@@ -170,7 +170,7 @@ private struct DeviceRow: View {
                 if busy {
                     ProgressView().tint(Palette.onPrimary)
                 } else {
-                    Text(online ? "连接" : "离线")
+                    Text(online ? L("连接") : L("离线"))
                         .scaledFont(14, .medium, relativeTo: .subheadline)
                         .foregroundStyle(online ? Palette.onPrimary : AccountPalette.muted)
                 }
@@ -188,7 +188,7 @@ private struct DeviceRow: View {
         }
         .buttonStyle(PressScaleStyle())
         .disabled(!online || busy)
-        .accessibilityLabel(Text(online ? "连接\(device.label)" : "\(device.label)离线"))
+        .accessibilityLabel(Text(online ? L("连接") + device.label : device.label + L("离线")))
     }
 
     private var manage: some View {
