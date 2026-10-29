@@ -26,6 +26,30 @@ final class ScreenshotTour: XCTestCase {
     @MainActor func testIslandDark() throws { try islandPreview(variant: "dark", appearance: "dark") }
     @MainActor func testIslandEnglish() throws { try islandPreview(variant: "en", appearance: "light", language: "en") }
 
+    /// 0.6.5: the first main pages in English: sign-in, computers, list, one conversation.
+    @MainActor func testEnglishMain() throws { try englishMain() }
+
+    @MainActor private func englishMain() throws {
+        continueAfterFailure = true
+        let app = launch(appearance: "light", language: "en", extra: ["-TeleplyDemo"])
+        let enter = app.buttons["Open Sample"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the English demo sign-in never showed")
+        snap(app, page: "02-demo-login", variant: "en")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["My Computers"].waitForExistence(timeout: 10), "My Computers never showed")
+        snap(app, page: "03-devices", variant: "en")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        XCTAssertTrue(connect.waitForExistence(timeout: 5), "the English connect button never showed")
+        connect.tap()
+        let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the English list never showed")
+        snap(app, page: "04-list", variant: "en")
+        first.tap()
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
+        snap(app, page: "08-chat", variant: "en")
+        app.terminate()
+    }
+
     @MainActor private func word(_ zh: String, _ en: String, _ language: String) -> String {
         language == "en" ? en : zh
     }
