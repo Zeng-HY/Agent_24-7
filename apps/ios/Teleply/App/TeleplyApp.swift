@@ -10,7 +10,9 @@ struct TeleplyApp: App {
     @State private var model: AppModel
 
     init() {
-        Labels.language = Locale.current.language.languageCode?.identifier == "en" ? "en" : "zh-Hans"\n        Hints.language = Labels.language\n        IslandWords.language = Labels.language
+        Labels.language = Locale.current.language.languageCode?.identifier == "en" ? "en" : "zh-Hans"
+        Hints.language = Labels.language
+        IslandWords.language = Labels.language
         let vault = KeychainVault()
         // The keychain outlives the app; a reinstall starts signed out (plan: 登录).
         vault.forgetAfterReinstall()
