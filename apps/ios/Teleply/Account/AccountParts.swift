@@ -133,11 +133,11 @@ private struct AccountButtonBody: View {
 
 /// A small grey button under the form (web .text-button).
 struct AccountTextButton: View {
-    let title: LocalizedStringKey
+    let title: String
     let action: () -> Void
 
     var body: some View {
-        Button(title, action: action)
+        Button(L(title), action: action)
             .scaledFont(14, relativeTo: .subheadline)
             .foregroundStyle(AccountPalette.muted)
             .padding(.horizontal, 12)
