@@ -20,7 +20,7 @@
 - **状态接口**：`/api/<来源>/state`、`/api/chats`、`/api/chat` 都带本轮开始、结束和动作；网页和安卓界面这次不改。
 - 版本 0.6.4。
 
-检查情况：本机 `TeleplyCore` 191 项、Python 174 项全过（新加开始记录离末尾 400KB、电脑中途重启、done 带起止时间、快照恢复和远程开岛、全部结束时保留刚结束的对话、状态变化 10 / 进度 5、进度 15 秒）。云端 `ios-native-check` 只编译通过（构建 `6ae338ce3e9be9cf26505d04`，6 分钟，Mac 上 191 项通过，只剩 `ChatModel.swift:592` 的旧警告）；截图构建 `6ae33cfd8e64ccacf5b3b1ef` 通过（11 分钟，8 张）：浅色、深色各拍锁屏浅色卡片、锁屏深色卡片和紧凑样子共 6 张，另加 `27-running-list-light`（列表「运行中 · 3 分 15 秒」）、`27-running-chat-light`（「正在跑命令 · 3 分 21 秒」）。截图在 `F:\Android-Dev\work\20261029-island-064\codemagic\6ae33cfd8e64ccacf5b3b1ef\artefacts\shots`。中转已更新（10-29 20:50，旧文件 `/opt/agent-relay-027/previous-20261029-205052`）；Windows `0.27.0-dev.30`（30）已构建并装到这台电脑（20:55，`dist/AgentRemote-0.27.0-dev.30-Setup.exe`，SHA256 `DD1A17E4…`），已连回中转。
+检查情况：本机 `TeleplyCore` 191 项、Python 174 项全过（新加开始记录离末尾 400KB、电脑中途重启、done 带起止时间、快照恢复和远程开岛、全部结束时保留刚结束的对话、状态变化 10 / 进度 5、进度 15 秒）。云端 `ios-native-check` 只编译通过（构建 `6ae338ce3e9be9cf26505d04`，6 分钟，Mac 上 191 项通过，只剩 `ChatModel.swift:592` 的旧警告）；截图构建 `6ae33cfd8e64ccacf5b3b1ef` 通过（11 分钟，8 张）：浅色、深色各拍锁屏浅色卡片、锁屏深色卡片和紧凑样子共 6 张，另加 `27-running-list-light`（列表「运行中 · 3 分 15 秒」）、`27-running-chat-light`（「正在跑命令 · 3 分 21 秒」）。截图在 `F:\Android-Dev\work\20261029-island-064\codemagic\6ae33cfd8e64ccacf5b3b1ef\artefacts\shots`。中转已更新（10-29 20:50，旧文件 `/opt/agent-relay-027/previous-20261029-205052`）；Windows `0.27.0-dev.30`（30）已构建并装到这台电脑（20:55，`dist/AgentRemote-0.27.0-dev.30-Setup.exe`，SHA256 `DD1A17E4…`），已连回中转；已发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.30`（21:07 前后，三个文件都在，阿里云和 GitHub 的清单一致）。
 
 ### 留给你在真机上验（0.6.4）
 
