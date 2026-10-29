@@ -37,6 +37,7 @@ check_ipa() {
   [ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$unpacked/entitlements.plist" 2>/dev/null)" = "production" ] ||
     fail "push entitlement (aps-environment production): is the profile made again with Push Notifications on?"
   [ -d "$app/zh-Hans.lproj" ] || fail "Simplified Chinese localization"
+  [ -d "$app/en.lproj" ] || fail "English localization (en.lproj)"
   # 灵动岛: the Live Activity widget extension must be embedded, use the island's App ID and profile, carry the same
   # version as the app (App Store Connect refuses a mismatch) and be a WidgetKit extension.
   ext="$app/PlugIns/TeleplyIslandWidget.appex"

@@ -59,34 +59,41 @@ class Accounts:
                 -- the phones an account's notifications go to, and the events already sent (relay_push.py)
                 CREATE TABLE IF NOT EXISTS push_phones(id TEXT PRIMARY KEY, owner TEXT, platform TEXT,
                     environment TEXT, token TEXT UNIQUE, label TEXT, version TEXT, created REAL, refreshed REAL,
-                    result TEXT DEFAULT '');
+                    result TEXT DEFAULT '', language TEXT DEFAULT 'zh-Hans');
                 CREATE INDEX IF NOT EXISTS push_phones_owner ON push_phones(owner);
                 CREATE TABLE IF NOT EXISTS push_events(id TEXT PRIMARY KEY, time REAL);
                 -- 灵动岛 (relay_push.py): one row per island's push token, and the phones' push-to-start tokens
                 CREATE TABLE IF NOT EXISTS push_activities(id TEXT PRIMARY KEY, owner TEXT, device TEXT, app TEXT,
                     chat TEXT, token TEXT UNIQUE, environment TEXT, state TEXT, since INTEGER, turn INTEGER,
                     created REAL, refreshed REAL, result TEXT DEFAULT '',
-                    saved_state TEXT, saved_since INTEGER, saved_turn INTEGER, title TEXT DEFAULT '');
+                    saved_state TEXT, saved_since INTEGER, saved_turn INTEGER, title TEXT DEFAULT '', language TEXT DEFAULT 'zh-Hans');
                 CREATE INDEX IF NOT EXISTS push_activities_owner ON push_activities(owner);
                 CREATE INDEX IF NOT EXISTS push_activities_chat ON push_activities(device, app, chat);
                 -- 0.6.3: one island per computer; these are the conversations its counts and list are made of
                 CREATE TABLE IF NOT EXISTS push_conversations(device TEXT, app TEXT, chat TEXT, owner TEXT,
                     title TEXT DEFAULT '', state TEXT, since INTEGER, turn INTEGER, refreshed REAL,
                     ended INTEGER DEFAULT 0, step TEXT DEFAULT '', started_source TEXT DEFAULT '',
+                    action_at INTEGER DEFAULT 0,
                     PRIMARY KEY(device, app, chat));
                 CREATE INDEX IF NOT EXISTS push_conversations_device ON push_conversations(device);
                 CREATE TABLE IF NOT EXISTS push_start(token TEXT PRIMARY KEY, owner TEXT, environment TEXT,
-                    refreshed REAL);
+                    refreshed REAL, language TEXT DEFAULT 'zh-Hans');
             ''')
             # A database from an earlier build has push_activities without the columns added since.
             columns = {row[1] for row in db.execute('PRAGMA table_info(push_activities)')}
             for name, kind in (('saved_state', 'TEXT'), ('saved_since', 'INTEGER'), ('saved_turn', 'INTEGER'),
-                               ('title', "TEXT DEFAULT ''")):
+                               ('title', "TEXT DEFAULT ''"), ('language', "TEXT DEFAULT 'zh-Hans'")):
                 if name not in columns:
                     db.execute(f'ALTER TABLE push_activities ADD COLUMN {name} {kind}')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(push_phones)')}
+            if 'language' not in columns:
+                db.execute("ALTER TABLE push_phones ADD COLUMN language TEXT DEFAULT 'zh-Hans'")
+            columns = {row[1] for row in db.execute('PRAGMA table_info(push_start)')}
+            if 'language' not in columns:
+                db.execute("ALTER TABLE push_start ADD COLUMN language TEXT DEFAULT 'zh-Hans'")
             columns = {row[1] for row in db.execute('PRAGMA table_info(push_conversations)')}
             for name, kind in (('ended', 'INTEGER DEFAULT 0'), ('step', "TEXT DEFAULT ''"),
-                               ('started_source', "TEXT DEFAULT ''")):
+                               ('started_source', "TEXT DEFAULT ''"), ('action_at', 'INTEGER DEFAULT 0')):
                 if name not in columns:
                     db.execute(f'ALTER TABLE push_conversations ADD COLUMN {name} {kind}')
 

@@ -230,6 +230,11 @@ def record_step(app: str, name: str, argument: str = "") -> str | None:
     return action
 
 
+def turn_start(previous, starts, now):
+    """The current turn's start: the newest start the record showed, never an older turn's (0.6.5)."""
+    return max(int(previous or 0), starts[-1] if starts else 0) or int(now)
+
+
 def new_scan(app: str) -> dict:
     """What one conversation's turn looks like while its record is read a piece at a time (0.6.4)."""
     return {"app": app, "state": None, "started": "", "ended": "", "latest": "", "key": "", "text": "", "action": "",
@@ -351,6 +356,8 @@ class Notifier:
         self.waiting: dict[tuple, dict] = {}         # (app, id) -> {since, title}: a question waits for the user
         self.steps: dict[tuple, tuple] = {}          # (app, id) -> (action, when it was last told)
         self.last_snapshot = 0.0
+        self.last_snapshot_empty = True
+        self.snapshot_force = True
         self.relay_was_on = False
         self.relay_was_listening = False
         self.running_quiet = True                    # kept for older callers; running is now always reported (0.6.4)
@@ -487,6 +494,7 @@ class Notifier:
             self.reported_running.clear()
             self.steps.clear()
             self.last_snapshot = 0
+            self.snapshot_force = True
         self.relay_was_listening = listening
         self.relay_was_on = on
         if found is None and not self.ntfy_on() and not on:
@@ -620,10 +628,15 @@ class Notifier:
         except Exception:
             self.log("通知：进度没报给中转\n" + traceback.format_exc())
 
-    def _snapshot(self) -> None:
-        """Every 60 s (and once when the relay connects): all running and waiting conversations on this computer, so a
-        relay that restarted can rebuild them. Not kept for a reconnect (0.6.4)."""
-        if not self.relay_on() or self.clock() - self.last_snapshot < SNAPSHOT_EVERY:
+    def _snapshot(self, force: bool = False) -> None:
+        """Every 60 s while something runs (and once when the relay connects): all running and waiting conversations
+        on this computer. An empty snapshot goes only after the last one ended, or on a reconnect (0.6.5 fix)."""
+        force = force or self.snapshot_force
+        if not self.relay_on():
+            return
+        # an empty snapshot goes as soon as the last conversation ends, not on the next minute
+        transition_empty = not (self.running or self.waiting) and not self.last_snapshot_empty
+        if not (force or transition_empty) and self.clock() - self.last_snapshot < SNAPSHOT_EVERY:
             return
         items = []
         for conv, info in self.running.items():
@@ -634,9 +647,13 @@ class Notifier:
             items.append({"app": conv[0], "chat": conv[1], "state": "waiting", "started": int(info["since"]),
                           "since": int(info["since"]), "title": info.get("title", ""),
                           "step": (self.steps.get(conv) or ("", ""))[0]})
+        if not items and self.last_snapshot_empty and not force:
+            return
         try:
             self.relay.publish("", "", extra={"kind": "snapshot", "items": items}, keep=False)
             self.last_snapshot = self.clock()
+            self.last_snapshot_empty = not items
+            self.snapshot_force = False
         except Exception:
             self.log("通知：快照没报给中转\n" + traceback.format_exc())
 
@@ -698,9 +715,14 @@ class Notifier:
         starts = [int(v) for v in starts if v > 0]
         ends = [e for e in events if e.get('type') == 'turn/end']
         action = ""
+        last_start = next((e for e in reversed(events) if e.get('type') == 'turn/start'), None)
+        turn_id = (last_start.get('data') or {}).get('turn') if last_start else None
         for event in reversed(events):
             if event.get('type') == 'tool/call':
-                name = (event.get('data') or {}).get('name') or ""
+                data = event.get('data') or {}
+                if turn_id is not None and data.get('turn') != turn_id:
+                    continue
+                name = data.get('name') or ""
                 action = record_step("deepseek", str(name)) or action
                 if action:
                     break
@@ -713,7 +735,7 @@ class Notifier:
             key = 'pending:' + ','.join(sorted(ids))
             text = 'DeepSeek 有待处理的提问或批准，请打开对话查看。'
             asks = True
-            started = int(previous.get('since') or (starts[-1] if starts else now))
+            started = turn_start(previous.get('since'), starts, now)
             if waiting is not None:
                 waiting[conv] = {"since": started, "title": chats.one_line(item.get('title') or "", 60)}
             end = dict(key=key, state='done', text=text, asks=asks, started=started, ended=now,
@@ -721,7 +743,7 @@ class Notifier:
         elif item.get('_running'):
             if waiting is not None:
                 waiting.pop(conv, None)
-            started = int(previous.get('since') or (starts[-1] if starts else 0)) or None
+            started = turn_start(previous.get('since'), starts, now) or None
             self._running(item, {"started": datetime.fromtimestamp(started).isoformat() if started else "",
                                  "key": str(starts[-1]) if starts else "", "action": action})
             if action and hasattr(self, "_step"):
@@ -740,7 +762,7 @@ class Notifier:
             key = str(end_event.get('seq'))
             text = item.get('preview', '')
             asks = False
-            started = int(previous.get('since') or (starts[-1] if starts else 0))
+            started = turn_start(previous.get('since'), starts, now)
             end = dict(key=key, state='done', text=text, asks=asks, started=started or ended, ended=ended,
                        started_source='记录' if starts else ('电脑注意到' if started else '不知道'))
         old = self.ended.get(conv)

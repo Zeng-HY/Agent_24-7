@@ -125,6 +125,9 @@ struct PeerList: View {
                 ForEach(peers, id: \.chat) { peer in
                     PeerRow(device: device, computer: computer, peer: peer)
                 }
+                if let more = IslandWords.moreLine(state.more) {
+                    MoreRow(text: more)
+                }
             } else if let peer = IslandWords.only(state) {
                 PeerRow(device: device, computer: computer, peer: peer)
             } else {
@@ -207,6 +210,28 @@ private struct PeerRow: View {
             Text(IslandWords.state(peer.status ?? .working))
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(IslandPalette.muted)
         }
+    }
+}
+
+/// 0.6.5: the fourth line, "还有 7 个 ›". The whole card opens the running-only list; this row is a hint, not a link.
+private struct MoreRow: View {
+    let text: String
+    var ink = IslandPalette.islandInk
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ink.opacity(0.65))
+                .frame(width: 15)
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ink.opacity(0.8))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .frame(height: 22)
+        .accessibilityLabel(text)
     }
 }
 
@@ -300,6 +325,9 @@ struct LockScreenCard: View {
             }
             ForEach(peers.prefix(3), id: \.chat) { peer in
                 PeerRow(device: attributes.device, computer: attributes.computer, peer: peer, ink: IslandPalette.ink)
+            }
+            if let more = IslandWords.moreLine(state.more) {
+                MoreRow(text: more, ink: IslandPalette.ink)
             }
         }
     }

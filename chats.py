@@ -960,14 +960,49 @@ def summary(item: dict) -> dict:
     return out
 
 
-def tail_step(app: str, path: Path) -> str:
-    """The latest tool action from the last 256 KB only (0.6.4: the state API's 动作, without the long start scan)."""
+def tail_step(app: str, path: Path, started: int = 0) -> str:
+    """The latest tool action of the turn that began at [started] (0.6.5): a new turn starts with no action, even when
+    the last 256 KB still holds the previous turn's last tool call."""
     try:
         lines, _ = read_tail(path, 256 << 10)
-        _, state = _parse(app, lines)
-    except (OSError, ValueError):
+    except OSError:
         return ''
-    return state.get('step', '') if state.get('running') else ''
+    action = ''
+    for raw in lines:
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeError):
+            continue
+        ts = rec.get('timestamp') or ''
+        try:
+            at = int(datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp())
+        except (ValueError, AttributeError):
+            at = 0
+        if started and at and at < started:
+            continue
+        payload = rec.get('payload') or {}
+        if app == 'codex':
+            event = payload.get('type') if rec.get('type') == 'event_msg' else None
+            if event == 'task_started':
+                action = ''
+            elif rec.get('type') == 'response_item' and payload.get('type') in ('function_call', 'custom_tool_call'):
+                step = _step_of('codex', str(payload.get('name') or ''), str(payload.get('input') or ''))
+                if step:
+                    action = step
+        else:
+            content = (rec.get('message') or {}).get('content')
+            blocks = content if isinstance(content, list) else []
+            if rec.get('type') == 'user' and not rec.get('isSidechain') and not rec.get('isMeta'):
+                text = _join_text(content).strip()
+                if text and not any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in blocks):
+                    action = ''
+            elif rec.get('type') == 'assistant':
+                for block in blocks:
+                    if isinstance(block, dict) and block.get('type') == 'tool_use':
+                        step = _step_of('claude', str(block.get('name') or ''))
+                        if step:
+                            action = step
+    return action
 
 
 def public(item: dict) -> dict:

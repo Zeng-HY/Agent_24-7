@@ -24,37 +24,43 @@ final class ScreenshotTour: XCTestCase {
     /// screenshots are what the user looks at. The whole tour takes minutes; this is the one page.
     @MainActor func testIslandLight() throws { try islandPreview(variant: "light", appearance: "light") }
     @MainActor func testIslandDark() throws { try islandPreview(variant: "dark", appearance: "dark") }
+    @MainActor func testIslandEnglish() throws { try islandPreview(variant: "en", appearance: "light", language: "en") }
 
-    @MainActor private func islandPreview(variant: String, appearance: String) throws {
+    @MainActor private func word(_ zh: String, _ en: String, _ language: String) -> String {
+        language == "en" ? en : zh
+    }
+
+    @MainActor private func islandPreview(variant: String, appearance: String, language: String = "zh-Hans") throws {
         continueAfterFailure = true
-        let app = launch(appearance: appearance, extra: ["-TeleplyDemo"])
-        let enter = app.buttons["进入示例"]
+        let app = launch(appearance: appearance, language: language, extra: ["-TeleplyDemo"])
+        let enter = app.buttons[word("进入示例", "Open Sample", language)]
         XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
         enter.tap()
-        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
-        let connect = app.buttons["连接测试电脑 A"]
+        XCTAssertTrue(app.staticTexts[word("我的电脑", "My Computers", language)].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
         if connect.waitForExistence(timeout: 5) { connect.tap() }
-        let menu = app.buttons["打开导航"]
+        let menu = app.buttons[word("打开导航", "Open Navigation", language)]
         XCTAssertTrue(menu.waitForExistence(timeout: 15), "the list never showed")
         menu.tap()
-        let gear = app.buttons["设置"].firstMatch
+        let gear = app.buttons[word("设置", "Settings", language)].firstMatch
         XCTAssertTrue(gear.waitForExistence(timeout: 10), "设置 was not in the sidebar")
         gear.tap()
-        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10), "设置 never opened")
+        XCTAssertTrue(app.navigationBars[word("设置", "Settings", language)].waitForExistence(timeout: 10), "设置 never opened")
         app.swipeUp()
-        let developer = app.buttons["开发者选项"].firstMatch
+        let developer = app.buttons[word("开发者选项", "Developer Options", language)].firstMatch
         for _ in 0..<3 where !developer.isHittable { app.swipeUp() }
         XCTAssertTrue(developer.isHittable, "开发者选项 could not be reached")
         developer.tap()
-        XCTAssertTrue(app.navigationBars["开发者选项"].waitForExistence(timeout: 10), "开发者选项 never opened")
-        let island = app.buttons["灵动岛样子"].firstMatch
+        XCTAssertTrue(app.navigationBars[word("开发者选项", "Developer Options", language)].waitForExistence(timeout: 10), "开发者选项 never opened")
+        let island = app.buttons[word("灵动岛样子", "Dynamic Island Style", language)].firstMatch
         for _ in 0..<3 where !island.isHittable { app.swipeUp() }
         XCTAssertTrue(island.isHittable, "灵动岛样子 could not be reached")
         island.tap()
-        XCTAssertTrue(app.navigationBars["灵动岛样子"].waitForExistence(timeout: 10), "灵动岛样子 never opened")
+        XCTAssertTrue(app.navigationBars[word("灵动岛样子", "Dynamic Island Style", language)].waitForExistence(timeout: 10), "灵动岛样子 never opened")
         // 0.6.2: the lock-screen card in both lights first, then the fixed-width compact island.
         snap(app, page: "27-island-lock-light", variant: variant)
-        for (title, page) in [("锁屏卡片 · 深色", "27-island-lock-dark"), ("紧凑（灵动岛）", "27-island-compact")] {
+        for (title, page) in [(word("锁屏卡片 · 深色", "Lock Screen Card · Dark", language), "27-island-lock-dark"),
+                              (word("紧凑（灵动岛）", "Compact (Dynamic Island)", language), "27-island-compact")] {
             let header = app.staticTexts[title].firstMatch
             XCTAssertTrue(header.waitForExistence(timeout: 5), "\(title) was not on the page")
             _ = reach(app, header)
@@ -66,15 +72,16 @@ final class ScreenshotTour: XCTestCase {
 
     /// 0.6.4: the list's running row and the conversation page's 正在思考 line, from the demo's fixed running turn.
     @MainActor func testRunningLight() throws { try runningShots(variant: "light", appearance: "light") }
+    @MainActor func testRunningEnglish() throws { try runningShots(variant: "en", appearance: "light", language: "en") }
 
-    @MainActor private func runningShots(variant: String, appearance: String) throws {
+    @MainActor private func runningShots(variant: String, appearance: String, language: String = "zh-Hans") throws {
         continueAfterFailure = true
-        let app = launch(appearance: appearance, extra: ["-TeleplyDemo"])
-        let enter = app.buttons["进入示例"]
+        let app = launch(appearance: appearance, language: language, extra: ["-TeleplyDemo"])
+        let enter = app.buttons[word("进入示例", "Open Sample", language)]
         XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
         enter.tap()
-        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
-        let connect = app.buttons["连接测试电脑 A"]
+        XCTAssertTrue(app.staticTexts[word("我的电脑", "My Computers", language)].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
         if connect.waitForExistence(timeout: 5) { connect.tap() }
         let running = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "运行中示例")).firstMatch
         XCTAssertTrue(running.waitForExistence(timeout: 10), "the running row never showed")
@@ -96,31 +103,32 @@ final class ScreenshotTour: XCTestCase {
         sleep(1)
     }
 
-    @MainActor private func tour(variant: String, appearance: String, extra: [String] = []) throws {
+    @MainActor private func tour(variant: String, appearance: String, language: String = "zh-Hans",
+                                 extra: [String] = []) throws {
         continueAfterFailure = true
 
-        let offline = launch(appearance: appearance, extra: extra + ["-TeleplyDemoUnreachable"])
+        let offline = launch(appearance: appearance, language: language, extra: extra + ["-TeleplyDemoUnreachable"])
         XCTAssertTrue(offline.buttons["重试"].waitForExistence(timeout: 20), "登录 never offered 重试 when the service was down")
         snap(offline, page: "01-unreachable", variant: variant)
         offline.terminate()
 
-        let app = launch(appearance: appearance, extra: extra + ["-TeleplyDemo"])
-        let enter = app.buttons["进入示例"]
+        let app = launch(appearance: appearance, language: language, extra: extra + ["-TeleplyDemo"])
+        let enter = app.buttons[word("进入示例", "Open Sample", language)]
         XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
         snap(app, page: "02-demo-login", variant: variant)
 
         enter.tap()
-        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        XCTAssertTrue(app.staticTexts[word("我的电脑", "My Computers", language)].waitForExistence(timeout: 10), "我的电脑 never showed")
         snap(app, page: "03-devices", variant: variant)
 
-        let connect = app.buttons["连接测试电脑 A"]
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
         XCTAssertTrue(connect.waitForExistence(timeout: 5), "测试电脑 A had no 连接")
         connect.tap()
         let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
         snap(app, page: "04-list", variant: variant)
 
-        let menu = app.buttons["打开导航"]
+        let menu = app.buttons[word("打开导航", "Open Navigation", language)]
         if menu.waitForExistence(timeout: 5) {
             menu.tap()
             if app.staticTexts["电脑遥控"].waitForExistence(timeout: 5) {
@@ -374,10 +382,10 @@ final class ScreenshotTour: XCTestCase {
 
         if menu.waitForExistence(timeout: 5) {
             menu.tap()
-            let gear = app.buttons["设置"].firstMatch
+            let gear = app.buttons[word("设置", "Settings", language)].firstMatch
             if gear.waitForExistence(timeout: 5) {
                 gear.tap()
-                if app.navigationBars["设置"].waitForExistence(timeout: 5) {
+                if app.navigationBars[word("设置", "Settings", language)].waitForExistence(timeout: 5) {
                     snap(app, page: "12-settings", variant: variant)
                     let archived = app.buttons["已归档对话"].firstMatch
                     if archived.waitForExistence(timeout: 5) {
@@ -390,15 +398,15 @@ final class ScreenshotTour: XCTestCase {
                     }
                     app.swipeUp()
                     snap(app, page: "26-settings-more", variant: variant)
-                    let developer = app.buttons["开发者选项"].firstMatch
+                    let developer = app.buttons[word("开发者选项", "Developer Options", language)].firstMatch
                     if developer.waitForExistence(timeout: 5), reach(app, developer) {
                         developer.tap()
-                        if app.navigationBars["开发者选项"].waitForExistence(timeout: 5) {
+                        if app.navigationBars[word("开发者选项", "Developer Options", language)].waitForExistence(timeout: 5) {
                             snap(app, page: "13-developer", variant: variant)
-                            let island = app.buttons["灵动岛样子"].firstMatch
+                            let island = app.buttons[word("灵动岛样子", "Dynamic Island Style", language)].firstMatch
                             if island.waitForExistence(timeout: 5), reach(app, island) {
                                 island.tap()
-                                if app.navigationBars["灵动岛样子"].waitForExistence(timeout: 5) {
+                                if app.navigationBars[word("灵动岛样子", "Dynamic Island Style", language)].waitForExistence(timeout: 5) {
                                     sleep(1)
                                     snap(app, page: "27-island", variant: variant)
                                 }
@@ -455,9 +463,10 @@ final class ScreenshotTour: XCTestCase {
         sleep(1)
     }
 
-    @MainActor private func launch(appearance: String, extra: [String]) -> XCUIApplication {
+    @MainActor private func launch(appearance: String, language: String = "zh-Hans", extra: [String]) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-TeleplyAppearance", appearance, "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + extra
+        let locale = language == "en" ? "en_US" : "zh_CN"
+        app.launchArguments = ["-TeleplyAppearance", appearance, "-AppleLanguages", "(\(language))", "-AppleLocale", locale] + extra
         app.launch()
         return app
     }

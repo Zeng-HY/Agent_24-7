@@ -1,12 +1,7716 @@
 {
-  "sourceLanguage" : "zh-Hans",
-  "strings" : {
-    "正在连接服务…" : {
-
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "\n系统收集的崩溃报告（%lld 份）\n": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\nSystem crash reports (%lld)\n"
+          }
+        }
+      }
     },
-    "重试" : {
-
+    " · %lld 个": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · %lld conversations"
+          }
+        }
+      }
+    },
+    " · %lld 个运行中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · %lld running"
+          }
+        }
+      }
+    },
+    " · 子智能体": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · Subagent"
+          }
+        }
+      }
+    },
+    " · 属于「%@」": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · In “%@”"
+          }
+        }
+      }
+    },
+    " · 当前": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · Current"
+          }
+        }
+      }
+    },
+    " · 未分组": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · Ungrouped"
+          }
+        }
+      }
+    },
+    " 后恢复": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " until reset"
+          }
+        }
+      }
+    },
+    " 更新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · updated"
+          }
+        }
+      }
+    },
+    " 秒 · ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " s · "
+          }
+        }
+      }
+    },
+    "%@ · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@"
+          }
+        }
+      }
+    },
+    "%@ · 已连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Connected"
+          }
+        }
+      }
+    },
+    "%@ · 连接有问题": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Connection issue"
+          }
+        }
+      }
+    },
+    "%@%@，已经 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@%@ for %@"
+          }
+        }
+      }
+    },
+    "%@好了，用了 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ done, took "
+          }
+        }
+      }
+    },
+    "%@离线": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ Offline"
+          }
+        }
+      }
+    },
+    "%@额度用完，": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ limit reached, "
+          }
+        }
+      }
+    },
+    "%lld %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld %@"
+          }
+        }
+      }
+    },
+    "%lld 个对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversations"
+          }
+        }
+      }
+    },
+    "%lld 个对话工作中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversations working"
+          }
+        }
+      }
+    },
+    "%lld 个对话等你定": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversations waiting on you"
+          }
+        }
+      }
+    },
+    "%lld 分": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld min"
+          }
+        }
+      }
+    },
+    "%lld 分 %@ 秒": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld min %@ sec"
+          }
+        }
+      }
+    },
+    "%lld 分钟前": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld min ago"
+          }
+        }
+      }
+    },
+    "%lld 小时": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld hr"
+          }
+        }
+      }
+    },
+    "%lld 小时 %lld 分": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld hr %lld min"
+          }
+        }
+      }
+    },
+    "%lld 条": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld items"
+          }
+        }
+      }
+    },
+    "%lld 秒": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sec"
+          }
+        }
+      }
+    },
+    "%lld个工作中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld working"
+          }
+        }
+      }
+    },
+    "%lld个等你定": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld waiting on you"
+          }
+        }
+      }
+    },
+    "Claude · 我的电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude · My Computer"
+          }
+        }
+      }
+    },
+    "Claude 不选文件夹，电脑上显示 No folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude doesn't use folders, so the computer shows No folder."
+          }
+        }
+      }
+    },
+    "Claude 可以归档和恢复，需电脑解锁；有工作副本的会话请在电脑上归档。暂不支持删除。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude conversations can be archived and restored, and require your computer to be unlocked. Archive conversations with working copies on your computer. Deleting isn't supported yet."
+          }
+        }
+      }
+    },
+    "Claude 想问你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude has a question"
+          }
+        }
+      }
+    },
+    "Claude 提议新开一个任务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude suggests starting a new task"
+          }
+        }
+      }
+    },
+    "Claude 的停止与队列动作需使用当前桌面令牌": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude stop and queue actions require the current desktop token."
+          }
+        }
+      }
+    },
+    "Claude 问要不要新开一个对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude is asking whether to start a new conversation"
+          }
+        }
+      }
+    },
+    "Codex 想问你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex has a question"
+          }
+        }
+      }
+    },
+    "Codex 有问题要问你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex Has a Question for You"
+          }
+        }
+      }
+    },
+    "Codex 的可以恢复，也可以勾选后删除；删除后电脑上也找不回来。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex conversations can be restored or selected for deletion; once deleted, they can't be recovered from your computer either."
+          }
+        }
+      }
+    },
+    "DeepSeek 想问你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek has a question"
+          }
+        }
+      }
+    },
+    "DeepSeek 没有删除对话的功能，只能恢复。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek doesn't support deleting conversations, so they can only be restored."
+          }
+        }
+      }
+    },
+    "DeepSeek 的工作区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek Workspace"
+          }
+        }
+      }
+    },
+    "DeepSeek 要选一个工作区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a workspace for DeepSeek"
+          }
+        }
+      }
+    },
+    "Markdown 解析用苹果维护的 swift-markdown 0.9.0（Apache-2.0）和 swift-cmark 0.9.0（BSD-2-Clause）。Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Markdown parsing uses Apple-maintained swift-markdown 0.9.0 (Apache-2.0) and swift-cmark 0.9.0 (BSD-2-Clause). The Claude and DeepSeek marks come from Simple Icons (CC0), and the Codex mark comes from SVG Logos (CC0). These logos belong to their respective companies."
+          }
+        }
+      }
+    },
+    "M月d日 HH:mm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MMM d, HH:mm"
+          }
+        }
+      }
+    },
+    "[图片：%@ · 可在当前文件中查看已授权资源]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Image: %@ · Authorized resources can be viewed in this file]"
+          }
+        }
+      }
+    },
+    "[图片：%@]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Image: %@]"
+          }
+        }
+      }
+    },
+    "^(\\[图片\\]\\s*)+": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "^(\\[Image\\]\\s*)+"
+          }
+        }
+      }
+    },
+    "iOS 没有给出推送令牌": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iOS didn't provide a push token"
+          }
+        }
+      }
+    },
+    "iPhone 的语音识别现在用不了，可以继续打字": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speech recognition on iPhone isn't available right now. You can keep typing."
+          }
+        }
+      }
+    },
+    "▸ 子对话 %lld 个": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "▸ %lld Sub-conversations"
+          }
+        }
+      }
+    },
+    "▾ 收起子对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "▾ Collapse Sub-conversations"
+          }
+        }
+      }
+    },
+    "● 运行中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "● Running"
+          }
+        }
+      }
+    },
+    "「%lld」会从这台手机上删除。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%lld” will be deleted from this iPhone."
+          }
+        }
+      }
+    },
+    "一般不用改：默认连接 Teleply 的服务。自己部署了账号服务时，在这里填它的 HTTPS 根地址。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You usually don't need to change this. By default the app connects to Teleply's service. If you've deployed your own account service, enter its HTTPS root address here."
+          }
+        }
+      }
+    },
+    "万": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "K"
+          }
+        }
+      }
+    },
+    "上一条没发出去": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last message wasn't sent"
+          }
+        }
+      }
+    },
+    "上一条送达状态待确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery of the last message is unconfirmed."
+          }
+        }
+      }
+    },
+    "上一级": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back"
+          }
+        }
+      }
+    },
+    "上下文": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Context"
+          }
+        }
+      }
+    },
+    "上下文 %lld%%": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Context %lld%%"
+          }
+        }
+      }
+    },
+    "上下文已用约 %@%%": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About %@%% of context used"
+          }
+        }
+      }
+    },
+    "上下文已用约 %lld%%，查看会话状态": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About %lld%% of context used. View session status."
+          }
+        }
+      }
+    },
+    "上传中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploading"
+          }
+        }
+      }
+    },
+    "上传中断，请重新选择文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload was interrupted. Choose the file again."
+          }
+        }
+      }
+    },
+    "上传失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload failed"
+          }
+        }
+      }
+    },
+    "上次操作的结果还没确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The result of the last action is unconfirmed."
+          }
+        }
+      }
+    },
+    "上次操作结果仍待核对，请刷新来源状态后处理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The result of your last action is still unverified. Refresh the source status, then try again."
+          }
+        }
+      }
+    },
+    "下一页": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Page"
+          }
+        }
+      }
+    },
+    "下一页差异": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Page of Changes"
+          }
+        }
+      }
+    },
+    "不分组": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        }
+      }
+    },
+    "不删除 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Don't Delete "
+          }
+        }
+      }
+    },
+    "不放进任何项目": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not in a Project"
+          }
+        }
+      }
+    },
+    "不要了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard"
+          }
+        }
+      }
+    },
+    "不要这个任务了？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard This Task?"
+          }
+        }
+      }
+    },
+    "不要这段录音": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard This Recording"
+          }
+        }
+      }
+    },
+    "中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medium"
+          }
+        }
+      }
+    },
+    "中断": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrupt"
+          }
+        }
+      }
+    },
+    "中转推了一条，看看岛": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The relay sent a push. Check the island."
+          }
+        }
+      }
+    },
+    "之前选的模型不在电脑现在的列表里，请重新选。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model you picked earlier isn't in the computer's current list. Please choose again."
+          }
+        }
+      }
+    },
+    "云端也没听清": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The cloud didn't catch that either."
+          }
+        }
+      }
+    },
+    "云端识别中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recognizing in the cloud…"
+          }
+        }
+      }
+    },
+    "云端识别没成功": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud recognition failed."
+          }
+        }
+      }
+    },
+    "仅允许本次": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Once"
+          }
+        }
+      }
+    },
+    "今天 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today %@"
+          }
+        }
+      }
+    },
+    "从电脑选择文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File on Computer"
+          }
+        }
+      }
+    },
+    "代码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code"
+          }
+        }
+      }
+    },
+    "会在电脑上打开 Claude 的模型菜单读一遍": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens Claude's model menu on your computer and reads it."
+          }
+        }
+      }
+    },
+    "会话状态": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session Status"
+          }
+        }
+      }
+    },
+    "低": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Low"
+          }
+        }
+      }
+    },
+    "你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You"
+          }
+        }
+      }
+    },
+    "保存": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        }
+      }
+    },
+    "保存到文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save to Files"
+          }
+        }
+      }
+    },
+    "修改答案": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change Answer"
+          }
+        }
+      }
+    },
+    "停止当前轮次": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop Current Turn"
+          }
+        }
+      }
+    },
+    "停止请求已接收，等待轮次确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop request received, waiting for the turn to confirm."
+          }
+        }
+      }
+    },
+    "停止这一轮": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop This Turn"
+          }
+        }
+      }
+    },
+    "先出计划，你确认后再执行": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makes a plan first, then runs after you confirm."
+          }
+        }
+      }
+    },
+    "先用同一模型的列表；这个对话现在的选项点「刷新」核对。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Using the list for the same model. Tap Refresh to check this conversation's current options."
+          }
+        }
+      }
+    },
+    "先登录，再用这个。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in first, then use this."
+          }
+        }
+      }
+    },
+    "先连上一台电脑，再用这个。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect a computer first, then use this."
+          }
+        }
+      }
+    },
+    "先选择一台电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a computer first"
+          }
+        }
+      }
+    },
+    "全不选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deselect All"
+          }
+        }
+      }
+    },
+    "全选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select All"
+          }
+        }
+      }
+    },
+    "全部": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All"
+          }
+        }
+      }
+    },
+    "全部应用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Apps"
+          }
+        }
+      }
+    },
+    "关于遥应": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About Teleply"
+          }
+        }
+      }
+    },
+    "关掉了，所有岛都收起来了。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turned off. All Dynamic Islands are hidden."
+          }
+        }
+      }
+    },
+    "关掉试的岛": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn Off Test Island"
+          }
+        }
+      }
+    },
+    "关闭导航": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close Navigation"
+          }
+        }
+      }
+    },
+    "内容": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Content"
+          }
+        }
+      }
+    },
+    "内容过大，请缩小读取范围": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Content is too large. Narrow the range you're reading."
+          }
+        }
+      }
+    },
+    "再显示 %lld 个（共 %lld 个）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show %lld more (of %lld)"
+          }
+        }
+      }
+    },
+    "写下需要调整的地方…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Describe what to change…"
+          }
+        }
+      }
+    },
+    "出错停了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed"
+          }
+        }
+      }
+    },
+    "分享": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        }
+      }
+    },
+    "分组": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group By"
+          }
+        }
+      }
+    },
+    "切换电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch Computer"
+          }
+        }
+      }
+    },
+    "切换电脑，当前是%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch computer. Current: %@"
+          }
+        }
+      }
+    },
+    "列表显示选项": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List Display Options"
+          }
+        }
+      }
+    },
+    "列表读于 %lld；选了以后应用到这个对话。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List read at %lld. The selection will be applied to this conversation."
+          }
+        }
+      }
+    },
+    "刚刚": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Just now"
+          }
+        }
+      }
+    },
+    "刚刚更新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updated just now"
+          }
+        }
+      }
+    },
+    "刚推了一条，看看通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Just sent a push. Check your notifications."
+          }
+        }
+      }
+    },
+    "创建并发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create and Send"
+          }
+        }
+      }
+    },
+    "创建时间": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Date Created"
+          }
+        }
+      }
+    },
+    "创建账号": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create Account"
+          }
+        }
+      }
+    },
+    "删了 %lld 个，%lld 个没删：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleted %lld, %lld couldn’t be deleted: "
+          }
+        }
+      }
+    },
+    "删除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete"
+          }
+        }
+      }
+    },
+    "删除原第%lld行：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed original line %lld: "
+          }
+        }
+      }
+    },
+    "删除后在电脑上也找不回来。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Once deleted, they can't be recovered from your computer either."
+          }
+        }
+      }
+    },
+    "删除这 %lld 个对话？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete %lld Conversations?"
+          }
+        }
+      }
+    },
+    "删除这条提示语？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete This Prompt?"
+          }
+        }
+      }
+    },
+    "删除（%lld）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete (%lld)"
+          }
+        }
+      }
+    },
+    "刷新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh"
+          }
+        }
+      }
+    },
+    "刷新 ›": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh ›"
+          }
+        }
+      }
+    },
+    "刷新失败，以下仍是上次读取的结果。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh failed. The results below are from the last load."
+          }
+        }
+      }
+    },
+    "刷新电脑上的列表": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh List on Computer"
+          }
+        }
+      }
+    },
+    "前": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " ago"
+          }
+        }
+      }
+    },
+    "加载更多对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load More Conversations"
+          }
+        }
+      }
+    },
+    "加载更早消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load Earlier Messages"
+          }
+        }
+      }
+    },
+    "包名": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bundle ID"
+          }
+        }
+      }
+    },
+    "包括最近的请求（方法、路径、状态、耗时，不含内容和登录凭据）、应用自己的记录和系统收集的崩溃报告。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Includes recent requests (method, path, status, and duration, but no content or sign-in credentials), the app's own records, and crash reports collected by the system."
+          }
+        }
+      }
+    },
+    "历史位置已变化，请回到最新消息后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The history position has changed. Return to the latest message and try again."
+          }
+        }
+      }
+    },
+    "历史计划": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Past Plans"
+          }
+        }
+      }
+    },
+    "原图片无法恢复，请重选或移除；不会省略附件发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original images couldn't be restored. Reselect or remove them; attachments won't be omitted when sending."
+          }
+        }
+      }
+    },
+    "原始行": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raw Lines"
+          }
+        }
+      }
+    },
+    "去处理 ›": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review ›"
+          }
+        }
+      }
+    },
+    "去选择 ›": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose ›"
+          }
+        }
+      }
+    },
+    "发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send"
+          }
+        }
+      }
+    },
+    "发送中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending…"
+          }
+        }
+      }
+    },
+    "发送并排队": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send and Queue"
+          }
+        }
+      }
+    },
+    "取消": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "取消排队": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel Queue"
+          }
+        }
+      }
+    },
+    "只放行这一次；以后同样的操作还会再问。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allows it this time only. You'll be asked again for the same action."
+          }
+        }
+      }
+    },
+    "只有图片或引用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only images or references"
+          }
+        }
+      }
+    },
+    "可以先写下一条，创建完成后发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can write the next message now; it will send once the conversation is created."
+          }
+        }
+      }
+    },
+    "可能不是最新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "May Be Out of Date"
+          }
+        }
+      }
+    },
+    "名称": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        }
+      }
+    },
+    "启动 遥应 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Launching Teleply %@"
+          }
+        }
+      }
+    },
+    "回到最新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jump to Latest"
+          }
+        }
+      }
+    },
+    "回执会话身份不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receipt session identity doesn't match."
+          }
+        }
+      }
+    },
+    "回执身份不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receipt identity mismatch"
+          }
+        }
+      }
+    },
+    "回答回执：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer receipt:"
+          }
+        }
+      }
+    },
+    "固定数据": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sample Data"
+          }
+        }
+      }
+    },
+    "固定数据，不连接真实服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uses fixed data and doesn't connect to a real server."
+          }
+        }
+      }
+    },
+    "图片": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image"
+          }
+        }
+      }
+    },
+    "图片上传": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image Upload"
+          }
+        }
+      }
+    },
+    "图片合计不能超过50MB": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Images can total at most 50 MB"
+          }
+        }
+      }
+    },
+    "图片超过 20MB，传不上去": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image is over 20 MB and can't be uploaded."
+          }
+        }
+      }
+    },
+    "图片：%@，点按放大": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image: %@, tap to zoom"
+          }
+        }
+      }
+    },
+    "在「%@」新建对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation in “%@”"
+          }
+        }
+      }
+    },
+    "在「文档\\Codex」下新建一个文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a new folder in “Documents\\Codex”"
+          }
+        }
+      }
+    },
+    "在干活": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working"
+          }
+        }
+      }
+    },
+    "在电脑上点「%@」": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select “%@” on the computer"
+          }
+        }
+      }
+    },
+    "在等你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting"
+          }
+        }
+      }
+    },
+    "在等你选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for you"
+          }
+        }
+      }
+    },
+    "在线": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Online"
+          }
+        }
+      }
+    },
+    "在这里做": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do It Here"
+          }
+        }
+      }
+    },
+    "填到这里": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Insert Here"
+          }
+        }
+      }
+    },
+    "处理结果待核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Result Unconfirmed"
+          }
+        }
+      }
+    },
+    "处理过程 · %lld 步": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activity · %lld steps"
+          }
+        }
+      }
+    },
+    "复制": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy"
+          }
+        }
+      }
+    },
+    "复制 %@ 代码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy %@ Code"
+          }
+        }
+      }
+    },
+    "复制代码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Code"
+          }
+        }
+      }
+    },
+    "复制全部": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy All"
+          }
+        }
+      }
+    },
+    "复制文件内容": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy File Contents"
+          }
+        }
+      }
+    },
+    "复制要做的操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Action"
+          }
+        }
+      }
+    },
+    "外观": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appearance"
+          }
+        }
+      }
+    },
+    "太短了，没听到": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too short to hear."
+          }
+        }
+      }
+    },
+    "失效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expired"
+          }
+        }
+      }
+    },
+    "失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed"
+          }
+        }
+      }
+    },
+    "失败：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed: "
+          }
+        }
+      }
+    },
+    "好了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
+    "好了 · 用了 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done · Took "
+          }
+        }
+      }
+    },
+    "子智能体 · ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subagent · "
+          }
+        }
+      }
+    },
+    "存在未完成或失败的附件，请重选或移除后再发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some attachments are incomplete or failed. Reselect or remove them before sending."
+          }
+        }
+      }
+    },
+    "完成，把文字放进输入框": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done, inserts the text into the message field"
+          }
+        }
+      }
+    },
+    "实时内容过大": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live content too large"
+          }
+        }
+      }
+    },
+    "实时协议或会话身份不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live protocol or session identity mismatch"
+          }
+        }
+      }
+    },
+    "实时序号不连续": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live sequence numbers are out of order"
+          }
+        }
+      }
+    },
+    "实时连接已关闭": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live connection closed."
+          }
+        }
+      }
+    },
+    "实时连接已结束": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Connection Ended"
+          }
+        }
+      }
+    },
+    "实时连接未启动": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Connection Not Started"
+          }
+        }
+      }
+    },
+    "实时连接正常": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Connection OK"
+          }
+        }
+      }
+    },
+    "密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        }
+      }
+    },
+    "对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation"
+          }
+        }
+      }
+    },
+    "对话创建中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creating conversation…"
+          }
+        }
+      }
+    },
+    "对话已归档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation Archived"
+          }
+        }
+      }
+    },
+    "对话已经建好，在对话列表里能找到。移除的只是这条提示。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The conversation was created and appears in your conversation list. Removing only dismisses this notice."
+          }
+        }
+      }
+    },
+    "对话已经换了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation changed"
+          }
+        }
+      }
+    },
+    "对话文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation Files"
+          }
+        }
+      }
+    },
+    "对话菜单": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation Menu"
+          }
+        }
+      }
+    },
+    "对话身份不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation identity doesn't match."
+          }
+        }
+      }
+    },
+    "导出 %lld\n\n": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exported %lld\n\n"
+          }
+        }
+      }
+    },
+    "导出诊断记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export Diagnostics"
+          }
+        }
+      }
+    },
+    "尚未确认发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Yet Confirmed"
+          }
+        }
+      }
+    },
+    "尚未确认发送 · 点击核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send not confirmed · Tap to check"
+          }
+        }
+      }
+    },
+    "展开全文": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Full Text"
+          }
+        }
+      }
+    },
+    "展开全文（%lld 字）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Full Text (%lld characters)"
+          }
+        }
+      }
+    },
+    "展开完整计划": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand Full Plan"
+          }
+        }
+      }
+    },
+    "展开（长按）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expanded (Touch and Hold)"
+          }
+        }
+      }
+    },
+    "岛出现在灵动岛、锁屏和待机显示里；锁屏上看卡片，灵动岛要解锁回桌面看。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The island appears in the Dynamic Island, on the lock screen, and in StandBy. See the card on the lock screen; unlock to the Home Screen to see the Dynamic Island."
+          }
+        }
+      }
+    },
+    "岛开了。锁屏看看；点它会回到遥应。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Island on. Check your lock screen; tap it to return to Teleply."
+          }
+        }
+      }
+    },
+    "差异显示": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diff Display"
+          }
+        }
+      }
+    },
+    "已保存到所选位置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved to the selected location"
+          }
+        }
+      }
+    },
+    "已保存到所选位置：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved to the selected location: "
+          }
+        }
+      }
+    },
+    "已保存，%lld 个词": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved, %lld words"
+          }
+        }
+      }
+    },
+    "已停止": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped"
+          }
+        }
+      }
+    },
+    "已允许": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed"
+          }
+        }
+      }
+    },
+    "已分享": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared"
+          }
+        }
+      }
+    },
+    "已切换到「%@」": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switched to “%@”"
+          }
+        }
+      }
+    },
+    "已删除 %lld 个对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleted %lld conversations"
+          }
+        }
+      }
+    },
+    "已加载的技能中没有匹配项，部分来源未能读取。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matches among the loaded skills, and some sources couldn't be read."
+          }
+        }
+      }
+    },
+    "已取消下载": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download canceled"
+          }
+        }
+      }
+    },
+    "已取消排队": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed from Queue"
+          }
+        }
+      }
+    },
+    "已回答": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answered"
+          }
+        }
+      }
+    },
+    "已在电脑上打开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opened on the computer"
+          }
+        }
+      }
+    },
+    "已在电脑上点了「%@」": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tapped “%@” on the computer"
+          }
+        }
+      }
+    },
+    "已复制": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied"
+          }
+        }
+      }
+    },
+    "已完成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed"
+          }
+        }
+      }
+    },
+    "已展开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expanded"
+          }
+        }
+      }
+    },
+    "已应用到这个 Claude 对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applied to this Claude conversation"
+          }
+        }
+      }
+    },
+    "已归档对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archived Conversations"
+          }
+        }
+      }
+    },
+    "已恢复": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restored"
+          }
+        }
+      }
+    },
+    "已恢复，回到对话列表里了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restored to the conversation list."
+          }
+        }
+      }
+    },
+    "已排队": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued"
+          }
+        }
+      }
+    },
+    "已接收": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Received"
+          }
+        }
+      }
+    },
+    "已接收 %lld MB": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Received %lld MB"
+          }
+        }
+      }
+    },
+    "已收起": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapsed"
+          }
+        }
+      }
+    },
+    "已整理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidied up"
+          }
+        }
+      }
+    },
+    "已暂停实时连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Connection Paused"
+          }
+        }
+      }
+    },
+    "已有新附件或引用，请先处理它们，再恢复提交快照": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There are new attachments or references. Handle them before restoring the submission snapshot."
+          }
+        }
+      }
+    },
+    "已用%lld · 窗口%lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used %lld · Window %lld"
+          }
+        }
+      }
+    },
+    "已移除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed"
+          }
+        }
+      }
+    },
+    "已答 · ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answered · "
+          }
+        }
+      }
+    },
+    "已结束": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ended"
+          }
+        }
+      }
+    },
+    "已读回所选设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read back the selected settings"
+          }
+        }
+      }
+    },
+    "已送达": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivered"
+          }
+        }
+      }
+    },
+    "常用提示语": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved Prompts"
+          }
+        }
+      }
+    },
+    "开发者选项": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Developer Options"
+          }
+        }
+      }
+    },
+    "开始": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start"
+          }
+        }
+      }
+    },
+    "开源组件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Source Components"
+          }
+        }
+      }
+    },
+    "引用对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reference Conversation"
+          }
+        }
+      }
+    },
+    "引用技能": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reference Skill"
+          }
+        }
+      }
+    },
+    "引用此文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reference This Folder"
+          }
+        }
+      }
+    },
+    "归档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive"
+          }
+        }
+      }
+    },
+    "归档于 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archived "
+          }
+        }
+      }
+    },
+    "当前会话已变化，未恢复附件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The conversation changed, so attachments weren't restored."
+          }
+        }
+      }
+    },
+    "当前服务不支持下载文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current service doesn't support file downloads"
+          }
+        }
+      }
+    },
+    "当前服务不支持实时连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This service doesn't support live connection."
+          }
+        }
+      }
+    },
+    "当前服务不支持此功能": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current server doesn't support this feature."
+          }
+        }
+      }
+    },
+    "当前条件：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current filters: "
+          }
+        }
+      }
+    },
+    "当前来源不支持操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current source doesn't support this action."
+          }
+        }
+      }
+    },
+    "当前版本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current version"
+          }
+        }
+      }
+    },
+    "录音交给电脑上的语音服务识别，不保存在手机上；识别出的文字只放进输入框，不会自动发送。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recordings are sent to the voice service on your computer for transcription and aren't stored on iPhone. The transcribed text only goes into the text field and isn't sent automatically."
+          }
+        }
+      }
+    },
+    "录音后自动整理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidy Up After Recording"
+          }
+        }
+      }
+    },
+    "待做": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To Do"
+          }
+        }
+      }
+    },
+    "待回答": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Awaiting answer"
+          }
+        }
+      }
+    },
+    "待核对发送记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends to Verify"
+          }
+        }
+      }
+    },
+    "待核对发送记录（%lld）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends to Verify (%lld)"
+          }
+        }
+      }
+    },
+    "待核对电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computer Unverified"
+          }
+        }
+      }
+    },
+    "待确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pending Confirmation"
+          }
+        }
+      }
+    },
+    "忘记密码？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forgot Password?"
+          }
+        }
+      }
+    },
+    "思考": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thinking"
+          }
+        }
+      }
+    },
+    "思考了 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thought for "
+          }
+        }
+      }
+    },
+    "恢复": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore"
+          }
+        }
+      }
+    },
+    "恢复 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore "
+          }
+        }
+      }
+    },
+    "恢复提交快照": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore Submission Snapshot"
+          }
+        }
+      }
+    },
+    "恢复的图片": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restored Images"
+          }
+        }
+      }
+    },
+    "恢复草稿": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore Draft"
+          }
+        }
+      }
+    },
+    "恢复默认服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Default Server"
+          }
+        }
+      }
+    },
+    "想做什么？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What do you want to do?"
+          }
+        }
+      }
+    },
+    "想运行一条命令": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wants to run a command"
+          }
+        }
+      }
+    },
+    "成功": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Succeeded"
+          }
+        }
+      }
+    },
+    "我的电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "My Computers"
+          }
+        }
+      }
+    },
+    "手机上看不了这类文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file type can't be viewed on iPhone"
+          }
+        }
+      }
+    },
+    "手机文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
+          }
+        }
+      }
+    },
+    "手机照片": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Photo Library"
+          }
+        }
+      }
+    },
+    "手机通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phone Notifications"
+          }
+        }
+      }
+    },
+    "手机锁着，暂时读不到登录信息，解锁后再试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your iPhone is locked, so your sign-in information can't be read right now. Unlock and try again."
+          }
+        }
+      }
+    },
+    "打开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        }
+      }
+    },
+    "打开了。手机发出去的对话会出现岛；电脑上开始的跑过一分钟也会。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turned on. Conversations sent from your iPhone show a Dynamic Island; ones started on the computer appear after a minute."
+          }
+        }
+      }
+    },
+    "打开对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Conversation"
+          }
+        }
+      }
+    },
+    "打开导航": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Navigation"
+          }
+        }
+      }
+    },
+    "打开新建对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open New Conversation"
+          }
+        }
+      }
+    },
+    "打开本地示例": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Local Sample"
+          }
+        }
+      }
+    },
+    "打开系统设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Settings"
+          }
+        }
+      }
+    },
+    "执行计划": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Execute Plan"
+          }
+        }
+      }
+    },
+    "批准请求": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approval Request"
+          }
+        }
+      }
+    },
+    "批准这一步吗？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approve This Step?"
+          }
+        }
+      }
+    },
+    "技能列表已变化，已返回第一页。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The skill list changed. Returned to the first page."
+          }
+        }
+      }
+    },
+    "技能读取失败，请重试。若仍失败，请检查电脑端连接。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load skills. Try again. If it still fails, check the connection to your computer."
+          }
+        }
+      }
+    },
+    "技能读取失败，请重试；若仍失败，请检查电脑端技能配置。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load skills. Try again; if it still fails, check the skill setup on your computer."
+          }
+        }
+      }
+    },
+    "拍照": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Take Photo"
+          }
+        }
+      }
+    },
+    "拍照-%@.jpg": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Photo-%@.jpg"
+          }
+        }
+      }
+    },
+    "拒绝": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deny"
+          }
+        }
+      }
+    },
+    "按来源应用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source App"
+          }
+        }
+      }
+    },
+    "按项目": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project"
+          }
+        }
+      }
+    },
+    "换云端识别": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Cloud Recognition"
+          }
+        }
+      }
+    },
+    "换掉电脑上 Claude 输入框里的「%@」，再发这条消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace “%@” in Claude's input field on your computer, then send this message"
+          }
+        }
+      }
+    },
+    "换掉电脑上的「%@」再发": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace “%@” on your computer and send again"
+          }
+        }
+      }
+    },
+    "排序": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sort By"
+          }
+        }
+      }
+    },
+    "推理强度": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reasoning effort"
+          }
+        }
+      }
+    },
+    "提交中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submitting"
+          }
+        }
+      }
+    },
+    "提交回答": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submit Answer"
+          }
+        }
+      }
+    },
+    "提交答案": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submit Answer"
+          }
+        }
+      }
+    },
+    "插入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Insert"
+          }
+        }
+      }
+    },
+    "搜索": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search"
+          }
+        }
+      }
+    },
+    "搜索全部项目…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search All Projects…"
+          }
+        }
+      }
+    },
+    "搜索对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search Conversations"
+          }
+        }
+      }
+    },
+    "搜索对话标题或文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search conversation titles or folders"
+          }
+        }
+      }
+    },
+    "搜索技能": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search Skills"
+          }
+        }
+      }
+    },
+    "搜索项目名称或路径": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search project names or paths"
+          }
+        }
+      }
+    },
+    "搜索：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search: "
+          }
+        }
+      }
+    },
+    "撤回这条": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from Queue"
+          }
+        }
+      }
+    },
+    "撤销": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Undo"
+          }
+        }
+      }
+    },
+    "撤销「%@」的远程访问，不删除电脑上的文件。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoke remote access for “%@”. Files on the computer are not deleted."
+          }
+        }
+      }
+    },
+    "操作已返回，请刷新核对实际状态": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The action returned. Refresh to verify the actual state."
+          }
+        }
+      }
+    },
+    "收起计划": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse Plan"
+          }
+        }
+      }
+    },
+    "改文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editing files"
+          }
+        }
+      }
+    },
+    "改登录页": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Sign-In Page"
+          }
+        }
+      }
+    },
+    "放大看 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enlarge "
+          }
+        }
+      }
+    },
+    "数据不全": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partial data"
+          }
+        }
+      }
+    },
+    "整理中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidying up…"
+          }
+        }
+      }
+    },
+    "整理没成功，保留原话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't tidy up. Kept the original."
+          }
+        }
+      }
+    },
+    "文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File"
+          }
+        }
+      }
+    },
+    "文件上传": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File Upload"
+          }
+        }
+      }
+    },
+    "文件已更新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File updated"
+          }
+        }
+      }
+    },
+    "文件已移动或删除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file was moved or deleted"
+          }
+        }
+      }
+    },
+    "文件接收不完整，请重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file didn't download completely. Please try again."
+          }
+        }
+      }
+    },
+    "文件是空的，没有上传": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is empty, so it wasn't uploaded."
+          }
+        }
+      }
+    },
+    "文件缺失": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File Missing"
+          }
+        }
+      }
+    },
+    "文件菜单": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File menu"
+          }
+        }
+      }
+    },
+    "文件超过 64MB，中转一次最多传 64MB": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is over 64 MB. The relay can transfer at most 64 MB at a time."
+          }
+        }
+      }
+    },
+    "文件超过100MB，请在电脑上打开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is over 100 MB. Open it on your computer."
+          }
+        }
+      }
+    },
+    "文件还在下载，请稍候": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is still downloading. Please wait."
+          }
+        }
+      }
+    },
+    "文件页已关闭": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file page is closed"
+          }
+        }
+      }
+    },
+    "断开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offline"
+          }
+        }
+      }
+    },
+    "断开了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offline"
+          }
+        }
+      }
+    },
+    "新增第%lld行：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added line %lld: "
+          }
+        }
+      }
+    },
+    "新对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation"
+          }
+        }
+      }
+    },
+    "新对话已就绪": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New conversation is ready."
+          }
+        }
+      }
+    },
+    "新对话提交": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation Submission"
+          }
+        }
+      }
+    },
+    "新对话正在准备中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your new conversation is being prepared."
+          }
+        }
+      }
+    },
+    "新对话用这个模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use this model for new conversations"
+          }
+        }
+      }
+    },
+    "新对话重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation Retry"
+          }
+        }
+      }
+    },
+    "新建不在项目里的%@对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New %@ Conversation Outside a Project"
+          }
+        }
+      }
+    },
+    "新建对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation"
+          }
+        }
+      }
+    },
+    "新建对话的结果": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation Result"
+          }
+        }
+      }
+    },
+    "新版本由 TestFlight 提醒和安装。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New versions are announced and installed through TestFlight."
+          }
+        }
+      }
+    },
+    "无": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        }
+      }
+    },
+    "无法保存提交快照，尚未发送。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save the submission snapshot. Nothing was sent."
+          }
+        }
+      }
+    },
+    "无法读取所选文件，请重新选择": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read the selected file. Please choose it again."
+          }
+        }
+      }
+    },
+    "无项目": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Project"
+          }
+        }
+      }
+    },
+    "昨天 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yesterday %@"
+          }
+        }
+      }
+    },
+    "显示": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show"
+          }
+        }
+      }
+    },
+    "显示密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Password"
+          }
+        }
+      }
+    },
+    "显示操作耗时": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Durations"
+          }
+        }
+      }
+    },
+    "显示更多（还有 %lld 个）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show More (%lld remaining)"
+          }
+        }
+      }
+    },
+    "普通执行": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct"
+          }
+        }
+      }
+    },
+    "暂无": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        }
+      }
+    },
+    "暂无数据": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No data"
+          }
+        }
+      }
+    },
+    "暂无消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Messages"
+          }
+        }
+      }
+    },
+    "暂无电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Computers"
+          }
+        }
+      }
+    },
+    "暂无记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Records"
+          }
+        }
+      }
+    },
+    "暂时不能控制这个来源": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This source can't be controlled right now."
+          }
+        }
+      }
+    },
+    "暂时无法打开这个对话：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't open this conversation right now:"
+          }
+        }
+      }
+    },
+    "暂时无法核对，内容还在手机上；恢复连接后继续核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't verify right now; the content is still on your iPhone. Verification continues once the connection returns."
+          }
+        }
+      }
+    },
+    "暂时无法读取对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't Load Conversations"
+          }
+        }
+      }
+    },
+    "暂时读不到电脑上的分组，可稍后再打开侧栏。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't read groups from the computer right now. Open the sidebar again later."
+          }
+        }
+      }
+    },
+    "暂未开放注册": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-Up Not Available"
+          }
+        }
+      }
+    },
+    "暂未识别到本对话的成果文件，可从电脑目录选择并保存到手机。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No output files found for this conversation yet. You can save one from a folder on your computer to your iPhone."
+          }
+        }
+      }
+    },
+    "更多结果": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More Results"
+          }
+        }
+      }
+    },
+    "更新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · updated"
+          }
+        }
+      }
+    },
+    "最低": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimal"
+          }
+        }
+      }
+    },
+    "最后活动 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last Active "
+          }
+        }
+      }
+    },
+    "最多5张图片": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Up to 5 images"
+          }
+        }
+      }
+    },
+    "最近活动": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent Activity"
+          }
+        }
+      }
+    },
+    "最近的请求": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent Requests"
+          }
+        }
+      }
+    },
+    "最近的请求和记录\n": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent requests and logs\n"
+          }
+        }
+      }
+    },
+    "最近输入 %lld tokens · 窗口大小未知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last input %lld tokens · Window size unknown"
+          }
+        }
+      }
+    },
+    "最高": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Max"
+          }
+        }
+      }
+    },
+    "有 %@ 个选项等你选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ options to choose from"
+          }
+        }
+      }
+    },
+    "有新消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Messages"
+          }
+        }
+      }
+    },
+    "有新消息，回到底部": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Messages, Return to Bottom"
+          }
+        }
+      }
+    },
+    "有问题要回答": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question to Answer"
+          }
+        }
+      }
+    },
+    "服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server"
+          }
+        }
+      }
+    },
+    "服务器尚无提交记录。可继续发送同一请求，不会重复创建。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server has no record of the submission. You can send the same request again; it won't be created twice."
+          }
+        }
+      }
+    },
+    "服务器还没开通遥应通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply notifications aren't enabled on the server yet."
+          }
+        }
+      }
+    },
+    "服务地址": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server Address"
+          }
+        }
+      }
+    },
+    "服务拒绝访问，请核对服务地址或账号权限。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The service denied access. Check the service address or your account permissions."
+          }
+        }
+      }
+    },
+    "服务版本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server Version"
+          }
+        }
+      }
+    },
+    "服务端未成功": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server Failed"
+          }
+        }
+      }
+    },
+    "服务返回了跳转，请在设置中填写正确的 HTTPS 服务地址。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The service returned a redirect. Enter the correct HTTPS service address in Settings."
+          }
+        }
+      }
+    },
+    "服务返回的内容读不出来，请稍后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The content returned by the service couldn't be read. Try again later."
+          }
+        }
+      }
+    },
+    "服务返回的电脑路径不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The computer path returned by the server doesn't match."
+          }
+        }
+      }
+    },
+    "未允许": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Allowed"
+          }
+        }
+      }
+    },
+    "未分组": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungrouped"
+          }
+        }
+      }
+    },
+    "未命名对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untitled Conversation"
+          }
+        }
+      }
+    },
+    "未找到匹配技能。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching skills found."
+          }
+        }
+      }
+    },
+    "未接收": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Received"
+          }
+        }
+      }
+    },
+    "本地固定场景": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Fixed Scenario"
+          }
+        }
+      }
+    },
+    "本地示例": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Sample"
+          }
+        }
+      }
+    },
+    "本地示例 · 固定数据 · 未连接真实服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local sample · Fixed data · Not connected to a real service"
+          }
+        }
+      }
+    },
+    "本地示例，未连接真实服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local sample. Not connected to a real service."
+          }
+        }
+      }
+    },
+    "本轮差异": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes this turn"
+          }
+        }
+      }
+    },
+    "本轮差异：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes this turn: "
+          }
+        }
+      }
+    },
+    "权限": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permission"
+          }
+        }
+      }
+    },
+    "权限选项": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permission Options"
+          }
+        }
+      }
+    },
+    "权限：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissions: %@"
+          }
+        }
+      }
+    },
+    "来源": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source"
+          }
+        }
+      }
+    },
+    "来源已切换，未提交": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source switched, nothing was sent."
+          }
+        }
+      }
+    },
+    "来源应用不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source app doesn't match."
+          }
+        }
+      }
+    },
+    "来源应用无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid source app."
+          }
+        }
+      }
+    },
+    "来源或会话已切换，未提交": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The source or conversation switched, nothing was sent."
+          }
+        }
+      }
+    },
+    "来源记录提供的本轮差异；不根据当前文件猜测旧版本。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes come from the source's record of this turn; old versions aren't inferred from the current file."
+          }
+        }
+      }
+    },
+    "来源：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source: "
+          }
+        }
+      }
+    },
+    "来自会话记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From session history"
+          }
+        }
+      }
+    },
+    "来自其他对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From Another Conversation"
+          }
+        }
+      }
+    },
+    "来自电脑上的 Claude": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From Claude on your computer"
+          }
+        }
+      }
+    },
+    "松开取消": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release to cancel"
+          }
+        }
+      }
+    },
+    "松开放入 · 上滑取消": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release to insert · Swipe up to cancel"
+          }
+        }
+      }
+    },
+    "松开放进输入框": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release to insert"
+          }
+        }
+      }
+    },
+    "极低": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Very Low"
+          }
+        }
+      }
+    },
+    "极高": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Very High"
+          }
+        }
+      }
+    },
+    "查找": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find"
+          }
+        }
+      }
+    },
+    "查找消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find Messages"
+          }
+        }
+      }
+    },
+    "查看 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View "
+          }
+        }
+      }
+    },
+    "查看成果文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View Output Files"
+          }
+        }
+      }
+    },
+    "查看源码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View Source"
+          }
+        }
+      }
+    },
+    "查看页面": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View Page"
+          }
+        }
+      }
+    },
+    "查资料": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Searching"
+          }
+        }
+      }
+    },
+    "核对上次操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Last Action"
+          }
+        }
+      }
+    },
+    "核对失败，原提交仍保留；不会自动重发。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification failed; the original submission is kept and won't be resent automatically."
+          }
+        }
+      }
+    },
+    "核对待发送消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Pending Message"
+          }
+        }
+      }
+    },
+    "核对状态": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Status"
+          }
+        }
+      }
+    },
+    "核对结果": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Result"
+          }
+        }
+      }
+    },
+    "桌面选项已变化，请刷新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The desktop options changed. Refresh."
+          }
+        }
+      }
+    },
+    "模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model"
+          }
+        }
+      }
+    },
+    "模型与推理强度：%@，%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model and reasoning effort: %@, %@"
+          }
+        }
+      }
+    },
+    "模型列表": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model List"
+          }
+        }
+      }
+    },
+    "模型：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model: %@"
+          }
+        }
+      }
+    },
+    "模式": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode"
+          }
+        }
+      }
+    },
+    "正在下载 %lld%%": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading %lld%%"
+          }
+        }
+      }
+    },
+    "正在下载…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading…"
+          }
+        }
+      }
+    },
+    "正在使用本地示例": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Using Local Sample"
+          }
+        }
+      }
+    },
+    "正在准备…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing…"
+          }
+        }
+      }
+    },
+    "正在出字": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Typing"
+          }
+        }
+      }
+    },
+    "正在出字…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Typing…"
+          }
+        }
+      }
+    },
+    "正在创建对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creating conversation."
+          }
+        }
+      }
+    },
+    "正在创建对话…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creating conversation…"
+          }
+        }
+      }
+    },
+    "正在发送首条消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending first message."
+          }
+        }
+      }
+    },
+    "正在听…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listening…"
+          }
+        }
+      }
+    },
+    "正在处理 · %lld 步": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working · %lld steps"
+          }
+        }
+      }
+    },
+    "正在归档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archiving"
+          }
+        }
+      }
+    },
+    "正在归档…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archiving…"
+          }
+        }
+      }
+    },
+    "正在提交，结果可核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submitting. You can verify the result."
+          }
+        }
+      }
+    },
+    "正在核对实时状态": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking Live Status"
+          }
+        }
+      }
+    },
+    "正在电脑上点选…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selecting on the computer…"
+          }
+        }
+      }
+    },
+    "正在电脑上重新读取…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reloading on your computer…"
+          }
+        }
+      }
+    },
+    "正在确认首条消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirming first message."
+          }
+        }
+      }
+    },
+    "正在继续原请求…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuing the original request…"
+          }
+        }
+      }
+    },
+    "正在读取": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading"
+          }
+        }
+      }
+    },
+    "正在读取技能…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading skills…"
+          }
+        }
+      }
+    },
+    "正在读取电脑上的权限…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading permissions from your computer…"
+          }
+        }
+      }
+    },
+    "正在读取电脑上的模型…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading models from your computer…"
+          }
+        }
+      }
+    },
+    "正在读取这台电脑上的应用…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading apps on this computer…"
+          }
+        }
+      }
+    },
+    "正在读取这台电脑上的应用，先用 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading apps on this computer; using %@ for now."
+          }
+        }
+      }
+    },
+    "正在读取这台电脑的应用…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading apps on this computer…"
+          }
+        }
+      }
+    },
+    "正在读取，以下暂为上次结果。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading. The results below are from the last load."
+          }
+        }
+      }
+    },
+    "正在连接电脑端": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting to your computer."
+          }
+        }
+      }
+    },
+    "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This source has no separate action receipt. Check the actual state after refreshing; it won't retry automatically."
+          }
+        }
+      }
+    },
+    "每行一个词，存在电脑上。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One word per line, stored on your computer."
+          }
+        }
+      }
+    },
+    "比例是估算值": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentage is an estimate"
+          }
+        }
+      }
+    },
+    "没保存": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not saved"
+          }
+        }
+      }
+    },
+    "没删除：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't delete: "
+          }
+        }
+      }
+    },
+    "没发出去": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Sent"
+          }
+        }
+      }
+    },
+    "没发出去 · 点击处理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not sent · Tap to resolve"
+          }
+        }
+      }
+    },
+    "没听清": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Didn't catch that"
+          }
+        }
+      }
+    },
+    "没归档：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not archived:"
+          }
+        }
+      }
+    },
+    "没恢复：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't restore: "
+          }
+        }
+      }
+    },
+    "没找到 Codex、Claude 或 DeepSeek 桌面版。装好后点重试；也可以在电脑的 remote_config.json 里用 \"apps\" 指定。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex, Claude, or DeepSeek desktop app not found. Install one and tap Retry, or set it with \"apps\" in remote_config.json on your computer."
+          }
+        }
+      }
+    },
+    "没拿到这个岛的推送令牌，稍后再试一次。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't get a push token for this Dynamic Island. Try again later."
+          }
+        }
+      }
+    },
+    "没拿到这部 iPhone 的推送令牌，请稍后再试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't get a push token for this iPhone. Try again later."
+          }
+        }
+      }
+    },
+    "没拿到这部 iPhone 的推送令牌：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't get a push token for this iPhone:"
+          }
+        }
+      }
+    },
+    "没拿到麦克风": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't access the microphone."
+          }
+        }
+      }
+    },
+    "没拿到麦克风，可以继续打字": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't access the microphone. You can keep typing."
+          }
+        }
+      }
+    },
+    "没有匹配的项目文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching project folders"
+          }
+        }
+      }
+    },
+    "没有对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Conversations"
+          }
+        }
+      }
+    },
+    "没有已归档的对话。\n在对话列表里把一行往左滑，就能归档。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No archived conversations.\nSwipe left on a row in the conversation list to archive it."
+          }
+        }
+      }
+    },
+    "没有待核对的记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Records to Verify"
+          }
+        }
+      }
+    },
+    "没有找到匹配的对话。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching conversations found."
+          }
+        }
+      }
+    },
+    "没有找到匹配的消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Matching Messages"
+          }
+        }
+      }
+    },
+    "没有找到对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Conversations Found"
+          }
+        }
+      }
+    },
+    "没有活动会话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No active conversation"
+          }
+        }
+      }
+    },
+    "没有相机权限：到 设置 → 遥应 里打开相机；也可以从手机照片里选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No camera access. Turn on Camera in Settings → Teleply, or choose a photo from your library."
+          }
+        }
+      }
+    },
+    "没有语音识别权限：到 设置 → 遥应 里打开语音识别；可以继续打字。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No speech recognition access. Turn on Speech Recognition in Settings → Teleply. You can keep typing."
+          }
+        }
+      }
+    },
+    "没有选择电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No computer selected"
+          }
+        }
+      }
+    },
+    "没有麦克风权限：到 设置 → 遥应 里打开麦克风；可以继续打字。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No microphone access. Turn on Microphone in Settings → Teleply. You can keep typing."
+          }
+        }
+      }
+    },
+    "没读到词典：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read the dictionary: "
+          }
+        }
+      }
+    },
+    "没转成文字": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't transcribe."
+          }
+        }
+      }
+    },
+    "浅色": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Light"
+          }
+        }
+      }
+    },
+    "测一下连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test Connection"
+          }
+        }
+      }
+    },
+    "消息关键词": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message keywords"
+          }
+        }
+      }
+    },
+    "消息提交": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message submission"
+          }
+        }
+      }
+    },
+    "消息身份不匹配": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message identity doesn't match."
+          }
+        }
+      }
+    },
+    "深色": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dark"
+          }
+        }
+      }
+    },
+    "添加到消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to Message"
+          }
+        }
+      }
+    },
+    "添加提示语": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Prompt"
+          }
+        }
+      }
+    },
+    "添加附件或引用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Attachment or Reference"
+          }
+        }
+      }
+    },
+    "清空记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Log"
+          }
+        }
+      }
+    },
+    "清除搜索": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Search"
+          }
+        }
+      }
+    },
+    "清除筛选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Filters"
+          }
+        }
+      }
+    },
+    "灵动岛": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Island"
+          }
+        }
+      }
+    },
+    "灵动岛样子": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Island Style"
+          }
+        }
+      }
+    },
+    "照片没存下来，请再拍一次": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save the photo. Take it again."
+          }
+        }
+      }
+    },
+    "照片没有跟着恢复，请重新添加": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Photos weren't restored. Add them again."
+          }
+        }
+      }
+    },
+    "版本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version"
+          }
+        }
+      }
+    },
+    "版本 %lld（%lld）\n": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %lld (%lld)\n"
+          }
+        }
+      }
+    },
+    "状态": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status"
+          }
+        }
+      }
+    },
+    "状态不明": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status Unknown"
+          }
+        }
+      }
+    },
+    "状态：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status: "
+          }
+        }
+      }
+    },
+    "用 DeepSeek 当前的设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use DeepSeek's current settings"
+          }
+        }
+      }
+    },
+    "用其他应用打开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in Another App"
+          }
+        }
+      }
+    },
+    "用快速查看打开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in Quick Look"
+          }
+        }
+      }
+    },
+    "电脑上已经处理过了：开始了、在这里做了，或者关掉了。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already handled on the computer: started, done here, or dismissed."
+          }
+        }
+      }
+    },
+    "电脑上已经没有在等的选项，上次的选择已处理。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The computer is no longer waiting on any choices; your last selection was handled."
+          }
+        }
+      }
+    },
+    "电脑上打开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open on Computer"
+          }
+        }
+      }
+    },
+    "电脑上打开这个对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open this conversation on your computer"
+          }
+        }
+      }
+    },
+    "电脑上没有打开这个对话；点「电脑上打开」后再发": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This conversation isn't open on your computer. Tap “Open on Computer”, then send."
+          }
+        }
+      }
+    },
+    "电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude on the computer is still waiting for your choice. Your last tap may not have arrived—choose again."
+          }
+        }
+      }
+    },
+    "电脑上的 DeepSeek 还没有工作区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DeepSeek on your computer has no workspaces yet"
+          }
+        }
+      }
+    },
+    "电脑上的%@这次没读到：%@，先用手机上记着的": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read the %@ on the computer this time: %@. Using what's saved on your iPhone for now."
+          }
+        }
+      }
+    },
+    "电脑上的工作，随时继续": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Work on your computer, anytime"
+          }
+        }
+      }
+    },
+    "电脑上的这张卡片也会关掉，任务不会开始。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This card will close on the computer too, and the task won't start."
+          }
+        }
+      }
+    },
+    "电脑上还没有项目文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No project folders on your computer yet"
+          }
+        }
+      }
+    },
+    "电脑名称": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computer Name"
+          }
+        }
+      }
+    },
+    "电脑已离线，请稍后刷新。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The computer is offline. Refresh later."
+          }
+        }
+      }
+    },
+    "电脑已离线，请稍后刷新电脑列表。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The computer is offline. Refresh the computer list later."
+          }
+        }
+      }
+    },
+    "电脑标识无效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid computer identifier."
+          }
+        }
+      }
+    },
+    "电脑没有给出可选的模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your computer didn't provide any models."
+          }
+        }
+      }
+    },
+    "电脑没有给出可选的模式": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your computer didn't provide any modes."
+          }
+        }
+      }
+    },
+    "电脑给的请求编号不对，请重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The computer returned an invalid request ID. Try again."
+          }
+        }
+      }
+    },
+    "电脑识别出文字后，再把口语整理成书面语；可以撤销。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After the computer transcribes your speech, it cleans up the spoken wording into written text. You can undo this."
+          }
+        }
+      }
+    },
+    "电脑遥控": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computer Control"
+          }
+        }
+      }
+    },
+    "留着": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep"
+          }
+        }
+      }
+    },
+    "登录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign In"
+          }
+        }
+      }
+    },
+    "登录响应缺少有效的账号凭据": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in response is missing a valid account credential."
+          }
+        }
+      }
+    },
+    "登录失效，请返回账号页重新登录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has expired. Go back to the Account page and sign in again."
+          }
+        }
+      }
+    },
+    "登录已失效": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in expired"
+          }
+        }
+      }
+    },
+    "登录已失效，请重新登录；回到原来的位置。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your sign-in has expired. Please sign in again; you'll return to where you were."
+          }
+        }
+      }
+    },
+    "登录已失效，请重新登录；当前阅读位置已保留。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has expired. Sign in again; your reading position has been saved."
+          }
+        }
+      }
+    },
+    "相同内容的原提交尚待确认，请先核对状态，不能重复发送。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An earlier submission with the same content is still awaiting confirmation. Check its status first; it can't be sent twice."
+          }
+        }
+      }
+    },
+    "相机": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Camera"
+          }
+        }
+      }
+    },
+    "真机上遥应一台电脑一个岛；同时有几个对话时，紧凑样子显示个数。这里是各种状态的样子，尺寸是按苹果的规格近似画的。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On a real iPhone, Teleply shows one Dynamic Island per computer. When several conversations are active at once, the compact view shows how many. Here are all the states, drawn at approximate Apple dimensions."
+          }
+        }
+      }
+    },
+    "确定": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
+    "确认改成「%lld」？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change to “%lld”?"
+          }
+        }
+      }
+    },
+    "确认选择此权限": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm Permission"
+          }
+        }
+      }
+    },
+    "示例无需真实账号或密码，数据都是固定的，不连接真实服务。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sample needs no real account or password. All data is fixed and does not connect to a real service."
+          }
+        }
+      }
+    },
+    "示例网络": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sample Network"
+          }
+        }
+      }
+    },
+    "离线": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offline"
+          }
+        }
+      }
+    },
+    "移除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove"
+          }
+        }
+      }
+    },
+    "移除只是手机不再跟踪这一条，不会重复发送。电脑上如果已经建好对话，会照常出现在对话列表里。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removing only stops your iPhone from tracking this item; it won't be sent again. If the conversation was created on your computer, it will still appear in your conversation list."
+          }
+        }
+      }
+    },
+    "移除引用 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove reference "
+          }
+        }
+      }
+    },
+    "移除这一条？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove This Item?"
+          }
+        }
+      }
+    },
+    "移除这台电脑？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove This Computer?"
+          }
+        }
+      }
+    },
+    "移除这条没发出去的记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove this unsent record"
+          }
+        }
+      }
+    },
+    "移除附件 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove attachment "
+          }
+        }
+      }
+    },
+    "空闲": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idle"
+          }
+        }
+      }
+    },
+    "立即补充": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Now"
+          }
+        }
+      }
+    },
+    "立即补充：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add now: %@"
+          }
+        }
+      }
+    },
+    "第 %lld 档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Level %lld"
+          }
+        }
+      }
+    },
+    "第%lld行：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line %lld: "
+          }
+        }
+      }
+    },
+    "等你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting"
+          }
+        }
+      }
+    },
+    "等待": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting"
+          }
+        }
+      }
+    },
+    "等待你处理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for you"
+          }
+        }
+      }
+    },
+    "等待处理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pending"
+          }
+        }
+      }
+    },
+    "等待更新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Awaiting update"
+          }
+        }
+      }
+    },
+    "答案已提交，等 Codex 接着做": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer submitted. Waiting for Codex to continue."
+          }
+        }
+      }
+    },
+    "答案结果待核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer Unconfirmed"
+          }
+        }
+      }
+    },
+    "管理电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage Computers"
+          }
+        }
+      }
+    },
+    "系统 iOS %@\n": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System iOS %@\n"
+          }
+        }
+      }
+    },
+    "系统权限": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System Permissions"
+          }
+        }
+      }
+    },
+    "系统没有开这个岛：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dynamic Island is off in system settings: "
+          }
+        }
+      }
+    },
+    "系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Activities for Teleply are turned off in system settings. Turn them on in Settings → Teleply."
+          }
+        }
+      }
+    },
+    "系统里关了遥应的通知：到系统设置里打开以后再回来。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications for Teleply are off in system settings. Turn them on there, then come back."
+          }
+        }
+      }
+    },
+    "紧凑（灵动岛）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact (Dynamic Island)"
+          }
+        }
+      }
+    },
+    "结果待确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Result unconfirmed"
+          }
+        }
+      }
+    },
+    "给开发和排查问题用，平常用不到。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For development and troubleshooting. You don't normally need these."
+          }
+        }
+      }
+    },
+    "继续修改": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep Editing"
+          }
+        }
+      }
+    },
+    "继续发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue Sending"
+          }
+        }
+      }
+    },
+    "继续发送的结果尚未确认，请核对结果：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The result of continuing the send isn't confirmed yet. Verify it:"
+          }
+        }
+      }
+    },
+    "编辑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit"
+          }
+        }
+      }
+    },
+    "网络失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network Failure"
+          }
+        }
+      }
+    },
+    "网页预览：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Web preview: "
+          }
+        }
+      }
+    },
+    "自动换行": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrap Lines"
+          }
+        }
+      }
+    },
+    "自由回答": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Free-form answer"
+          }
+        }
+      }
+    },
+    "自由回答：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Free-form answer:"
+          }
+        }
+      }
+    },
+    "草稿": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Draft"
+          }
+        }
+      }
+    },
+    "草稿：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Draft: "
+          }
+        }
+      }
+    },
+    "补充回答（可不填）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Additional Answer (Optional)"
+          }
+        }
+      }
+    },
+    "补充回答：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Additional Answer:"
+          }
+        }
+      }
+    },
+    "要做的操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action"
+          }
+        }
+      }
+    },
+    "要在电脑上选「New session」或「Do it here」。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose “New session” or “Do it here” on the computer."
+          }
+        }
+      }
+    },
+    "要自己写答案的话，请在电脑上点「Other」填写。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To write your own answer, select “Other” on the computer."
+          }
+        }
+      }
+    },
+    "计划": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan"
+          }
+        }
+      }
+    },
+    "计划与执行选项": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan and Execution Options"
+          }
+        }
+      }
+    },
+    "计划模式": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan Mode"
+          }
+        }
+      }
+    },
+    "计划进度 %lld / %lld：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan progress %lld / %lld:"
+          }
+        }
+      }
+    },
+    "让中转改一下": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask the Relay to Change It"
+          }
+        }
+      }
+    },
+    "记录或电脑已不可用，请刷新列表。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The record or computer is no longer available. Refresh the list."
+          }
+        }
+      }
+    },
+    "设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings"
+          }
+        }
+      }
+    },
+    "设置已绑定下一条消息，尚未发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings are attached to your next message. Nothing was sent."
+          }
+        }
+      }
+    },
+    "诊断测速": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diagnostics Speed Test"
+          }
+        }
+      }
+    },
+    "诊断记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diagnostics"
+          }
+        }
+      }
+    },
+    "试一下灵动岛": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try Dynamic Island"
+          }
+        }
+      }
+    },
+    "试的岛关掉了。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test Dynamic Island turned off."
+          }
+        }
+      }
+    },
+    "该轮失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This turn failed"
+          }
+        }
+      }
+    },
+    "该轮已完成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This turn is complete"
+          }
+        }
+      }
+    },
+    "该轮已结束": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This turn has ended"
+          }
+        }
+      }
+    },
+    "语音识别": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speech Recognition"
+          }
+        }
+      }
+    },
+    "语音词典": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Dictionary"
+          }
+        }
+      }
+    },
+    "语音词典，每行一个词": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Dictionary, One Word per Line"
+          }
+        }
+      }
+    },
+    "语音输入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Input"
+          }
+        }
+      }
+    },
+    "请执行这份计划。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please carry out this plan."
+          }
+        }
+      }
+    },
+    "请更新电脑端后下载文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update the app on your computer to download files"
+          }
+        }
+      }
+    },
+    "请查看这些图片。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please look at these images."
+          }
+        }
+      }
+    },
+    "请查看这些图片或引用。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please review these images or references."
+          }
+        }
+      }
+    },
+    "请求失败（HTTP %@），请核对后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request failed (HTTP %@). Check and try again."
+          }
+        }
+      }
+    },
+    "请求完成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request completed"
+          }
+        }
+      }
+    },
+    "请输入 HTTPS 服务根地址，不含账号、路径或参数。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the HTTPS service root address, without an account, path, or parameters."
+          }
+        }
+      }
+    },
+    "请输入电脑名称。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a computer name."
+          }
+        }
+      }
+    },
+    "请输入要查找的内容。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter something to search for."
+          }
+        }
+      }
+    },
+    "请输入账号与密码。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter your account and password."
+          }
+        }
+      }
+    },
+    "请输入首条消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a first message"
+          }
+        }
+      }
+    },
+    "读不到 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read "
+          }
+        }
+      }
+    },
+    "读不到这台电脑上有哪些应用，先用 %@。点这里重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read the apps on this computer; using %@ for now. Tap to retry."
+          }
+        }
+      }
+    },
+    "读不到这台电脑上有哪些应用，可在列表上方重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read the apps on this computer. You can retry above the list."
+          }
+        }
+      }
+    },
+    "读不到这台电脑的应用 · 重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't read apps on this computer · Retry"
+          }
+        }
+      }
+    },
+    "读取中…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading…"
+          }
+        }
+      }
+    },
+    "读取电脑上的项目…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading projects on your computer…"
+          }
+        }
+      }
+    },
+    "读文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading files"
+          }
+        }
+      }
+    },
+    "账号": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account"
+          }
+        }
+      }
+    },
+    "账号与电脑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account & Computers"
+          }
+        }
+      }
+    },
+    "账号菜单": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account Menu"
+          }
+        }
+      }
+    },
+    "超过 20MB，不直接显示": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Larger than 20 MB, not shown here"
+          }
+        }
+      }
+    },
+    "超过10秒": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Over 10 sec"
+          }
+        }
+      }
+    },
+    "跑命令": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running commands"
+          }
+        }
+      }
+    },
+    "跑测试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run Tests"
+          }
+        }
+      }
+    },
+    "跟电脑当前设置走": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the computer's current settings"
+          }
+        }
+      }
+    },
+    "跟随系统": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System"
+          }
+        }
+      }
+    },
+    "输入消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message"
+          }
+        }
+      }
+    },
+    "输入消息…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message"
+          }
+        }
+      }
+    },
+    "运行中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running"
+          }
+        }
+      }
+    },
+    "运行中 · ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running · "
+          }
+        }
+      }
+    },
+    "返回": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back"
+          }
+        }
+      }
+    },
+    "返回登录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to Sign In"
+          }
+        }
+      }
+    },
+    "还有 %%u 个对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%%u more conversations"
+          }
+        }
+      }
+    },
+    "还没发出，草稿还在：": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not sent yet; your draft is still here:"
+          }
+        }
+      }
+    },
+    "还没有提示语。点下面的按钮加一条，以后可以一点插入草稿。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No prompts yet. Tap the button below to add one, then insert it into your draft with a tap."
+          }
+        }
+      }
+    },
+    "还没问过": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Asked"
+          }
+        }
+      }
+    },
+    "这一条已经处理过了。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item has already been handled."
+          }
+        }
+      }
+    },
+    "这个会话还没有可显示的状态。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This session has no status to show yet."
+          }
+        }
+      }
+    },
+    "这个创建请求已经处理过了，请从对话列表打开。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This creation request has already been handled. Open it from the conversation list."
+          }
+        }
+      }
+    },
+    "这个对话正在运行，先停止这一轮再归档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This conversation is running. Stop the current turn before archiving."
+          }
+        }
+      }
+    },
+    "这个文件不在电脑列出的对话文件里，现在打不开；电脑端更新后再试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file isn't among the conversation files listed by the computer, so it can't be opened now. Update the app on your computer and try again."
+          }
+        }
+      }
+    },
+    "这个版本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Version"
+          }
+        }
+      }
+    },
+    "这些消息的结果还没确认。核对只读取回执，不会重新发送。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The results for these messages haven't been confirmed yet. Checking only reads receipts; nothing is resent."
+          }
+        }
+      }
+    },
+    "这台手机没有可用的相机": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No camera is available on this iPhone."
+          }
+        }
+      }
+    },
+    "这台手机现在不能显示灵动岛。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This iPhone can't show the Dynamic Island right now."
+          }
+        }
+      }
+    },
+    "这台电脑上没有找到桌面应用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No desktop apps found on this computer"
+          }
+        }
+      }
+    },
+    "这台电脑没开语音，用 iPhone 自带的识别": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice isn't enabled on this computer. Using iPhone's built-in recognition."
+          }
+        }
+      }
+    },
+    "这台电脑没开语音，用 iPhone 自带的识别（可能联网）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice isn't enabled on this computer. Using iPhone's built-in recognition (may use the network)."
+          }
+        }
+      }
+    },
+    "这台电脑没开语音：麦克风会改用 iPhone 自带的识别，结果同样只放进输入框。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice isn't set up on this computer, so the microphone uses iPhone's built-in recognition. The result still only goes into the text field."
+          }
+        }
+      }
+    },
+    "这张照片没读出来，请换一张或从手机文件里选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read this photo. Try a different one or choose a file from your iPhone."
+          }
+        }
+      }
+    },
+    "这是一个 word 的双语文件…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is a bilingual Word file…"
+          }
+        }
+      }
+    },
+    "这条排队消息的更多操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More actions for this queued message"
+          }
+        }
+      }
+    },
+    "这条通知来自别的账号的电脑，或者这台电脑已经移除。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This notification came from a computer on another account, or the computer has been removed."
+          }
+        }
+      }
+    },
+    "这条首条消息没发出去。移除后手机上不再留着它的内容。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This first message wasn't sent. Removing it also removes its content from your iPhone."
+          }
+        }
+      }
+    },
+    "这里不直接显示": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not shown here"
+          }
+        }
+      }
+    },
+    "这里打开的是文件现在的样子；某一轮改了什么，请从时间线里那一步的「本轮差异」进入。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This shows the file as it is now. To see what changed in a turn, open Changes this turn from that step in the timeline."
+          }
+        }
+      }
+    },
+    "这里是历史位置，后面还有更新的消息。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You're viewing an earlier part of this conversation. There are newer messages below."
+          }
+        }
+      }
+    },
+    "进入示例": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Sample"
+          }
+        }
+      }
+    },
+    "进度 %lld / %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Progress %lld / %lld"
+          }
+        }
+      }
+    },
+    "进行中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Progress"
+          }
+        }
+      }
+    },
+    "连不上服务器": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't Connect to Server"
+          }
+        }
+      }
+    },
+    "连不上服务器，请检查网络后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't reach the server. Check your network and try again."
+          }
+        }
+      }
+    },
+    "连不上这个服务，请检查地址和网络后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't connect to this service. Check the address and your network, then try again."
+          }
+        }
+      }
+    },
+    "连接": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect"
+          }
+        }
+      }
+    },
+    "连接%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to %@"
+          }
+        }
+      }
+    },
+    "连接中断，正在重连": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection lost. Reconnecting…"
+          }
+        }
+      }
+    },
+    "连接失败，请检查网络和服务地址后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't connect. Check your network and the service address, then try again."
+          }
+        }
+      }
+    },
+    "连接请求 %lld/3": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection request %lld/3"
+          }
+        }
+      }
+    },
+    "连接这个服务": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to This Server"
+          }
+        }
+      }
+    },
+    "退出登录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign Out"
+          }
+        }
+      }
+    },
+    "送达未确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery Unconfirmed"
+          }
+        }
+      }
+    },
+    "送达状态待确认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery Unconfirmed"
+          }
+        }
+      }
+    },
+    "选中删除 ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Selected "
+          }
+        }
+      }
+    },
+    "选择工作区": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Workspace"
+          }
+        }
+      }
+    },
+    "选择文字": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select Text"
+          }
+        }
+      }
+    },
+    "选方案": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick a Plan"
+          }
+        }
+      }
+    },
+    "通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications"
+          }
+        }
+      }
+    },
+    "遥应": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply"
+          }
+        }
+      }
+    },
+    "遥应 · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply · %@"
+          }
+        }
+      }
+    },
+    "遥应发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply Send"
+          }
+        }
+      }
+    },
+    "遥应诊断记录": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply Diagnostics"
+          }
+        }
+      }
+    },
+    "遥应诊断记录\n": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply Diagnostics\n"
+          }
+        }
+      }
+    },
+    "遥应通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply Notifications"
+          }
+        }
+      }
+    },
+    "遥应通知、录音、iPhone 自带的语音识别和拍照要用到。点一行到系统设置里遥应这一页去改。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used for Teleply notifications, recording, iPhone's built-in speech recognition, and taking photos. Tap a row to change it on the Teleply page in Settings."
+          }
+        }
+      }
+    },
+    "遥应，": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply, "
+          }
+        }
+      }
+    },
+    "遥应，%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply, %@"
+          }
+        }
+      }
+    },
+    "邮箱或账号": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email or Account"
+          }
+        }
+      }
+    },
+    "部分技能未能读取，其余技能仍可选择。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some skills couldn't be loaded. The rest can still be selected."
+          }
+        }
+      }
+    },
+    "重命名": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename"
+          }
+        }
+      }
+    },
+    "重新读取": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reload"
+          }
+        }
+      }
+    },
+    "重试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try Again"
+          }
+        }
+      }
+    },
+    "锁屏卡片 · 浅色": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lock Screen Card · Light"
+          }
+        }
+      }
+    },
+    "锁屏卡片 · 深色": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lock Screen Card · Dark"
+          }
+        }
+      }
+    },
+    "问题": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question"
+          }
+        }
+      }
+    },
+    "阅读视图": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reader View"
+          }
+        }
+      }
+    },
+    "附件和设置仍在恢复，请稍候": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachments and settings are still being restored. Please wait."
+          }
+        }
+      }
+    },
+    "隐藏": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide"
+          }
+        }
+      }
+    },
+    "隐藏密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide Password"
+          }
+        }
+      }
+    },
+    "需要你回答 · %lld 步": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs your answer · %lld steps"
+          }
+        }
+      }
+    },
+    "项目": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project"
+          }
+        }
+      }
+    },
+    "项目文件夹": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project Folder"
+          }
+        }
+      }
+    },
+    "项目：%@，%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project: %@, %@"
+          }
+        }
+      }
+    },
+    "预览未能加载，仍可尝试保存原文件。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The preview couldn't load. You can still try saving the original file."
+          }
+        }
+      }
+    },
+    "额度用完": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limit reached"
+          }
+        }
+      }
+    },
+    "额度用完 · ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limit reached · "
+          }
+        }
+      }
+    },
+    "首条消息": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "First Message"
+          }
+        }
+      }
+    },
+    "首条消息发送前设置并核对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set and confirm before the first message is sent"
+          }
+        }
+      }
+    },
+    "首条消息已送达": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "First message delivered."
+          }
+        }
+      }
+    },
+    "首次读取电脑上的权限…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading permissions on your computer for the first time…"
+          }
+        }
+      }
+    },
+    "首次读取电脑上的模型…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading models on your computer for the first time…"
+          }
+        }
+      }
+    },
+    "首次读取电脑上的模型列表…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading the model list from your computer for the first time…"
+          }
+        }
+      }
+    },
+    "首次读取电脑上的项目…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading projects on your computer for the first time…"
+          }
+        }
+      }
+    },
+    "高": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "High"
+          }
+        }
+      }
+    },
+    "麦克风": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone"
+          }
+        }
+      }
+    },
+    "默认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default"
+          }
+        }
+      }
+    },
+    "默认权限": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default Permissions"
+          }
+        }
+      }
+    },
+    "默认模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default Model"
+          }
+        }
+      }
+    },
+    "默认（电脑当前设置）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default (Computer Setting)"
+          }
+        }
+      }
+    },
+    "（共 %lld 项）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " (%lld items)"
+          }
+        }
+      }
+    },
+    "（电脑离线）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Computer Offline)"
+          }
+        }
+      }
+    },
+    "（链接未开放）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(link not available)"
+          }
+        }
+      }
+    },
+    "，%lld 个运行中": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", %lld running"
+          }
+        }
+      }
+    },
+    "，打开处理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", open Activity"
+          }
+        }
+      }
+    },
+    "还有 %lld 个 ›": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "And %lld more ›"
+          }
+        }
+      }
     }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }

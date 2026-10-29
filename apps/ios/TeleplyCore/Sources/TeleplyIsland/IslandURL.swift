@@ -15,9 +15,11 @@ public enum IslandURL {
                                   URLQueryItem(name: "c", value: chat)])
     }
 
-    /// teleply://list?d=<computer>: 方案七 opens this computer's conversation list.
-    public static func list(device: String) -> URL? {
-        url(host: "list", items: [URLQueryItem(name: "d", value: device)])
+    /// teleply://list?d=<computer>&status=running: 方案七, and 0.6.5's "还有 N 个", open this computer's list.
+    public static func list(device: String, status: String? = nil) -> URL? {
+        var items = [URLQueryItem(name: "d", value: device)]
+        if let status, !status.isEmpty { items.append(URLQueryItem(name: "status", value: status)) }
+        return url(host: "list", items: items)
     }
 
     private static func url(host: String, items: [URLQueryItem]) -> URL? {

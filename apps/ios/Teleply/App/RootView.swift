@@ -54,6 +54,7 @@ struct RootView: View {
         // and the computer and source are checked once signed in.
         .onOpenURL { url in
             if let target = PushTarget(url: url) { model.openNotification(target) }
+            else if let target = IslandListTarget(url: url) { model.openIslandList(target) }
         }
         // A tapped notification waits for the launch or a sign-in (AppModel+Push); signed in, the account gets
         // this phone's 遥应通知 again when it is wanted.

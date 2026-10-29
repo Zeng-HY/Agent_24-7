@@ -129,13 +129,15 @@ public func mergeLive(_ old: [Message], _ incoming: [Message]) -> [Message] {
 
 /// The words under a sent message: only real evidence says 已送达 (spec B03, B04).
 public func receiptLabel(state: String, result: JSONValue, action: String) -> String {
+    let words: String
     switch state {
-    case "cancelled": return "已取消排队"
-    case "rejected": return "未接收"
-    case "queued": return "已排队"
-    case "accepted" where action == "stop": return "停止请求已接收，等待轮次确认"
-    case "accepted" where result["evidence"]["source"].string() == "conversation_record": return "已送达"
-    case "accepted": return "已接收"
-    default: return "送达状态待确认"
+    case "cancelled": words = "已取消排队"
+    case "rejected": words = "未接收"
+    case "queued": words = "已排队"
+    case "accepted" where action == "stop": words = "停止请求已接收，等待轮次确认"
+    case "accepted" where result["evidence"]["source"].string() == "conversation_record": words = "已送达"
+    case "accepted": words = "已接收"
+    default: words = "送达状态待确认"
     }
+    return Hints.text(words)
 }

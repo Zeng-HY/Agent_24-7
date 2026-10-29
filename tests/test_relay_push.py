@@ -492,6 +492,8 @@ class IslandTests(RelayTests):
         self.service.push.clock = lambda: 1761630003.0
         await self.service.push.deliver(self.devices[0], {'id': 'i2', 'event': 'message', 'kind': 'failed',
                                                           'app': 'claude', 'chat': 'c2'})
+        self.service.push.clock = lambda: 1761630011.0
+        await self.service.push.flush_islands()  # the second change merged and went out after the ten seconds
         self.assertEqual([s['push_type'] for s in self.sender.sent], ['liveactivity', 'liveactivity'])
         self.assertEqual(self.sender.sent[0]['payload']['aps']['alert']['sound'], 'default')
         second = self.sender.sent[1]
@@ -514,6 +516,19 @@ class IslandTests(RelayTests):
                                         'body': '好了 · 用了 6 分钟'})
         self.assertEqual(aps['category'], 'teleply.conversation')
         self.assertEqual(self.service.push.starts, {})  # the turn it took is not needed after the notice
+
+    async def test_an_english_phone_gets_english_notice_and_island_text(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('register', {'token': PHONE, 'language': 'en'})
+        await self.post('activity', self.computer(language='en'))
+        await self.service.push.sweep_islands()
+        self.sender.sent.clear()
+        self.service.push.clock = lambda: 1761630011.0
+        await self.service.push.deliver(self.devices[0], {'id': 'w1', 'event': 'message', 'kind': 'waiting',
+                                                          'app': 'claude', 'chat': 'c1', 'title': 'Review'})
+        await self.service.push.flush_islands()
+        body = self.sender.sent[-1]['payload']['aps']['alert']['body']
+        self.assertEqual(body, 'Waiting for you')
 
     async def test_a_conversation_seen_under_a_minute_says_only_好了(self):
         self.service.push.clock = lambda: 1761630000.0
@@ -546,7 +561,7 @@ class IslandTests(RelayTests):
                                                  peers=[{'app': 'claude', 'chat': 'chat-1', 'title': '',
                                                          'state': 'working', 'since': 1761630000,
                                                          'turn': 1761630000, 'ended': 0, 'step': ''}],
-                                                 working=1, waiting=0))
+                                                 working=1, waiting=0, more=0))
         self.assertEqual(self.service.push.starts, {})  # started once, not every half minute
 
     async def test_a_quiet_event_changes_the_island_but_shows_no_banner(self):
@@ -644,14 +659,15 @@ class IslandTests(RelayTests):
         await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
                                                           'app': 'claude', 'chat': 'c1', 'since': 1761629880,
                                                           'title': '改登录页'})
-        self.service.push.clock = lambda: 1761630006.0
+        self.service.push.clock = lambda: 1761630011.0
         await self.service.push.deliver(self.devices[0], {'id': 'r2', 'event': 'message', 'kind': 'running',
                                                           'app': 'codex', 'chat': 'c2', 'since': 1761629940,
                                                           'title': '跑测试'})
-        self.service.push.clock = lambda: 1761630012.0
+        self.service.push.clock = lambda: 1761630022.0
         await self.service.push.deliver(self.devices[0], {'id': 'w1', 'event': 'message', 'kind': 'waiting',
                                                           'app': 'claude', 'chat': 'c3', 'title': '选方案'})
-        self.assertEqual([('alert' in s['payload']['aps']) for s in self.sender.sent], [False, False, True])
+        await self.service.push.flush_islands()
+        self.assertEqual([('alert' in s['payload']['aps']) for s in self.sender.sent], [True])
         sent = self.sender.sent[-1]
         content = sent['payload']['aps']['content-state']
         self.assertEqual((content['state'], content['working'], content['waiting']), ('waiting', 2, 1))
@@ -674,10 +690,12 @@ class IslandTests(RelayTests):
                                                           'app': 'codex', 'chat': 'c1', 'since': 1761629700,
                                                           'title': '这是一个 word 的双语文件…'})
         self.sender.sent.clear()
+        self.service.push.clock = lambda: 1761630011.0
         await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
                                                           'app': 'codex', 'chat': 'c1', 'started': 1761629700,
                                                           'ended': 1761630000, 'started_source': '记录',
                                                           'title': '这是一个 word 的双语文件…'})
+        await self.service.push.flush_islands()
         sent = [s for s in self.sender.sent if s['push_type'] == 'liveactivity'][-1]
         content = sent['payload']['aps']['content-state']
         self.assertEqual((content['state'], content['working'], content['waiting']), ('done', 0, 0))
@@ -723,9 +741,10 @@ class IslandTests(RelayTests):
         await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
                                                           'app': 'claude', 'chat': 'c1', 'since': 1761629700})
         self.sender.sent.clear()
-        self.service.push.clock = lambda: 1761630006.0
+        self.service.push.clock = lambda: 1761630011.0
         await self.service.push.deliver(self.devices[0], {'id': 'p1', 'event': 'message', 'kind': 'step',
                                                           'app': 'claude', 'chat': 'c1', 'step': 'edit'})
+        await self.service.push.flush_islands()
         self.assertEqual(len(self.sender.sent), 1)
         sent = self.sender.sent[0]
         self.assertEqual((sent['push_type'], sent['priority']), ('liveactivity', 5))
@@ -734,9 +753,10 @@ class IslandTests(RelayTests):
         await self.service.push.deliver(self.devices[0], {'id': 'p2', 'event': 'message', 'kind': 'step',
                                                           'app': 'claude', 'chat': 'c1', 'step': 'run'})
         self.assertEqual(len(self.sender.sent), 1)  # inside the 15 seconds
-        self.service.push.clock = lambda: 1761630022.0
+        self.service.push.clock = lambda: 1761630027.0
         await self.service.push.deliver(self.devices[0], {'id': 'p3', 'event': 'message', 'kind': 'step',
                                                           'app': 'claude', 'chat': 'c1', 'step': 'run'})
+        await self.service.push.flush_islands()
         self.assertEqual(len(self.sender.sent), 2)
         self.assertEqual(self.sender.sent[1]['payload']['aps']['content-state']['step'], 'run')
 
@@ -745,8 +765,10 @@ class IslandTests(RelayTests):
         await self.post('activity', self.computer(state='working', since=1761629700, turn=1761629700))
         await self.service.push.sweep_islands()
         self.sender.sent.clear()
+        self.service.push.clock = lambda: 1761630011.0
         await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
                                                           'app': 'claude', 'chat': 'c2', 'since': 1761629700})
+        await self.service.push.flush_islands()
         self.assertEqual((self.sender.sent[0]['priority'], 'alert' in self.sender.sent[0]['payload']['aps']), (10, False))
 
     async def test_a_finished_conversation_leaves_a_silent_record_at_once_and_drops_out(self):
@@ -757,12 +779,13 @@ class IslandTests(RelayTests):
         await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
                                                           'app': 'claude', 'chat': 'c1', 'since': 1761629880,
                                                           'title': '改登录页'})
-        self.service.push.clock = lambda: 1761630006.0
+        self.service.push.clock = lambda: 1761630011.0
         await self.service.push.deliver(self.devices[0], {'id': 'r2', 'event': 'message', 'kind': 'running',
                                                           'app': 'codex', 'chat': 'c2', 'since': 1761629940,
                                                           'title': '跑测试'})
+        await self.service.push.flush_islands()
         self.sender.sent.clear()
-        self.service.push.clock = lambda: 1761630012.0
+        self.service.push.clock = lambda: 1761630022.0
         await self.service.push.deliver(self.devices[0], {'id': 'd1', 'event': 'message', 'kind': 'done',
                                                           'app': 'claude', 'chat': 'c1', 'title': '改登录页'})
         self.assertEqual([s['push_type'] for s in self.sender.sent], ['alert', 'liveactivity'])
@@ -794,9 +817,11 @@ class IslandTests(RelayTests):
         await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
         await self.service.push.sweep_islands()  # flush the registration catch-up (nothing known yet: nothing sent)
         self.sender.sent.clear()
+        self.service.push.clock = lambda: 1761630011.0
         await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
                                                           'app': 'claude', 'chat': 'c1', 'since': 1761629880,
                                                           'title': '改登录页'})
+        await self.service.push.flush_islands()
         content = self.sender.sent[0]['payload']['aps']['content-state']
         self.assertEqual((content['state'], content['working'], content['waiting']), ('working', 1, 0))
         self.assertEqual((content['since'], content['turn']), (1761629880, 1761629880))  # one conversation: its times
@@ -823,6 +848,83 @@ class IslandTests(RelayTests):
         self.assertNotIn('alert', aps)  # the record already went in; the island only catches up
         await asyncio.sleep(.3)
         self.assertEqual(len([s for s in self.sender.sent if s['push_type'] == 'liveactivity']), 1)
+
+    async def test_a_burst_of_three_hundred_changes_still_ends_on_the_latest_state(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.sweep_islands()
+        self.sender.sent.clear()
+        now = 1761630000.0
+        for n in range(300):
+            now += 1
+            self.service.push.clock = lambda now=now: now
+            kind = 'waiting' if n % 7 == 6 else 'running'
+            app = 'claude' if n % 2 == 0 else 'codex'
+            await self.service.push.deliver(self.devices[0], {
+                'id': f'burst{n}', 'event': 'message', 'kind': kind, 'app': app, 'chat': f'c{n % 4}',
+                'since': int(now) - 30, 'title': f'对话 {n % 4}'})
+            await self.service.push.flush_islands()
+        for n in range(4):
+            self.service.push.clock = lambda now=now: now
+            await self.service.push.deliver(self.devices[0], {'id': f'end{n}', 'event': 'message', 'kind': 'done',
+                                                              'app': 'claude' if n % 2 == 0 else 'codex',
+                                                              'chat': f'c{n}', 'started': int(now) - 30,
+                                                              'ended': int(now), 'title': f'对话 {n}'})
+        self.service.push.clock = lambda: now + 20
+        await self.service.push.flush_islands()
+        live = [s for s in self.sender.sent if s['push_type'] == 'liveactivity']
+        self.assertTrue(live)
+        self.assertEqual(live[-1]['payload']['aps']['content-state']['state'], 'done')
+        # 300 changes in 300 s: far below the 600/h safety valve, and the last state goes out within 20 s.
+
+    async def test_an_unchanged_snapshot_does_not_push(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.sweep_islands()
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761629880,
+                                                          'title': '改登录页'})
+        self.service.push.clock = lambda: 1761630010.0
+        await self.service.push.flush_islands()
+        self.sender.sent.clear()
+        item = {'app': 'claude', 'chat': 'c1', 'state': 'working', 'started': 1761629880, 'title': '改登录页'}
+        for n in (1, 2):
+            self.service.push.clock = lambda n=n: 1761630000.0 + n * 60
+            await self.service.push.deliver(self.devices[0], {'id': f'snap{n}', 'event': 'message', 'kind': 'snapshot',
+                                                              'items': [item]})
+            await self.service.push.flush_islands()
+        self.assertEqual([s for s in self.sender.sent if s['push_type'] == 'liveactivity'], [])
+
+    async def test_the_list_puts_waiting_first_then_the_latest_action_and_counts_the_rest(self):
+        self.service.push.clock = lambda: 1761630000.0
+        for n, (app, chat, kind, title) in enumerate([
+            ('claude', 'a', 'running', '早'),
+            ('codex', 'b', 'running', '中'),
+            ('deepseek', 'c', 'running', '晚'),
+            ('claude', 'd', 'waiting', '等你'),
+        ]):
+            self.service.push.clock = lambda n=n: 1761630000.0 + n * 20
+            await self.service.push.deliver(self.devices[0], {'id': f'row{n}', 'event': 'message', 'kind': kind,
+                                                              'app': app, 'chat': chat, 'since': 1761630000,
+                                                              'title': title})
+        agg = self.service.push.aggregate(self.devices[0], 1761631000.0)
+        self.assertEqual([p['chat'] for p in agg['peers']], ['d', 'c', 'b'])
+        self.assertEqual(agg['more'], 1)
+
+    async def test_the_phone_can_read_the_summary_without_a_push(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.sweep_islands()
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761629880,
+                                                          'title': '改登录页'})
+        status, answer = await self.post('island-state', {'device': self.devices[0]})
+        self.assertEqual(status, 200)
+        content = answer['content-state']
+        self.assertEqual((content['state'], content['working'], content['waiting']), ('working', 1, 0))
+        self.assertEqual(content['peers'][0]['chat'], 'c1')
+        self.assertEqual(await self.post('island-state', {'device': self.devices[1]}), (400, {'error': '这台电脑不属于这个账号'}))
+        self.assertEqual((await self.post('island-state', {'device': self.devices[0]}, cookie=False))[0], 401)
 
     async def test_the_sample_and_the_relay_agree_on_every_state(self):
         for name, state in self.fixture().items():

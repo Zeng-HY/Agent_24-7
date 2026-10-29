@@ -645,7 +645,7 @@ class Bridge:
             ended = int(started + (latest.get("durationMs") or 0) / 1000) if started and latest.get("status") != "inProgress" else 0
             try:
                 path = chats.conv_path(item)
-                step = chats.tail_step("codex", path) if path and is_running(state) else ""
+                step = chats.tail_step("codex", path, started) if path and is_running(state) else ""
             except (OSError, chats.ChatError):step = ""
             return {"available": True, "settings": selected_settings(state), "running": is_running(state),
                     "active_turn_id": turns[-1].get("turnId") if is_running(state) and turns else None,

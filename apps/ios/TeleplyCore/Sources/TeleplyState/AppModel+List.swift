@@ -132,6 +132,21 @@ extension AppModel {
         }
     }
 
+    /// 0.6.5: teleply://list?d=…&status=running, opened by the island's "还有 N 个". Selects the computer when needed and
+    /// keeps the running-only filter until the user changes it.
+    public func openIslandList(_ target: IslandListTarget) {
+        guard let computer = account?.devices.first(where: { $0.id == target.device }) else {
+            showComputers()
+            return
+        }
+        listStatus = target.status
+        if device?.id == computer.id {
+            listDisplay(status: target.status)
+        } else {
+            select(computer)
+        }
+    }
+
     /// 清除筛选: every source, newest first, every state, no search words.
     public func clearListFilters() {
         listSource = "all"

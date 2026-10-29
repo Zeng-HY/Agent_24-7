@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "Teleply";
+"NSCameraUsageDescription" = "Take a photo and send it as an attachment to a conversation on your computer.";
+"NSMicrophoneUsageDescription" = "Record audio for your computer's voice service to transcribe into the text field. The iPhone doesn't keep the recording.";
+"NSSpeechRecognitionUsageDescription" = "When voice isn't set up on your computer, use iPhone's built-in speech recognition to turn speech into text in the text field.";

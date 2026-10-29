@@ -39,10 +39,11 @@ struct ConversationView: View {
                                      whole: { model.whole($0, $1) }, share: { sharing = $0 }, busy: busy)
         let submissions = model.conversation.submissions
         let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
-        // Sends still on their way that the record does not show yet (Android outbox).
-        let outbox = submissions.filter { record in
-            record.action == "send" && record.label == "提交中" && !model.messages.contains { $0.request == record.request }
-        }
+        // Sends still on their way that the record does not show yet (Android outbox). 0.6.5: a send taken by the
+        // computer (已接收 etc.) stays here until the record has it, so it no longer disappears for 88 seconds while
+        // Codex compacts a long conversation.
+        let outbox = outboxSends(submissions, messages: model.messages,
+                                 now: Int64(Date().timeIntervalSince1970 * 1000))
         let cards = timeline.cards
         ScrollView {
             // A plain stack, not a lazy one: with LazyVStack the area above the input card went blank after the

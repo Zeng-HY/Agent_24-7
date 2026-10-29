@@ -1,0 +1,66 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "遥应": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teleply"
+          }
+        }
+      }
+    },
+    "等你": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting"
+          }
+        }
+      }
+    },
+    "断开": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offline"
+          }
+        }
+      }
+    },
+    "可能不是最新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "May Be Out of Date"
+          }
+        }
+      }
+    },
+    "还有 %lld 个 ›": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "And %lld more ›"
+          }
+        }
+      }
+    },
+    "%lld 个对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversations"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

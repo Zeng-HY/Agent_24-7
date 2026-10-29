@@ -72,6 +72,21 @@ struct PushRequestTests {
         #expect(PushTarget(device: device, app: "claude", chat: "") == nil)
     }
 
+    @Test func theForegroundSummaryIsReadAsAnIslandState() async throws {
+        let device = String(repeating: "a", count: 32)
+        let transport = RecordingTransport { request in
+            .json(#"{"ok":true,"content-state":{"state":"working","since":1761629880,"turn":1761629880,"working":1,"waiting":0,"more":2,"peers":[{"app":"codex","chat":"c1","title":"T","state":"working","since":1761629880,"turn":1761629880,"step":"run"}]}}"#)
+        }
+        let client = RelayClient(origin: .default, transport: transport)
+        let state = try await client.islandState(device: device)
+        #expect(state?.status == .working)
+        #expect(state?.more == 2)
+        #expect(state?.peers?.first?.step == "run")
+        let sent = await transport.log.items
+        #expect(sent.first?.url.path == "/account/push/island-state")
+        #expect(sent.first?.body?.contains(device.utf8) == true)
+    }
+
     @Test func theTokenTravelsInPostBodiesNeverInAnAddress() async throws {
         let transport = RecordingTransport { request in
             request.url.path.hasSuffix("/state") ? .json(#"{"available":true,"registered":true,"phones":2}"#)

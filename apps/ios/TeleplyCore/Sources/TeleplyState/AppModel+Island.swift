@@ -29,7 +29,21 @@ extension AppModel {
         await islandReadEnabled()
         guard island.enabled != false, account != nil, !expired, !fixture else { return }
         await islandReconcile()
+        await islandRefreshFromRelay()
         await islandRegisterStartToken()
+    }
+
+    /// 0.6.5: at launch and each return to the front, read the relay's current summary for each computer island and
+    /// apply it in the app. The app's own update costs no push, so the island is right even after pushes were missed.
+    func islandRefreshFromRelay() async {
+        guard island.wanted, !fixture, !expired, account != nil else { return }
+        for (raw, track) in island.live where track.identity.chat.isEmpty {
+            guard let state = try? await client.islandState(device: track.identity.device) else { continue }
+            var stored = track
+            stored.state = state
+            island.live[raw] = stored
+            await services.island.update(IslandRef(raw: raw), state)
+        }
     }
 
     /// 设置 → 开发者选项 → 灵动岛: the switch (0.6.0 前只在这里，默认关). Off ends every island and forgets its token.
@@ -175,7 +189,7 @@ extension AppModel {
             try await client.islandRegister(IslandRegistration(
                 token: token, device: track.identity.device, app: track.identity.app, chat: track.identity.chat,
                 environment: services.island.environment, state: track.state.state, since: track.state.since,
-                turn: track.state.turn, title: track.identity.title))
+                turn: track.state.turn, title: track.identity.title, language: IslandWords.language))
             if var stored = island.live[ref.raw] {
                 stored.registered = true
                 island.live[ref.raw] = stored
@@ -233,7 +247,7 @@ extension AppModel {
     func islandRegisterStartToken() async {
         guard island.wanted, !fixture, !expired, account != nil else { return }
         guard let token = await services.island.startToken(seconds: 5) else { return }
-        try? await client.islandStartToken(IslandStartToken(token: token, environment: services.island.environment))
+        try? await client.islandStartToken(IslandStartToken(token: token, environment: services.island.environment, language: IslandWords.language))
     }
 
     func islandStopAll() async {
@@ -309,7 +323,7 @@ extension AppModel {
             try await client.islandRegister(IslandRegistration(token: token, device: device.id, app: identity.app,
                                                                chat: identity.chat, environment: services.island.environment,
                                                                state: state.state, since: state.since, turn: state.turn,
-                                                               title: identity.title))
+                                                               title: identity.title, language: IslandWords.language))
             island.note = try await client.islandTest(device: device.id, app: identity.app, chat: identity.chat)
         } catch {
             island.note = describe(error)

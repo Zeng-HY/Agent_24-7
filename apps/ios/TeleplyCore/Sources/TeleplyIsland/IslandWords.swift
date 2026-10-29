@@ -17,6 +17,11 @@ public nonisolated enum IslandColorRole: String, Sendable, Equatable {
 /// The design rule: short words the user already knows from 遥应's notifications (在干活、在等你、好了、出错停了、
 /// 断开了), and nothing of the conversation.
 public enum IslandWords {
+    /// Set once at launch by the app and by the widget extension from the iPhone language. Tests keep the default,
+    /// so the island's words stay Chinese unless the phone is English.
+    nonisolated(unsafe) public static var language = "zh-Hans"
+    static var english: Bool { language.hasPrefix("en") }
+
     public static func appName(_ app: String) -> String {
         switch app {
         case "claude": return "Claude"
@@ -28,12 +33,12 @@ public enum IslandWords {
     /// The short state word (4 characters at most, for the compact island).
     public static func state(_ status: IslandStatus) -> String {
         switch status {
-        case .working: return "在干活"
-        case .waiting: return "在等你"
-        case .done: return "好了"
-        case .failed: return "出错停了"
-        case .offline: return "断开了"
-        case .limited: return "额度用完"
+        case .working: return english ? "Working" : "在干活"
+        case .waiting: return english ? "Waiting" : "在等你"
+        case .done: return english ? "Done" : "好了"
+        case .failed: return english ? "Failed" : "出错停了"
+        case .offline: return english ? "Offline" : "断开了"
+        case .limited: return english ? "Limit reached" : "额度用完"
         }
     }
 
@@ -42,60 +47,63 @@ public enum IslandWords {
     public static func detail(_ state: IslandState, now: Int) -> String {
         switch state.status ?? .working {
         case .working:
-            return stepName(state.step) ?? "在干活"
+            return stepName(state.step) ?? (english ? "Working" : "在干活")
         case .waiting:
-            return ask(state) ?? "在等你选"
+            return ask(state) ?? (english ? "Waiting for you" : "在等你选")
         case .done:
-            return "好了 · 用了 " + duration((state.ended ?? now) - state.turn)
+            return (english ? "Done · Took " : "好了 · 用了 ") + duration((state.ended ?? now) - state.turn)
         case .failed:
-            return "出错停了"
+            return english ? "Failed" : "出错停了"
         case .offline:
-            return "断开了"
+            return english ? "Offline" : "断开了"
         case .limited:
-            return "额度用完 · " + countdown((state.resets ?? now) - now) + " 后恢复"
+            return (english ? "Limit reached · " : "额度用完 · ") + countdown((state.resets ?? now) - now)
+                + (english ? " until reset" : " 后恢复")
         }
     }
 
     /// 方案六: the two-character name of what the computer is doing. nil when it is not known.
     public static func stepName(_ step: String?) -> String? {
         switch step {
-        case "edit": return "改文件"
-        case "run": return "跑命令"
-        case "search": return "查资料"
-        case "read": return "读文件"
-        case "think": return "思考"
+        case "edit": return english ? "Editing files" : "改文件"
+        case "run": return english ? "Running commands" : "跑命令"
+        case "search": return english ? "Searching" : "查资料"
+        case "read": return english ? "Reading files" : "读文件"
+        case "think": return english ? "Thinking" : "思考"
         default: return nil
         }
     }
 
     /// 0.6.4: the conversation page's live line, e.g. "正在跑命令 · 3 分 12 秒" / "正在思考 · 3 分 12 秒".
     public static func thinkingLine(step: String?, started: Int, now: Int) -> String {
-        "正在" + (stepName(step) ?? "思考") + " · " + duration(now - started)
+        (english ? "" : "正在") + (stepName(step) ?? (english ? "Thinking" : "思考")) + " · " + duration(now - started)
     }
 
     /// 0.6.4: a finished turn's fold, e.g. "思考了 3 分 12 秒".
     public static func thoughtLine(started: Int, ended: Int) -> String {
-        "思考了 " + duration(ended - started)
+        (english ? "Thought for " : "思考了 ") + duration(ended - started)
     }
 
     /// 0.6.4: a running row in the conversation list, e.g. "运行中 · 3 分 12 秒".
     public static func runningLine(started: Int, now: Int) -> String {
-        "运行中 · " + duration(now - started)
+        (english ? "Running · " : "运行中 · ") + duration(now - started)
     }
 
     /// 方案二: what is being asked, in words that say nothing of the command itself.
     public static func ask(_ state: IslandState) -> String? {
         if let text = state.askText, !text.isEmpty { return text }
-        if state.askType == "permission" { return "想运行一条命令" }
-        if let choices = state.choices, choices > 0 { return "有 \(choices) 个选项等你选" }
-        return "在等你选"
+        if state.askType == "permission" { return english ? "Wants to run a command" : "想运行一条命令" }
+        if let choices = state.choices, choices > 0 {
+            return english ? "\(choices) choices waiting for you" : "有 \(choices) 个选项等你选"
+        }
+        return english ? "Waiting for you" : "在等你选"
     }
 
     /// The right-hand part of the compact island; nil when the view draws a symbol or the timer instead.
     public static func compactTrailing(_ state: IslandState, now: Int) -> String? {
         switch state.status ?? .working {
-        case .waiting: return "等你"
-        case .offline: return "断开"
+        case .waiting: return english ? "Waiting" : "等你"
+        case .offline: return english ? "Offline" : "断开"
         case .limited: return compactCountdown((state.resets ?? now) - now)
         case .working, .done, .failed: return nil
         }
@@ -155,6 +163,15 @@ public enum IslandWords {
     /// "6 分 12 秒", "12 秒", "1 小时 3 分".
     public static func duration(_ seconds: Int) -> String {
         let total = max(0, seconds)
+        if english {
+            if total < 60 { return "\(total) sec" }
+            if total < 3600 {
+                let minutes = total / 60, rest = total % 60
+                return rest == 0 ? "\(minutes) min" : "\(minutes) min \(rest) sec"
+            }
+            let hours = total / 3600, minutes = total % 3600 / 60
+            return minutes == 0 ? "\(hours) hr" : "\(hours) hr \(minutes) min"
+        }
         if total < 60 { return "\(total) 秒" }
         if total < 3600 {
             let minutes = total / 60, rest = total % 60
@@ -181,6 +198,17 @@ public enum IslandWords {
 
     /// One sentence for VoiceOver, e.g. "Claude 在干活，已经 4 分 31 秒".
     public static func accessibility(app: String, state: IslandState, now: Int, computer: String = "") -> String {
+        if english {
+            if let line = aggregate(state) { return "Teleply, " + line }
+            if let peer = finished(state) { return "Teleply, \(title(peer, computer: computer)), \(detail(state, now: now))" }
+            let name = appName(app), word = self.state(state.status ?? .working)
+            switch state.status ?? .working {
+            case .waiting: return "\(name) \(word), " + (ask(state) ?? "")
+            case .done: return "\(name) done, took " + duration((state.ended ?? now) - state.turn)
+            case .limited: return "\(name) limit reached, " + countdown((state.resets ?? now) - now) + " until reset"
+            default: return "\(name) \(word) for \(duration(now - state.since))"
+            }
+        }
         if let line = aggregate(state) { return "遥应，" + line }
         if let peer = finished(state) { return "遥应，\(title(peer, computer: computer))" }
         let name = appName(app), word = self.state(state.status ?? .working), elapsed = duration(now - state.since)
@@ -209,8 +237,8 @@ public enum IslandWords {
     /// one or none runs, where the timer or the state mark says it better.
     public static func compactCount(_ state: IslandState) -> String? {
         guard let counts = counts(state) else { return nil }
-        if counts.waiting > 0 { return "\(counts.waiting)个等你定" }
-        if counts.working >= 2 { return "\(counts.working)个工作中" }
+        if counts.waiting > 0 { return english ? "\(counts.waiting) waiting" : "\(counts.waiting)个等你定" }
+        if counts.working >= 2 { return english ? "\(counts.working) working" : "\(counts.working)个工作中" }
         return nil
     }
 
@@ -219,8 +247,8 @@ public enum IslandWords {
     public static func aggregate(_ state: IslandState) -> String? {
         guard let counts = counts(state), counts.total > 0 else { return nil }
         var parts: [String] = []
-        if counts.working > 0 { parts.append("\(counts.working) 个对话工作中") }
-        if counts.waiting > 0 { parts.append("\(counts.waiting) 个对话等你定") }
+        if counts.working > 0 { parts.append(english ? "\(counts.working) conversations working" : "\(counts.working) 个对话工作中") }
+        if counts.waiting > 0 { parts.append(english ? "\(counts.waiting) waiting for you" : "\(counts.waiting) 个对话等你定") }
         return parts.joined(separator: " · ")
     }
 
@@ -228,6 +256,12 @@ public enum IslandWords {
     public static func only(_ state: IslandState) -> IslandPeer? {
         guard let counts = counts(state), counts.total == 1 else { return nil }
         return state.peers?.first
+    }
+
+    /// 0.6.5: the fourth line of the lock-screen card and the long-press list. nil when three rows cover everyone.
+    public static func moreLine(_ count: Int?) -> String? {
+        guard let count, count > 0 else { return nil }
+        return english ? "And \(count) more ›" : "还有 \(count) 个 ›"
     }
 
     /// 0.6.4: with nothing running, the relay sends the one that just finished; the card keeps its title and 用时.

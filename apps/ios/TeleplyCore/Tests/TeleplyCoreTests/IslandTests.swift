@@ -16,7 +16,7 @@ struct IslandTests {
         let states = try Self.fixture()
         #expect(Set(states.keys) == Set(IslandStatus.allCases.map(\.rawValue)))
         let allowed: Set<String> = ["state", "since", "turn", "ask", "askType", "choices", "askText", "askOptions", "step",
-                                    "ended", "resets", "peers", "working", "waiting"]
+                                    "ended", "more", "resets", "peers", "working", "waiting"]
         for state in states.values {
             let encoded = try JSONEncoder().encode(state)
             let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -195,9 +195,9 @@ struct IslandTests {
         let registration = IslandRegistration(token: token, device: device, app: "claude", chat: "chat-1",
                                               environment: "production", state: "working", since: 1761629940, turn: 1761629940)
         let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(registration)) as? [String: Any])
-        #expect(Set(object.keys) == ["op", "token", "device", "app", "chat", "environment", "state", "since", "turn", "title"])
+        #expect(Set(object.keys) == ["op", "token", "device", "app", "chat", "environment", "state", "since", "turn", "title", "language"])
         #expect(object["op"] as? String == "register" && object["state"] as? String == "working")
-        #expect(object["title"] as? String == "")  // the title is optional; the app fills it when it knows it
+        #expect(object["title"] as? String == "" && object["language"] as? String == "zh-Hans")  // the title is optional; the app fills it when it knows it
         #expect(!object.keys.contains("message"))
     }
 }

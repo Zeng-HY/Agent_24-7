@@ -38,10 +38,13 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
     /// user; both are nil on an island from an older relay (one per conversation).
     public var working: Int?
     public var waiting: Int?
+    /// 0.6.5: how many more conversations are behind the three the list can show.
+    public var more: Int?
 
     public init(state: String, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
                 askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
-                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil, ended: Int? = nil) {
+                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil, ended: Int? = nil,
+                more: Int? = nil) {
         self.state = state
         self.since = since
         self.turn = turn
@@ -56,15 +59,17 @@ public nonisolated struct IslandState: Codable, Hashable, Sendable {
         self.peers = peers
         self.working = working
         self.waiting = waiting
+        self.more = more
     }
 
     /// The usual way to make one: a known state.
     public init(status: IslandStatus, since: Int, turn: Int, ask: String? = nil, askType: String? = nil, choices: Int? = nil,
                 askText: String? = nil, askOptions: [String]? = nil, step: String? = nil, resets: Int? = nil,
-                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil, ended: Int? = nil) {
+                peers: [IslandPeer]? = nil, working: Int? = nil, waiting: Int? = nil, ended: Int? = nil,
+                more: Int? = nil) {
         self.init(state: status.rawValue, since: since, turn: turn, ask: ask, askType: askType, choices: choices,
                   askText: askText, askOptions: askOptions, step: step, resets: resets, peers: peers,
-                  working: working, waiting: waiting, ended: ended)
+                  working: working, waiting: waiting, ended: ended, more: more)
     }
 
     /// Nil for a state this build does not know (drawn as 在干活, still decoded).
@@ -145,9 +150,11 @@ public nonisolated struct IslandRegistration: Codable, Hashable, Sendable {
     public var turn: Int
     /// The conversation's title, for the island's long-press list; empty when the phone does not know it.
     public var title: String
+    /// 0.6.5: zh-Hans or en, so the relay writes the alert in this phone's language.
+    public var language: String
 
     public init(op: String = "register", token: String, device: String, app: String, chat: String, environment: String,
-                state: String, since: Int, turn: Int, title: String = "") {
+                state: String, since: Int, turn: Int, title: String = "", language: String = "zh-Hans") {
         self.op = op
         self.token = token
         self.device = device
@@ -158,6 +165,7 @@ public nonisolated struct IslandRegistration: Codable, Hashable, Sendable {
         self.since = since
         self.turn = turn
         self.title = title
+        self.language = language
     }
 
     /// The island is gone (dismissed, ended, or the setting turned off): the relay forgets its token.
@@ -171,10 +179,12 @@ public nonisolated struct IslandRegistration: Codable, Hashable, Sendable {
 public nonisolated struct IslandStartToken: Codable, Hashable, Sendable {
     public var token: String
     public var environment: String
+    public var language: String
 
-    public init(token: String, environment: String) {
+    public init(token: String, environment: String, language: String = "zh-Hans") {
         self.token = token
         self.environment = environment
+        self.language = language
     }
 }
 

@@ -407,6 +407,64 @@ class Watcher(unittest.TestCase):
         steps = [m for m in self.notifier.relay.wait(0, 0)[0] if m.get("kind") == "step"]
         self.assertEqual([m["step"] for m in steps], ["edit", "run"])
 
+    def test_a_new_codex_turn_starts_with_no_previous_action(self):
+        self.cfg.pop('bark')
+        self.turn('task_started', 'old', ts='2027-01-15T08:00:10Z')
+        tool = json.dumps({'timestamp': '2027-01-15T08:00:20Z', 'type': 'response_item',
+                           'payload': {'type': 'custom_tool_call', 'name': 'exec', 'input': 'dir',
+                                       'status': 'completed'}})
+        with self.codex.open('a', encoding='utf-8') as f:
+            f.write(tool + '\n')
+        self.turn('task_complete', 'old', '好了', ts='2027-01-15T08:00:30Z')
+        self.turn('task_started', 'new', ts='2027-01-15T08:01:00Z')
+        scan = self.notifier._scan_file(self.items[0])
+        self.assertEqual((scan['state'], scan['action']), ('running', ''))
+        with self.codex.open('a', encoding='utf-8') as f:
+            f.write(tool.replace('08:00:20', '08:01:10') + '\n')
+        scan = self.notifier._scan_file(self.items[0])
+        self.assertEqual(scan['action'], 'run')
+
+    def test_a_deepseek_conversation_running_three_rounds_uses_each_rounds_start(self):
+        # The record may still hold all three turn/start events; the newest one is this round's.
+        self.assertEqual(notify.turn_start(1000, [1000, 5000, 9000], 10000), 9000)
+        self.assertEqual(notify.turn_start(9000, [1000, 5000], 10000), 9000)  # no new start in the page: keep ours
+        self.assertEqual(notify.turn_start(0, [], 10000), 10000)
+
+    def test_the_state_api_step_starts_empty_in_a_new_codex_turn(self):
+        self.codex.write_text('', encoding='utf-8')
+        self.turn('task_started', 'old', ts='2027-01-15T08:00:10Z')
+        tool = json.dumps({'timestamp': '2027-01-15T08:00:20Z', 'type': 'response_item',
+                           'payload': {'type': 'custom_tool_call', 'name': 'exec', 'input': 'dir',
+                                       'status': 'completed'}})
+        with self.codex.open('a', encoding='utf-8') as f:
+            f.write(tool + '\n')
+        self.turn('task_complete', 'old', '好了', ts='2027-01-15T08:00:30Z')
+        self.turn('task_started', 'new', ts='2027-01-15T08:01:00Z')
+        started = int(notify._seconds('2027-01-15T08:01:00Z', 0))
+        self.assertEqual(notify.chats.tail_step('codex', self.codex, started), '')
+        with self.codex.open('a', encoding='utf-8') as f:
+            f.write(tool.replace('08:00:20', '08:01:10') + '\n')
+        self.assertEqual(notify.chats.tail_step('codex', self.codex, started), 'run')
+
+    def test_an_empty_snapshot_is_sent_once_when_the_last_work_ends(self):
+        self.cfg.pop('bark')
+        with self.notifier.relay.listener():
+            self.notifier.look()  # the first force snapshot
+            first = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
+            self.now += 61
+            self.notifier.look()
+            second = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
+            self.assertEqual((first, second), (1, 1))
+            self.turn('task_started', 't1', ts='2027-01-15T08:02:00Z')
+            self.notifier.look()
+            self.turn('task_complete', 't1', '好了', ts='2027-01-15T08:02:10Z')
+            self.notifier.look()
+            after_done = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
+            self.now += 61
+            self.notifier.look()
+            after_idle = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
+            self.assertEqual((after_done, after_idle), (3, 3))
+
     def test_deepseek_running_is_told_the_same_way(self):
         self.cfg.pop("bark")
         with self.notifier.relay.listener():

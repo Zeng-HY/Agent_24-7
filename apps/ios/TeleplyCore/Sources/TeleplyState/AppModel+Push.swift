@@ -1,4 +1,5 @@
 import Foundation
+import TeleplyIsland
 import TeleplyModel
 
 /// 遥应通知 (relay_push.py; plan "Teleply - iOS 原生推送方案"): the service keeps this phone's push token for the
@@ -47,7 +48,7 @@ extension AppModel {
         guard let token = await pushTokenNow() else { return }
         do {
             try await client.pushRegister(token: token, environment: services.push.environment, label: services.push.label,
-                                          version: services.push.version)
+                                          version: services.push.version, language: IslandWords.language)
             push.phase = .on
         } catch {
             pushFailed(error)
@@ -88,7 +89,7 @@ extension AppModel {
         let client = client, platform = services.push
         Task { [weak self] in
             guard (try? await client.pushRegister(token: token, environment: platform.environment, label: platform.label,
-                                                  version: platform.version)) != nil else { return }
+                                                  version: platform.version, language: IslandWords.language)) != nil else { return }
             if self?.push.phase != .denied { self?.push.phase = .on }
         }
     }

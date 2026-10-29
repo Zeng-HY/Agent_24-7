@@ -37,6 +37,22 @@ public struct PushTarget: Sendable, Equatable {
     }
 }
 
+/// teleply://list?d=…&status=running (0.6.5): the island's "还有 N 个" opens one computer's running conversations.
+public struct IslandListTarget: Sendable, Equatable {
+    public let device: String
+    public let status: String
+
+    public init?(url: URL) {
+        guard url.scheme == IslandURL.scheme, url.host == "list",
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let query = parts.queryItems,
+              let device = query.first(where: { $0.name == "d" })?.value,
+              (try? RelayClient.devicePath(device, "")) != nil else { return nil }
+        self.device = device
+        self.status = query.first(where: { $0.name == "status" })?.value == "running" ? "running" : "all"
+    }
+}
+
 /// 遥应通知 and how the app presents them (relay_push.py, 0.6.2). The relay sends every notice with [category], so the
 /// lock screen groups one computer's notices in one stack and the group's summary reads [summaryFormat] (Apple's
 /// categorySummaryFormat; "%u" is how many are under it). While 遥应 is in front the app shows a banner without a
@@ -88,9 +104,11 @@ extension RelayClient {
     }
 
     /// Keeps this phone's token for the signed-in account (again, when it is there already).
-    public func pushRegister(token: String, environment: String, label: String, version: String) async throws {
+    public func pushRegister(token: String, environment: String, label: String, version: String,
+                             language: String = "zh-Hans") async throws {
         _ = try await json(post("/account/push/register", json: ["token": .string(token), "platform": "ios", "environment": .string(environment),
-                                                                  "label": .string(label), "version": .string(version)]))
+                                                                  "label": .string(label), "version": .string(version),
+                                                                  "language": .string(language)]))
     }
 
     public func pushUnregister(token: String) async throws {
@@ -114,6 +132,15 @@ extension RelayClient {
     public func islandStartToken(_ token: IslandStartToken) async throws {
         _ = try await json(post("/account/push/start-token",
                                 json: ["token": .string(token.token), "environment": .string(token.environment)]))
+    }
+
+    /// 0.6.5: the summary the relay would push now, read when the app comes to the front. The phone applies it itself,
+    /// so an island that missed pushes is right within a moment and no push quota is spent.
+    public func islandState(device: String) async throws -> IslandState? {
+        let reply = try await json(post("/account/push/island-state", json: ["device": .string(device)]))
+        let part = reply["content-state"]
+        guard part.isObject else { return nil }
+        return try JSONDecoder().decode(IslandState.self, from: try part.encoded())
     }
 
     /// 开发者选项 → 让中转改一下: one Live Activity push for this island, which proves the key may send its topic.

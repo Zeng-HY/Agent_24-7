@@ -17,6 +17,8 @@ struct IslandWidgets: WidgetBundle {
 }
 
 struct IslandLiveActivity: Widget {
+    init() { IslandWords.language = Locale.current.language.languageCode?.identifier == "en" ? "en" : "zh-Hans" }
+
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: IslandAttributes.self) { context in
             LockScreenCard(attributes: context.attributes, state: context.state)
@@ -69,7 +71,7 @@ struct IslandLiveActivity: Widget {
     /// island (waiting ones come first in the relay's list).
     private func openURL(_ context: ActivityViewContext<IslandAttributes>) -> URL? {
         if !context.attributes.chat.isEmpty { return IslandURL.open(context.attributes.identity) }
-        guard let peer = context.state.peers?.first else { return nil }
-        return IslandURL.open(device: context.attributes.device, app: peer.app, chat: peer.chat)
+        // 0.6.5: a computer's card opens the list filtered to running conversations; a row still opens its own.
+        return IslandURL.list(device: context.attributes.device, status: "running")
     }
 }

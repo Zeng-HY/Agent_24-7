@@ -10,5 +10,5 @@ extension ServiceOriginError: UserFacingError {}
 
 /// What to show for any error: its own words, or Android's general line for a network failure.
 public func describe(_ error: any Error) -> String {
-    (error as? any UserFacingError)?.message ?? "连接失败，请检查网络和服务地址后重试。"
+    Hints.text((error as? any UserFacingError)?.message ?? "连接失败，请检查网络和服务地址后重试。")
 }

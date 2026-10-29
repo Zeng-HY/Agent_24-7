@@ -15,6 +15,7 @@
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>zh-Hans</string>
+		<string>en</string>
 	</array>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
@@ -46,6 +47,8 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>这台电脑没开语音时，用 iPhone 自带的语音识别把说的话转成文字，放进输入框。</string>
 	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>

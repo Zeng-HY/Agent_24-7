@@ -402,9 +402,13 @@ class Bridge:
         ends=[int(e['time']/1000) for e in events if e.get('type')=='turn/end' and e.get('time')]
         from chats import _step_of
         step=''
+        last_start=next((e for e in reversed(events) if e.get('type')=='turn/start'),None)
+        turn_id=(last_start.get('data') or {}).get('turn') if last_start else None
         for e in reversed(events):
             if e.get('type')=='tool/call':
-                step=_step_of('deepseek',str((e.get('data') or {}).get('name') or ''))
+                data=e.get('data') or {}
+                if turn_id is not None and data.get('turn')!=turn_id:continue
+                step=_step_of('deepseek',str(data.get('name') or ''))
                 if step:break
         return (starts[-1] if starts else 0),(ends[-1] if ends else 0),step
     def state(self,sid):
