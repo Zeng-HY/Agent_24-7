@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.5 构建 20 已传 TestFlight；0.6.4 构建 19 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.5 构建 21 已传 TestFlight；0.6.4 构建 19 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.6.5：岛不再停旧状态、发出去的话不消失、英文版（10-30，构建 20 已传 TestFlight）
+## 0.6.5：岛不再停旧状态、发出去的话不消失、英文版（10-30，构建 21 已传 TestFlight）
 
 用户 10-30 早上报：岛写「10 个对话工作中」，列了三个早已结束的 DeepSeek 对话，计时 1:58:58；另外在一个很长的 Codex 对话里发新指令，输入框显示「已接收」，时间线里却看不到这句话，最下面还是上一轮的「正在跑命令」。英文对照表用户看过、原样通过。
 
@@ -19,7 +19,7 @@
 - **`NSSupportsLiveActivitiesFrequentUpdates`**：手机向苹果要「频繁更新」；忙的时候系统会问用户要不要允许更多。
 - 版本 0.6.5。
 
-检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。0.6.5（20）已传 TestFlight（Codemagic `6ae3ec839215d38b5580e7cb`，4 分钟，Delivery UUID `683f7534-739c-4ca2-83f3-cb3d54a37c26`）。Windows `0.27.0-dev.31`（31）已构建并装到这台电脑（9:03，`dist/AgentRemote-0.27.0-dev.31-Setup.exe`，SHA256 `255F4D12…`），还没发布到阿里云/GitHub。中转更新包 `dist/agent-relay-0.27.0-dev.zip`（SHA256 `B9DAB6D8…`）已打好，需要用阿里云 Workbench 上传后执行 `update-027.sh`。
+检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。0.6.5（21）已传 TestFlight（Codemagic `6ae3ee02c6cd057eaef31451`，4 分钟，Delivery UUID `7b4d31f6-487a-44ac-9d43-3a251db68abe`）。Windows `0.27.0-dev.31`（31）已构建并装到这台电脑（9:03，`dist/AgentRemote-0.27.0-dev.31-Setup.exe`，SHA256 `255F4D12…`），还没发布到阿里云/GitHub。中转更新包 `dist/agent-relay-0.27.0-dev.zip`（SHA256 `B9DAB6D8…`）已打好，需要用阿里云 Workbench 上传后执行 `update-027.sh`。
 
 ### 留给你在真机上验（0.6.5）
 
