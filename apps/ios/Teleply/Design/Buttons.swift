@@ -105,6 +105,6 @@ struct GlassIconButton: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
-        .accessibilityLabel(Text(label))
+        .accessibilityLabel(Text(L(label)))
     }
 }
