@@ -156,10 +156,12 @@ private struct DeviceRow: View {
                 if device.connectable {
                     Circle().fill(AccountPalette.online).frame(width: 7, height: 7)
                 }
-                Text(device.connectable ? LK("在线") : LK("离线"))
-                if current { Text(LK(" · 当前")) }
-                    .scaledFont(13, relativeTo: .footnote)
-                    .foregroundStyle(AccountPalette.muted)
+                HStack(spacing: 0) {
+                    Text(device.connectable ? LK("在线") : LK("离线"))
+                    if current { Text(LK(" · 当前")) }
+                }
+                .scaledFont(13, relativeTo: .footnote)
+                .foregroundStyle(AccountPalette.muted)
             }
         }
     }
