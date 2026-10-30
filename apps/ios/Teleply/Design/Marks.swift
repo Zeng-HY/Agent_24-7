@@ -84,13 +84,13 @@ struct NoteBar: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(ink)
                 .accessibilityHidden(true)
-            Text(text)
+            Text(LK(text))
                 .noteFont()
                 .foregroundStyle(ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
             if let action {
-                Button(action, action: onAction)
+                Button(LK(action), action: onAction)
                     .buttonStyle(PillStyle(kind: .text, minHeight: 36))
                     .disabled(!actionEnabled)
             }
@@ -127,7 +127,7 @@ struct NoticeToast: View {
     var body: some View {
         ZStack {
             if let text {
-                Text(text)
+                Text(LK(text))
                     .smallBodyFont()
                     .foregroundStyle(Palette.page)
                     .multilineTextAlignment(.center)
