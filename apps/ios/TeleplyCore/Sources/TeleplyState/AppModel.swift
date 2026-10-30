@@ -175,6 +175,8 @@ public final class AppModel {
     @ObservationIgnored var foreground = true
     @ObservationIgnored var devicePoll: Task<Void, Never>?
     @ObservationIgnored var listPoll: Task<Void, Never>?
+    /// Back from a conversation the list is read by back() itself; the 10 s read then starts with a wait.
+    @ObservationIgnored var listJustRead = false
     @ObservationIgnored var treeTask: Task<Void, Never>?
     @ObservationIgnored var treeToken = 0
     @ObservationIgnored var treeMore: [String: Int] = [:]
@@ -652,6 +654,7 @@ public final class AppModel {
             // The navigation stack pops at once, so the screen changes now; the page keeps what it showed until its
             // slide-out is over, unless it is opened again meanwhile.
             screen = .chats
+            listJustRead = true
             live()
             leaving?.cancel()
             leaving = Task { [weak self] in

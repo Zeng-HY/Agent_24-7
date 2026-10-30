@@ -257,6 +257,40 @@ struct AppModelTests {
         #expect(state.marked && model.conversation.control.running)
     }
 
+    /// 10-30: back in front (from the background, 设置 or 我的电脑) the list is read at once, so a turn that ended
+    /// meanwhile no longer shows 运行中 with a ticking timer for ten seconds; back from a conversation it is read once
+    /// (by back()), not twice.
+    @Test func theListIsReadAtOnceWhenItComesBackToTheFront() async throws {
+        let transport = WatchedTransport(world: DemoWorld())
+        let model = AppModel(services: AppServices(store: LocalStore(folder: temporaryFolder()), vault: MemoryCookieVault(),
+                                                   transport: transport, demo: { DemoTransport() }, pacer: IdlePacer(),
+                                                   newScope: { "scope-1" }))
+        await signedInOnA(model)
+        func reads() async -> Int { await transport.log.items.filter { $0.url.path.hasSuffix("/api/chats") }.count }
+        // Lets a read that is due happen, then waits until no more come.
+        func quiet() async throws {
+            var last = -1
+            while true {
+                let now = await reads()
+                if now == last { return }
+                last = now
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        try await quiet()
+        let start = await reads()
+        model.setForeground(false)
+        model.setForeground(true)
+        try await quiet()
+        #expect(await reads() == start + 1)
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        model.back()
+        await model.settle()
+        try await quiet()
+        #expect(await reads() == start + 2)
+    }
+
     @Test func theLiveConnectionReadsStateFreshOnEntering() async {
         let world = DemoWorld()
         let model = makeApp(world: world)

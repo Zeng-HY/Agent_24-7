@@ -80,6 +80,11 @@ extension AppModel {
     }
 
     /// The list is read again every 10 s while it is in front (web loadConvs): rows merge, nothing is reset.
+    /// 10-30: it is also read at once whenever it comes (back) to the front: from the background, from 设置 or 我的电脑.
+    /// Rows read before going away could still say 运行中 for a turn that ended meanwhile, and their timers kept ticking
+    /// for the first ten seconds (user's screenshot: 运行中 · 44 分 11 秒 on a conversation finished nine minutes
+    /// earlier). Back from a conversation back() reads it itself. A read held off by work in hand is tried again a
+    /// second later, not ten.
     func pollList(_ on: Bool) {
         guard on else {
             listPoll?.cancel()
@@ -87,12 +92,26 @@ extension AppModel {
             return
         }
         guard listPoll == nil else { return }
+        let first: Duration = listJustRead ? .seconds(10) : .zero
+        listJustRead = false
         listPoll = Task { [weak self] in
+            var wait = first
             while !Task.isCancelled {
                 guard let pacer = self?.services.pacer else { return }
-                do { try await pacer.wait(.seconds(10)) } catch { return }
-                guard let self, !self.busy, self.screen == .chats, !self.expired else { continue }
+                if wait > .zero {
+                    do { try await pacer.wait(wait) } catch { return }
+                }
+                guard let self else { return }
+                guard self.screen == .chats, !self.expired else {
+                    wait = .seconds(10)
+                    continue
+                }
+                if self.busy {
+                    wait = .seconds(1)
+                    continue
+                }
                 try? await self.mergeFirstPage()
+                wait = .seconds(10)
             }
         }
     }
