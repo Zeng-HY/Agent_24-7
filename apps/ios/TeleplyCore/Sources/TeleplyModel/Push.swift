@@ -61,7 +61,10 @@ public struct IslandListTarget: Sendable, Equatable {
 public enum PushNotice {
     /// Same string as relay_push.NOTICE_CATEGORY.
     public static let category = "teleply.conversation"
-    public static let summaryFormat = "还有 %u 个对话"
+    /// 0.6.5: the notification stack's summary follows the phone language.
+    public static var summaryFormat: String {
+        Hints.language.hasPrefix("en") ? "And %u more conversations" : "还有 %u 个对话"
+    }
 
     /// What the app shows for a notice that arrives while it is in front.
     public enum Foreground: Sendable, Equatable {
