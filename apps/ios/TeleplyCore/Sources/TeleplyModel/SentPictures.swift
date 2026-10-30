@@ -35,11 +35,12 @@ public func sentPictures(messages: [Message], records: [JSONValue]) -> [String: 
         var found = request.isEmpty ? nil : users.last { taken[$0.id] == nil && $0.request == request }
         if found == nil {
             // A picture sent without words goes to Claude as 请查看这些图片。 (remote.py _send_with_references).
-            let sent = record["text"].string().trimmingCharacters(in: .whitespacesAndNewlines)
+            let sent = wordsIgnoringPictureMarks(record["text"].string().trimmingCharacters(in: .whitespacesAndNewlines))
             let words = squeezed(sent.isEmpty ? "请查看这些图片。" : sent)
             let since = record["created"].double() - 5
             found = users.last { message in
-                guard taken[message.id] == nil, message.request.isEmpty, let rest = picturedWords(message.text), squeezed(rest) == words else { return false }
+                guard taken[message.id] == nil, message.request.isEmpty,
+                      let rest = wordsAfterPictureMarks(message.text), squeezed(rest) == words else { return false }
                 return (writtenAt(message) ?? .greatestFiniteMagnitude) >= since
             }
         }
@@ -52,6 +53,20 @@ public func sentPictures(messages: [Message], records: [JSONValue]) -> [String: 
 public func picturedWords(_ text: String) -> String? {
     guard let marks = text.range(of: #"^(\[图片\]\s*)+"#, options: .regularExpression) else { return nil }
     return String(text[marks.upperBound...])
+}
+
+/// A message's words without the picture marks the computer writes: Claude's `[图片]` prefix and DeepSeek's
+/// `[1 张图片]` suffix. Used for matching a send to its record and for showing sent pictures.
+func wordsAfterPictureMarks(_ text: String) -> String? {
+    let withoutCount = text.replacingOccurrences(of: #"\s*\[\s*\d+\s*张图片\s*\]\s*$"#,
+                                                 with: "", options: .regularExpression)
+    if let rest = picturedWords(withoutCount) { return rest }
+    return withoutCount == text ? nil : withoutCount
+}
+
+/// The same, for a record that may carry no picture mark at all (matching a send to its row).
+func wordsIgnoringPictureMarks(_ text: String) -> String {
+    wordsAfterPictureMarks(text) ?? text
 }
 
 /// Text without any whitespace, as the web compares a send with its message (codex-ui.js normalize).

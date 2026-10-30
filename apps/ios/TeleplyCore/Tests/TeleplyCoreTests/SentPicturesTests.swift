@@ -40,6 +40,12 @@ struct SentPicturesTests {
         #expect(sentPictures(messages: [messages[0]], records: [record("c3", ["d"], created: 1_792_483_300)]).isEmpty)
     }
 
+    @Test func deepSeeksPictureCountSuffixStillTakesItsPictures() {
+        let record = record("d1", ["a"], text: "看这张图", created: 1_792_483_198)
+        let message = user("m1", "看这张图\n[1 张图片]", time: "2026-10-20T08:00:00Z")
+        #expect(sentPictures(messages: [message], records: [record])["m1"]?.map(\.id) == ["a"])
+    }
+
     @Test func onlyAMessageWithTheMarkAndTheSameWordsTakesPictures() {
         let records = [record("c1", ["a"], text: "看 这张图")]
         #expect(sentPictures(messages: [user("m1", "看这张图")], records: records).isEmpty)
@@ -49,5 +55,6 @@ struct SentPicturesTests {
         #expect(sentPictures(messages: [user("m1", "[图片] 看这张图")], records: [record("c1", ["../x"], text: "看这张图")]).isEmpty)
         #expect(picturedWords("[图片] [图片] 两张") == "两张")
         #expect(picturedWords("没有图") == nil)
+        #expect(wordsAfterPictureMarks("看这张图\n[1 张图片]") == "看这张图")
     }
 }

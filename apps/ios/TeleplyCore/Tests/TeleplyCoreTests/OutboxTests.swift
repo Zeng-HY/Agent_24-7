@@ -54,4 +54,12 @@ struct OutboxTests {
         let shown = user("[图片] 看一下这个", at: "2027-01-15T08:00:00Z")
         #expect(outboxSends([record], messages: [shown], now: now).isEmpty)
     }
+
+    @Test func deepSeeksPictureCountDoesNotLeaveASecondCopy() {
+        let record = send("看一下这个", created: 1_800_000_000_000)
+        let shown = user("看一下这个\n[1 张图片]", at: "2027-01-15T08:00:00Z")
+        #expect(outboxSends([record], messages: [shown], now: now).isEmpty)
+        #expect(outboxSends([record], messages: [user("看一下这个\n[2 张图片]", at: "2027-01-15T08:00:00Z")],
+                            now: now).isEmpty)
+    }
 }

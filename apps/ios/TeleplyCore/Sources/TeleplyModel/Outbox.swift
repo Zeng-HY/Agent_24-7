@@ -35,7 +35,9 @@ public func outboxSends(_ submissions: [Submission], messages: [Message], now: I
 /// A Claude/DeepSeek user message that is this send: the same words (after any picture marks) and written no earlier
 /// than five seconds before the phone sent it.
 private func matches(_ message: Message, _ record: Submission) -> Bool {
-    let words = squeezed(picturedWords(message.text) ?? message.text)
+    // DeepSeek appends "\n[1 张图片]" to the record; the phone's send has only the words. Without this, the send
+    // never matches and stays under the record's own row as a second, faded copy (10-30).
+    let words = squeezed(wordsIgnoringPictureMarks(message.text))
     guard !words.isEmpty, words == squeezed(record.text) else { return false }
     guard let written = writtenAt(message) else { return false }
     return written >= Double(record.created) / 1000 - 5
