@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.5 构建 22 已传 TestFlight；0.6.4 构建 19 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.5 构建 23 已传 TestFlight；0.6.4 构建 19 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.6.5：岛不再停旧状态、发出去的话不消失、英文版（10-30，构建 22 已传 TestFlight）
+## 0.6.5：岛不再停旧状态、发出去的话不消失、英文版（10-30，构建 23 已传 TestFlight）
 
 用户 10-30 早上报：岛写「10 个对话工作中」，列了三个早已结束的 DeepSeek 对话，计时 1:58:58；另外在一个很长的 Codex 对话里发新指令，输入框显示「已接收」，时间线里却看不到这句话，最下面还是上一轮的「正在跑命令」。英文对照表用户看过、原样通过。
 
@@ -12,14 +12,14 @@
 - **只在看得见的内容变了时推**：状态、两个计数、列表三行（编号、状态、动作、开始时间）、刚结束对话和「还有几个」都参与比较；快照只对账，内容没变不推。空快照在最后一个对话结束时发一次，之后只在重新连上中转时再发。
 - **挑三个**：等你定的排最前，然后按最近一次动作排（`action_at`，不是 `refreshed`）；`content-state` 加了可选的 `more`（还有几个）。
 - **手机自己补**：打开遥应、回到前台时，向中转读一次当前汇总（`POST /account/push/island-state`），用 `activity.update` 自己改岛；不占推送名额。
-- **发出去的话不消失**：只要记录里还没有同一个请求编号的消息，淡色的那条就一直留在时间线最后，下面写「提交中 / 已接收 / 已排队 / 送达状态待确认」。Codex 按 `client_request_id` 对；Claude、DeepSeek 按文字加时间对；记录里出现了就换成正式那条，不会两条都在。十分钟后记录里已有更晚的用户消息才收起，走「待核对发送记录」。DeepSeek 带图时记录会在文字后加「[1 张图片]」，现在先把这段计数去掉再比对，所以不会在真消息下面再留一条淡色重影，图片也能对上缩略图。
+- **发出去的话不消失**：只要记录里还没有同一个请求编号的消息，淡色的那条就一直留在时间线最后，下面写「提交中 / 已接收 / 已排队 / 送达状态待确认」。Codex 按 `client_request_id` 对；Claude、DeepSeek 按文字加时间对；记录里出现了就换成正式那条，不会两条都在。十分钟后记录里已有更晚的用户消息才收起，走「待核对发送记录」。DeepSeek 带图时记录会在文字后加「[1 张图片]」，现在先把这段计数去掉再比对；DeepSeek 的时间是六位小数（`...46.667000+00:00`），原来只认三位，导致发送永远对不上记录。两处都修了，所以不会在真消息下面再留一条淡色重影，图片也能对上缩略图。
 - **新一轮动作从空开始**：Codex 的 `task_started`、Claude 的新用户消息、DeepSeek 的 `turn/start` 之后，还没调用工具时 `step` 为空；手机显示「正在思考 · 计时」，第一个工具调用后才变「正在跑命令」。
 - **英文版**：跟随 iPhone 语言（系统 设置 → 遥应 → 语言），只有简体中文和英文，别的语言显示英文。应用和扩展都用 `Localizable.xcstrings`，开发语言仍是简体中文；`CFBundleLocalizations` 加 `en`，`ci-testflight.sh` 检查 `en.lproj`。中转按每部手机登记的语言写通知和岛的提醒文字；电脑返回的最常见提示按原文对成英文，其余保留中文，未翻清单见本文末尾。
 - **锁屏卡片第四行**：超过三个时写「还有 N 个 ›」；卡片总高按约 160 点收紧，不加第五行。整张卡片打开 `teleply://list?d=…&status=running`，列表只看运行中。
 - **`NSSupportsLiveActivitiesFrequentUpdates`**：手机向苹果要「频繁更新」；忙的时候系统会问用户要不要允许更多。
 - 版本 0.6.5。
 
-检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。0.6.5（22）已传 TestFlight（Codemagic `6ae3f4b944437a0dc36fa4be`，4 分钟，Delivery UUID `be4e3306-fd12-4d64-a029-97f4d20833ee`）。Windows `0.27.0-dev.31`（31）已构建并装到这台电脑（9:03，`dist/AgentRemote-0.27.0-dev.31-Setup.exe`，SHA256 `255F4D12…`），已发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.31`（三个文件都在）。中转已更新（10-30 09:26，旧文件 `/opt/agent-relay-027/previous-20261030-092624`），`/account` 返回 200。
+检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。0.6.5（23）已传 TestFlight（Codemagic `6ae3f9692b6e549e0afdb87e`，6 分钟，Delivery UUID `996a777c-214f-4650-8f7e-515185c90c4c`）。Windows `0.27.0-dev.31`（31）已构建并装到这台电脑（9:03，`dist/AgentRemote-0.27.0-dev.31-Setup.exe`，SHA256 `255F4D12…`），已发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.31`（三个文件都在）。中转已更新（10-30 09:26，旧文件 `/opt/agent-relay-027/previous-20261030-092624`），`/account` 返回 200。
 
 ### 留给你在真机上验（0.6.5）
 
