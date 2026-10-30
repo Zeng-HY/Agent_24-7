@@ -107,7 +107,7 @@ struct IslandPreviewPage: View {
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).smallBodyFont().foregroundStyle(Palette.ink)
+            Text(LK(title)).smallBodyFont().foregroundStyle(Palette.ink)
             content()
         }
     }

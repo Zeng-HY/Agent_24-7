@@ -52,6 +52,7 @@
 - **iOS 0.6.2**（通知去重和样子，10-28）的代码在 `main`（9e9763f 中转、20906da 手机和扩展、d5f3f06 并发警告、f0d862b 紧凑岛定宽、915b5e2 样子页、5fcf9e5 文档）：一阵子只响一次、普通通知带标题并叠成一摞、岛收起补静默记录、锁屏卡片白底、新建对话也开岛、紧凑岛定宽。本机 187 项 Swift、103 项 Python 通过；云端 #50、#52 只编译通过，Mac 上 187 项通过；#53 截图 6 张。**中转已更新**（10-28 15:21，旧文件在 `/opt/agent-relay-027/previous-20261028-152116`）；**Windows 不改**（标题和 running 已经在 dev.28 里）；**0.6.2（17）已传 TestFlight**（#55，Delivery UUID `8f7b7fc5-238a-4ea6-9a29-b7335f572a08`），待真机验。检查清单见 `apps/ios/README.md` 的 0.6.2 一节。
 - **iOS 0.6.3**（一台电脑一个岛，10-28）的代码在 `main`（48cbe41 中转和电脑、ad06702 手机和扩展、9bf1574 展开边距、45bea5e 手表黑底和文档）：按对话汇总计数、长按列表、锁屏、手表；岛登记补推；电脑轮询加快。本机 189 项 Swift、109 项 Python 通过；#56 编译通过，Mac 上 189 项；#57 截图 6 张。**中转已更新**（10-28 17:41 前后）、**Windows dev.29 已装**；**0.6.3（18）已传 TestFlight**（#58，Delivery UUID `638c72d7-e28b-4e28-a0f6-dd46131f77a5`），待真机验。检查清单见 `apps/ios/README.md` 的 0.6.3 一节。
 - **iOS 0.6.4**（用时准、岛及时、看得到在思考，10-29）的代码在 `main`（e500236 电脑/中转/手机/测试，54fcbdf 文档和示例，d42e6b8 截图修正）：电脑按位置增量读记录、用记录里的开始和结束时间；中转保存起止时间、全部结束时保留刚结束的对话、快照补漏、远程开岛查数据库；岛和会话页显示动作与「正在思考」计时。本机 191 项 Swift、174 项 Python 全过；Codemagic 编译 `6ae338ce3e9be9cf26505d04`、截图 `6ae33cfd8e64ccacf5b3b1ef` 通过。中转已更新（10-29 20:50，旧文件 `/opt/agent-relay-027/previous-20261029-205052`）；Windows `0.27.0-dev.30`（30）已构建、装到这台电脑（20:55），并发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.30`。**0.6.4（19）已传 TestFlight**（Codemagic `6ae3436e79b17edbd333b902`，12 分钟，Delivery UUID `f47e104a-5e30-4d12-8f0b-0298748688db`），待真机验。截图和验收清单见 `apps/ios/README.md` 的 0.6.4 一节。
+- **0.6.5**（岛推送合并不丢、发出去的话不消失、英文版，10-30）的代码在 `main`（6ab9c62，a2832f7 修启动换行，8bf13b6 英文截图）：中转每座岛最多 10 秒一次、合并到最新、20 秒内一定推到；快照只在内容变了时推；列表按最近动作排并带 `more`；手机前台读 `POST /account/push/island-state` 自己补岛；发出去的消息按请求编号/文字加时间留在时间线，记录出现才换；新一轮先空 step；应用和扩展加 `Localizable.xcstrings`、`en.lproj`；中转按手机语言写通知和岛提醒。本机 197 项 Swift、170 项 Python 全过；Codemagic 编译 `6ae3da068946d75adc3c208e` 通过（Mac 197 项）。截图和 0.6.5 验收见 `apps/ios/README.md` 的 0.6.5 一节；中转和 Windows dev.31 等甲上线后更新。
 - **`project.yml`**：`MARKETING_VERSION: "0.6.4"`，`CURRENT_PROJECT_VERSION: "1"`。构建号不用手改：`ci-testflight.sh` 取 TestFlight 上这个版本最新的号加一，每个版本从 1 开始。
 - **安卓**：同样的文件页和通知开关也改了（03ac35a、583f84f），没发。灵动岛不碰 `apps/android`。
 - **Windows**：**0.27.0-dev.30 已构建、装到这台电脑并发布**（10-29 20:55 装，21:07 前后发）：按位置增量读记录、用记录里的开始/结束时间、启动/重连补报 running、60 秒快照和动作；安装包、清单和签名已传阿里云，GitHub 预发布 `windows-v0.27.0-dev.30` 也附了三个文件。`dist/AgentRemote-0.27.0-dev.30-Setup.exe`，SHA256 `DD1A17E4…`。dev.29 是 0.6.3 用的那版（有任务时 2 秒、空闲 5 秒看记录）。
@@ -447,6 +448,14 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 - **进度**：`{"kind":"step","step":"edit|run|search|read"}`，电脑在动作变了才报、同一对话至少 15 秒；中转也守 15 秒，优先级 5、不带提醒。`content-state.step` 和每个 `peers[].step` 是可选字段，老手机解得开。
 - **状态接口**：`/api/<来源>/state`、`/api/chats`（`turn_started`、`turn_ended`、`step`）、`/api/chat`（顶层和每条消息的 `turn_started`/`turn_ended`、`step`）都带本轮时间；单位是 Unix 秒。网页和安卓界面这一步不改。
 - **iPhone**：锁屏卡片半透明（`CardBackground` 68%），浅色、深色都透壁纸；长按和锁屏每个在干活的对话后面有动作图标 + 两个字 + 计时；会话页最下面「正在思考 · 3 分 12 秒」，跑完的折叠条「思考了 3 分 12 秒」，列表行「运行中 · 3 分 12 秒」。计时全用电脑给的本轮开始时间。
+
+**0.6.5：岛的推送合并、不丢，英文版（10-30）**
+
+- **合并队列**：中转每座岛只记一份「要显示的最新内容」，最多每 10 秒推一次；连续变化覆盖前一份，最后一次变化 20 秒内一定推到。`update_island` 返回 `sent` / `queued` / `same` / `gone`，`queued` 不再被当成「已推」。一小时上限 600 是安全阀，超了排队一分钟再试并写 `push:` 日志，不丢。
+- **内容比较**：状态、两个计数、三行 peer（编号、状态、动作、时间）、刚结束对话、`more` 一起算；快照只对账，内容没变不推。最后一个对话结束发一次空快照，之后只在重新连上中转时发。
+- **挑三个**：等你定的最前，然后按 `action_at`（这一轮开始或最近一次 step）排；`content-state.more = 总数 - 列出的行数`。
+- **手机补岛**：`POST /account/push/island-state`（账号 + 电脑编号）返回和推送一样的内容；应用启动和回前台读一次，用 `activity.update` 自己改岛。
+- **英文版**：`Localizable.xcstrings`（应用、扩展各一份），`CFBundleLocalizations` 加 `en`，`en.lproj/InfoPlist.strings`，`ci-testflight.sh` 检查 `en.lproj`。`push_phones.language`、`push_activities.language`、`push_start.language` 决定中转写的通知正文和岛提醒；`Hints.swift` 先按原文映射 20 条电脑提示，其余照旧中文。
 
 **手机的规矩**：
 
