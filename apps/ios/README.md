@@ -19,7 +19,7 @@
 - **`NSSupportsLiveActivitiesFrequentUpdates`**：手机向苹果要「频繁更新」；忙的时候系统会问用户要不要允许更多。
 - 版本 0.6.5。
 
-检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。0.6.5（21）已传 TestFlight（Codemagic `6ae3ee02c6cd057eaef31451`，4 分钟，Delivery UUID `7b4d31f6-487a-44ac-9d43-3a251db68abe`）。Windows `0.27.0-dev.31`（31）已构建并装到这台电脑（9:03，`dist/AgentRemote-0.27.0-dev.31-Setup.exe`，SHA256 `255F4D12…`），还没发布到阿里云/GitHub。中转更新包 `dist/agent-relay-0.27.0-dev.zip`（SHA256 `B9DAB6D8…`）已打好，需要用阿里云 Workbench 上传后执行 `update-027.sh`。
+检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。0.6.5（21）已传 TestFlight（Codemagic `6ae3ee02c6cd057eaef31451`，4 分钟，Delivery UUID `7b4d31f6-487a-44ac-9d43-3a251db68abe`）。Windows `0.27.0-dev.31`（31）已构建并装到这台电脑（9:03，`dist/AgentRemote-0.27.0-dev.31-Setup.exe`，SHA256 `255F4D12…`），已发布到阿里云和 GitHub 预发布 `windows-v0.27.0-dev.31`（三个文件都在）。中转已更新（10-30 09:26，旧文件 `/opt/agent-relay-027/previous-20261030-092624`），`/account` 返回 200。
 
 ### 留给你在真机上验（0.6.5）
 
