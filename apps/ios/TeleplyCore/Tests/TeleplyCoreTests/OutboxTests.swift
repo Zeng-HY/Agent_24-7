@@ -55,6 +55,12 @@ struct OutboxTests {
         #expect(outboxSends([record], messages: [shown], now: now).isEmpty)
     }
 
+    @Test func deepSeeksSixFractionalDigitsDoNotLeaveASecondCopy() {
+        let record = send("Hello", created: 1_793_325_106_000)
+        let shown = user("Hello", at: "2026-10-30T01:51:46.667000+00:00")
+        #expect(outboxSends([record], messages: [shown], now: now).isEmpty)
+    }
+
     @Test func deepSeeksPictureCountDoesNotLeaveASecondCopy() {
         let record = send("看一下这个", created: 1_800_000_000_000)
         let shown = user("看一下这个\n[1 张图片]", at: "2027-01-15T08:00:00Z")

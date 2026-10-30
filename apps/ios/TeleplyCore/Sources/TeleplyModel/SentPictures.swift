@@ -78,9 +78,12 @@ func squeezed(_ text: String) -> String {
 func writtenAt(_ message: Message) -> Double? {
     let text = message.details["time"].string()
     guard !text.isEmpty else { return nil }
+    // DeepSeek writes six fractional digits ("…46.667000+00:00"); ISO8601DateFormatter's fractional seconds take
+    // three. Cut the extra digits, or the time is unreadable and a send never matches its record (10-30).
+    let three = text.replacingOccurrences(of: #"(\.\d{3})\d+"#, with: "$1", options: .regularExpression)
     let reader = ISO8601DateFormatter()
     reader.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = reader.date(from: text) { return date.timeIntervalSince1970 }
+    if let date = reader.date(from: three) { return date.timeIntervalSince1970 }
     reader.formatOptions = [.withInternetDateTime]
-    return reader.date(from: text)?.timeIntervalSince1970
+    return reader.date(from: three)?.timeIntervalSince1970
 }
