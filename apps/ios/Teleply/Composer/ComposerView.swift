@@ -191,7 +191,7 @@ struct ComposerCard: View {
                 VoiceLive(voice: voice)
             } else {
                 if !newPage { AttachmentTiles(workspace: model.workspace, saved: saved) }
-                TextField("", text: $text, selection: $selection, prompt: Text(prompt).foregroundStyle(Palette.muted), axis: .vertical)
+                TextField("", text: $text, selection: $selection, prompt: Text(LK(prompt)).foregroundStyle(Palette.muted), axis: .vertical)
                     .bodyFont()
                     .foregroundStyle(Palette.ink)
                     .tint(Palette.accent)

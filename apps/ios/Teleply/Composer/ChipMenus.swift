@@ -11,7 +11,7 @@ struct ChipLabel: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            Text(text)
+            Text(LK(text))
                 .scaledFont(narrow ? 11 : 12, .medium, relativeTo: .caption)
                 .lineLimit(1)
             Image(systemName: "chevron.down")

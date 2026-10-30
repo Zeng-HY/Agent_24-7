@@ -23,7 +23,7 @@ struct DevicesView: View {
                         .rise(0)
                 }
                 if model.fixture {
-                    Text(L("本地示例 · 固定数据 · 未连接真实服务"))
+                    Text(LK("本地示例 · 固定数据 · 未连接真实服务"))
                         .scaledFont(13, relativeTo: .footnote)
                         .foregroundStyle(AccountPalette.muted)
                         .padding(.top, 8)
@@ -156,7 +156,8 @@ private struct DeviceRow: View {
                 if device.connectable {
                     Circle().fill(AccountPalette.online).frame(width: 7, height: 7)
                 }
-                Text((device.connectable ? L("在线") : L("离线")) + (current ? L(" · 当前") : ""))
+                Text(device.connectable ? LK("在线") : LK("离线"))
+                if current { Text(LK(" · 当前")) }
                     .scaledFont(13, relativeTo: .footnote)
                     .foregroundStyle(AccountPalette.muted)
             }
@@ -170,7 +171,7 @@ private struct DeviceRow: View {
                 if busy {
                     ProgressView().tint(Palette.onPrimary)
                 } else {
-                    Text(online ? L("连接") : L("离线"))
+                    Text(online ? LK("连接") : LK("离线"))
                         .scaledFont(14, .medium, relativeTo: .subheadline)
                         .foregroundStyle(online ? Palette.onPrimary : AccountPalette.muted)
                 }

@@ -137,7 +137,7 @@ struct AccountTextButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(L(title), action: action)
+        Button(LK(title), action: action)
             .scaledFont(14, relativeTo: .subheadline)
             .foregroundStyle(AccountPalette.muted)
             .padding(.horizontal, 12)

@@ -45,7 +45,7 @@ struct LoginView: View {
             BrandHeader()
                 .frame(maxWidth: .infinity)
                 .rise(0)
-            Text(model.fixture ? L("本地示例") : L("登录"))
+            Text(model.fixture ? LK("本地示例") : LK("登录"))
                 .scaledFont(30, .semibold, relativeTo: .largeTitle)
                 .tracking(-0.8)
                 .foregroundStyle(AccountPalette.ink)
@@ -70,7 +70,7 @@ struct LoginView: View {
                 }
             }
             .padding(.top, 30)
-            Button(model.fixture ? L("进入示例") : L("登录"), action: submit)
+            Button(model.fixture ? LK("进入示例") : LK("登录"), action: submit)
                 .buttonStyle(AccountButtonStyle(busy: model.busy && model.screen == .login))
                 .disabled(!ready || model.busy)
                 .padding(.top, 22)

@@ -229,7 +229,7 @@ struct TimelineItem: View, Equatable {
             .padding(.top, first ? 16 : 0)
         case .question(let approval):
             VStack(alignment: .leading, spacing: 4) {
-                Text(approval ? "批准请求" : "问题")
+                Text(approval ? LK("批准请求") : LK("问题"))
                     .captionFont(.medium)
                     .foregroundStyle(Palette.askGo)
                 MarkdownView(source: message.text)
