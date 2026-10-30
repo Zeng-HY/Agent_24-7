@@ -19,7 +19,7 @@
 - **`NSSupportsLiveActivitiesFrequentUpdates`**：手机向苹果要「频繁更新」；忙的时候系统会问用户要不要允许更多。
 - 版本 0.6.5。
 
-检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3da068946d75adc3c208e` 通过（Mac 197 项，2 分钟）；英文截图 `6ae3df70a4cb4b67a4f12e16` 拍出了 02/03/04/08 和 27 的英文锁屏、紧凑、运行中，但英文岛页的标题断言仍写中文（截图本身已出）。之后修了动态文字（`LK` / `LocalizedStringKey`）和岛页标题；准备再编时 Codemagic 返回 `BILLING_NOT_ENABLED`（额度用完，控制台提示打开 billing），所以最后这几次改动**还没在云端编过、也没上传 TestFlight**。中转和 Windows dev.31 等甲上线后更新/构建。
+检查情况：本机 `TeleplyCore` 197 项、Python 170 项全过（新加 300 次变化后 20 秒内落到最新、空快照不推、挑三个和 `more`、英文手机、状态接口账号校验、DeepSeek 每轮时间、Codex 新一轮 step 为空、手机上已接收但记录还没有的那条保留/替换）。云端 `ios-native-check` 编译 `6ae3e61be2705e912f5af296` 通过（Mac 197 项，3 分钟）；英文截图 `6ae3e69ff6e1538efa7774a5` 通过（8 分钟，15 张：02/03/04/08 的英文主页面，27 的英文锁屏浅色/深色、紧凑、运行中列表和会话，另有中文浅色/深色岛）。截图在 `F:\Android-Dev\work\20261029-island-064\shots-065`。中转和 Windows dev.31 等甲上线后更新/构建；TestFlight 0.6.5 还没传。
 
 ### 留给你在真机上验（0.6.5）
 
