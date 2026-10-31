@@ -295,6 +295,14 @@ extension AppModel {
         for track in tracks { await islandUnregister(track) }
     }
 
+    /// 删除账号: every island on this phone ends now, 试一下灵动岛's too, without a word to the relay: it deleted their
+    /// tokens with the account. The app lets go of them first, so their endings ask nothing of it either.
+    func islandEndAllHere() async {
+        island.live.removeAll()
+        island.demo = nil
+        await services.island.endAll()
+    }
+
     private func computerLabel(_ id: String) -> String {
         account?.devices.first(where: { $0.id == id })?.label ?? device?.label ?? "我的电脑"
     }

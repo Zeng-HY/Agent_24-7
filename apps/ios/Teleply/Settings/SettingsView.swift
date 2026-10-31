@@ -4,11 +4,16 @@ import TeleplyModel
 import TeleplyState
 
 /// 设置 (spec 4.6; Android SettingsScreen): a full sheet with deeper pages in it. Only what users set, top to bottom:
-/// 对话 (已归档对话), 外观, 手机通知, 语音输入, the system permissions, 账号, 关于遥应; 开发者选项 at the bottom holds the
-/// service address, the local demo and diagnostics. Without a computer there is no 对话, 手机通知 or 语音输入.
+/// 对话 (已归档对话), 外观, 手机通知, 语音输入, the system permissions, 账号 (with 删除账号), 关于遥应 (with 隐私政策);
+/// 开发者选项 at the bottom holds the service address, the local demo and diagnostics. Without a computer there is no 对话,
+/// 手机通知 or 语音输入.
 struct SettingsView: View {
     let model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var deleting = false
+
+    /// Teleply's privacy policy, on its website (also linked under the web account page).
+    static let privacyPolicy = URL(string: "https://pocketagentdesk.com/privacy")!
 
     var body: some View {
         NavigationStack {
@@ -41,12 +46,16 @@ struct SettingsView: View {
                                 dismiss()
                                 model.logout()
                             }
+                            Button("删除账号", role: .destructive) { deleting = true }
                         }
                     }
                     .listRowBackground(Palette.controlFill)
                 }
                 Section("关于遥应") {
                     LabeledContent("遥应", value: AppVersion.short)
+                    // Inside the app, not in Safari (App Review).
+                    Button("隐私政策") { InAppBrowser.open(Self.privacyPolicy) }
+                        .foregroundStyle(Palette.ink)
                     NavigationLink("开源组件") { LicencesView() }
                 }
                 .listRowBackground(Palette.controlFill)
@@ -64,11 +73,83 @@ struct SettingsView: View {
                     Button(role: .close) { dismiss() }
                 }
             }
+            // Once the account is gone, 设置 makes way for 登录 and its 账号已删除.
+            .sheet(isPresented: $deleting, onDismiss: { if model.account == nil { dismiss() } }) {
+                DeleteAccountSheet(model: model)
+            }
         }
         .tint(Palette.accent)
         .presentationBackground(Palette.page)
         // A new service starts over like a fresh launch (spec 4.6): the sheet makes way for it.
         .onChange(of: model.origin) { dismiss() }
+    }
+}
+
+/// 删除账号 (web account menu → 删除账号; App Review 5.1.1(v)): what goes and what stays, 当前密码, 取消 and 删除, in one
+/// sheet. It stays up with the relay's words when the relay refuses (当前密码错误, 请在 N 秒后重试), keeping what was typed;
+/// once the account is gone it closes, and 登录 says 账号已删除.
+private struct DeleteAccountSheet: View {
+    let model: AppModel
+    @State private var password = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let forms = model.forms
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("账号、关联的邮箱、绑定的电脑和通知设置都会删除，不能恢复。电脑上的文件和对话不受影响。")
+                        .bodyFont()
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    AccountField(label: "当前密码", text: $password, password: true, content: .password, submit: .done, onSubmit: delete)
+                    if let error = forms.deleteError {
+                        Text(LK(error))
+                            .noteFont()
+                            .foregroundStyle(Palette.danger)
+                            .task(id: error) { AccessibilityNotification.Announcement(L(error)).post() }
+                    }
+                    HStack(spacing: 10) {
+                        Button("取消") { dismiss() }
+                            .buttonStyle(PillStyle())
+                            .frame(maxWidth: .infinity)
+                        Button(role: .destructive, action: delete) {
+                            if forms.deleting { ProgressView() } else { Text("删除") }
+                        }
+                        .buttonStyle(PillStyle(kind: .danger))
+                        .frame(maxWidth: .infinity)
+                        .disabled(password.isEmpty || forms.deleting)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .navigationTitle("删除账号？")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { dismiss() }
+                        .disabled(forms.deleting)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Palette.sheet)
+        .interactiveDismissDisabled(forms.deleting)
+        .onAppear { model.forms.deleteError = nil }
+    }
+
+    private func delete() {
+        guard !password.isEmpty, !model.forms.deleting else { return }
+        let typed = password
+        Task {
+            if await model.deleteAccount(password: typed) {
+                password = ""
+                dismiss()
+            }
+        }
     }
 }
 

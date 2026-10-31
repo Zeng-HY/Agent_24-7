@@ -20,7 +20,7 @@ struct RelayReadTests {
         let page = try await client.chatList(device: device, app: "codex", query: "中文 & ?")
         let sent = await transport.log.items
         #expect(sent[0].method == .post)
-        #expect(sent[0].headers["Origin"] == "https://8.166.15.235")
+        #expect(sent[0].headers["Origin"] == "https://app.pocketagentdesk.com")
         #expect(sent[1].url.path == "/d/\(device)/api/chats")
         #expect(sent[1].url.absoluteString.contains("query=%E4%B8%AD%E6%96%87%20%26%20%3F"))
         #expect(sent[1].headers["Cookie"] == "__Host-ar_account=synthetic")

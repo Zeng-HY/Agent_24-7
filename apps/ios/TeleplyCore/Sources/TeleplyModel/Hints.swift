@@ -27,14 +27,31 @@ public enum Hints {
         "对话已变化，请刷新": "The conversation has changed. Refresh and try again.",
         "文件引用无效或不属于当前对话": "This file reference is invalid or doesn’t belong to this conversation.",
         "电脑已离线，请等待上线后再连接": "This computer is offline. Try again when it’s back online.",
+        // The relay's words for 创建账号, 忘记密码 and 删除账号 (relay_identity.py, relay_accounts.py).
+        "请输入有效的邮箱地址": "Enter a valid email address.",
+        "密码须为 12 至 256 个字符": "Passwords must be 12 to 256 characters.",
+        "验证码不对": "That code isn’t right.",
+        "验证码已失效，请重新发送": "This code has expired. Send a new one.",
+        "邮箱已关联账号，请登录": "This email already has an account. Sign in instead.",
+        "当前注册名额已满": "Sign-up is full for now.",
+        "邮箱服务暂未启用": "Email isn’t available on this service yet.",
+        "当前密码错误": "The current password is wrong.",
+        "密码已变化，请重新登录": "The password has changed. Sign in again.",
     ]
 
     public static func text(_ raw: String) -> String {
         guard language.hasPrefix("en") else { return raw }
         if let exact = english[raw] { return exact }
+        if let seconds = wait(raw) { return seconds == 1 ? "Try again in 1 second." : "Try again in \(seconds) seconds." }
         for (zh, en) in english where !zh.isEmpty && raw.hasPrefix(zh) {
             return en + raw.dropFirst(zh.count)
         }
         return raw
+    }
+
+    /// The seconds in the relay's "请在 N 秒后重试" (a request it limits, 429).
+    static func wait(_ raw: String) -> Int? {
+        guard raw.hasPrefix("请在 "), raw.hasSuffix(" 秒后重试") else { return nil }
+        return Int(raw.dropFirst("请在 ".count).dropLast(" 秒后重试".count))
     }
 }

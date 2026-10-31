@@ -4,9 +4,13 @@ import Foundation
 /// serviceOrigin()). The relay accepts exactly one Host and one Origin, so the address is normalised the way
 /// OkHttp does: lower-case host, no default port.
 public struct ServiceOrigin: Sendable, Hashable {
-    /// Teleply's own service (spec 4.8): users never type it. Moves to a domain later (docs/handoff-domain.md).
-    public static let defaultAddress = "https://8.166.15.235"
+    /// Teleply's own service (spec 4.8): users never type it. On its domain since it moved from the IP below
+    /// (docs/handoff-domain.md).
+    public static let defaultAddress = "https://app.pocketagentdesk.com"
     public static let `default` = try! ServiceOrigin(defaultAddress)
+    /// The same service's address before the domain. The relay still answers on it, for the same accounts; a phone
+    /// that used it moves to the domain once, signed in (AppModel.moveToDomain).
+    public static let formerDefault = try! ServiceOrigin("https://8.166.15.235")
 
     /// "https://host[:port]", the exact Origin header the relay expects on every POST.
     public let header: String

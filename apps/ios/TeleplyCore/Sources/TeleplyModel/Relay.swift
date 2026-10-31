@@ -160,7 +160,21 @@ public struct RelayClient: Sendable {
 
     /// POST /account/login; keeps the relay's `__Host-ar_account` from the answer. The password is not kept.
     public func login(name: String, password: String) async throws {
-        let response = try await send(post("/account/login", json: ["name": .string(name), "password": .string(password)]))
+        try keepSignIn(try await send(accountPost("/account/login", ["name": name, "password": password])))
+    }
+
+    /// The relay reads an account request only as a JSON object of strings, of at most 8 KB (relay_service.data).
+    static let accountBodyLimit = 8 * 1024
+
+    /// A POST to an account route; one the relay would refuse as too big is refused here.
+    func accountPost(_ path: String, _ fields: [String: String]) throws -> RelayRequest {
+        let request = try post(path, json: .object(fields.mapValues { .string($0) }))
+        guard (request.body?.count ?? 0) <= Self.accountBodyLimit else { throw ReadFailure("填的内容太长了，请检查后重试。") }
+        return request
+    }
+
+    /// The sign-in from an answer that gives one (登录, and 验证 / 保存密码 with the code), kept for this service.
+    func keepSignIn(_ response: RelayResponse) throws {
         guard let header = response.headers["set-cookie"], let cookie = SessionCookie.fromSetCookie(header, now: now()) else {
             throw ReadFailure("登录响应缺少有效的账号凭据")
         }
@@ -450,25 +464,28 @@ public enum RelayError: Error, Sendable, Equatable {
 
 /// An answer outside 2xx, with the computer's own error text when it gave one (Android ServiceFailure).
 /// [draft] is the text found in Claude's box on the computer when that turned a send away (desktop_draft).
+/// [retryAfter] is the seconds the relay says to wait when it limits a request (429), 0 otherwise.
 public struct ServiceFailure: Error, Sendable, Equatable {
     public let status: Int
     public let code: String
     public let detail: String
     public let notSubmitted: Bool
     public let draft: String
+    public let retryAfter: Int
 
-    public init(status: Int, code: String = "", detail: String = "", notSubmitted: Bool = false, draft: String = "") {
+    public init(status: Int, code: String = "", detail: String = "", notSubmitted: Bool = false, draft: String = "", retryAfter: Int = 0) {
         self.status = status
         self.code = code
         self.detail = detail
         self.notSubmitted = notSubmitted
         self.draft = draft
+        self.retryAfter = retryAfter
     }
 
     public init(status: Int, body: Data) {
         let error = (try? JSONValue.parse(body)) ?? .null
         self.init(status: status, code: error["code"].string(), detail: error["error"].string(),
-                  notSubmitted: error["not_submitted"].bool(), draft: error["draft"].string())
+                  notSubmitted: error["not_submitted"].bool(), draft: error["draft"].string(), retryAfter: max(0, error["retry_after"].int()))
     }
 
     public var message: String {

@@ -70,7 +70,7 @@ struct DevicesView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 28)
                 }
-                AccountMessage(text: model.error, error: true)
+                AccountMessage(text: model.error ?? model.forms.said, error: model.error != nil)
             }
             .frame(maxWidth: 440)
             .padding(.horizontal, 24)

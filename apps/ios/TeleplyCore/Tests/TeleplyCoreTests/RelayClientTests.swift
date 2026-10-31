@@ -10,7 +10,7 @@ struct RelayClientTests {
         let sent = await transport.log.items
         #expect(sent.count == 1)
         #expect(sent.first?.method == .get)
-        #expect(sent.first?.url.absoluteString == "https://8.166.15.235/account/config")
+        #expect(sent.first?.url.absoluteString == "https://app.pocketagentdesk.com/account/config")
         #expect(sent.first?.headers == ["Accept": "application/json"])
         #expect(sent.first?.body == nil)
         #expect(sent.first?.deadline == 40)
@@ -20,7 +20,7 @@ struct RelayClientTests {
         let client = RelayClient(origin: .default, transport: RecordingTransport { _ in .json("{}") })
         let request = try client.post("/account/select", json: ["id": "0123456789abcdef0123456789abcdef"])
         #expect(request.method == .post)
-        #expect(request.headers["Origin"] == "https://8.166.15.235")
+        #expect(request.headers["Origin"] == "https://app.pocketagentdesk.com")
         #expect(request.headers["Accept"] == "application/json")
         #expect(request.headers["Content-Type"] == "application/json; charset=utf-8")
         let body = try JSONValue.parse(try #require(request.body))

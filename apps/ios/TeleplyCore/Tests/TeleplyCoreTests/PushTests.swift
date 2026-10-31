@@ -198,7 +198,8 @@ struct PushFlowTests {
         push.allowed = .allowed
         let model = await signedIn(world, push: push)
         model.pushToken(token)  // iOS answers the launch's request
-        for _ in 0..<100 where tokens(world).isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
+        // The service keeps the token a moment before the answer reaches the model: wait for both.
+        for _ in 0..<100 where tokens(world).isEmpty || model.push.phase != .on { try? await Task.sleep(for: .milliseconds(20)) }
         #expect(tokens(world) == [token])
         #expect(model.push.phase == .on)
     }

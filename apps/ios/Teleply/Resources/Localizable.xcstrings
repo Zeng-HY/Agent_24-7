@@ -941,6 +941,16 @@
         }
       }
     },
+    "保存密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Password"
+          }
+        }
+      }
+    },
     "修改答案": {
       "localizations": {
         "en": {
@@ -1321,6 +1331,26 @@
         }
       }
     },
+    "删除账号": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Account"
+          }
+        }
+      }
+    },
+    "删除账号？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Account?"
+          }
+        }
+      }
+    },
     "删除这 %lld 个对话？": {
       "localizations": {
         "en": {
@@ -1527,6 +1557,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Send and Queue"
+          }
+        }
+      }
+    },
+    "发送验证码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Code"
           }
         }
       }
@@ -1811,6 +1851,16 @@
         }
       }
     },
+    "填的内容太长了，请检查后重试。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That's too long. Check it and try again."
+          }
+        }
+      }
+    },
     "处理结果待核对": {
       "localizations": {
         "en": {
@@ -2067,6 +2117,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Password"
+          }
+        }
+      }
+    },
+    "密码已更新": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password updated."
+          }
+        }
+      }
+    },
+    "密码（至少 12 位）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password (at least 12 characters)"
           }
         }
       }
@@ -2601,6 +2671,16 @@
         }
       }
     },
+    "已重新发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent again."
+          }
+        }
+      }
+    },
     "常用提示语": {
       "localizations": {
         "en": {
@@ -2697,6 +2777,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "The conversation changed, so attachments weren't restored."
+          }
+        }
+      }
+    },
+    "当前密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current Password"
           }
         }
       }
@@ -2837,6 +2927,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pending Confirmation"
+          }
+        }
+      }
+    },
+    "忘记密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forgot Password"
           }
         }
       }
@@ -3617,6 +3717,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Added line %lld: "
+          }
+        }
+      }
+    },
+    "新密码（至少 12 位）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Password (at least 12 characters)"
           }
         }
       }
@@ -5231,6 +5341,16 @@
         }
       }
     },
+    "注册": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign Up"
+          }
+        }
+      }
+    },
     "浅色": {
       "localizations": {
         "en": {
@@ -6481,6 +6601,16 @@
         }
       }
     },
+    "请查收邮件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check your email."
+          }
+        }
+      }
+    },
     "请查看这些图片。": {
       "localizations": {
         "en": {
@@ -6531,6 +6661,16 @@
         }
       }
     },
+    "请输入当前密码。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter your current password."
+          }
+        }
+      }
+    },
     "请输入电脑名称。": {
       "localizations": {
         "en": {
@@ -6557,6 +6697,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Enter your account and password."
+          }
+        }
+      }
+    },
+    "请输入邮件里的 6 位验证码。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the 6-digit code from the email."
           }
         }
       }
@@ -6651,12 +6801,32 @@
         }
       }
     },
+    "账号、关联的邮箱、绑定的电脑和通知设置都会删除，不能恢复。电脑上的文件和对话不受影响。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account, its linked email, bound computers and notification settings will all be deleted. This can't be undone. Files and conversations on your computers aren't affected."
+          }
+        }
+      }
+    },
     "账号与电脑": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Account & Computers"
+          }
+        }
+      }
+    },
+    "账号已删除": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deleted."
           }
         }
       }
@@ -6747,6 +6917,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Message"
+          }
+        }
+      }
+    },
+    "输入验证码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter Code"
           }
         }
       }
@@ -7321,6 +7501,16 @@
         }
       }
     },
+    "邮箱": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email"
+          }
+        }
+      }
+    },
     "邮箱或账号": {
       "localizations": {
         "en": {
@@ -7351,12 +7541,42 @@
         }
       }
     },
+    "重新发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resend"
+          }
+        }
+      }
+    },
+    "重新发送（%lld）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resend (%lld)"
+          }
+        }
+      }
+    },
     "重新读取": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Reload"
+          }
+        }
+      }
+    },
+    "重置密码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Password"
           }
         }
       }
@@ -7417,6 +7637,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Attachments and settings are still being restored. Please wait."
+          }
+        }
+      }
+    },
+    "隐私政策": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy Policy"
           }
         }
       }
@@ -7577,6 +7807,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Reading projects on your computer for the first time…"
+          }
+        }
+      }
+    },
+    "验证": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify"
+          }
+        }
+      }
+    },
+    "验证码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification Code"
+          }
+        }
+      }
+    },
+    "验证码已发送": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code sent."
           }
         }
       }

@@ -3,6 +3,7 @@ import Foundation
 /// Where the app stood last (Android Preferences): the service, the sign-in scope, the computer, the
 /// conversation and its title, the source in use, and the appearance.
 public struct Place: Codable, Sendable, Equatable {
+    /// "" for Teleply's own service, whatever its address is now.
     public var origin = ""
     public var theme = "system"
     public var scope = ""
@@ -10,6 +11,9 @@ public struct Place: Codable, Sendable, Equatable {
     public var chat = ""
     public var title = ""
     public var app = "codex"
+    /// The default service's move from its IP to its domain was done on this phone (AppModel.moveToDomain), so an
+    /// address set by hand afterwards, the IP included, stays.
+    public var movedToDomain = false
 
     public init() {}
 
@@ -23,6 +27,7 @@ public struct Place: Codable, Sendable, Equatable {
         chat = try fields.decodeIfPresent(String.self, forKey: .chat) ?? ""
         title = try fields.decodeIfPresent(String.self, forKey: .title) ?? ""
         app = try fields.decodeIfPresent(String.self, forKey: .app) ?? "codex"
+        movedToDomain = try fields.decodeIfPresent(Bool.self, forKey: .movedToDomain) ?? false
     }
 }
 
@@ -105,6 +110,9 @@ public struct ChatRecord: Codable, Sendable, Equatable {
 public actor LocalStore {
     private let folder: URL
     private var cache: [String: ChatRecord] = [:]
+    /// Sign-ins whose records were deleted in this run of the app (删除账号): a write that comes late for one (a draft
+    /// typed a moment before, a send's receipt, a new conversation's job) is dropped, so nothing of it comes back.
+    private var forgotten: Set<String> = []
 
     public init(folder: URL) {
         self.folder = folder
@@ -118,6 +126,15 @@ public actor LocalStore {
 
     public func savePlace(_ place: Place) {
         write(place, to: url("place.json"))
+    }
+
+    /// The move to the domain is done (AppModel.moveToDomain): [origin] is the address from now on, "" for the
+    /// default. Unlike another service, the place stays: the same accounts and computers answer on both addresses.
+    public func setMovedToDomain(origin: String) {
+        var place = place()
+        place.origin = origin
+        place.movedToDomain = true
+        savePlace(place)
     }
 
     /// Another service starts with no place: the saved computer and conversation belong to the old one.
@@ -166,6 +183,7 @@ public actor LocalStore {
     }
 
     public func update(scope: String, device: String, app: String, chat: String, _ change: @Sendable (inout ChatRecord) -> Void) {
+        guard !forgotten.contains(scope) else { return }
         let key = Self.recordName(scope: scope, device: device, app: app, chat: chat)
         var record = record(scope: scope, device: device, app: app, chat: chat)
         change(&record)
@@ -179,6 +197,20 @@ public actor LocalStore {
 
     public func setDetail(scope: String, device: String, app: String, chat: String, kind: String, value: String?) {
         update(scope: scope, device: device, app: app, chat: chat) { $0.details[kind] = value }
+    }
+
+    /// 删除账号: every record of one sign-in leaves this phone — drafts, sends, and each conversation's details (the
+    /// computers' cached sources and lists, settings, new conversations under way), those moved aside as unreadable
+    /// too — and later writes for it are dropped. Other sign-ins' records stay.
+    public func forget(scope: String) {
+        guard !scope.isEmpty else { return }
+        forgotten.insert(scope)
+        cache = cache.filter { Self.recordParts($0.key)?.first != scope }
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: url("chats").path) else { return }
+        // A record moved aside carries a second extension after its name.
+        for name in names where Self.recordParts(String(name.prefix { $0 != "." }))?.first == scope {
+            try? FileManager.default.removeItem(at: url("chats/" + name))
+        }
     }
 
     // MARK: Drafts and sends (spec B01, B03, B10)

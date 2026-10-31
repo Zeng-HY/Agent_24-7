@@ -25,7 +25,7 @@ struct AccountField: View {
         let lifted = focused || !text.isEmpty
         let lit = focused && scheme == .light
         ZStack(alignment: .topLeading) {
-            Text(label)
+            Text(LK(label))
                 .scaledFont(16, relativeTo: .body)
                 .foregroundStyle(focused ? AccountPalette.ink : AccountPalette.muted)
                 .scaleEffect(lifted ? 0.75 : 1, anchor: .topLeading)
@@ -84,7 +84,7 @@ struct AccountField: View {
         .textContentType(content)
         .submitLabel(submit)
         .onSubmit(onSubmit)
-        .accessibilityLabel(Text(label))
+        .accessibilityLabel(Text(LK(label)))
     }
 }
 
@@ -146,7 +146,8 @@ struct AccountTextButton: View {
     }
 }
 
-/// The line under a page (web #message): errors in red; a change comes up out of a blur.
+/// The line under a page (web #message): errors in red; a change comes up out of a blur. The app's own lines are
+/// looked up in the string catalog; the relay's words come translated already (Hints) or as they are.
 struct AccountMessage: View {
     let text: String?
     let error: Bool
@@ -156,7 +157,7 @@ struct AccountMessage: View {
     var body: some View {
         if let text, !text.isEmpty {
             VStack(spacing: 0) {
-                Text(text)
+                Text(LK(text))
                     .scaledFont(14, relativeTo: .subheadline, lineHeight: 1.7)
                     .foregroundStyle(error ? AccountPalette.danger : AccountPalette.muted)
                     .multilineTextAlignment(.center)
@@ -168,7 +169,7 @@ struct AccountMessage: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 24)
             .rise(0, key: text)
-            .task(id: text) { AccessibilityNotification.Announcement(text).post() }
+            .task(id: text) { AccessibilityNotification.Announcement(L(text)).post() }
         }
     }
 }

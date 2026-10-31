@@ -119,9 +119,16 @@ extension AppModel {
     /// 退出登录: the service forgets this phone for the account first, while the sign-in still works.
     func pushSignOut() async {
         guard services.push.wanted() else { return }
+        pushForget()
+        if let token = push.token { try? await client.pushUnregister(token: token) }
+    }
+
+    /// This phone's own half of signing out: 遥应通知 is no longer wanted here. After 删除账号 it is all there is to do:
+    /// the relay deleted the account's phones and islands with it, and has no sign-in left to ask with.
+    func pushForget() {
+        guard services.push.wanted() else { return }
         services.push.setWanted(false)
         push.phase = .off
-        if let token = push.token { try? await client.pushUnregister(token: token) }
     }
 
     // MARK: A tapped notification

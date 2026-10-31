@@ -1,8 +1,8 @@
 #!/bin/bash
 # ios-native-check. "compile" (default): TeleplyCore tests plus a simulator build, to catch compile errors fast.
 # "shots": the same, then the screenshot tour on each simulator runtime in SHOT_RUNTIMES (default iOS 26.5;
-# add iOS-27-1 at the end of a phase). Pictures land in build/shots.zip. A failed test does not wait for the
-# simulator's diagnostics (they took 10 minutes in build 6adede40).
+# add iOS-27-1 at the end of a phase) on a 6.9-inch iPhone, the size App Store Connect asks for. Pictures land in
+# build/shots.zip. A failed test does not wait for the simulator's diagnostics (they took 10 minutes in build 6adede40).
 set -euo pipefail
 source "$(dirname "$0")/ci-common.sh"
 
@@ -10,7 +10,9 @@ MODE="${1:-compile}"
 # iOS 26.5 by default: on this Xcode 27.1 image the 27.1 runtime only supports the foldable iPhone Duo, whose
 # side column moves the navigation bar (builds 6aded501, 6adeda5d). Add iOS-27-1 at the end of a phase.
 RUNTIMES="${SHOT_RUNTIMES:-iOS-26-5}"
-DEVICE="${SHOT_DEVICE:-iPhone 17}"
+# The iPhone 17 Pro Max (6.9 inch, 1320 x 2868) by default: App Store screenshots must come from a 6.9-inch phone.
+# Where a runtime has none, pick_device takes another Pro Max, then an ordinary phone with a warning.
+DEVICE="${SHOT_DEVICE:-iPhone 17 Pro Max}"
 # SHOT_ONLY: some of the tour's variants, e.g. "testLight testLargestText", to save build minutes after a small fix.
 ONLY=()
 for test in ${SHOT_ONLY:-}; do ONLY+=("-only-testing:TeleplyUITests/ScreenshotTour/$test"); done
@@ -50,8 +52,9 @@ pack_results() {
 }
 trap pack_results EXIT
 
-# The UDID of an available iPhone simulator on runtime $1: one the machine already has (preferring
-# $DEVICE), else a new one of a device type that runtime says it supports. Build #4 showed that a fixed
+# The UDID of an available iPhone simulator on runtime $1, in this order: $DEVICE as the machine has it, or made
+# new when the runtime supports it; another 6.9-inch phone (a Pro Max, newest first), had or made; else, as before,
+# an ordinary phone with a warning that the pictures are not the App Store size. Build #4 showed that a fixed
 # "iPhone 17" is refused on iOS 27.1 ("Incompatible device").
 pick_device() {
   python3 - "$1" "$DEVICE" <<'PY'
@@ -66,27 +69,45 @@ def rank(name):
     plain = re.fullmatch(r"iPhone (\d+)", name)
     if plain: return (0, -int(plain.group(1)))
     return (2, 0) if re.search(r"Duo|Fold", name) else (1, 0)
+# A 6.9-inch phone, whose screenshots App Store Connect takes: a Pro Max, newest number first.
+def pro_max(name):
+    found = re.fullmatch(r"iPhone (\d+) Pro Max", name)
+    return -int(found.group(1)) if found else None
 phones = sorted((d for d in simctl("devices", "available")["devices"].get(runtime_id, []) if d["name"].startswith("iPhone")), key=lambda d: rank(d["name"]))
 sys.stderr.write("iPhone simulators on %s: %s\n" % (key, ", ".join(d["name"] for d in phones)))
 runtimes = simctl("runtimes")["runtimes"]
 types = next((r.get("supportedDeviceTypes", []) for r in runtimes if r["identifier"] == runtime_id), [])
 kinds = sorted((t for t in types if t["name"].startswith("iPhone")), key=lambda t: rank(t["name"]))
-# An existing plain phone is used as it is. When the machine only has a foldable for this runtime (build
-# 6aded501: just "iPhone Duo" on 27.1, which moves the navigation bar into a side column), a plain one is
-# made below if the runtime supports any.
 sys.stderr.write("iPhone types %s supports: %s\n" % (key, ", ".join(t["name"] for t in kinds)))
+def use(device, why):
+    sys.stderr.write("Using simulator %s (%s) on %s: %s\n" % (device["name"], device["udid"], key, why))
+    print(device["udid"])
+    sys.exit(0)
+def make(kind, why):
+    sys.stderr.write("Creating simulator %s on %s: %s\n" % (kind["name"], key, why))
+    print(subprocess.check_output(["xcrun", "simctl", "create", "shots-" + key, kind["identifier"], runtime_id]).decode().strip())
+    sys.exit(0)
+# 1. The preferred phone, had or made.
+for device in phones:
+    if device["name"] == preferred: use(device, "the preferred phone")
+for kind in kinds:
+    if kind["name"] == preferred: make(kind, "the preferred phone")
+# 2. Another 6.9-inch phone, had or made.
+bigger = sorted((d for d in phones if pro_max(d["name"]) is not None), key=lambda d: pro_max(d["name"]))
+if bigger: use(bigger[0], preferred + " is missing; another 6.9-inch phone")
+bigger_kinds = sorted((t for t in kinds if pro_max(t["name"]) is not None), key=lambda t: pro_max(t["name"]))
+if bigger_kinds: make(bigger_kinds[0], preferred + " is missing; another 6.9-inch phone")
+# 3. An ordinary phone, as before. An existing plain phone is used as it is. When the machine only has a foldable
+# for this runtime (build 6aded501: just "iPhone Duo" on 27.1, which moves the navigation bar into a side column),
+# a plain one is made below if the runtime supports any.
+sys.stderr.write("WARNING: no 6.9-inch iPhone on %s; these screenshots are not the size App Store Connect asks for\n" % key)
 plain_kind = next((t for t in kinds if rank(t["name"])[0] < 2), None)
 if phones and (rank(phones[0]["name"])[0] < 2 or plain_kind is None):
-    choice = next((d for d in phones if d["name"] == preferred), phones[0])
-    sys.stderr.write("Using simulator %s (%s) on %s\n" % (choice["name"], choice["udid"], key))
-    print(choice["udid"])
-    sys.exit(0)
+    use(phones[0], "fallback")
 if not kinds:
     sys.stderr.write("No iPhone simulator for %s. Runtimes here: %s\n" % (runtime_id, ", ".join(r["identifier"] for r in runtimes)))
     sys.exit(1)
-kind = next((t for t in kinds if t["name"] == preferred), kinds[0])
-sys.stderr.write("Creating simulator %s on %s (supported: %s)\n" % (kind["name"], key, ", ".join(t["name"] for t in kinds)))
-print(subprocess.check_output(["xcrun", "simctl", "create", "shots-" + key, kind["identifier"], runtime_id]).decode().strip())
+make(kinds[0], "fallback")
 PY
 }
 

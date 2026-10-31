@@ -1,5 +1,5 @@
-/// GET /account/config: the relay's version and whether it sends email (sign-up and password resets open
-/// in the browser only then, spec 4.8).
+/// GET /account/config: the relay's version and whether it sends email (登录 offers 创建账号 and 忘记密码 only
+/// then, spec 4.8).
 public struct AccountConfig: Sendable, Equatable {
     public var version: String
     public var emailEnabled: Bool

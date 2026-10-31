@@ -164,6 +164,8 @@ public final class AppModel {
     public let push = PushModel()
     /// 灵动岛 on this phone (AppModel+Island).
     public let island = IslandModel()
+    /// 登录's other forms and 删除账号 (AppModel+Account).
+    public let forms = AccountForms()
 
     @ObservationIgnored let services: AppServices
     @ObservationIgnored var client: RelayClient
@@ -232,13 +234,14 @@ public final class AppModel {
     // MARK: Operations
 
     /// Runs one user action; a newer one cancels it. Errors become the page's message; a 401 goes to 登录 with
-    /// the place kept.
+    /// the place kept. What the page said before goes as it starts.
     func operation(_ block: @escaping (Int) async throws -> Void) {
         work?.cancel()
         generation += 1
         let g = generation
         busy = true
         error = nil
+        forms.said = nil
         work = Task { [weak self] in
             do {
                 try await block(g)
@@ -309,6 +312,7 @@ public final class AppModel {
         pendingNew = nil
         jobSheet = nil
         undo = nil
+        forms.reset()
         clearReading()
     }
 
@@ -347,6 +351,7 @@ public final class AppModel {
     }
 
     func begin(_ g: Int) async throws {
+        await moveToDomain()
         let place = await services.store.place()
         guard current(g) else { return }
         pendingRestore = place
@@ -359,6 +364,31 @@ public final class AppModel {
         screen = .launch
         useClient(RelayClient(origin: origin, transport: services.transport, vault: services.vault))
         try await restore(g)
+    }
+
+    /// Teleply's own service moved from its IP to its domain (docs/handoff-domain.md), and the relay answers on both
+    /// for the same accounts. Once on each phone: one on the IP (saved, or nothing saved while the IP was the default)
+    /// goes to the default again, and its sign-in moves from the IP's keychain entry to the domain's, so nobody signs
+    /// in again. The place, drafts and records stay: they belong to the sign-in, not the address, and push and island
+    /// tokens belong to the account on the relay. A keychain that cannot be read now (locked since the phone started)
+    /// leaves the move for the next launch. Once done, an address set by hand under 开发者选项, the IP too, stays.
+    func moveToDomain() async {
+        let place = await services.store.place()
+        guard !place.movedToDomain else { return }
+        let former = ServiceOrigin.formerDefault, next = services.defaultOrigin
+        let onFormer = place.origin.isEmpty || (try? ServiceOrigin(place.origin)) == former
+        if onFormer, next != former {
+            do {
+                if let cookie = try services.vault.read(former.key) {
+                    // A sign-in the domain has already (tried there by hand) is the newer one.
+                    if try services.vault.read(next.key) == nil { try services.vault.write(next.key, cookie) }
+                    try services.vault.write(former.key, nil)
+                }
+            } catch {
+                return
+            }
+        }
+        await services.store.setMovedToDomain(origin: onFormer ? "" : place.origin)
     }
 
     /// Where the app stands at launch (web account page): not signed in → 登录; signed in → the computer used last
@@ -430,8 +460,15 @@ public final class AppModel {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !password.isEmpty else { throw ReadFailure("请输入账号与密码。") }
         try await client.login(name: name, password: password)
+        try await signedIn(g)
+    }
+
+    /// The relay gave a sign-in (登录, or 验证 and 保存密码 with the emailed code): back where the app was when the same
+    /// account came back after its sign-in ran out, otherwise 我的电脑.
+    func signedIn(_ g: Int) async throws {
         let account = try await client.account()
         guard current(g) else { return }
+        forms.reset()
         // A computer id belongs to exactly one account: the same computer means the same account came back.
         let previousDevice = device, previousChat = chat
         let sameOwner = expired && previousDevice != nil && account.devices.contains { $0.id == previousDevice?.id }
