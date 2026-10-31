@@ -269,3 +269,33 @@ class Identity(Accounts):
         with self.connect() as db:
             row=db.execute('SELECT email FROM account_emails WHERE owner=?',(self.owner(token),)).fetchone()
             return row['email'] if row else ''
+
+    def delete_account(self, token, password):
+        """删除账号: the signed-in account and all that is kept for it (sign-ins, email and its codes, its computers'
+        access and traffic counts, the phones its notices go to), once the password is given again. Returns the ids of
+        its computers, whose connections the caller closes. A computer's row stays, emptied and revoked: bind() numbers
+        old FRP routes by the rows there are and must never hand one out twice."""
+        owner=self.owner(token)
+        if not owner: raise ValueError('请重新登录')
+        self.rate('delete:'+owner)
+        with self.connect() as db:
+            row=db.execute('SELECT password FROM users WHERE id=?',(owner,)).fetchone()
+        if not row or not password_matches(password,row['password']): raise ValueError('当前密码错误')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if not db.execute('DELETE FROM users WHERE id=? AND password=?',(owner,row['password'])).rowcount:
+                raise ValueError('密码已变化，请重新登录')
+            email=db.execute('SELECT email FROM account_emails WHERE owner=?',(owner,)).fetchone()
+            if email:
+                db.execute('DELETE FROM email_grants WHERE email=?',(email['email'],))
+                db.execute('DELETE FROM email_pins WHERE email=?',(email['email'],))
+            for table in ('sessions','grants','email_grants','account_emails',
+                          'push_phones','push_activities','push_conversations','push_start'):
+                db.execute(f'DELETE FROM {table} WHERE owner=?',(owner,))
+            devices=[r['id'] for r in db.execute('SELECT id FROM devices WHERE owner=?',(owner,))]
+            for device in devices:
+                db.execute('DELETE FROM device_channels WHERE id=?',(device,))
+                db.execute('DELETE FROM device_authorizations WHERE device=?',(device,))
+                db.execute('DELETE FROM usage WHERE device=?',(device,))
+                db.execute("UPDATE devices SET owner='',label='',gateway_secret='',tunnel_secret='',revoked=1 WHERE id=?",(device,))
+        return devices

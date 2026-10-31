@@ -244,6 +244,44 @@ class V2Tests(unittest.IsolatedAsyncioTestCase):
         finally:
             await asyncio.to_thread(gateway.shutdown);gateway.server_close();thread.join()
 
+    async def test_answers_on_its_other_address_held_to_the_one_each_request_came_in_on(self):
+        port=self.origin.rsplit(':',1)[1];other='http://localhost:'+port;signed={'Cookie':COOKIE+'='+self.tokens[0]}
+        self.service.aliases={'localhost:'+port:other}
+        async with self.client.get(self.origin+'/account/state',headers={**signed,'Host':'localhost:'+port}) as r:
+            self.assertEqual(r.status,200)
+        async with self.client.post(self.origin+'/account/rename',headers={**signed,'Host':'localhost:'+port,'Origin':other},
+                                    json={'id':self.devices[0],'label':'书房'}) as r:self.assertEqual(r.status,200)
+        async with self.client.post(self.origin+'/account/rename',headers={**signed,'Host':'localhost:'+port,'Origin':self.origin},
+                                    json={'id':self.devices[0],'label':'别处'}) as r:self.assertEqual(r.status,403)
+        async with self.client.get(self.origin+'/account',headers={'Host':'elsewhere.test'}) as r:self.assertEqual(r.status,421)
+        async with self.client.post(self.origin+'/device-auth/start',headers={'Host':'localhost:'+port,'Origin':other,
+                                    'Authorization':'Bearer '+'c'*43},json={'label':'新电脑'}) as r:
+            self.assertTrue((await r.json())['url'].startswith(other+'/account?authorize='))
+
+    async def test_old_frp_computers_keep_getting_the_address_they_were_enrolled_with(self):
+        self.service.legacy_origin='https://8.166.15.235'
+        row=self.store.bind(self.store.grant('bind',self.store.owner(self.tokens[0])),'Legacy','alice')
+        path=Path(self.tmp.name)/'legacy.json';path.write_text(json.dumps(row))
+        gateway=DeviceGateway(0,'https://8.166.15.235',path,self.local_ports[0],'local-0')
+        thread=threading.Thread(target=gateway.serve_forever,daemon=True);thread.start()
+        with self.store.connect() as db:db.execute('UPDATE devices SET port=? WHERE id=?',(gateway.server_port,row['id']))
+        try:
+            async with self.client.get(self.origin+'/d/'+row['id']+'/api/status',headers=self.headers()) as r:
+                self.assertEqual(r.status,200);self.assertEqual(await r.text(),'private-0')
+        finally:
+            await asyncio.to_thread(gateway.shutdown);gateway.server_close();thread.join()
+
+    async def test_deleting_the_account_signs_out_and_cuts_off_its_computers(self):
+        async with self.client.post(self.origin+'/account/delete',headers=self.headers(),json={'password':'not-the-password'}) as r:
+            self.assertEqual(r.status,400)
+        async with self.client.post(self.origin+'/account/delete',headers=self.headers(),json={'password':'password-for-alice'}) as r:
+            self.assertEqual(r.status,200);self.assertIn('Max-Age=0',r.headers['Set-Cookie'])
+        self.assertNotIn(self.devices[0],self.service.hub.connections)
+        async with self.client.get(self.origin+'/account/state',headers=self.headers()) as r:self.assertEqual(r.status,401)
+        with self.assertRaises(ValueError):await asyncio.to_thread(self.store.login,'alice','password-for-alice')
+        async with self.client.get(self.origin+'/account/state',headers=self.headers(1)) as r:
+            self.assertEqual(r.status,200);self.assertEqual(len((await r.json())['devices']),1)
+
     async def test_verified_tls_stream_and_untrusted_certificate_rejection(self):
         openssl=shutil.which('openssl') or 'C:/Program Files/Git/usr/bin/openssl.exe'
         if not Path(openssl).is_file():self.skipTest('OpenSSL unavailable')

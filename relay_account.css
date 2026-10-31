@@ -37,3 +37,7 @@ body:has(#signed:not([hidden])) .mark{width:36px;height:36px}
 @media(max-width:360px){body:has(#signed:not([hidden])){padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}body:has(#signed:not([hidden])) .brand{font-size:24px}}
 
 html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:focus,html[data-input="pointer"] dialog:focus{outline:none!important}html[data-input="pointer"] .tree-row:focus,html[data-input="pointer"] .tree-add:focus{box-shadow:none!important}
+
+/* 删除账号 in the account menu and its confirm button; the footer every public page carries (隐私政策, ICP number). */
+.action-menu button.danger,.dialog-actions .primary.danger{color:var(--danger)}.dialog-actions .primary.danger{background:var(--soft)}:root[data-theme=dark] .dialog-actions .primary.danger{background:#351d20;color:#ff9a9a;border-color:#bb7777}
+.site-foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;margin:40px 0 0;font-size:12px;line-height:1.6}.site-foot a{color:var(--muted);text-decoration:none}.site-foot a:hover{color:var(--ink)}

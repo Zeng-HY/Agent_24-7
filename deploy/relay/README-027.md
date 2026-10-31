@@ -62,6 +62,25 @@ sudo /opt/agent-relay-027/.venv/bin/python /home/admin/agent-relay-027-new/confi
 
 关掉：`sudo rm /etc/systemd/system/agent-relay-027.service.d/push.conf`，再 `sudo systemctl daemon-reload` 和 `sudo systemctl restart agent-relay-027.service`。手机登记的令牌留在数据库里，不影响别的功能。
 
+## 换用域名 pocketagentdesk.com
+
+先在阿里云云解析里把 `app`、`@`、`www` 三条 A 记录指向 `8.166.15.235`，再照下面“更新服务器”装好新包（只换代码，中转仍然只认 IP）。然后：
+
+```bash
+sudo python3 /home/admin/agent-relay-027-new/switch-domain.py --check
+sudo python3 /home/admin/agent-relay-027-new/switch-domain.py
+```
+
+第一行只检查，不改动。第二行做这些事，有一步不通过就自动换回：
+
+- 给 Caddy 加上 `app.pocketagentdesk.com`（中转）和 `pocketagentdesk.com`、`www`（网站，装到 `/var/www/pocketagentdesk`），去掉全局的 `auto_https off`，域名的证书由 Caddy 自己申请，http 自动转到 https。IP 站点和它的 Certbot 证书照旧。
+- Caddy 从此占用 80 端口。Certbot 续 IP 证书时不再自己占 80，改在 `127.0.0.1:18402` 等着，由 Caddy 把 IP 的验证请求转过去（续期设置里加了 `http01_port`、`http01_address`）。切换时先试运行一次续期，不通过就全部换回。
+- 加 systemd 附加设置 `agent-relay-027.service.d/domain.conf`，让中转以域名为主地址、同时认 IP。旧版 App、旧电脑端、旧 FRP 电脑照常走 IP。
+
+以后检查 IP 证书续期，照旧运行 `sudo certbot renew --cert-name 8.166.15.235 --dry-run`。
+
+退回：`sudo python3 /home/admin/agent-relay-027-new/switch-domain.py --rollback`（Caddyfile、Certbot 续期设置、中转附加设置都换回原样）。
+
 ## 更新服务器
 
 在电脑的源码目录运行 `python deploy/relay/pack-027.py`，把生成的 `dist/agent-relay-0.27.0-dev.zip` 上传到 `/home/admin/`，然后：

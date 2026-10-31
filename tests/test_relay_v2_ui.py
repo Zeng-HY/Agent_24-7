@@ -144,4 +144,52 @@ class UI(unittest.TestCase):
                 loop.call_soon_threadsafe(loop.stop);thread.join();loop.close()
 
 
+    def test_deleting_the_account_asks_for_the_password_and_lands_on_login(self):
+        """删除账号 in the account menu (App Store 5.1.1(v)): the password again, then nothing of it is left; every page
+        carries the footer with 隐私政策."""
+        with tempfile.TemporaryDirectory() as temp:
+            store=Identity(Path(temp)/'state.db');mail=Mail()
+            store.register('alice','password-for-alice',store.grant('invite'))
+            store.approve(store.login('alice','password-for-alice'),store.start_authorization('x'*43,'测试电脑'))
+            service=Service('https://relay.test',store,mail)
+            loop=asyncio.new_event_loop();runner=web.AppRunner(service.app,access_log=None)
+            async def start():
+                await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+                return site._server.sockets[0].getsockname()[1]
+            thread=threading.Thread(target=loop.run_forever,daemon=True);thread.start()
+            port=asyncio.run_coroutine_threadsafe(start(),loop).result()
+            try:
+                with sync_playwright() as pw:
+                    browser=pw.chromium.launch(channel='chrome',headless=True)
+                    page=browser.new_context(viewport={'width':320,'height':568}).new_page();errors=[]
+                    page.on('pageerror',lambda e:errors.append(str(e)))
+                    def forward(route):
+                        request=route.request;p=urlsplit(request.url)
+                        headers=request.all_headers();headers['Host']='relay.test'
+                        conn=http.client.HTTPConnection('127.0.0.1',port,timeout=10)
+                        conn.request(request.method,p.path+('?'+p.query if p.query else ''),body=request.post_data_buffer,headers=headers)
+                        response=conn.getresponse()
+                        route.fulfill(status=response.status,headers={k:v for k,v in response.getheaders() if k.lower() not in ('connection','content-length')},body=response.read())
+                        conn.close()
+                    page.route('https://relay.test/**',forward)
+                    page.goto('https://relay.test/account');page.locator('#mode').wait_for(state='visible')
+                    self.assertEqual(page.locator('.site-foot a').first.get_attribute('href'),'https://pocketagentdesk.com/privacy')
+                    page.locator('#name').fill('alice');page.locator('#password').fill('password-for-alice')
+                    page.locator('#submit').click();page.locator('#signed').wait_for(state='visible')
+                    page.locator('#menuButton').click();page.get_by_role('button',name='删除账号',exact=True).click()
+                    page.locator('#dialog').wait_for(state='visible')
+                    self.assertEqual((page.locator('#dialogTitle').inner_text(),page.locator('#confirm').inner_text()),('删除账号？','删除'))
+                    page.locator('#dialog-password').fill('not-the-password');page.locator('#confirm').click()
+                    page.get_by_text('当前密码错误',exact=True).wait_for()
+                    page.locator('#dialog-password').fill('password-for-alice');page.locator('#confirm').click()
+                    page.locator('#auth').wait_for(state='visible');page.get_by_text('账号已删除',exact=True).wait_for()
+                    self.assertIsNone(store.user('alice'))
+                    self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),320)
+                    self.assertEqual(errors,[])
+                    browser.close()
+            finally:
+                asyncio.run_coroutine_threadsafe(runner.cleanup(),loop).result()
+                loop.call_soon_threadsafe(loop.stop);thread.join();loop.close()
+
+
 if __name__=='__main__':unittest.main()

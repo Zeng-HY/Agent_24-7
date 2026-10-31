@@ -36,12 +36,22 @@ def clean_target(value):
 
 REASONS={400:'请求无效',401:'请先登录',403:'没有权限',404:'找不到',405:'请求无效',413:'请求过大',421:'请求无效',429:'太频繁了，稍后再试',502:'电脑连接中断，请重试',503:'暂时不可用'}
 
+def https_origin(origin):
+    p=urlsplit(origin)
+    if p.scheme!='https' or not p.netloc or p.path or p.username or p.query or p.fragment:
+        raise ValueError('HTTPS origin required')
+    return p.netloc
+
+
 class Service:
-    def __init__(self, origin, store, mailer=None, trusted_proxy=False, sender=None):
-        p=urlsplit(origin)
-        if p.scheme!='https' or not p.netloc or p.path or p.username or p.query or p.fragment:
-            raise ValueError('HTTPS origin required')
-        self.origin,self.authority=origin,p.netloc
+    def __init__(self, origin, store, mailer=None, trusted_proxy=False, sender=None, aliases=(), legacy_origin=None):
+        self.origin,self.authority=origin,https_origin(origin)
+        # The other addresses it answers on (the IP while phones and computers move to the domain): each request is
+        # held to the one it came in on, and email links use the main one.
+        self.aliases={https_origin(alias):alias for alias in aliases}
+        # Old FRP computers accept only the address they were enrolled with (relay_device.py enroll --origin).
+        self.legacy_origin=legacy_origin
+        if legacy_origin:https_origin(legacy_origin)
         self.store=store
         self.mailer=mailer or Mailer(origin)
         self.hub=TunnelHub(store)
@@ -64,6 +74,16 @@ class Service:
         await asyncio.gather(*self.availability_tasks.values(),return_exceptions=True)
         for ident in list(self.hub.connections): await self.hub.disconnect(ident)
 
+    def here(self, request):
+        """The address this request came in on, when it is one of ours: Host is that address's, exactly once."""
+        hosts=request.headers.getall('Host',[])
+        if len(hosts)!=1:return None
+        return self.origin if hosts[0]==self.authority else self.aliases.get(hosts[0])
+
+    def legacy_address(self):
+        origin=self.legacy_origin or self.origin
+        return origin,urlsplit(origin).netloc
+
     async def connectable(self, row, fresh=False):
         connection=self.hub.connections.get(row['id'])
         if connection and not connection.socket.closed:return True
@@ -72,11 +92,12 @@ class Service:
         key=(row['id'],port,digest(secret));now=asyncio.get_running_loop().time()
         cached=self.availability_cache.get(key)
         if not fresh and cached and now-cached[0]<2:return cached[1]
+        origin,authority=self.legacy_address()
         async def probe():
             try:
                 async with self.probe_slots,ClientSession(timeout=ClientTimeout(total=1.5)) as client:
                     async with client.get('http://127.0.0.1:'+str(port)+'/api/status',allow_redirects=False,
-                            headers={'Host':self.authority,'Origin':self.origin,'Authorization':'Bearer '+secret}) as response:
+                            headers={'Host':authority,'Origin':origin,'Authorization':'Bearer '+secret}) as response:
                         if response.status!=200:return False
                         data=await response.content.read(16385)
                         return len(data)<=16384 and json.loads(data).get('ok') is True
@@ -104,11 +125,13 @@ class Service:
     @web.middleware
     async def guard(self, request, handler):
         try:
-            if request.headers.getall('Host',[]) != [self.authority]: raise web.HTTPMisdirectedRequest()
+            here=self.here(request)
+            if here is None: raise web.HTTPMisdirectedRequest()
+            request['origin']=here
             origin=request.headers.get('Origin')
-            if origin is not None and origin!=self.origin: raise web.HTTPForbidden()
+            if origin is not None and origin!=here: raise web.HTTPForbidden()
             if request.headers.get('Sec-Fetch-Site')=='cross-site': raise web.HTTPForbidden()
-            if request.method=='POST' and origin!=self.origin: raise web.HTTPForbidden()
+            if request.method=='POST' and origin!=here: raise web.HTTPForbidden()
             if request.method not in ('GET','HEAD','POST'): raise web.HTTPMethodNotAllowed(request.method,['GET','HEAD','POST'])
             if request.method!='POST' and (request.content_length or request.headers.get('Transfer-Encoding')):raise web.HTTPBadRequest()
             if request.content_length is not None and request.content_length>MAX_BODY: raise web.HTTPRequestEntityTooLarge(max_size=MAX_BODY,actual_size=request.content_length)
@@ -255,6 +278,10 @@ class Service:
         elif action=='reset':
             if data.get('pin'):session=self.store.start_session(await self.costly(request,self.store.consume_pin,data.get('email',''),'reset',data['pin'],data.get('password','')))
             else:await self.costly(request,self.store.reset_compatible,data.get('code',''),data.get('password',''))
+        elif action=='delete':  # 删除账号, asked for again with the password; nothing of the account is kept
+            for ident in await self.costly(request,self.store.delete_account,token,data.get('password','')):
+                await self.hub.disconnect(ident)
+            session=''
         elif action=='rename': self.store.rename(token,data.get('id',''),data.get('label',''))
         elif action=='revoke':
             ident=data.get('id','')
@@ -284,7 +311,8 @@ class Service:
             self.store.rate('auth-start-global',120,3600)
             data=await self.data(request)
             ident=self.store.start_authorization(bearer(request),data.get('label',''))
-            return web.json_response({'id':ident,'url':self.origin+'/account?authorize='+ident})
+            # the page opens on the address this computer uses, where its window lets it go
+            return web.json_response({'id':ident,'url':request.get('origin',self.origin)+'/account?authorize='+ident})
         if action=='poll' and request.method=='POST':
             data=await self.data(request)
             row=self.store.authorization(data.get('id',''),bearer(request))
@@ -315,7 +343,8 @@ class Service:
     async def legacy_proxy(self,request,token,row,target):
         # Temporary fallback for existing FRP devices; destination never comes from callers.
         headers={k:request.headers[k] for k in REQUEST_HEADERS if k in request.headers}
-        headers.update({'Host':self.authority,'Origin':self.origin,'Authorization':'Bearer '+row['gateway_secret']})
+        origin,authority=self.legacy_address()
+        headers.update({'Host':authority,'Origin':origin,'Authorization':'Bearer '+row['gateway_secret']})
         if request.content_length is not None: headers['Content-Length']=str(request.content_length)
         async def body():
             total=0
@@ -359,6 +388,8 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--state',type=Path,required=True)
     parser.add_argument('--origin',required=True)
+    parser.add_argument('--alias-origin',action='append',default=[],help='another address it also answers on')
+    parser.add_argument('--legacy-origin',help='the address old FRP computers were enrolled with (default --origin)')
     parser.add_argument('--port',type=int,default=18771)
     parser.add_argument('--trusted-proxy',action='store_true')
     args=parser.parse_args()
@@ -367,7 +398,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     os.umask(0o077)
     store=Identity(args.state,int(os.getenv('AR_ACCOUNT_LIMIT','20')),int(os.getenv('AR_DEVICE_LIMIT','3')))
-    service=Service(args.origin,store,trusted_proxy=args.trusted_proxy)
+    service=Service(args.origin,store,trusted_proxy=args.trusted_proxy,aliases=args.alias_origin,legacy_origin=args.legacy_origin)
     web.run_app(service.app,host='127.0.0.1',port=args.port,access_log=None,print=None)
 
 

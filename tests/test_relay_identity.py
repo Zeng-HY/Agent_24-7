@@ -22,6 +22,31 @@ class IdentityTests(unittest.TestCase):
             self.assertTrue(store.login('owner@example.test','updated-password'))
             with self.assertRaises(ValueError):store.reset_compatible(reset,'updated-again')
 
+    def test_deleting_an_account_keeps_nothing_of_it_but_the_route_numbers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store=Identity(Path(temp)/'state.db')
+            code=store.email_grant('signup','gone@example.test','gone-account-password')
+            owner=store.consume_pin('gone@example.test','signup',code.pin)
+            session=store.start_session(owner);other=store.start_session(owner)
+            device=store.approve(session,store.start_authorization('k'*43,'我的电脑'))
+            store.usage(device,10,20,1)
+            with store.connect() as db:
+                db.execute("INSERT INTO push_phones(id,owner,platform,environment,token,label,version,created,refreshed) "
+                           "VALUES ('p',?,'ios','production','t','iPhone','1',0,0)",(owner,))
+            store.register('stays','stays-password',store.grant('invite'))
+            with self.assertRaises(ValueError):store.delete_account(session,'not-the-password')
+            self.assertTrue(store.valid(session))
+            self.assertEqual(store.delete_account(session,'gone-account-password'),[device])
+            self.assertFalse(store.valid(session));self.assertFalse(store.valid(other))
+            self.assertIsNone(store.user('gone@example.test'));self.assertIsNone(store.channel_device('k'*43))
+            self.assertTrue(store.login('stays','stays-password'))
+            with store.connect() as db:
+                for table in ('account_emails','push_phones','usage','device_channels','device_authorizations','email_grants','email_pins'):
+                    self.assertEqual(db.execute(f'SELECT count(*) FROM {table}').fetchone()[0],0,table)
+                row=db.execute('SELECT * FROM devices WHERE id=?',(device,)).fetchone()
+                self.assertEqual((row['owner'],row['label'],row['revoked']),('','',1))
+            self.assertTrue(store.email_grant('signup','gone@example.test','new-account-password'))  # free again
+
     def test_capacity_expiry_and_retry_time(self):
         with tempfile.TemporaryDirectory() as temp:
             store=Identity(Path(temp)/'state.db',account_limit=1,device_limit=1)
