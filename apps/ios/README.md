@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.6 还没上传；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.6.6：岛少弹、刚发出去不再误报「需要你回答」、输入框 / 和 $ 列表、/compact 真压缩（10-31，还没上传）
+## 0.6.6：岛少弹、刚发出去不再误报「需要你回答」、输入框 / 和 $ 列表、/compact 真压缩（10-31，构建 24 已传 TestFlight）
 
 用户 10-31 报了四件事：灵动岛弹得太频繁，像是每换一个状态（运行中、跑命令……）都弹一次；发了消息，上面常写黄色的「需要你回答」，其实才刚开始跑；设置里「系统权限」下面那行说明不需要；输入框里打 / 或 $ 要弹出常用命令，比如 /compact，选了能真的压缩，显示「压缩中」，压缩完上下文圈换成新的百分比。三个 AI 都要，以后加的也要。0.6.6 也带着上面 10-30 下午补的列表刷新。
 
@@ -26,7 +26,9 @@
 
 检查情况：本机 `TeleplyCore` 211 项全过（新加：/ 和 $ 的识别、筛选和填入，命令不留在时间线，压缩状态、实时更新带圈，一台电脑一座岛，答过的问题卡不算在等你）；中转 51 项全过（新加：短轮只弹一次、远程开岛不重复）；电脑 Python 全过，只有 `test_mobile_polish` 两项照旧失败（网页里找不到「复制命令」按钮，和这次无关）。云端 `ios-native-check` 编译 `6ae5e8916753cb4614ef4e98` 通过（2c1c544，2 分钟）。
 
-还没做：中转没上传（要你同意）；Windows 电脑端要出 dev.32 再装上，/compact、压缩中、DeepSeek 的圈才生效；iPhone 0.6.6 没传 TestFlight；安卓同样的问题（「需要你回答」误报、/ 列表）按规矩没改。
+上线情况（用户 10-31 晚同意「两个都做」）：0.6.6（24）已传 TestFlight（Codemagic `6ae5f221e21599a8660725ae`，5 分钟，从 4503835 打，Delivery UUID `9d35abc9-c2fe-44e7-8bf5-65bc6f9460db`）。Windows `0.27.0-dev.32`（32）从 a1ffcd2 的干净副本打（工作区里有别的会话没写完的 `relay_desktop.py`、`relay_controller.py`，所以用临时 worktree，打完删了），自检通过，21:56 装到这台电脑（`G:\AgentRemote`，`dist/AgentRemote-0.27.0-dev.32-Setup.exe`，SHA256 `1AF87ED7…`）；装后本机接口核对过：Codex 的 / 列表是 /compact，Claude 是四个内置加 5 个自己的技能，DeepSeek 是 compact、feedback、goal、permission、plan，DeepSeek 状态带上下文 40.2%，已连回中转。dev.32 没发布到阿里云和 GitHub。
+
+还没做：中转没上传（岛少弹的规则在中转上，等「域名备案后的应用部署」那次更新之后再单独传，用户自己运行）；dev.32 没发布；安卓同样的问题（「需要你回答」误报、/ 列表）按规矩没改。
 
 ### 留给你在真机上验（0.6.6）
 
