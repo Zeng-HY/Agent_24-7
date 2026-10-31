@@ -94,6 +94,8 @@ sudo bash /home/admin/agent-relay-027-new/update-027.sh
 
 默认 `AR_ACCOUNT_LIMIT=20`、`AR_DEVICE_LIMIT=3`。如需修改，向同一私有环境文件加入这两个配置后重启 `agent-relay-027.service`。只调整数值，不取消认证和限流。发信失败时注册保持不可用；原用户名登录继续可用。
 
+2026-10-31 起账号上限是 200，没有写进邮箱设置文件（`smtp.env` 里有发信密码，不去动它），而是写在单独的附加设置 `/etc/systemd/system/agent-relay-027.service.d/limits.conf`（两行：`[Service]`、`Environment=AR_ACCOUNT_LIMIT=200`）。注意 `EnvironmentFile` 里的同名设置会盖过它，所以调之前先确认 `sudo grep -c '^AR_ACCOUNT_LIMIT' /etc/agent-relay/smtp.env` 是 0。改数字：改这个文件，再 `sudo systemctl daemon-reload && sudo systemctl restart agent-relay-027.service`。核对：`sudo cat /proc/$(systemctl show -p MainPID --value agent-relay-027.service)/environ | tr '\0' '\n' | grep '^AR_ACCOUNT_LIMIT'`。退回默认 20：删掉这个文件，再 daemon-reload 和重启。
+
 ## 电脑与手机
 
 安装 Windows 测试安装包后登录。已有设备在绑定页选择“迁移：原电脑名称”，保持设备 ID 和所属账号；新电脑选择“新增电脑”。授权凭据先保存在当前 Windows 用户的 DPAPI 私有文件中，因此断网后查询授权结果不会重复创建电脑。
