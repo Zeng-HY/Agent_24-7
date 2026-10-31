@@ -215,5 +215,13 @@
       "手机上已接收、电脑记录里还没出现的那句话，会一直留在时间线，不会消失。"
     ],
     "details": "岛和通知\n中转对每座岛只保留要显示的最新内容：10 秒内连续变化只推最后一份，最后一次变化 20 秒内一定推到；一小时上限 600 只是安全阀，超了排队，不丢。没有推出去时不再记成「推过了」。快照只对账，内容没变不推；最后一个对话结束时发一次空快照，之后只在重新连上中转时发。超过三个对话时列表只列三个，其余写「还有 N 个」。\n\n新一轮和发送保留\nCodex 的 task_started、Claude 的新用户消息、DeepSeek 的 turn/start 之后，还没调用工具时动作是空的，手机显示「正在思考 · 计时」；第一个工具调用后才变成「正在跑命令」。手机上发出去的消息按请求编号（Codex）或文字加时间（Claude、DeepSeek）一直留在时间线，直到记录里出现同一条；电脑在压缩上下文时也不会先消失。\n\n安装\nWindows 0.27.0-dev.31 / build 31，试验构建，没有正式发布。"
+  },
+  "0.27.0-dev.32": {
+    "summary": [
+      "手机输入框打 / 能列出这个对话能用的命令；Codex 和 DeepSeek 的 /compact 交给它们自己压缩，不再当成一句话发给模型。",
+      "压缩时手机显示「正在压缩上下文」，压缩完有「对话已压缩」，上下文圈换成新的百分比；DeepSeek 也有圈了。",
+      "Claude 压缩完不再让岛写二十分钟「在干活」。"
+    ],
+    "details": "输入框命令\n新接口 /api/composer/commands 给出每个对话能从手机用的命令：Codex 是 /compact；Claude 是 /compact、/init、/review、/security-review，加上自己的命令和技能；DeepSeek 用它自己的命令列表（export 是下载到电脑的，不列）。Codex 的 /compact 交给桌面自己的压缩（thread-follower-compact-thread），正在跑时不接；DeepSeek 的命令走 commands/execute。$ 列出的技能仍走原来的引用技能。\n\n压缩中和上下文\nCodex 看桌面状态里没完成的 contextCompaction，Claude 看它从队列取走 /compact 的那一刻，DeepSeek 看 compaction/start 和 compaction/end，状态里都带 compacting 和开始时间。Codex 和 DeepSeek 的时间线也有「对话已压缩」。DeepSeek 的状态和页面带上下文用量（projectedTokens / 窗口）；Claude 压缩后用记录里的 postTokens，桌面的上下文面板关着时用上次读到的窗口算百分比。\n\n通知\nClaude 的压缩摘要和「Compacted」不再算成新的一轮。\n\n安装\nWindows 0.27.0-dev.32 / build 32，试验构建，没有正式发布。"
   }
 }
