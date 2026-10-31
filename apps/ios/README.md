@@ -1,8 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.0 换用域名；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.7.0：换用域名、App 内注册和找回密码、删除账号、隐私政策（10-31，构建待传）
+## 0.7.0：换用域名、App 内注册和找回密码、删除账号、隐私政策（10-31，构建 25 已传 TestFlight）
 
 用户 10-31 说 pocketagentdesk.com 备案下来了（粤ICP备2026170106号），要换掉 IP，并准备上 App Store。苹果审核要求：能注册就要能在 App 里删除账号（5.1.1(v)）；注册不能跳到 Safari（4）；要有隐私政策。服务器 10-31 晚已切换（`deploy/relay/switch-domain.py`，见 `docs/handoff-domain.md`），旧 IP 照常可用。
 
@@ -15,6 +15,8 @@
 - 版本 0.7.0。
 
 检查情况：本机 `TeleplyCore` 235 项全过（新加：注册、验证、找回、重新发送倒计时、删除账号、搬地址、清本地记录）。云端 `ios-native-check` 编译 `6ae5f749995a13af7e6def84` 通过（7365cff，2 分钟）。
+
+上线情况（用户 10-31 晚说「打 TestFlight 版」）：0.7.0（25）已传 TestFlight（Codemagic `6ae5f853066103fc3d2414aa`，4 分钟，从 22ba881 打，Delivery UUID `714278fe-595f-4b46-a93b-dcf36284ab6f`），带着 0.6.6 的全部改动。
 
 ### 留给你在真机上验（0.7.0）
 
