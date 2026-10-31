@@ -22,7 +22,9 @@ if __name__=='__main__' and 'AR_DATA_DIR' not in os.environ:
     os.environ['AR_DATA_DIR']=str(Path(os.environ['LOCALAPPDATA'])/'AgentRemote'/'Data')
 from app_paths import ASSETS, DATA, command
 
-ORIGIN='https://8.166.15.235'
+ORIGIN='https://app.pocketagentdesk.com'
+# Where computers were bound before the domain. The relay still answers there, and the device key works on both.
+OLD_ORIGIN='https://8.166.15.235'
 stop=threading.Event()
 connection_state='offline'
 rebind_requested=False
@@ -35,6 +37,12 @@ class NoRedirect(HTTPRedirectHandler):
 class ApiError(ValueError):
     def __init__(self, message, code='network_error', retry_after=2):
         super().__init__(message);self.code=code;self.retry_after=retry_after
+
+
+def current_binding(binding):
+    """A binding saved on the old IP moves to ORIGIN; anything else (a test relay, a hand-set address) stays."""
+    if binding and binding.get('origin')==OLD_ORIGIN:return {**binding,'origin':ORIGIN}
+    return binding
 
 
 def api(origin,path,data,key):

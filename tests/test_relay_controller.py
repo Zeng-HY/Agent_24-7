@@ -24,6 +24,12 @@ class Controller(unittest.TestCase):
         self.assertTrue(c.startup)
         c.shell.sync.assert_called()
 
+    def test_a_binding_made_on_the_ip_moves_to_the_domain_and_keeps_its_key(self):
+        self.assertEqual(d.current_binding({'origin':'https://8.166.15.235','key':'k','device':'x'}),
+                         {'origin':'https://app.pocketagentdesk.com','key':'k','device':'x'})
+        self.assertEqual(d.current_binding({'origin':'http://127.0.0.1:9','key':'k'})['origin'],'http://127.0.0.1:9')
+        self.assertIsNone(d.current_binding(None))
+
     def test_local_commands_accept_no_payload_or_remote_navigation(self):
         self.assertEqual(local_action('agentremote-action://check-update'),'check-update')
         for uri in ['https://example.test','agentremote-action://install?url=https://evil.test','agentremote-action://bind/extra','agentremote-action://exit','javascript:alert(1)']:

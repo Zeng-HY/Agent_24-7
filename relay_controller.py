@@ -33,7 +33,7 @@ class DesktopController:
     def __init__(self,instance,start_hidden=False,rebind=False):
         self.instance=instance;self.hidden=start_hidden;self.stop=threading.Event();self.auth_stop=threading.Event()
         self.agent_stop=threading.Event();self.cancel_download=threading.Event();self.action_lock=threading.Lock()
-        self.cfg=desktop.initialize();self.binding=load() or {'origin':desktop.ORIGIN,'key':secrets.token_urlsafe(32)}
+        self.cfg=desktop.initialize();self.binding=desktop.current_binding(load()) or {'origin':desktop.ORIGIN,'key':secrets.token_urlsafe(32)}
         save(self.binding)
         if rebind:self.binding={'origin':desktop.ORIGIN,'key':secrets.token_urlsafe(32)};save(self.binding)
         prefs=desktop.preferences()
