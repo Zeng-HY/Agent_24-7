@@ -184,8 +184,9 @@ extension AppModel {
         let merged = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
         if merged != messages { messages = merged }
         // 0.6.6: the model and the context as the computer has them now, so the ring follows a compaction while the
-        // page is open (it used to keep the number the page opened with).
-        if let meta = frame.meta, meta["runtime"].isObject, meta["runtime"] != pageMeta["runtime"] {
+        // page is open (it used to keep the number the page opened with). DeepSeek's live pages carry no context (its
+        // ring comes with the state), so a runtime without one leaves the page's alone.
+        if let meta = frame.meta, meta["runtime"].has("context_state"), meta["runtime"] != pageMeta["runtime"] {
             var next = pageMeta.object
             next["runtime"] = meta["runtime"]
             pageMeta = .object(next)
