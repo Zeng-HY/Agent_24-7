@@ -28,7 +28,9 @@
 
 上线情况（用户 10-31 晚同意「两个都做」）：0.6.6（24）已传 TestFlight（Codemagic `6ae5f221e21599a8660725ae`，5 分钟，从 4503835 打，Delivery UUID `9d35abc9-c2fe-44e7-8bf5-65bc6f9460db`）。Windows `0.27.0-dev.32`（32）从 a1ffcd2 的干净副本打（工作区里有别的会话没写完的 `relay_desktop.py`、`relay_controller.py`，所以用临时 worktree，打完删了），自检通过，21:56 装到这台电脑（`G:\AgentRemote`，`dist/AgentRemote-0.27.0-dev.32-Setup.exe`，SHA256 `1AF87ED7…`）；装后本机接口核对过：Codex 的 / 列表是 /compact，Claude 是四个内置加 5 个自己的技能，DeepSeek 是 compact、feedback、goal、permission、plan，DeepSeek 状态带上下文 40.2%，已连回中转。dev.32 没发布到阿里云和 GitHub。
 
-还没做：中转没上传（岛少弹的规则在中转上，等「域名备案后的应用部署」那次更新之后再单独传，用户自己运行）；dev.32 没发布；安卓同样的问题（「需要你回答」误报、/ 列表）按规矩没改。
+中转包（用户 10-31 晚同意「准备」）：update-027.sh 每次换掉全部中转文件，所以岛少弹的改动和换域名的改动必须在同一个包里。换域名那次 21:50 已上线（「域名备案后的应用部署」会话，服务器上是它的文件 + 17bba06 的 relay_push.py）；22:09 在工作区打包，它的中转文件就是线上那版，relay_push.py 换成 `git show HEAD:relay_push.py`（含 2c1c544），`dist/agent-relay-0.27.0-dev.zip`，SHA256 `5f13a7d8…`。中转测试 114 项在这组文件上通过（另有 3 项是这台电脑的测试环境缺 win32/playwright，和中转无关）。上传由用户在 Workbench 运行：解压到 `/home/admin/agent-relay-027-new`，只运行 `update-027.sh`，**不要再运行 switch-domain.py**。
+
+还没做：中转包还没上传；dev.32 没发布；安卓同样的问题（「需要你回答」误报、/ 列表）按规矩没改。
 
 ### 留给你在真机上验（0.6.6）
 
