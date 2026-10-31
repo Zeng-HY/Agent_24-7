@@ -1,6 +1,28 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.0 换用域名；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
+
+## 0.7.0：换用域名、App 内注册和找回密码、删除账号、隐私政策（10-31，构建待传）
+
+用户 10-31 说 pocketagentdesk.com 备案下来了（粤ICP备2026170106号），要换掉 IP，并准备上 App Store。苹果审核要求：能注册就要能在 App 里删除账号（5.1.1(v)）；注册不能跳到 Safari（4）；要有隐私政策。服务器 10-31 晚已切换（`deploy/relay/switch-domain.py`，见 `docs/handoff-domain.md`），旧 IP 照常可用。
+
+- **默认地址**：`https://app.pocketagentdesk.com`。启动时存的是 IP 或什么都没存，就改用域名，并把钥匙串里 IP 下的登录搬到域名下，不用重新登录。只搬一次，之后在 开发者选项 → 服务地址 手动填的 IP 保留（`AppModel.moveToDomain`、`LocalStore.Place.movedToDomain`）。草稿、发送记录、缓存都按登录和电脑存，不受影响。
+- **App 内注册和找回密码**：登录页的 创建账号、忘记密码 不再打开 Safari，照网页做成一屏：邮箱 + 密码 → 输入验证码（第 6 位自动提交，重新发送有倒计时）；忘记密码 → 邮箱 → 验证码 + 新密码。走中转原有的接口（register、verify、resend、forgot、reset），逻辑在 `AccountEmail.swift`、`AccountForms.swift`、`AppModel+Account.swift`。
+- **删除账号**：设置 → 账号 → 删除账号，输当前密码确认，调中转新接口 `POST /account/delete`。成功后和退出登录一样回到登录页，写「账号已删除」；还会结束这台手机上的灵动岛，清掉这个账号在手机上的草稿和记录。
+- **隐私政策**：设置 → 关于遥应 → 隐私政策，在 App 里打开 https://pocketagentdesk.com/privacy（`InAppBrowser.swift`）。
+- **隐私清单**：写明收集的数据（邮箱、账号编号、推送标识、灵动岛暂存的对话标题、流量统计），和 App Store 的隐私问卷一致（`docs/app-store-listing.md`）。
+- **截图**：自动截图改用 6.9 英寸的 iPhone 17 Pro Max，App Store 要这个尺寸（`scripts/ci-check.sh`）。
+- 版本 0.7.0。
+
+检查情况：本机 `TeleplyCore` 235 项全过（新加：注册、验证、找回、重新发送倒计时、删除账号、搬地址、清本地记录）。云端 `ios-native-check` 编译 `6ae5f749995a13af7e6def84` 通过（7365cff，2 分钟）。
+
+### 留给你在真机上验（0.7.0）
+
+1. 装上直接打开：不用重新登录，还在原来的电脑和对话；设置 → 开发者选项 → 服务地址 显示 app.pocketagentdesk.com。
+2. 退出登录，点 创建账号：用一个没注册过的邮箱注册，把邮件里的 6 位验证码填进去，直接登录，不跳 Safari。
+3. 用这个新账号试 设置 → 账号 → 删除账号：先输错密码，提示「当前密码错误」；再输对，回到登录页写「账号已删除」。
+4. 设置 → 关于遥应 → 隐私政策：在 App 里打开网页，点「完成」回来。
+5. 用原来的账号登录回去，确认电脑和对话都在。
 
 ## 0.6.6：岛少弹、刚发出去不再误报「需要你回答」、输入框 / 和 $ 列表、/compact 真压缩（10-31，构建 24 已传 TestFlight）
 
