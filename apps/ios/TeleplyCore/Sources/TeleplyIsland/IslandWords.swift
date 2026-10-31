@@ -70,13 +70,19 @@ public enum IslandWords {
         case "search": return english ? "Searching" : "查资料"
         case "read": return english ? "Reading files" : "读文件"
         case "think": return english ? "Thinking" : "思考"
+        case "compact": return english ? "Compacting context" : "压缩上下文"  // 0.6.6
         default: return nil
         }
     }
 
     /// 0.6.4: the conversation page's live line, e.g. "正在跑命令 · 3 分 12 秒" / "正在思考 · 3 分 12 秒".
     public static func thinkingLine(step: String?, started: Int, now: Int) -> String {
-        (english ? "" : "正在") + (stepName(step) ?? (english ? "Thinking" : "思考")) + " · " + duration(now - started)
+        thinkingWords(step: step) + " · " + duration(now - started)
+    }
+
+    /// The same line without its timer, when the computer did not say when the turn began: "正在压缩上下文".
+    public static func thinkingWords(step: String?) -> String {
+        (english ? "" : "正在") + (stepName(step) ?? (english ? "Thinking" : "思考"))
     }
 
     /// 0.6.4: a finished turn's fold, e.g. "思考了 3 分 12 秒".

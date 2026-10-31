@@ -2,10 +2,12 @@ import SwiftUI
 import TeleplyModel
 
 /// Where a conversation's model and context come from (Android runtimeOf): Claude's from the desktop (the state's
-/// runtime), the others from the session record (the page's runtime), with the state's as a fallback.
+/// runtime), the others from the session record (the page's runtime), with the state's as a fallback. 0.6.6: DeepSeek's
+/// state carries its context, read every 2.5 s (its live stream gets the numbers only once), so that one leads.
 func runtimeOf(app: String, control: JSONValue, page: JSONValue) -> JSONValue {
     let fromControl = control["runtime"]
     if app == "claude", fromControl.isObject { return fromControl }
+    if app == "deepseek", fromControl["context_state"].string() == "available" { return fromControl }
     return page.isObject && !page.object.isEmpty ? page : fromControl
 }
 

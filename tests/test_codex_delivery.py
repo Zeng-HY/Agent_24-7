@@ -38,6 +38,33 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(self.pipe.call.call_count, 1)
         self.assertEqual(self.pipe.call.call_args.args[0], "thread-follower-steer-turn")
 
+    def test_compact_runs_the_desktops_own_compaction_once(self):
+        """0.6.6: /compact typed on the phone is the desktop's compaction, never words to the model."""
+        self.state["turns"][0]["status"] = "completed"
+        body = {"id": "test-thread", "request_id": "test-request-0009", "text": "/compact", "intent": "auto"}
+        result = self.bridge.send(body)
+        self.assertEqual((result["delivery_state"], result["command"]), ("accepted", "/compact"))
+        self.assertEqual(self.pipe.call.call_args.args[:2], ("thread-follower-compact-thread", {"conversationId": "test-thread"}))
+        self.assertEqual(self.bridge.send(body), result)  # its receipt again, not a second compaction
+        self.assertEqual(self.pipe.call.call_count, 1)
+
+    def test_compact_waits_for_the_turn_and_takes_no_words(self):
+        with self.assertRaises(cc.ControlError): self.bridge.send({**self.body, "text": "/compact"})
+        self.state["turns"][0]["status"] = "completed"
+        with self.assertRaises(cc.ControlError):
+            self.bridge.send({"id": "test-thread", "request_id": "test-request-0003", "text": "/compact 只留结论"})
+        self.pipe.call.assert_not_called()
+        self.assertEqual(self.bridge.receipt("test-thread", self.body["request_id"])["state"], "unknown")
+
+    def test_a_compaction_under_way_is_read_from_the_desktop_state(self):
+        state = {"turns": [{"turnId": "t", "status": "inProgress",
+                            "items": [{"type": "contextCompaction", "source": "manual", "completed": False}]}]}
+        self.assertTrue(cc.compacting_now(state))
+        state["turns"][0]["items"][0]["completed"] = True
+        self.assertFalse(cc.compacting_now(state))
+        state["turns"][0].update(status="completed", items=[{"type": "contextCompaction", "completed": False}])
+        self.assertFalse(cc.compacting_now(state))  # a turn that is over holds no compaction under way
+
     def test_same_text_two_intentional_requests_have_distinct_ids(self):
         self.bridge.send(self.body)
         self.bridge.send({**self.body, "request_id": "test-request-0002"})

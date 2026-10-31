@@ -154,6 +154,7 @@ class Controller:
         self.modes_path=self.catalog_path.with_name('claude-modes.json')
         self.modes=load_modes(self.modes_path)
         self.hooks=None  # claude_hooks.Bridge, set by remote.py: questions and permissions Claude Code holds open (10-27)
+        self.windows={}  # conversation -> the context window its Context card last showed (0.6.6)
     def _document(self,item,open_first=False):
         d=self.desktop
         if open_first:
@@ -461,7 +462,15 @@ class Controller:
                 result['queued'].append({'id':queued['id'],'text':queued['text'],'token':self._ticket(item['id'],'steer_queued',{'id':queued['id']},revision)})
             if result['running'] and anchor:
                 result['stop_revision']=signature([item['id'],anchor]);result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
-            if usage:result['runtime']={**runtime,**usage}
+            if usage:
+                result['runtime']={**runtime,**usage}
+                if usage.get('context_window'):self.windows[item['id']]=usage['context_window']
+            elif runtime.get('context_state')=='partial' and runtime.get('used_tokens') is not None and self.windows.get(item['id']):
+                # 0.6.6: the Context card is closed: the record's count over the window last read off it, so a
+                # /compact's postTokens moves the ring at once
+                window=self.windows[item['id']]
+                result['runtime']={**runtime,'context_window':window,'percent':round(runtime['used_tokens']/window*100,1),
+                                   'context_state':'available','approximate':True}
             dock=self.desktop._claude_ask(root,doc)  # a question card of Claude's new window, or the dock (10-26)
             options,prompt=self._dock_read(dock) if dock else ([],None)
             # Bind execution/answer buttons to both the visible set and the latest transcript version.

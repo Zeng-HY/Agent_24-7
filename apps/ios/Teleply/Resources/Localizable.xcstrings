@@ -7301,16 +7301,6 @@
         }
       }
     },
-    "遥应通知、录音、iPhone 自带的语音识别和拍照要用到。点一行到系统设置里遥应这一页去改。": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Used for Teleply notifications, recording, iPhone's built-in speech recognition, and taking photos. Tap a row to change it on the Teleply page in Settings."
-          }
-        }
-      }
-    },
     "遥应，": {
       "localizations": {
         "en": {
@@ -7747,6 +7737,266 @@
           "stringUnit": {
             "state": "translated",
             "value": "Hide Sub-chats"
+          }
+        }
+      }
+    },
+    "还有 %lld 个，接着输入可以筛选": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld more. Keep typing to narrow them."
+          }
+        }
+      }
+    },
+    "正在读取…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading…"
+          }
+        }
+      }
+    },
+    "没有找到匹配的技能": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching skills"
+          }
+        }
+      }
+    },
+    "这个对话没有能从手机用的命令": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This conversation has no commands you can use from the phone"
+          }
+        }
+      }
+    },
+    "没有找到匹配的命令": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching commands"
+          }
+        }
+      }
+    },
+    "可用的命令": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Available commands"
+          }
+        }
+      }
+    },
+    "可用的技能": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Available skills"
+          }
+        }
+      }
+    },
+    "读不到命令列表，请稍后再输入 / 试一次。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t read the command list. Type / again in a moment."
+          }
+        }
+      }
+    },
+    "读不到技能列表，请稍后再输入 $ 试一次。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t read the skill list. Type $ again in a moment."
+          }
+        }
+      }
+    },
+    "压缩上下文": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact context"
+          }
+        }
+      }
+    },
+    "把较早的对话压成摘要，腾出上下文": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summarize earlier messages to free up context"
+          }
+        }
+      }
+    },
+    "把较早的对话压成摘要，腾出上下文；后面可写要保留的重点": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summarize earlier messages to free up context; add what to keep after it"
+          }
+        }
+      }
+    },
+    "要保留的重点": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "what to keep"
+          }
+        }
+      }
+    },
+    "生成 CLAUDE.md": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write CLAUDE.md"
+          }
+        }
+      }
+    },
+    "读一遍这个项目，写一份给 Claude 看的说明": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read this project and write instructions for Claude"
+          }
+        }
+      }
+    },
+    "审查改动": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review changes"
+          }
+        }
+      }
+    },
+    "审查当前的代码改动": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review the current code changes"
+          }
+        }
+      }
+    },
+    "安全审查": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Security review"
+          }
+        }
+      }
+    },
+    "检查当前改动里的安全问题": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the current changes for security issues"
+          }
+        }
+      }
+    },
+    "长任务目标": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Long-task goal"
+          }
+        }
+      }
+    },
+    "设定、查看或暂停一个长任务的目标": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set, view or pause the goal of a long task"
+          }
+        }
+      }
+    },
+    "进入或离开计划模式": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter or leave plan mode"
+          }
+        }
+      }
+    },
+    "切换权限": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch permissions"
+          }
+        }
+      }
+    },
+    "换一个权限档位（沙盒和批准方式）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick another permission preset (sandbox and approvals)"
+          }
+        }
+      }
+    },
+    "反馈": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feedback"
+          }
+        }
+      }
+    },
+    "给这个对话记一条反馈": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record feedback about this conversation"
           }
         }
       }

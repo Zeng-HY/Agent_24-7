@@ -204,6 +204,9 @@ public struct DemoTransport: RelayFileTransport {
         case "/api/composer/references", "/api/chat/new/references":
             let kind = query["kind"] ?? "chat"
             return Self.json(["items": [["kind": .string(kind), "id": "fixture-reference", "app": .string(app), "name": "固定引用", "title": "固定引用"]]])
+        case "/api/composer/commands":  // 0.6.6: what the box offers after / (composer_commands.py)
+            return Self.json(["items": [["name": "compact", "text": "/compact", "title": "压缩上下文",
+                                         "detail": "把较早的对话压成摘要，腾出上下文", "input": "", "scope": "内置命令"]]])
         case "/api/chat/archived":
             return Self.json(world.archivedList())
         case "/api/notify":

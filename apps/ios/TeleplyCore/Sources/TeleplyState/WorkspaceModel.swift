@@ -66,6 +66,9 @@ public final class WorkspaceModel {
     public internal(set) var transfer = ""
     /// The computer folder a file's page was opened from, as listed, for the way back.
     public internal(set) var folderListing: JSONValue = [:]
+    /// 0.6.6: the box's / list and $ list for the conversation in use (WorkspaceModel+Suggestions).
+    public internal(set) var suggestions = ComposerLists()
+    @ObservationIgnored var suggestionReads: [ComposerTrigger.Kind: Task<Void, Never>] = [:]
 
     /// A first message sent: it becomes a job and the sheet is free again at once (web 10-16).
     @ObservationIgnored public var created: (NewJob) -> Void = { _ in }

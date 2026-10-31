@@ -165,8 +165,6 @@ struct PermissionSection: View {
             row("相机", camera)
         } header: {
             Text("系统权限")
-        } footer: {
-            Text("遥应通知、录音、iPhone 自带的语音识别和拍照要用到。点一行到系统设置里遥应这一页去改。")
         }
         .listRowBackground(Palette.controlFill)
     }

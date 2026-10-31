@@ -52,6 +52,9 @@ ISLAND_RELEVANCE = {'waiting': 100, 'limited': 90, 'failed': 80, 'offline': 60, 
 ISLAND_GAP = 10                 # seconds between two pushes to one island; a burst merges into the latest (0.6.4 fix)
 ISLAND_PER_HOUR = 600           # a safety valve, not a drop: past this, pushes wait and merge (0.6.4 fix)
 REMOTE_AFTER = 60               # a turn running this long gets an island started from afar
+START_HOLD = 30 * 60            # 0.6.6: a start from afar that went out is not sent again until its island reports in
+CALM_CHAT = 5 * 60              # 0.6.6: a conversation that just opened the island changes it quietly for this long
+CALM_DONE = 60                  # 0.6.6: after the island opened for anything, a done this soon changes it quietly
 OFFLINE_AFTER = 60              # a computer gone this long turns its islands grey
 OFFLINE_END_AFTER = 30 * 60     # gone this long ends them; the lock screen keeps one an hour
 END_AFTER = 2 * 60              # done or failed islands end this long after the state began (0.6.4: was 5 min)
@@ -271,6 +274,8 @@ class Push:
         self.snapshot_misses = {}   # (device, app, chat) -> snapshots in a row without it (0.6.4)
         self.island_refreshed = {}  # island id -> when it was last pushed without a change
         self.start_tried = {}       # (device, app, chat) -> when a remote start was last tried
+        self.start_sent = {}        # computer -> when a remote start went out, until its island registers (0.6.6)
+        self.popped = {}            # (device, app, chat) -> when it last opened the island with a sound (0.6.6)
         self.step_last = {}         # (device, app, chat) -> when its last progress push went (STEP_GAP)
         self.pending = {}           # island id -> the latest content waiting for its 10-second turn
         self.sent_content = {}      # island id -> canonical content last sent, to skip unchanged snapshots
@@ -413,6 +418,7 @@ class Push:
                 kept = db.execute('SELECT id FROM push_activities WHERE token=?', (token,)).fetchone()
                 if kept:
                     self.fresh_islands.add(kept['id'])
+                self.start_sent.pop(device, None)  # the island reported in: a later one may be started again
         if computer_island:
             self.wake()
         return {'ok': True}
@@ -654,7 +660,8 @@ class Push:
                                   loud=False, force=True, ended=ended)
             if kind == 'running':
                 self.starts[conv] = {'since': since, 'title': title}
-            loud = kind != 'running' and self.may_ring(owner, now) and not quiet
+            loud = self.may_pop(owner, conv, kind, now) and not quiet
+            calmed = self.calm(owner, conv, kind, now) if not quiet else ''
             agg = self.aggregate(device, now, last_kind=kind)
             state_change = kind in ('running', 'waiting', 'done', 'failed')
             async def fallback_notice():
@@ -678,6 +685,7 @@ class Push:
                 took = status in ('sent', 'queued', 'same') or took
             if loud and took:
                 self.rang[owner] = now
+                self.popped[conv] = now
             if not took and kind != 'running' and not quiet:  # every island's token is dead: the notice is the only word
                 loud = self.may_ring(owner, now)
                 went, why = await self.notice(owner, device, app, chat, kind, computer['label'], phones, now, turn,
@@ -691,7 +699,8 @@ class Push:
                 self.starts.pop(conv, None)
             route = '通知静默' if kind in ('done', 'failed') else '岛静默' if kind == 'running' or not loud else '岛提醒'
             self.decided(kind, app, chat, route,
-                         f'这台电脑的岛按汇总更新（{agg["working"]} 个工作中、{agg["waiting"]} 个等你定）',
+                         f'这台电脑的岛按汇总更新（{agg["working"]} 个工作中、{agg["waiting"]} 个等你定）'
+                         + (f'，{calmed}，岛不弹' if calmed else '') + ('，岛弹一下' if loud and took else ''),
                          started=started, ended=ended, source=source)
             return
         if kind == 'running':
@@ -709,13 +718,14 @@ class Push:
         self.starts.pop(conv, None)
         fallback = ''
         if legacy:  # a 0.6.2 phone still has one island per conversation
-            loud = self.may_ring(owner, now) and not quiet
+            loud = self.may_pop(owner, conv, kind, now) and not quiet
             turn = int(legacy['turn'] or turn or now)
             status = await self.update_island(legacy, state, ended or int(now), turn, alert=loud,
                                               priority=10, force=True, step=event.get('step'), ended=ended)
             if status in ('sent', 'queued', 'same'):
                 if loud:
                     self.rang[owner] = now
+                    self.popped[conv] = now
                 self.decided(kind, app, chat, '岛提醒' if loud else '岛静默', self.why_island(quiet, loud),
                              started=started, ended=ended, source=source)
                 return
@@ -916,6 +926,24 @@ class Push:
         """One sound an account in RING_GAP seconds (user 10-28): the first of a burst rings, the rest are silent."""
         last = self.rang.get(owner)
         return last is None or now - last >= RING_GAP
+
+    def calm(self, owner, conv, kind, now):
+        """Why this done changes the island quietly instead of opening it, or '' (0.6.6, user 10-31: the island opened
+        too often). A conversation that opened it CALM_CHAT ago or less is mostly a quick follow-up turn (three in one
+        minute on 10-31); any opening CALM_DONE ago or less already brought the user to the phone. Asking and failing
+        still open it, with RING_GAP only."""
+        if kind != 'done':
+            return ''
+        if now - self.popped.get(conv, -CALM_CHAT) < CALM_CHAT:
+            return '这个对话五分钟内刚让岛弹过'
+        if now - self.rang.get(owner, -CALM_DONE) < CALM_DONE:
+            return '一分钟内岛刚弹过'
+        return ''
+
+    def may_pop(self, owner, conv, kind, now):
+        """Whether this event opens the island with a sound: only done, failed and waiting ever do, never running or a
+        step (0.6.6)."""
+        return kind in WORDS and self.may_ring(owner, now) and not self.calm(owner, conv, kind, now)
 
     def why_island(self, quiet, loud):
         if quiet:
@@ -1184,9 +1212,10 @@ class Push:
             waiting_start = [dict(r) for r in db.execute(
                 'SELECT * FROM push_conversations WHERE state="working" AND turn<=? '
                 'ORDER BY refreshed DESC', (int(now) - REMOTE_AFTER,))]
+        tried = set()  # 0.6.6: one start per computer a sweep, not one per running conversation
         for conv in waiting_start:
             device, app, chat = conv['device'], conv['app'], conv['chat']
-            if device not in connected:
+            if device not in connected or device in tried:
                 continue
             with self.store.connect() as db:
                 island = db.execute('SELECT 1 FROM push_activities WHERE device=? AND app="" AND chat=""',
@@ -1197,11 +1226,18 @@ class Push:
                                                       (computer['owner'],))] if computer else []
             if island or not computer or not starts:
                 continue
+            # 0.6.6: Apple opens the island for every start, and one sent before has no row here until the phone hands
+            # over its token (a phone the app is not running on never does): starting it again each minute opened it
+            # again and again, with whatever the computer was doing at that moment (user 10-31: 运行中、跑命令…).
+            if now - self.start_sent.get(device, -START_HOLD) < START_HOLD:
+                continue
             key = (device, app, chat)
             if now - self.start_tried.get(key, -REMOTE_AFTER) < REMOTE_AFTER:
                 continue
             self.start_tried[key] = now
+            tried.add(device)
             if await self.remote_start(device, app, chat, int(conv['turn']), computer, starts, conv['title'] or ''):
+                self.start_sent[device] = now
                 self.starts.pop(key, None)
         for row in rows:
             device = row['device']

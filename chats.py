@@ -221,6 +221,7 @@ def clean_claude_user(text: str) -> str:
     return _CLAUDE_TAGS.sub("", text or "").strip()
 
 
+_SLASH = re.compile(r"/[A-Za-z][\w:.-]{0,63}(?:\s[\s\S]*)?")  # a message that is one slash command
 _COMMAND_NAME = re.compile(r"<command-name>\s*(.*?)\s*</command-name>", re.S)
 _COMMAND_ARGS = re.compile(r"<command-args>\s*(.*?)\s*</command-args>", re.S)
 _COMMAND_OUTPUT = re.compile(r"<local-command-(?:stdout|stderr)>")
@@ -566,7 +567,7 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
     state = {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
     saw_items = False
     for raw in lines:
-        if b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]:
+        if b"event_msg" not in raw[:160] and b"response_item" not in raw[:160] and b'"compacted"' not in raw[:160]:
             continue  # response items, token records, turn context: not shown
         try:
             rec = json.loads(raw)
@@ -575,6 +576,9 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
         payload = rec.get("payload") or {}
         kind = payload.get("type")
         ts = rec.get("timestamp") or ""
+        if rec.get("type") == "compacted":  # 0.6.6: /compact, or Codex out of room; the divider Claude's has
+            msgs.append({"role": "event", "text": "对话已压缩", "time": ts})
+            continue
         if rec.get('type')=='response_item':
             if kind=='message' and payload.get('role')=='assistant' and payload.get('phase') in ('commentary','final_answer'):
                 text=codex_answer(_join_text(payload.get('content')).strip())
@@ -766,6 +770,9 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
     last_kind, last_stop = None, None
     # next-step boxes with a question: the turn ends at their result, the record's last line (10-16)
     asks = context.setdefault("asks", set()) if context is not None else set()
+    # 0.6.6: what waits in Claude's queue, and the slash command already shown when Claude took it from there
+    queue = context.setdefault("queue", []) if context is not None else []
+    kept = context if context is not None else {}
     for raw in lines:
         try:
             rec = json.loads(raw)
@@ -774,6 +781,29 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
         t = rec.get("type")
         if t == "custom-title":
             state["title"] = rec.get("customTitle") or state["title"]
+            continue
+        if t == "queue-operation":
+            # 0.6.6: a slash command shows when Claude takes it from its queue. A /compact then runs for minutes with
+            # nothing else written; its tagged line comes only after the summary (10-05: 4 min 12 s).
+            op, ts = rec.get("operation"), rec.get("timestamp") or ""
+            if op == "enqueue":
+                queue.append(" ".join(str(rec.get("content") or "").split()))
+                del queue[:-20]
+            elif op == "remove" and " ".join(str(rec.get("content") or "").split()) in queue:
+                queue.remove(" ".join(str(rec.get("content") or "").split()))
+            elif op == "dequeue" and queue:
+                taken = queue.pop(0)
+                if _SLASH.fullmatch(taken):
+                    msgs.append({"role": "user", "text": taken, "time": ts})
+                    kept["claude_shown"], last_kind = taken, "user"
+                    state["turn_started"], state["turn_ended"] = ts, ""
+                    state["step"] = "compact" if taken.partition(" ")[0] == "/compact" else ""
+                    if ts:
+                        state["latest_event_time"] = ts
+            continue
+        if t == "system" and rec.get("subtype") == "compact_boundary":
+            if state.get("step") == "compact":
+                state["step"] = ""  # the summary and "Compacted" follow at once
             continue
         steered=_claude_steer_message(rec)
         if steered:
@@ -796,6 +826,14 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                 text = clean_claude_user(content)
                 # a local command's output (/compact's "Compacted") ends what the command started: no turn follows
                 last_kind = "command_done" if not text and _COMMAND_OUTPUT.search(content) else "user"
+                if not text and last_kind == "user":
+                    # 0.6.6: a slash command shows as it was typed (it is in tags only), so a phone's /compact finds its
+                    # own row instead of waiting faded under the record for ten minutes; once, if the queue showed it
+                    command = " ".join(claude_command(content).split())
+                    if command and command == kept.get("claude_shown"):
+                        kept["claude_shown"] = ""
+                    else:
+                        text = command
             else:
                 blocks = content or []
                 text = clean_claude_user("\n".join(b.get("text", "") for b in blocks
@@ -1031,7 +1069,11 @@ def parse_runtime(app: str, lines: list[bytes]) -> dict:
                     if all(isinstance(v,(int,float)) and not isinstance(v,bool) and v>=0 for v in parts) and any(parts):
                         out.update(used_tokens=sum(parts),usage_time=ts,context_state='partial',source='last_request')
             elif kind=='system' and rec.get('subtype')=='compact_boundary':
-                out.update(used_tokens=None,usage_time=ts,context_state='waiting')
+                # 0.6.6: Claude writes what the context came down to, so the ring moves before the next answer
+                after=(rec.get('compactMetadata') or {}).get('postTokens')
+                if isinstance(after,int) and not isinstance(after,bool) and after>=0:
+                    out.update(used_tokens=after,usage_time=ts,context_state='partial',source='compact')
+                else:out.update(used_tokens=None,usage_time=ts,context_state='waiting')
             continue
         event = payload.get("type") if kind == "event_msg" else None
         if event == "task_started":

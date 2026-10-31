@@ -7,17 +7,22 @@ public struct Control: Sendable, Equatable {
     public var queued: [Queued] = []
     /// Recent turns by id: inProgress, completed, interrupted, failed.
     public var turns: [String: String] = [:]
+    /// Something waits for the user's answer: a question still open, Claude's prompt, DeepSeek's requests.
     public var questions = false
     /// 0.6.4: the running turn's start and end from the computer, Unix seconds; 0 when it does not know.
     public var turnStarted = 0
     public var turnEnded = 0
-    /// 0.6.4: edit | run | search | read.
+    /// 0.6.4: edit | run | search | read; 0.6.6: compact while the context is compacted.
     public var step = ""
+    /// 0.6.6: a compaction under way (/compact, or the source out of room), and since when (Unix seconds, 0 unknown).
+    /// DeepSeek compacts outside a turn too, so this does not wait for `running`.
+    public var compacting = false
+    public var compactStarted = 0
     public var raw: JSONValue = [:]
 
     public init(available: Bool = false, running: Bool = false, turn: String = "", queueAvailable: Bool = false,
                 queued: [Queued] = [], turns: [String: String] = [:], questions: Bool = false, raw: JSONValue = [:],
-                turnStarted: Int = 0, turnEnded: Int = 0, step: String = "") {
+                turnStarted: Int = 0, turnEnded: Int = 0, step: String = "", compacting: Bool = false, compactStarted: Int = 0) {
         self.available = available
         self.running = running
         self.turn = turn
@@ -29,6 +34,8 @@ public struct Control: Sendable, Equatable {
         self.turnStarted = turnStarted
         self.turnEnded = turnEnded
         self.step = step
+        self.compacting = compacting
+        self.compactStarted = compactStarted
     }
 }
 
@@ -70,11 +77,16 @@ public func parseControl(_ json: JSONValue) -> Control {
         queueAvailable: json["queue_available"].bool(),
         queued: json["queued"].array.map { Queued(id: $0["id"].string(), text: $0["text"].string(), status: $0["status"].string()) },
         turns: turns,
-        questions: !json["questions"].array.isEmpty || json["prompt"].isObject || !json["interactions"].array.isEmpty,
+        // 0.6.6: Codex also lists its last answered cards (they can still be changed). Counted, they made every new
+        // turn of such a conversation say 需要你回答 in yellow and hid 正在思考 (user 10-31).
+        questions: json["questions"].array.contains { $0["status"].string() != "answered" } || json["prompt"].isObject
+            || !json["interactions"].array.isEmpty,
         raw: json,
         turnStarted: json["turn_started"].int(),
         turnEnded: json["turn_ended"].int(),
-        step: json["step"].string())
+        step: json["step"].string(),
+        compacting: json["compacting"].bool() || json["step"].string() == "compact",
+        compactStarted: json["compact_started"].int())
 }
 
 /// One frame of the live stream: the snapshot (seq 1) or an update with only the changed messages.
@@ -84,6 +96,9 @@ public struct LiveFrame: Sendable, Equatable {
     public var messages: [Message]
     /// Codex sends its state inside the stream; nil for the other sources.
     public var control: Control?
+    /// 0.6.6: an update's page fields (status, runtime, title…), nil when it brought none. Dropped before, so the
+    /// context ring kept the number the page opened with, through a compaction too (user 10-31).
+    public var meta: JSONValue? = nil
 }
 
 /// Checks the live stream (live_events.py protocol 1): the first frame is the snapshot, then consecutive updates;
@@ -112,7 +127,8 @@ public struct StreamReducer: Sendable {
         let page = snapshot ? json["chat"] : json
         if snapshot, page["id"].string() != chat || page["app"].string() != app { throw ReadFailure("实时协议或会话身份不匹配") }
         let control: Control? = app == "codex" && json.object["control"] != nil ? (json["control"].isObject ? parseControl(json["control"]) : Control()) : nil
-        let frame = LiveFrame(seq: number, snapshot: snapshot, messages: try page["messages"].array.map(parseMessage), control: control)
+        var frame = LiveFrame(seq: number, snapshot: snapshot, messages: try page["messages"].array.map(parseMessage), control: control)
+        if !snapshot, json["meta"].isObject { frame.meta = json["meta"] }
         seq = number
         return frame
     }
@@ -136,6 +152,8 @@ public func receiptLabel(state: String, result: JSONValue, action: String) -> St
     case "queued": words = "已排队"
     case "accepted" where action == "stop": words = "停止请求已接收，等待轮次确认"
     case "accepted" where result["evidence"]["source"].string() == "conversation_record": words = "已送达"
+    // 0.6.6: a command the source ran itself (/compact); no message of it will ever be in the record to confirm it.
+    case "accepted" where !result["command"].string().isEmpty: words = "已送达"
     case "accepted": words = "已接收"
     default: words = "送达状态待确认"
     }

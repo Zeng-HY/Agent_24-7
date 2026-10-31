@@ -89,7 +89,11 @@ struct ConversationView: View {
                         .padding(.top, 16)
                 }
                 // 0.6.4: where the answer will appear, like the GPT app's 正在思考, with the turn's own timer.
-                if control.running && !control.questions {
+                // 0.6.6: 正在压缩上下文 while the source compacts, with the compaction's own start when it says.
+                if control.compacting {
+                    ThinkingRow(step: "compact", started: control.compactStarted > 0 ? control.compactStarted : model.turnStarted)
+                        .id("thinking")
+                } else if control.running && !control.questions {
                     ThinkingRow(step: model.turnStep, started: model.turnStarted)
                         .id("thinking")
                 }

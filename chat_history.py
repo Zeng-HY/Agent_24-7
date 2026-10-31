@@ -37,7 +37,7 @@ class Transcript:
                     raw=f.readline(st.st_size-f.tell())
                     if not raw.endswith(b'\n'):break
                     self.offset=f.tell()
-                    if self.app=='codex' and b'"event_msg"' not in raw[:160] and b'"response_item"' not in raw[:160]:continue
+                    if self.app=='codex' and b'"event_msg"' not in raw[:160] and b'"response_item"' not in raw[:160] and b'"compacted"' not in raw[:160]:continue
                     msgs,state=chats._parse(self.app,[raw],self.context)
                     msgs=activity_records.enrich(self.app,raw,msgs,self.context)
                     for k,v in state.items():

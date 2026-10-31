@@ -167,6 +167,8 @@ struct ComposerCard: View {
     @State private var selection: TextSelection?
     @State private var voice = VoiceInput()
     @State private var confirming: JSONValue?
+    /// The words a / or $ list row put in the box: the list stays away until they change.
+    @State private var picked: String?
     @FocusState private var focused: Bool
     /// The card's width: under 370 pt the chips use 11 pt (web .composer-chip).
     @State private var width: CGFloat = 400
@@ -184,6 +186,7 @@ struct ComposerCard: View {
         // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
         let newPage = isNewPage(chat.key?.chat)
         let prompt = newPage ? L("可以先写下一条，创建完成后发送") : chat.hint.isEmpty ? L("输入消息…") : chat.hint
+        let trigger = listAsked(newPage: newPage)
         VStack(alignment: .leading, spacing: 0) {
             StatusLine(model: model, voice: voice)
             // While recording, the card shows what is heard in place of the box (web: the box becomes the recorder).
@@ -191,6 +194,9 @@ struct ComposerCard: View {
                 VoiceLive(voice: voice)
             } else {
                 if !newPage { AttachmentTiles(workspace: model.workspace, saved: saved) }
+                if let trigger {
+                    SuggestionList(model: model, trigger: trigger) { pick($0, trigger) }
+                }
                 TextField("", text: $text, selection: $selection, prompt: Text(LK(prompt)).foregroundStyle(Palette.muted), axis: .vertical)
                     .bodyFont()
                     .foregroundStyle(Palette.ink)
@@ -228,6 +234,7 @@ struct ComposerCard: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 26, style: .continuous))
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .sensoryFeedback(.impact(weight: .light), trigger: chat.acknowledged)
+        .onChange(of: trigger) { _, next in model.workspace.suggest(next) }
         .onChange(of: text) { if text != chat.draft { chat.edit(text) } }
         .onChange(of: chat.draftReset, initial: true) { if text != chat.draft { text = chat.draft } }
         .onChange(of: chat.key) { text = chat.draft }
@@ -266,6 +273,27 @@ struct ComposerCard: View {
                 }
             }
         }
+    }
+
+    /// 0.6.6 (user 10-31): / at the start of the box lists the source's commands, $ at a word's start its skills
+    /// (DeepSeek takes none). Only at a plain cursor, and not again for the words a row just put there.
+    private func listAsked(newPage: Bool) -> ComposerTrigger? {
+        let chat = model.conversation
+        guard focused, chat.ready, !newPage, !voice.active, text != picked else { return nil }
+        let spot = cursor()
+        guard spot.0 == spot.1, let found = composerTrigger(text, cursor: spot.1) else { return nil }
+        if found.kind == .skill, (chat.key?.app ?? model.app) == "deepseek" { return nil }
+        return found
+    }
+
+    /// A row of the / or $ list (0.6.6): the command goes into the box with the cursor after it; a skill goes with the
+    /// message as 引用技能 adds it, and the typed $word leaves the box.
+    private func pick(_ row: JSONValue, _ trigger: ComposerTrigger) {
+        let next = trigger.kind == .command ? pickCommand(text, trigger, command: row) : dropTrigger(text, trigger)
+        if trigger.kind == .skill { model.workspace.addReference(row) }
+        text = next.text
+        picked = next.text
+        selection = TextSelection(insertionPoint: next.text.index(next.text.startIndex, offsetBy: min(next.cursor, next.text.count)))
     }
 
     /// The cursor or selection in the box, in characters; the end of the draft when it cannot be told.
@@ -355,6 +383,97 @@ struct ComposerCard: View {
 
     private var confirmShown: Binding<Bool> {
         Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } })
+    }
+}
+
+/// 0.6.6 (user 10-31): what fits the typed / or $, right above the words: the source's commands, or its skills. A tap
+/// puts the command in the box, or adds the skill as 引用技能 does. Five rows at most; more letters narrow them.
+private struct SuggestionList: View {
+    let model: AppModel
+    let trigger: ComposerTrigger
+    let pick: (JSONValue) -> Void
+
+    var body: some View {
+        let lists = model.workspace.suggestions
+        // Skills are searched on the computer as the words change; until the new answer comes, the last one narrowed here.
+        let all = composerMatches((trigger.kind == .command ? lists.commands : lists.skills) ?? [], query: trigger.query, limit: 100)
+        let rows = Array(all.prefix(5))
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                Button { pick(row) } label: { SuggestionRow(row: row, kind: trigger.kind) }
+                    .buttonStyle(.plain)
+            }
+            if rows.isEmpty || all.count > rows.count {
+                Text(note(lists, more: all.count - rows.count))
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.horizontal, 4)
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(LK(trigger.kind == .command ? "可用的命令" : "可用的技能")))
+    }
+
+    private func note(_ lists: ComposerLists, more: Int) -> LocalizedStringKey {
+        if more > 0 { return "还有 \(more) 个，接着输入可以筛选" }
+        if lists.busy.contains(trigger.kind) { return "正在读取…" }
+        if let failed = lists.failed { return LK(failed) }
+        if trigger.kind == .skill { return "没有找到匹配的技能" }
+        return lists.commands?.isEmpty == true ? "这个对话没有能从手机用的命令" : "没有找到匹配的命令"
+    }
+}
+
+/// One command or skill: what is typed for it in code letters, its name in words, then what it does.
+private struct SuggestionRow: View {
+    let row: JSONValue
+    let kind: ComposerTrigger.Kind
+
+    var body: some View {
+        let typed = kind == .skill ? "$" + row["name"].string()
+            : row["text"].string().isEmpty ? "/" + row["name"].string() : row["text"].string()
+        // The computer's own words for its built-in commands are in the String Catalog; a skill's are its author's.
+        let own = kind == .command && row["scope"].string() == "内置命令"
+        let title = row["title"].string()
+        let detail = row["detail"].string().isEmpty ? row["description"].string() : row["detail"].string()
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(verbatim: typed)
+                    .scaledFont(15, .medium, design: .monospaced, relativeTo: .callout)
+                    .foregroundStyle(Palette.ink)
+                if !title.isEmpty {
+                    words(title, own)
+                        .smallBodyFont()
+                        .foregroundStyle(Palette.ink)
+                }
+                if !row["input"].string().isEmpty {
+                    words(row["input"].string(), own)
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                }
+            }
+            .lineLimit(1)
+            if !detail.isEmpty {
+                words(detail, own)
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private func words(_ text: String, _ own: Bool) -> Text {
+        own ? Text(LK(text)) : Text(verbatim: text)
     }
 }
 

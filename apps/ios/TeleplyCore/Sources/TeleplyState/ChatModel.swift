@@ -10,7 +10,9 @@ public enum SendNote {
     public static let claudeCheckText = "_claude_check_text"
     public static let desktopDraft = "_desktop_draft"
     public static let sendError = "_send_error"
-    static let all = [claudeOffset, claudeCheckText, desktopDraft, sendError]
+    /// 0.6.6: the command the source ran itself (Outbox.swift).
+    public static let command = commandNote
+    static let all = [claudeOffset, claudeCheckText, desktopDraft, sendError, command]
 }
 
 /// Labels of sends still to be settled, and of a send taken off the list by the user.
@@ -569,6 +571,11 @@ public final class ChatModel {
                 } else {
                     let state = result["delivery_state"].string()
                     done.label = receiptLabel(state: state.isEmpty ? (result["accepted"].bool() ? "accepted" : "unknown") : state, result: result, action: action)
+                    if action == "send", !result["command"].string().isEmpty {
+                        var notes = jsonValue(record.body).object
+                        notes[SendNote.command] = result["command"]
+                        done.body = jsonText(.object(notes))
+                    }
                 }
                 await save(done, synthetic)
             }

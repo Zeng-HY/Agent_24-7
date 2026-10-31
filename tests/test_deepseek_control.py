@@ -461,4 +461,51 @@ class ListTests(unittest.TestCase):
         self.assertEqual([(v['id'],v['parent_title']) for v in out['items']],[('k012','# 任务')])
         self.assertEqual(self.history.conversations('all',query='batch_worker')['items'][0]['kind'],'script')
 
+class CommandTests(unittest.TestCase):
+    """0.6.6 (user 10-31): DeepSeek's own slash commands run as its box runs them, never as words to the model; its
+    context fills the ring, and a compaction shows while it runs and as a divider after."""
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.calls=[]
+        def call(method,args):
+            self.calls.append((method,args))
+            if method=='commands/list':return [{'definitionId':'x','name':'compact','description':'Compact older conversation history'},
+                                               {'name':'export','description':'Download this Session log'},
+                                               {'name':'goal','description':'Set or view the goal','input':{'hint':'[<objective>|clear]'}}]
+            if method=='commands/execute':return {'kind':'success'}
+            if method=='session/prompt':return {'accepted':True}
+            raise AssertionError(method)
+        self.client=Mock();self.client.call.side_effect=call
+        self.bridge=d.Bridge(self.client,self.tmp.name,links=d.ParentLinks(Path(self.tmp.name)/'links.jsonl'))
+        p=patch.object(self.bridge,'find',return_value={'id':SID,'status':'idle'});p.start();self.addCleanup(p.stop)
+    def methods(self):
+        return [m for m,_ in self.calls if m in ('session/prompt','commands/execute')]
+    def test_a_command_of_its_own_list_runs_once_as_a_command(self):
+        body={'id':SID,'request_id':'c'*32,'text':'/compact','intent':'steer','attachments':[]}
+        result=self.bridge.send(body)
+        self.assertEqual((result['command'],result['accepted']),('/compact',True))
+        self.assertEqual(self.bridge.send(body),result)
+        self.assertEqual(self.methods(),['commands/execute'])
+        self.assertEqual([a for m,a in self.calls if m=='commands/execute'][0],{'agentId':SID,'line':'/compact','submittedAttachments':[]})
+    def test_other_words_and_hidden_commands_go_as_a_prompt(self):
+        for text,rid in (('/export','d'*32),('/compactx','e'*32),('请 /compact 一下','f'*32)):
+            self.bridge.send({'id':SID,'request_id':rid,'text':text,'intent':'steer','attachments':[]})
+        self.assertEqual(self.methods(),['session/prompt']*3)
+    def test_the_list_in_the_phones_words_without_export(self):
+        import composer_commands
+        items=composer_commands.catalog('deepseek',SID,deepseek=self.bridge)['items']
+        self.assertEqual([(v['text'],v['title'],v['input']) for v in items],[('/compact','压缩上下文',''),('/goal','长任务目标','[<objective>|clear]')])
+    def test_context_and_a_compaction_under_way(self):
+        values={'modelSelection':{'next':{'model':'deepseek-v4','reasoningEffort':'high'}},
+                'contextPressure':{'pressureTokens':421026,'projectedTokens':422004,'contextWindow':1048576}}
+        runtime=d.runtime_of(values)
+        self.assertEqual((runtime['model'],runtime['used_tokens'],runtime['percent'],runtime['context_state']),('deepseek-v4',422004,40.2,'available'))
+        self.assertNotIn('percent',d.runtime_of({'modelSelection':{}}))
+        start={'type':'compaction/start','time':1761900000000,'data':{'compactionId':'k1'}}
+        end={'type':'compaction/end','time':1761900060000,'data':{'compactionId':'k1'}}
+        self.assertEqual(d.compaction([start],now=1761900030),(True,1761900000))
+        self.assertEqual(d.compaction([start,end],now=1761900070),(False,0))
+        self.assertEqual(d.compaction([start],now=1761900000+3600),(False,0))  # a start with no end is not shown forever
+        rows=d.public_messages([{'event':{**end,'seq':12}},{'event':{'type':'compaction/end','seq':13,'time':0,'data':{'compactionId':'k2','error':'x'}}}])
+        self.assertEqual([(r['role'],r['text']) for r in rows],[('event','对话已压缩'),('event','压缩没成功')])
+
 if __name__=='__main__':unittest.main()

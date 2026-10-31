@@ -11,6 +11,7 @@ from app_paths import DATA
 from types import SimpleNamespace
 from contextlib import contextmanager
 from deepseek_stream import public_messages,merge_row
+import composer_commands
 
 HOME = Path.home() / '.dsh'
 
@@ -21,8 +22,33 @@ def workspace_meta():
     except (OSError,ValueError):return {}
 
 class DeepSeekError(Exception):
-    def __init__(self, text, status=409):
-        super().__init__(text); self.status=status
+    def __init__(self, text, status=409, not_submitted=False):
+        super().__init__(text); self.status=status; self.not_submitted=not_submitted
+
+def runtime_of(values):
+    """The model, the effort and how full the context is (0.6.6): contextPressure's projectedTokens, what the next
+    request would cost (so a compaction shows before the next message), over the window, else the last sample."""
+    selection=(values.get('modelSelection') or {}).get('next') or {}
+    out={'model':selection.get('model'),'effort':selection.get('reasoningEffort')}
+    pressure=values.get('contextPressure') or {}
+    used=pressure.get('projectedTokens',pressure.get('pressureTokens'));window=pressure.get('contextWindow')
+    number=lambda v:isinstance(v,(int,float)) and not isinstance(v,bool)
+    if number(used) and used>=0 and number(window) and window>0:
+        out.update(used_tokens=int(used),context_window=int(window),percent=round(used/window*100,1),
+                   context_state='available',source='desktop')
+    return out
+
+def compaction(events,now=None):
+    """(True, its start in Unix seconds) while a compaction runs: a compaction/start of the last half hour with no
+    compaction/end of the same id after it (0.6.6); (False, 0) otherwise."""
+    started={}
+    for e in events:
+        kind=e.get('type');data=e.get('data') or {}
+        if kind=='compaction/start':started[data.get('compactionId')]=int((e.get('time') or 0)/1000)
+        elif kind=='compaction/end':started.pop(data.get('compactionId'),None)
+    now=time.time() if now is None else now
+    open_=[t for t in started.values() if t and now-t<1800]
+    return (True,max(open_)) if open_ else (False,0)
 
 def workspaces():
     """The workspaces the Harness sidebar lists, newest first (tables.workspaces in workspace.json).
@@ -386,18 +412,21 @@ class Bridge:
             rows.append({'id':child,'label':(state['title'] or '子智能体')[:60],'mode':'','title':state['title'],
                          'running':state['running'],'created':0,'updated':state['updated']})
         return rows
-    def _turn_times(self,sid,start_seq=0,records=None):
+    def _events(self,sid,start_seq=0,records=None):
+        """The newest events of a session (100), reaching back to the turn/start at start_seq when it is older."""
+        if records is not None:return [v.get('event') or {} for v in records]
+        try:page,_=self.records(sid,limit=100)
+        except Exception:return []
+        events=[v.get('event') or {} for v in page.get('records',[])]
+        if start_seq and not any(e.get('type')=='turn/start' for e in events):
+            try:earlier,_=self.records(sid,before=str(int(start_seq)+1),limit=5)
+            except Exception:earlier={}
+            events=[v.get('event') or {} for v in earlier.get('records',[])]+events
+        return events
+    def _turn_times(self,sid,start_seq=0,records=None,events=None):
         """The newest turn/start and turn/end events as Unix seconds, and the latest tool action (0.6.4)."""
-        if records is not None:
-            events=[v.get('event') or {} for v in records]
-        else:
-            try:page,_=self.records(sid,limit=100)
-            except Exception:return 0,0,''
-            events=[v.get('event') or {} for v in page.get('records',[])]
-            if start_seq and not any(e.get('type')=='turn/start' for e in events):
-                try:earlier,_=self.records(sid,before=str(int(start_seq)+1),limit=5)
-                except Exception:earlier={}
-                events=[v.get('event') or {} for v in earlier.get('records',[])]+events
+        if events is None:events=self._events(sid,start_seq,records)
+        if not events:return 0,0,''
         starts=[int(e['time']/1000) for e in events if e.get('type')=='turn/start' and e.get('time')]
         ends=[int(e['time']/1000) for e in events if e.get('type')=='turn/end' and e.get('time')]
         from chats import _step_of
@@ -417,12 +446,17 @@ class Bridge:
         v=p['values'];selection=(v.get('modelSelection') or {}).get('next') or {}
         outline=v.get('turnOutline') or []
         preset=current_permission(v)
-        started,ended,step=(0,0,'')
+        started,ended,step=(0,0,'');events=[]
         if item.get('_running') or outline:
-            started,ended,step=self._turn_times(sid,(outline[-1] or {}).get('seq') if outline else 0)
+            events=self._events(sid,(outline[-1] or {}).get('seq') if outline else 0)
+            started,ended,step=self._turn_times(sid,events=events)
+        # 0.6.6: a compaction (its /compact from the phone, or DeepSeek running out of room) shows as 压缩上下文, and the
+        # context ring rides on this state, read every 2.5 s, since the live stream gets the numbers only once.
+        compacting,compact_started=compaction(events)
         return {'available':True,'id':sid,'running':item.get('_running',False),'status':item['status'],
             'turn_id':str(outline[-1]['turn']) if outline else None,
-            'turn_started':started,'turn_ended':ended,'step':step if item.get('_running') else '',
+            'turn_started':started,'turn_ended':ended,'step':'compact' if compacting else step if item.get('_running') else '',
+            'compacting':compacting,'compact_started':compact_started,'runtime':runtime_of(v),
             'settings':selection,'questions':(v.get('userQuestions') or {}).get('active',[]),
             'inbox':v.get('inbox',{}),'queued':queued_messages(v.get('inbox')),
             'permission':preset or '','permission_name':permission_name(preset),'permission_available':preset is not None,
@@ -482,7 +516,7 @@ class Bridge:
         if around and (seq:=re.match(r'\d+(?=:|$)',str(around))):before=str(int(seq.group())+1)
         item=self.find(sid);page,p=self.records(sid,before,limit);rows=public_messages(page['records'],sid)
         seqs=[r['event']['seq'] for r in page['records'] if r.get('event')]
-        v=p['values'];selection=(v.get('modelSelection') or {}).get('next') or {}
+        v=p['values']
         subs=self._subagents(sid,v);by_child={s['id']:s for s in subs}
         for row in rows:
             if row.get('role')!='subagent':continue
@@ -493,7 +527,7 @@ class Bridge:
                                            records=page.get('records',[]))
         return {k:val for k,val in item.items() if not k.startswith('_')}|{'messages':rows,'subagents':subs,
             'turn_started':started,'turn_ended':ended,'step':step if item.get('_running') else '',
-            'size':p['asOfSeq'],'modified':item.get('updated',0),'runtime':{'model':selection.get('model'),'effort':selection.get('reasoningEffort')},
+            'size':p['asOfSeq'],'modified':item.get('updated',0),'runtime':runtime_of(v),
             'has_more':bool(page['hasMore'] and seqs),'next_cursor':str(min(seqs)) if seqs and page['hasMore'] else None,
             'has_newer':bool(before),'reset':False,'total':len(rows)}
     def image(self,sid,ident,thumbnail=False):
@@ -566,6 +600,11 @@ class Bridge:
         mode=body.get('intent','steer')
         if mode not in ('queue','steer'):raise DeepSeekError('发送模式无效',400)
         rid=body.get('request_id')
+        # 0.6.6: a slash command of DeepSeek's own list runs as its box runs it; sent as a prompt, the model read the words
+        command=composer_commands.parse(text)
+        if command and not ids and not body.get('references') and command[0][1:] not in composer_commands.DEEPSEEK_HIDDEN \
+                and any(c['name']==command[0][1:] for c in self.commands(sid)):
+            return self.command(sid,body,text.strip())
         def operation():
             result=self.client.call('session/prompt',{'request':{'sessionId':sid,'requestId':rid,'mode':mode,'content':content,'clientTimeZone':'Asia/Taipei'}})
             if result.get('accepted') is not True:raise DeepSeekError('DeepSeek 尚未确认接收')
@@ -573,6 +612,32 @@ class Bridge:
                 meta=self.uploads.attachment(ident,sid);meta['used']=True;self.uploads._write_meta(meta)
             return {'accepted':True,'text':'已排队' if mode=='queue' else '已交给 DeepSeek','request_id':rid}
         return self.once(rid,sid,body,operation)
+    def commands(self,sid):
+        """The session's own slash commands (commands/list, 0.6.6): name, description and the hint for what follows.
+        Kept a minute per session: the list changes only with DeepSeek itself."""
+        self.find(sid)
+        now=time.monotonic();cache=self.__dict__.setdefault('_commands',{})
+        hit=cache.get(sid)
+        if hit and now-hit[0]<60:return hit[1]
+        result=self.client.call('commands/list',{'agentId':sid})
+        rows=result.get('commands') if isinstance(result,dict) else result
+        found=[]
+        for row in rows if isinstance(rows,list) else []:
+            if not isinstance(row,dict) or not isinstance(row.get('name'),str) or not re.fullmatch(r'[A-Za-z][\w:.-]{0,63}',row['name']):continue
+            hint=row['input'].get('hint') if isinstance(row.get('input'),dict) else ''
+            found.append({'name':row['name'],'description':str(row.get('description') or ''),'hint':str(hint or '')})
+        cache[sid]=(now,found)
+        if len(cache)>40:cache.pop(next(iter(cache)))
+        return found
+    def command(self,sid,body,line):
+        """A slash command typed on the phone (0.6.6): commands/execute, as the desktop's box runs it."""
+        name=line.split()[0]
+        def operation():
+            result=self.client.call('commands/execute',{'agentId':sid,'line':line,'submittedAttachments':[]})
+            if isinstance(result,dict) and result.get('kind')=='error':
+                raise DeepSeekError('DeepSeek 没有执行 '+name+'：'+str(result.get('text') or '')[:160],409,not_submitted=True)
+            return {'accepted':True,'text':'已执行 '+name,'request_id':body.get('request_id'),'command':name}
+        return self.once(body.get('request_id'),sid,body,operation)
     def stop(self,sid,expected_turn=None):
         state=self.state(sid)
         if not expected_turn or expected_turn!=state['turn_id']:raise DeepSeekError('当前轮次已变化，请刷新后再停止')

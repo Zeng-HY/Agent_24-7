@@ -1,5 +1,9 @@
 import Foundation
 
+/// 0.6.6: the note a send's saved body gets when the source ran it as a command of its own (Codex's and DeepSeek's
+/// /compact): no message of it ever comes into the record, so it does not wait in the timeline.
+public let commandNote = "_command"
+
 /// Sends that are on this phone but not in the conversation's record yet (0.6.5). A send stays in the timeline, in the
 /// light "not yet in the record" style, until the record has the same message; then the record's row replaces it.
 ///
@@ -13,6 +17,8 @@ public func outboxSends(_ submissions: [Submission], messages: [Message], now: I
     for record in submissions.sorted(by: { $0.created < $1.created }) {
         guard record.action == "send", !record.request.isEmpty else { continue }
         guard !["未接收", "已取消排队"].contains(record.label) else { continue }
+        if record.body.contains(commandNote), let notes = try? JSONValue.parse(Data(record.body.utf8)),
+           !notes[commandNote].string().isEmpty { continue }
         if let found = users.first(where: { !used.contains($0.id) && $0.request == record.request }) {
             used.insert(found.id)
             continue

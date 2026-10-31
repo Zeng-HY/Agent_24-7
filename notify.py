@@ -299,7 +299,13 @@ def _scan_claude(scan: dict, rec: dict) -> None:
                 scan.update(state="done", ended=ts, action="")
             return
         text = _claude_text(content).strip()
-        if not text:
+        if not text or rec.get("isCompactSummary"):
+            return  # 0.6.6: the summary a /compact writes is not a turn of its own
+        if chats._COMMAND_OUTPUT.search(text) and not chats.clean_claude_user(text):
+            # 0.6.6: a local command's output (/compact's "Compacted") ends what the command began; no answer follows.
+            # Read as a new turn, it kept the island at 在干活 for twenty minutes after a /compact.
+            if scan["state"] == "running":
+                scan.update(state="stopped", ended=ts, action="")
             return
         if text.startswith("[Request interrupted"):
             scan.update(state="stopped", ended=ts, action="")

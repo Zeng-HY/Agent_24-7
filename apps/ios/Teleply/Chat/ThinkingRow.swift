@@ -5,7 +5,7 @@ import TeleplyIsland
 /// starts at the turn's recorded start (never at the phone's clock) and ticks by itself without a push. The width is
 /// pinned so a longer reading cannot push the rest of the page around (the 0.6.2 timer lesson).
 struct ThinkingRow: View {
-    /// edit | run | search | read, when the computer says; "" means it is thinking.
+    /// edit | run | search | read, when the computer says; "" means it is thinking; compact while it compacts (0.6.6).
     let step: String
     /// Unix seconds; 0 when the computer did not say, and then no timer is shown.
     let started: Int
@@ -26,7 +26,7 @@ struct ThinkingRow: View {
                         .frame(width: 210, alignment: .leading)
                 }
             } else {
-                Text("正在" + (IslandWords.stepName(step) ?? "思考"))
+                Text(verbatim: IslandWords.thinkingWords(step: step))
                     .lineLimit(1)
             }
             Spacer(minLength: 0)

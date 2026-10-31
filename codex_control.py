@@ -28,6 +28,7 @@ import win32event
 import win32file
 
 import chats
+import composer_commands
 
 HERE = Path(__file__).resolve().parent
 TESTED_APP_VERSION = "26.1007.2314.0"
@@ -37,6 +38,8 @@ VERSIONS = {"initialize": 0, "thread-owner-discovery": 1,
 VERSIONS["thread-follower-interrupt-turn"] = 4
 VERSIONS.update({"thread-follower-set-queued-follow-ups-state": 1,
                  "thread-follower-remove-queued-message": 1})
+# 0.6.6: the desktop's own /compact; its owner window runs thread/compact/start (app.asar 26.1021).
+VERSIONS["thread-follower-compact-thread"] = 1
 
 
 class ControlError(Exception):
@@ -287,6 +290,15 @@ def selected_settings(state):
 def is_running(state):
     turns = ordered_turns(state)
     return (state.get("threadRuntimeStatus") or {}).get("type") == "active" or bool(turns and turns[-1].get("status") == "inProgress")
+
+
+def compacting_now(state):
+    """A compaction under way (0.6.6), from /compact or from Codex running out of room: the running turn holds a
+    contextCompaction item not completed yet, the desktop's own test (app.asar 26.1021)."""
+    turns = ordered_turns(state)
+    return bool(turns) and is_running(state) and any(
+        isinstance(v, dict) and v.get("type") == "contextCompaction" and not v.get("completed")
+        for v in turns[-1].get("items") or [])
 
 
 def catalog():
@@ -647,9 +659,11 @@ class Bridge:
                 path = chats.conv_path(item)
                 step = chats.tail_step("codex", path, started) if path and is_running(state) else ""
             except (OSError, chats.ChatError):step = ""
+            compacting = compacting_now(state)  # 0.6.6: the phone says 正在压缩上下文 with the turn's timer
             return {"available": True, "settings": selected_settings(state), "running": is_running(state),
                     "active_turn_id": turns[-1].get("turnId") if is_running(state) and turns else None,
-                    "turn_started": started, "turn_ended": ended, "step": step,
+                    "turn_started": started, "turn_ended": ended, "step": "compact" if compacting else step,
+                    "compacting": compacting, "compact_started": started if compacting else 0,
                     "recent_turns": [{"id":t.get("turnId"),"status":t.get("status")} for t in turns[-4:]],
                     "questions": qs, "plan": latest_plan(state), "catalog": catalog(),
                     "queued": queued, "queue_available": queue_available,
@@ -856,12 +870,41 @@ class Bridge:
             self._finish(rid,response);self.cache.pop(tid,None)
             return response
 
+    def compact(self, body):
+        """/compact typed on the phone (0.6.6, user 10-31): the desktop compacts the conversation as its own /compact
+        does; sent as a message, the words only reached the model. Taken once per request id, like a send."""
+        tid, rid = str(body.get("id", "")), str(body.get("request_id", ""))
+        with self.lock:
+            if self.receipt(tid, rid)["state"] != "unknown":
+                return self._begin(rid, tid, body)
+            chats.require_send_desktop()
+            _, owner, state = self.snapshot(tid, True)
+            if is_running(state):
+                raise ControlError("Codex 这一轮还没结束，等它停下再压缩；草稿已保留")
+            self._begin(rid, tid, body)
+            try:
+                self._pipe().call("thread-follower-compact-thread", {"conversationId": tid}, owner, 30)
+            except ControlError as exc:
+                if "结果未确认" not in str(exc):  # the desktop said no: nothing started, the phone may send again
+                    self._finish(rid, {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)})
+                raise
+            result = {"ok": True, "accepted": True, "delivery_state": "accepted", "request_id": rid, "intent": "command",
+                      "command": "/compact", "text": "已开始压缩"}
+            self._finish(rid, result)
+            self.cache.pop(tid, None)
+            return result
+
     def send(self, body, timing=None):
         phase=timing or (lambda *args:None)
         phase('send_lock','等待 Codex 发送通道')
         tid, rid = str(body.get("id", "")), str(body.get("request_id", ""))
         text = str(body.get("text", "")).strip()
         ids = body.get("attachments") or []
+        command = composer_commands.parse(text)
+        if command and command[0] == "/compact" and not ids and not body.get("references") and not body.get("plan_id"):
+            if command[1]:
+                raise ControlError("Codex 的 /compact 不带说明，删掉后面的字再发；草稿已保留", 400)
+            return self.compact(body)
         if not isinstance(ids, list) or len(ids) > 5 or len(set(ids)) != len(ids):
             raise ControlError("每条消息最多 5 张不同图片", 400)
         files = any(isinstance(v, dict) and v.get("kind") in ("file", "folder") for v in body.get("references") or [])

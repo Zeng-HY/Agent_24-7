@@ -183,5 +183,12 @@ extension AppModel {
         guard screen == .reading, app == key.app, scope == key.scope, device?.id == key.device, chat?.id == key.chat else { return }
         let merged = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
         if merged != messages { messages = merged }
+        // 0.6.6: the model and the context as the computer has them now, so the ring follows a compaction while the
+        // page is open (it used to keep the number the page opened with).
+        if let meta = frame.meta, meta["runtime"].isObject, meta["runtime"] != pageMeta["runtime"] {
+            var next = pageMeta.object
+            next["runtime"] = meta["runtime"]
+            pageMeta = .object(next)
+        }
     }
 }

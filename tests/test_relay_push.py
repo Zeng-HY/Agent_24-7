@@ -502,6 +502,53 @@ class IslandTests(RelayTests):
         self.assertEqual(second['payload']['aps']['content-state']['state'], 'failed')
         self.assertEqual(self.activities()[1]['state'], 'failed')
 
+    async def test_quick_follow_up_turns_open_the_island_once(self):
+        """0.6.6 (user 10-31: the island opened too often): running never opens it; a conversation that just opened it
+        finishes again quietly; another one's done a minute after any opening opens it; asking always does."""
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.sweep_islands()
+        self.sender.sent.clear()
+
+        async def opens(ident, kind, chat, at):
+            before = len(self.sender.sent)
+            self.service.push.clock = lambda: float(at)
+            await self.service.push.deliver(self.devices[0], {'id': ident, 'event': 'message', 'kind': kind,
+                                                              'app': 'codex', 'chat': chat, 'title': chat})
+            return any('alert' in s['payload']['aps'] for s in self.sender.sent[before:]
+                       if s['push_type'] == 'liveactivity')
+
+        self.assertEqual([await opens('d1', 'done', 'c1', 1761630010),
+                          await opens('r1', 'running', 'c1', 1761630030),
+                          await opens('d2', 'done', 'c1', 1761630060),      # c1 opened it 50 s ago
+                          await opens('d3', 'done', 'c2', 1761630100),      # 90 s after the last opening
+                          await opens('d4', 'done', 'c3', 1761630130),      # 30 s after one
+                          await opens('w1', 'waiting', 'c3', 1761630160),   # asking
+                          await opens('r2', 'running', 'c1', 1761630380),
+                          await opens('d5', 'done', 'c1', 1761630400)],     # c1's last opening 390 s ago
+                         [True, False, False, True, False, True, False, True])
+
+    async def test_a_start_from_afar_goes_once_per_computer_until_its_island_reports_in(self):
+        """0.6.6: Apple opens the island for every start. Two conversations past a minute start one island, and a start
+        the phone has not answered with its island's token is not sent again a minute later."""
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('start-token', {'token': 'ef' * 32, 'environment': 'production'})
+        for ident, chat in (('r1', 'c1'), ('r2', 'c2')):
+            await self.service.push.deliver(self.devices[0], {'id': ident, 'event': 'message', 'kind': 'running',
+                                                              'app': 'codex', 'chat': chat, 'since': 1761630000})
+
+        def starts():
+            return [s for s in self.sender.sent if s['payload']['aps'].get('event') == 'start']
+
+        self.service.push.clock = lambda: 1761630061.0
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(starts()), 1)
+        self.service.push.clock = lambda: 1761630200.0
+        await self.service.push.sweep_islands()
+        self.assertEqual(len(starts()), 1)
+        await self.post('activity', self.computer(token='ab' * 32, since=1761630000, turn=1761630000))
+        self.assertNotIn(self.devices[0], self.service.push.start_sent)
+
     async def test_a_notice_carries_the_title_the_subtitle_and_how_long_the_turn_took(self):
         self.service.push.clock = lambda: 1761630000.0
         await self.post('register', {'token': PHONE})

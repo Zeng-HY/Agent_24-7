@@ -81,4 +81,21 @@ struct ChatCoreTests {
         #expect(control.turns == ["t0": "completed"])
         #expect(control.questions)
     }
+
+    /// 0.6.6: a conversation whose question was answered earlier is not waiting for the user in its next turn.
+    @Test func answeredCodexCardsDoNotWaitForTheUser() throws {
+        let answered = try JSONValue.parse(Data("""
+        {"available":true,"running":true,"turn_id":"t2",
+         "questions":[{"id":"native:t1:7","kind":"native","status":"answered","editable":false},
+                      {"id":"async:c1","kind":"async","status":"answered","editable":true}]}
+        """.utf8))
+        #expect(!parseControl(answered).questions)
+        let open = try JSONValue.parse(Data("""
+        {"available":true,"running":true,"turn_id":"t2",
+         "questions":[{"id":"async:c1","kind":"async","status":"answered"},{"id":"native:t2:9","kind":"native","status":"pending"}]}
+        """.utf8))
+        #expect(parseControl(open).questions)
+        let deepseek = try JSONValue.parse(Data(#"{"available":true,"questions":[{"callId":"q1","questions":[]}]}"#.utf8))
+        #expect(parseControl(deepseek).questions)  // DeepSeek lists only the open ones, with no status
+    }
 }

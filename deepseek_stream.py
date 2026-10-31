@@ -88,6 +88,9 @@ def public_messages(records,sid=None):
                 rows[str(seq)]={**base,'id':str(seq),'order':seq,'role':'assistant','kind':'deliverables','presented_files':valid,
                     'text':'成果文件：\n'+'\n'.join(v['path'].replace('\\','/').rsplit('/',1)[-1] for v in valid)}
             continue
+        if kind=='compaction/end':  # 0.6.6: /compact or DeepSeek out of room, as Claude's and Codex's divider
+            rows[str(seq)]={**base,'id':str(seq),'order':seq,'role':'event','text':'压缩没成功' if data.get('error') else '对话已压缩'}
+            continue
         if kind=='subagent/catalog':
             # A conversation opened a subagent (the desktop shows these as its own cards). The label is the one the
             # host shows; the child's status is filled in when the history is read (deepseek_control.conversation).

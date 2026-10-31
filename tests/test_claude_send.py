@@ -498,11 +498,32 @@ class SendTests(unittest.TestCase):
         self.assertEqual(chats.claude_command('/compact 是一句普通的话'),'')
     def test_compaction_shows_as_a_divider_and_nothing_runs_after_it(self):
         msgs,state=chats.parse_claude([json.dumps(v).encode() for v in self.COMPACT])
-        self.assertEqual([(m['role'],m['text']) for m in msgs],[('assistant','推送好了。'),('event','对话已压缩')])
+        # 0.6.6: the /compact shows where Claude took it from its queue, once (not again at its tagged line)
+        self.assertEqual([(m['role'],m['text']) for m in msgs],[('assistant','推送好了。'),('user','/compact'),('event','对话已压缩')])
         self.assertIs(state['running'],False)
         # a command that hands work to Claude (a skill) is a turn under way until the answer comes
         skill={'type':'user','timestamp':'2026-10-20T10:30:00Z','message':{'role':'user','content':'<command-message>code-review</command-message>\n<command-name>/code-review</command-name>\n<command-args></command-args>'}}
         self.assertIs(chats.parse_claude([json.dumps(v).encode() for v in [*self.COMPACT,skill]])[1]['running'],True)
+    def test_a_compaction_under_way_runs_with_its_own_step(self):
+        """0.6.6: between the queue's dequeue and the compact boundary Claude writes nothing for minutes; the phone says
+        正在压缩上下文 with the timer from when Claude took the command."""
+        lines=[json.dumps({**v,'timestamp':'2026-10-20T10:18:38Z'} if v['type']=='queue-operation' else v).encode() for v in self.COMPACT]
+        msgs,state=chats.parse_claude(lines[:3])
+        self.assertEqual((state['running'],state['step'],state['turn_started']),(True,'compact','2026-10-20T10:18:38Z'))
+        self.assertEqual(msgs[-1],{'role':'user','text':'/compact','time':'2026-10-20T10:18:38Z'})
+        msgs,state=chats.parse_claude(lines)
+        self.assertEqual((state['running'],state['step']),(False,''))
+        # read a line at a time (chat_history.Transcript), the command shows once too
+        context,seen={},[]
+        for line in lines:seen+=chats.parse_claude([line],context)[0]
+        self.assertEqual([m['text'] for m in seen if m['role']=='user'],['/compact'])
+    def test_a_compaction_says_what_the_context_came_down_to(self):
+        boundary={'type':'system','subtype':'compact_boundary','timestamp':'2026-10-05T08:25:09Z',
+                  'compactMetadata':{'trigger':'manual','preTokens':765755,'postTokens':12751}}
+        answer={'type':'assistant','timestamp':'2026-10-05T08:10:19Z','message':{'model':'claude-opus','stop_reason':'end_turn',
+                'usage':{'input_tokens':10,'cache_read_input_tokens':765000,'cache_creation_input_tokens':700},'content':[]}}
+        out=chats.parse_runtime('claude',[json.dumps(v).encode() for v in (answer,boundary)])
+        self.assertEqual((out['used_tokens'],out['context_state'],out['source']),(12751,'partial','compact'))
     def test_midturn_attachment_proves_read_and_is_public_input(self):
         record={'type':'attachment','uuid':'attachment-id','timestamp':'now','attachment':{'type':'queued_command','prompt':'补充指令','humanTurn':True,'origin':{'kind':'human'},'source_uuid':'source-1'},'rendered':[{'content':'PRIVATE TRANSPORT WRAPPER'}]}
         raw=(json.dumps(record)+'\n').encode()

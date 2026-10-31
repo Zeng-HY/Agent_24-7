@@ -66,6 +66,7 @@ import live_events
 import claude_control
 import claude_hooks  # Claude Code asks this service first before a question card or a permission prompt (10-27)
 import composer_references
+import composer_commands  # what the box offers after / and how a typed command runs (0.6.6)
 import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
 import archives  # a left swipe archives a conversation; 设置 → 已归档对话 restores or deletes (10-20)
 import new_conversations
@@ -460,6 +461,14 @@ class Handler(BaseHTTPRequestHandler):
             try:self._json(self.server.references.search(q.get('app','codex'),q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),force=q.get('fresh')=='1',scan_id=q.get('scan_id','')))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
+        if path=='/api/composer/commands':  # 0.6.6: what the box offers after / (composer_commands.py)
+            q=self._query();app=q.get('app','codex')
+            try:
+                if app not in ('codex','claude','deepseek'):raise chats.ChatError('没有这个来源')
+                if app!='deepseek':chats.find(app,q.get('id',''))
+                self._json(composer_commands.catalog(app,q.get('id',''),self.server.references,self.server.deepseek))
+            except (chats.ChatError,deepseek_control.DeepSeekError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
+            return
         if path in ('/api/files/places','/api/files/list'):  # 电脑上的文件: where to start, and one folder (pc_files.py)
             q=self._query()
             try:
@@ -827,7 +836,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path=='/api/deepseek/approval':result=bridge.events.answer(body.get('id'),body.get('event_id'),body.get('choice'),'approval/request')
             else:raise deepseek_control.DeepSeekError('没有这个接口',404)
             self._json(result)
-        except (deepseek_control.DeepSeekError,codex_control.ControlError,chats.ChatError) as exc:self._json({'error':str(exc)},getattr(exc,'status',400))
+        except (deepseek_control.DeepSeekError,codex_control.ControlError,chats.ChatError) as exc:
+            self._json({'error':str(exc),'not_submitted':bool(getattr(exc,'not_submitted',False))},getattr(exc,'status',400))
         except (ValueError,TypeError,KeyError):self._json({'error':'DeepSeek 请求或接口格式不兼容'},400)
 
     def _codex_get(self, path):

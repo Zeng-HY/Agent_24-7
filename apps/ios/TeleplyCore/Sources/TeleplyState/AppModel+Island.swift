@@ -157,6 +157,9 @@ extension AppModel {
             }
             island.live[ref.raw] = IslandTrack(identity: identity, state: state)  // the relay's list comes with it
             islandFetchToken(ref)
+            // 0.6.6: the relay starts one from afar only when it knows of none for this computer, so one the phone still
+            // has is left over (its token never reached the relay). Two would both open at every pop.
+            if identity.chat.isEmpty { islandEndOthers(of: identity.device, keeping: ref) }
         case let .token(ref, token):
             guard var track = island.live[ref.raw] else { return }
             track.token = token
@@ -166,6 +169,20 @@ extension AppModel {
         case let .dismissed(ref):
             guard let track = island.live.removeValue(forKey: ref.raw) else { return }
             Task { await islandUnregister(track) }
+        }
+    }
+
+    /// Ends this computer's other islands (0.6.6): each would open at every pop too, and with two up iOS shows only
+    /// the small round style.
+    func islandEndOthers(of device: String, keeping ref: IslandRef) {
+        let others = island.live.filter { $0.key != ref.raw && $0.value.identity.device == device && $0.value.identity.chat.isEmpty }
+        for (key, track) in others {
+            island.live.removeValue(forKey: key)
+            Task { [weak self] in
+                guard let self else { return }
+                await services.island.end(IslandRef(raw: key), track.state, dismissIn: 0)
+                await islandUnregister(track)
+            }
         }
     }
 
@@ -224,6 +241,27 @@ extension AppModel {
                 kept.append(snap)
             }
         }
+        // 0.6.6: one island per computer. The one the relay knows (registered) stays, else the later one.
+        var keep: [String: IslandSnapshot] = [:]
+        var spare: [IslandSnapshot] = []
+        for snap in kept where snap.identity.chat.isEmpty {
+            guard let held = keep[snap.identity.device] else {
+                keep[snap.identity.device] = snap
+                continue
+            }
+            if island.live[held.ref.raw]?.registered == true {
+                spare.append(snap)
+            } else {
+                spare.append(held)
+                keep[snap.identity.device] = snap
+            }
+        }
+        for snap in spare {
+            await services.island.end(snap.ref, snap.state, dismissIn: 0)
+            if let track = island.live.removeValue(forKey: snap.ref.raw) { await islandUnregister(track) }
+        }
+        let gone = Set(spare.map(\.ref.raw))
+        kept.removeAll { gone.contains($0.ref.raw) }
         for snap in kept where island.live[snap.ref.raw] == nil {
             island.live[snap.ref.raw] = IslandTrack(identity: snap.identity, state: snap.state)
             islandFetchToken(snap.ref)

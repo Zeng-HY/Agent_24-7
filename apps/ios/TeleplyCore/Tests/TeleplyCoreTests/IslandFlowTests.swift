@@ -307,6 +307,27 @@ struct IslandFlowTests {
         #expect(paths.contains("/account/push/activity"))
     }
 
+    /// 0.6.6 (user 10-31: the island opened too often): two islands for one computer both opened at every pop.
+    @Test func aComputerKeepsOneIslandAndAStartFromAfarReplacesALeftOverOne() async {
+        let world = DemoWorld(), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: WatchedTransport(world: world))
+        let identity = IslandIdentity(device: DemoData.computerA, app: "", chat: "", computer: "测试电脑 A", title: "")
+        island.snapshots = [
+            IslandSnapshot(ref: IslandRef(raw: "a"), identity: identity, state: IslandState(status: .working, since: 1, turn: 1)),
+            IslandSnapshot(ref: IslandRef(raw: "b"), identity: identity, state: IslandState(status: .working, since: 2, turn: 2)),
+        ]
+        await model.islandReconcile()
+        #expect(island.ends == 1)
+        #expect(Array(model.island.live.keys) == ["b"])
+        island.snapshots.append(IslandSnapshot(ref: IslandRef(raw: "c"), identity: identity,
+                                               state: IslandState(status: .working, since: 3, turn: 3)))
+        island.fire(.started(IslandRef(raw: "c"), identity, IslandState(status: .working, since: 3, turn: 3)))
+        #expect(Array(model.island.live.keys) == ["c"])
+        for _ in 0..<100 where island.ends < 2 { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(island.ends == 2)
+        #expect(island.snapshots.map(\.ref.raw) == ["c"])
+    }
+
     @Test func turningTheSwitchOffEndsEveryIsland() async throws {
         let world = DemoWorld(), watched = WatchedTransport(world: world), island = FakeIsland()
         let model = await signedIn(world, island: island, transport: watched)

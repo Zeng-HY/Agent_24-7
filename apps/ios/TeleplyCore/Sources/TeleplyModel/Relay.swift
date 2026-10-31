@@ -261,7 +261,7 @@ public struct RelayClient: Sendable {
     /// The computer routes the phone calls besides reading (Android RelayApi DetailRoutes).
     public static let detailRoutes: Set<String> = [
         "chat/new/options", "chat/folders", "chat/new/draft", "chat/new", "chat/new/state", "chat/new/retry", "chat/new/references",
-        "composer/references", "files/places", "files/list", "files/image", "files/remove", "codex/remove-attachment", "codex/attachments",
+        "composer/references", "composer/commands", "files/places", "files/list", "files/image", "files/remove", "codex/remove-attachment", "codex/attachments",
         "chat/files", "chat/diff", "file/text", "file/meta", "deepseek/models", "deepseek/permissions", "deepseek/model", "deepseek/permission",
         "deepseek/answer", "deepseek/approval", "claude/catalog", "claude/setting", "claude/choose", "claude/menu", "claude/close-menu",
         "chat/projects", "chat/open", "chat/resolve", "claude/next", "claude/task", "chat/check", "chat/archive", "chat/unarchive",
