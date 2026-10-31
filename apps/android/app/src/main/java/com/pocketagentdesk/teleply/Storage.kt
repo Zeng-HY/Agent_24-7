@@ -13,6 +13,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.settings by preferencesDataStore("native_settings")
@@ -23,6 +24,32 @@ class SettingsStore(private val context: Context) {
     suspend fun origin(value: String) { context.settings.edit { p -> p[stringPreferencesKey("origin")] = value; listOf("scope","device","chat","title","app").forEach { p.remove(stringPreferencesKey(it)) } } }
     suspend fun appearance(theme: String, dynamic: Boolean) { context.settings.edit { it[stringPreferencesKey("theme")] = theme; it[booleanPreferencesKey("dynamic")] = dynamic } }
     suspend fun selection(scope: String, device: String, chat: String = "", title: String = "") { context.settings.edit { p -> mapOf("scope" to scope,"device" to device,"chat" to chat).forEach { (k,v) -> p[stringPreferencesKey(k)] = v }; p.remove(stringPreferencesKey("title")) } }
+    /** 10-31 ([moveService]): whether the move off the old default ran; then that it did, with only the address changed. */
+    suspend fun serviceMoved() = context.settings.data.first()[booleanPreferencesKey("service_moved")] == true
+    suspend fun serviceMoved(origin: String?) { context.settings.edit { p -> if (origin != null) p[stringPreferencesKey("origin")] = origin; p[booleanPreferencesKey("service_moved")] = true } }
+}
+
+/**
+ * 10-31: Teleply's own service moved from its IP ([OldDefaultOrigin]) to its domain ([DefaultOrigin]). It answers on
+ * both and a sign-in is good on either, but this phone keeps the sign-in by address ([SecureCookieVault]). Once, as the
+ * app starts: a phone still on the old default (its IP saved, or nothing saved, which meant the default) is put on the
+ * new one, with its sign-in moved to the new address and the conversation it checks in the background ([watched]).
+ * Where it was (the sign-in's scope, the computer, the conversation), drafts and sends are kept by sign-in, not by
+ * address, so they stay as they are; updates come from addresses of their own. Done is remembered: the IP set again by
+ * hand (开发者选项 → 服务地址) stays.
+ */
+suspend fun moveService(store: ReaderStore, vault: CookieVault, watched: (from: String, to: String) -> Unit = { _, _ -> }) {
+    if (store.serviceMoved()) return
+    val from = serviceOrigin(OldDefaultOrigin).toString()
+    val to = serviceOrigin(DefaultOrigin).toString()
+    val saved = store.preferences().origin
+    val old = saved.isBlank() || sameService(saved, from)
+    if (old) {
+        vault.read(from)?.let { vault.write(to, it); vault.write(from, null) }
+        watched(from, to)
+    }
+    // Nothing saved stays nothing: the default, which is now the domain.
+    store.serviceMoved(if (old && saved.isNotBlank()) to else null)
 }
 class SecureCookieVault(context: Context) : CookieVault {
     private val prefs = context.getSharedPreferences("keystore_credentials", Context.MODE_PRIVATE)

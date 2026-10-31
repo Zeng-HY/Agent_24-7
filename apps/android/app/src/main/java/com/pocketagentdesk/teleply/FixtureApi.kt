@@ -123,6 +123,8 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     }
     override suspend fun renameDevice(device: String, label: String) { world.devices.replaceAll { if (it.id == device) it.copy(label = label) else it } }
     override suspend fun revokeDevice(device: String) { if (!world.devices.removeIf { it.id == device }) throw ServiceFailure(404) }
+    // The demo account's password is fixture (进入示例); another is turned down in the service's words.
+    override suspend fun deleteAccount(password: String) { if (password != "fixture") throw ServiceFailure(400, detail = "当前密码错误"); world.signedIn = false }
 
     override suspend fun chats(device: String, query: String, cursor: String?): Page<Chat> = chatList(device, source, query, cursor)
 

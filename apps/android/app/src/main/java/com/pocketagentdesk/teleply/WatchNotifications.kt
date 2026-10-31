@@ -37,7 +37,11 @@ fun notificationChange(old:WatchSignal?,now:WatchSignal):String?=when {
     }
     else -> null
 }
-fun watchBelongs(target:WatchTarget,prefs:Preferences)=target.origin==prefs.origin && target.key.scope==prefs.scope && prefs.scope.isNotBlank()
+/**
+ * Whether [target] is still this phone's: the same service and sign-in. Nothing saved is the default service, which the
+ * app shows as [DefaultOrigin] (10-31: compared as written, the check could not be switched on there at all).
+ */
+fun watchBelongs(target:WatchTarget,prefs:Preferences)=sameService(target.origin,prefs.origin.ifBlank { DefaultOrigin }) && target.key.scope==prefs.scope && prefs.scope.isNotBlank()
 class WatchManager(private val context:Context,private val store:ReaderStore,private val apiFactory:(String)->ReadApi) {
     private val prefs=context.getSharedPreferences("native_watch",Context.MODE_PRIVATE)
     private val mutable=MutableStateFlow(readTarget());val state=mutable.asStateFlow()
@@ -64,6 +68,16 @@ class WatchManager(private val context:Context,private val store:ReaderStore,pri
         if(result!=JobScheduler.RESULT_SUCCESS) { disable();error("系统未接受后台检查任务") }
     }
     fun disable() { context.getSystemService(JobScheduler::class.java).cancel(JOB);NotificationManagerCompat.from(context).cancel(NOTICE);prefs.edit().clear().commit();mutable.value=null }
+    /**
+     * 10-31 ([moveService]): the service's address changed from [from] to [to], the same service. The conversation
+     * checked there goes along with its token, so a notice already shown still opens it.
+     */
+    fun moved(from:String,to:String) {
+        val t=state.value ?: return
+        if(!sameService(t.origin,from)) return
+        val j=runCatching { JSONObject(prefs.getString("target",null)!!) }.getOrNull() ?: return
+        if(prefs.edit().putString("target",j.put("origin",to).toString()).commit()) mutable.value=t.copy(origin=to)
+    }
     suspend fun resolve(nonce:String):WatchTarget?=state.value?.takeIf { it.nonce==nonce && watchBelongs(it,store.preferences()) }
     suspend fun checkOnce():String {
         val target=state.value ?: return "未开启"

@@ -32,7 +32,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.room.Room
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 fun useTwoPane(width:Float,height:Float,fontScale:Float)=width>=840f*fontScale.coerceIn(1f,1.6f) && height>=480f
 
@@ -56,7 +58,9 @@ class MainActivity : ComponentActivity() {
         watchToken=intent.getStringExtra(WatchManager.EXTRA)
         setContent {
             val vm:ReaderViewModel=viewModel(factory=object:ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T = ReaderViewModel(store) { origin -> RelayApi(origin,vault) } as T
+                // 10-31: off the old default service (its IP) once, before the saved one is read (moveService); a deleted
+                // account takes its background check with it.
+                @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T = ReaderViewModel(store,prepare={ withContext(Dispatchers.IO) { moveService(store,vault) { from,to -> graph.watch.moved(from,to) } } },accountDeleted={ graph.watch.disable() }) { origin -> RelayApi(origin,vault) } as T
             })
             val state by vm.state.collectAsStateWithLifecycle()
             LaunchedEffect(watchToken,state.busy,state.account) {
@@ -241,13 +245,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** 隐私政策 (设置 → 关于遥应): the page the web account page's footer links to. */
+const val PrivacyPolicyUrl = "https://pocketagentdesk.com/privacy"
+
 /**
  * Settings page (spec 4.6). Only what users set (0.9): conversations, appearance, notifications, voice, the account and
  * about; the service address, the local demo and diagnostics are under 开发者选项 at the bottom.
  */
 @Composable private fun SettingsScreen(s:ReaderState,vm:ReaderViewModel) {
+    val context=LocalContext.current
     var archived by remember { mutableStateOf(false) }
     var licences by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
     PageFrame("设置",null,vm::back) {
         if(s.device!=null) {
             SectionLabel("对话")
@@ -260,7 +269,7 @@ class MainActivity : ComponentActivity() {
             SectionLabel("账号")
             CardSection {
                 CardRow("我的电脑",vm::computers,chevron=true)
-                if(!s.fixture) { CardDivider();CardRow("退出登录",vm::logout,danger=true) }
+                if(!s.fixture) { CardDivider();CardRow("退出登录",vm::logout,danger=true);CardDivider();CardRow("删除账号",{ deleting=true },danger=true) }
             }
         }
         SectionLabel("关于遥应")
@@ -270,11 +279,15 @@ class MainActivity : ComponentActivity() {
             CardDivider()
             CardRow("检查更新",{ updater?.check(manual=true) },detail=if(updater?.enabled==false) "开发版不检查更新" else "每天自动看一次，有新版本时提示",chevron=updater?.enabled==true,enabled=updater?.enabled==true)
             CardDivider()
+            // In the phone's browser, as 登录's 忘记密码？ and 创建账号.
+            CardRow("隐私政策",{ openInBrowser(context,PrivacyPolicyUrl) },chevron=true)
+            CardDivider()
             CardRow("开源组件",{ licences=true },chevron=true)
         }
         CardSection { CardRow("开发者选项",vm::developer,chevron=true) }
     }
     if(archived) ArchivedSheet(vm) { archived=false }
+    if(deleting) DeleteAccountSheet(s,vm) { deleting=false }
     if(licences) TeleplySheet("开源组件",{ licences=false }) {
         Text("液态玻璃移植自 Kyant0/AndroidLiquidGlass（Backdrop，Apache-2.0）；CommonMark Java 0.24.0（BSD-2-Clause）；AndroidX、Kotlin、OkHttp（Apache-2.0）；Word 和 Excel 文件用 docx-preview 0.4.1（Apache-2.0）、JSZip 3.10.2（MIT）、SheetJS 社区版 0.20.3（Apache-2.0）在手机上显示；Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。",style=MaterialTheme.typography.bodyMedium,color=LocalTeleply.current.text)
     }

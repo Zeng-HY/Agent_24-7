@@ -103,6 +103,7 @@ class RelayApiTest {
     private lateinit var server:MockWebServer
     private lateinit var api:RelayApi
     private lateinit var vault:MemoryCookieVault
+    private lateinit var client:OkHttpClient
     private val device="a".repeat(32)
     @Before fun setup() {
         val cert=HeldCertificate.Builder().addSubjectAlternativeName("localhost").addSubjectAlternativeName("127.0.0.1").build()
@@ -110,7 +111,8 @@ class RelayApiTest {
         val trust=HandshakeCertificates.Builder().addTrustedCertificate(cert.certificate).build()
         server=MockWebServer().apply { useHttps(tls.sslSocketFactory(),false);start() }
         vault=MemoryCookieVault()
-        api=RelayApi(server.url("/").toString(),vault,OkHttpClient.Builder().sslSocketFactory(trust.sslSocketFactory(),trust.trustManager).build())
+        client=OkHttpClient.Builder().sslSocketFactory(trust.sslSocketFactory(),trust.trustManager).build()
+        api=RelayApi(server.url("/").toString(),vault,client)
     }
     @After fun cleanup() { api.close();server.shutdown() }
     private fun response(json:String,status:Int=200) { server.enqueue(MockResponse().setResponseCode(status).setHeader("Content-Type","application/json").setBody(json)) }
@@ -141,6 +143,38 @@ class RelayApiTest {
     @Test fun offlineHasSpecificError()=runTest {
         response("""{"code":"device_offline"}""",409)
         try { api.select(device);fail() } catch(e:ServiceFailure) { assertEquals(409,e.status);assertEquals("device_offline",e.code) }
+    }
+    /** 删除账号: the password in a POST with this service's Origin; turned down, the sign-in stays; done, only this one goes. */
+    @Test fun deleteAccountPostsThePasswordAndDropsOnlyThisSignIn()=runTest {
+        val here=server.url("/").toString()
+        vault.write(here,"__Host-ar_account=synthetic; Path=/; Secure; HttpOnly");vault.write("https://another.invalid/","other")
+        response("""{"error":"当前密码错误"}""",400)
+        try { api.deleteAccount("wrong");fail() } catch(e:ServiceFailure) { assertEquals(400,e.status);assertEquals("当前密码错误",e.message) }
+        response("""{"error":"请在 31 秒后重试","code":"rate_limited","retry_after":31}""",429)
+        try { api.deleteAccount("wrong");fail() } catch(e:ServiceFailure) { assertEquals(429,e.status);assertEquals("请在 31 秒后重试",e.message) }
+        repeat(2) { server.takeRequest() }
+        assertNotNull(vault.read(here))
+        server.enqueue(MockResponse().setHeader("Content-Type","application/json").setBody("""{"ok":true}""").addHeader("Set-Cookie","__Host-ar_account=; Path=/; Secure; HttpOnly; Max-Age=0"))
+        api.deleteAccount("test-only")
+        val post=server.takeRequest()
+        assertEquals("POST",post.method);assertEquals("/account/delete",post.requestUrl!!.encodedPath);assertEquals(here.removeSuffix("/"),post.getHeader("Origin"))
+        assertEquals("__Host-ar_account=synthetic",post.getHeader("Cookie"));assertEquals("test-only",JSONObject(post.body.readUtf8()).string("password"))
+        assertNull(vault.read(here));assertEquals("other",vault.read("https://another.invalid/"))
+    }
+    /** 10-31: a sign-in made on the old default's IP and moved (moveService) is what the domain is sent, with its own Origin. */
+    @Test fun aSignInMovedOffTheIpIsSentToTheDomain()=runTest {
+        val ip=serviceOrigin(OldDefaultOrigin)
+        vault.write(ip.toString(),okhttp3.Cookie.parse(ip,"__Host-ar_account=synthetic; Path=/; Secure; HttpOnly; Max-Age=3600")!!.toString())
+        moveService(TestStore(),vault)
+        // The domain's requests come to this test server instead.
+        val here=client.newBuilder().addInterceptor { chain -> chain.proceed(chain.request().newBuilder().url(chain.request().url.newBuilder().host(server.hostName).port(server.port).build()).build()) }.build()
+        val domain=RelayApi(DefaultOrigin,vault,here)
+        try {
+            response("""{"devices":[],"email":""}""");domain.account()
+            assertEquals("__Host-ar_account=synthetic",server.takeRequest().getHeader("Cookie"))
+            response("""{"ok":true}""");domain.deleteAccount("test-only")
+            assertEquals(DefaultOrigin,server.takeRequest().getHeader("Origin"))
+        } finally { domain.close() }
     }
     @Test fun expirationClearsOnlyCurrentOrigin()=runTest {
         vault.write(server.url("/").toString(),"__Host-ar_account=synthetic; Path=/; Secure; HttpOnly")

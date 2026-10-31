@@ -35,6 +35,14 @@ class PlatformPolicyTest {
         val p=Preferences(origin=target.origin,scope="owner")
         assertTrue(watchBelongs(target,p));assertFalse(watchBelongs(target,p.copy(scope="other")));assertFalse(watchBelongs(target,p.copy(origin="https://another.invalid/")))
     }
+    /** 10-31: nothing saved is the default service, however the check's address is written; anything else is not. */
+    @Test fun watchOnTheDefaultServiceBelongsWhenNothingIsSaved() {
+        val target=WatchTarget(DefaultOrigin,ChatKey("owner","d","c"),"random");val p=Preferences(origin="",scope="owner")
+        assertTrue(watchBelongs(target,p));assertTrue(watchBelongs(target.copy(origin="https://app.pocketagentdesk.com/"),p))
+        assertTrue(watchBelongs(target,p.copy(origin="https://APP.pocketagentdesk.com/")))
+        assertFalse(watchBelongs(target.copy(origin=OldDefaultOrigin),p));assertFalse(watchBelongs(target.copy(origin="fixture://local"),p))
+        assertFalse(watchBelongs(target,p.copy(origin="https://example.invalid/")));assertFalse(watchBelongs(target,p.copy(scope="")))
+    }
     @Test fun responsiveLayoutLeavesRoomForTextAndKeyboard() {
         assertFalse(useTwoPane(412f,800f,1f));assertTrue(useTwoPane(1200f,800f,1f))
         assertFalse(useTwoPane(1200f,800f,2f));assertTrue(useTwoPane(1600f,900f,2f));assertFalse(useTwoPane(1000f,400f,1f))

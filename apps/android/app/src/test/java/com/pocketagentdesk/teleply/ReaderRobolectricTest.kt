@@ -72,6 +72,15 @@ class ReaderRobolectricTest:ReaderUiScenarios() {
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Developer }
         capture("09-developer-dark-large-jvm")
     }
+    /** 设置 → 关于遥应 → 隐私政策 opens the policy in the phone's browser, as 登录's links open the web account page. */
+    @Test fun privacyPolicyOpensInTheBrowser() {
+        launch();compose.waitUntil(10000) { vm.state.value.screen==Screen.Login && !vm.state.value.busy }
+        compose.onNodeWithContentDescription("设置").performClick()
+        compose.onNodeWithText("隐私政策").performScrollTo().performClick()
+        val opened=org.robolectric.Shadows.shadowOf(androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()).nextStartedActivity
+        org.junit.Assert.assertEquals(android.content.Intent.ACTION_VIEW,opened.action)
+        org.junit.Assert.assertEquals("https://pocketagentdesk.com/privacy",opened.dataString)
+    }
     @Test fun nativeLoginFieldsEvidence() {
         launch()
         compose.runOnIdle { vm.connect("https://fixture.example.invalid") }

@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -289,7 +290,7 @@ fun LoginPage(s: ReaderState, vm: ReaderViewModel) {
                 }
                 val offline = s.error?.startsWith("连不上服务器") == true && s.account == null
                 AccountMessage(
-                    s.error ?: if (s.expired) "登录已失效，请重新登录；回到原来的位置。" else null,
+                    s.error ?: s.accountNote ?: if (s.expired) "登录已失效，请重新登录；回到原来的位置。" else null,
                     error = s.error != null,
                     action = if (offline) "重试" else null,
                     onAction = vm::retry,
@@ -303,8 +304,34 @@ fun LoginPage(s: ReaderState, vm: ReaderViewModel) {
     }
 }
 
-private fun openAccountPage(context: android.content.Context, origin: String) {
-    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(origin.removeSuffix("/") + "/account")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+private fun openAccountPage(context: android.content.Context, origin: String) = openInBrowser(context, origin.removeSuffix("/") + "/account")
+
+/** A web page in the phone's browser (登录's 忘记密码？ and 创建账号, 设置's 隐私政策); nothing happens when there is none. */
+fun openInBrowser(context: android.content.Context, url: String) {
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+}
+
+/**
+ * 删除账号 (设置 → 账号; the web account menu's dialog): what goes and what stays, the password again, 取消 and 删除. A
+ * sheet in the page's own window, as 管理电脑, so the field types like every other one. When the service turns the
+ * password down or asks to wait, its words show under the field and the sheet stays; done, the app is on 登录.
+ */
+@Composable
+fun DeleteAccountSheet(s: ReaderState, vm: ReaderViewModel, onDismiss: () -> Unit) {
+    val p = LocalTeleply.current
+    var password by remember { mutableStateOf("") } // never saved
+    var refused by remember { mutableStateOf<String?>(null) }
+    val delete = { if (password.isNotEmpty() && !s.busy) { refused = null; vm.deleteAccount(password) { refused = it } } }
+    TeleplySheet("删除账号？", onDismiss) {
+        if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = p.accent, trackColor = p.line)
+        Text("账号、关联的邮箱、绑定的电脑和通知设置都会删除，不能恢复。电脑上的文件和对话不受影响。", style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 22.sp), color = p.muted)
+        AccountField(password, { password = it }, "当前密码", password = true, imeAction = ImeAction.Done, onDone = delete)
+        refused?.let { Text(it, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.note, color = p.error) }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PillButton("取消", onDismiss, modifier = Modifier.weight(1f))
+            PillButton("删除", delete, style = PillStyle.Danger, enabled = password.isNotEmpty() && !s.busy, modifier = Modifier.weight(1f))
+        }
+    }
 }
 
 /**

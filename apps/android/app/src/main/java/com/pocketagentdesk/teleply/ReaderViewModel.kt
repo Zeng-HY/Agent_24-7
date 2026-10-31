@@ -23,6 +23,13 @@ interface ReaderStore {
     suspend fun setOrigin(origin: String)
     suspend fun appearance(theme: String, dynamic: Boolean)
     suspend fun selection(scope: String, device: String, chat: String, title: String)
+    /**
+     * 10-31 ([moveService]): whether this phone has left the old default service yet; and noting that it has, with
+     * [origin] saved in place of the old address when that one had been saved. The place stays (unlike [setOrigin]):
+     * it is the same service under another address.
+     */
+    suspend fun serviceMoved(): Boolean = true
+    suspend fun serviceMoved(origin: String?) {}
 }
 class NativeReaderStore(private val settings: SettingsStore, private val dao: ReadingDao) : ReaderStore {
     override suspend fun source(app:String)=settings.source(app)
@@ -37,6 +44,8 @@ class NativeReaderStore(private val settings: SettingsStore, private val dao: Re
     override suspend fun setOrigin(origin: String) = settings.origin(origin)
     override suspend fun appearance(theme: String, dynamic: Boolean) = settings.appearance(theme, dynamic)
     override suspend fun selection(scope: String, device: String, chat: String, title: String) = settings.selection(scope,device,chat,title)
+    override suspend fun serviceMoved() = settings.serviceMoved()
+    override suspend fun serviceMoved(origin: String?) = settings.serviceMoved(origin)
 }
 /** [Launch]: the Teleply mark while the app finds out where it stands (0.9, web account page while booting). */
 /** [Developer]: 开发者选项 under 设置 (0.9: the service address, the local demo and diagnostics, off the main pages). */
@@ -52,6 +61,8 @@ data class ReaderState(
     val older: Boolean = false, val newer: Boolean = false, val searchQuery: String = "",
     val hits: List<Message> = emptyList(), val hitCursor: String? = null, val hitMore: Boolean = false, val searched: Boolean = false,
     val busy: Boolean = false, val error: String? = null, val expired: Boolean = false,
+    /** A line under 登录 that is not an error (web account page say): 账号已删除. */
+    val accountNote: String? = null,
     val theme: String = "system", val dynamic: Boolean = false, val serverVersion: String = "",
     /**
      * [anchor]: the message the page shows first after the read numbered [scrollRevision], a search hit (jump); null
@@ -115,11 +126,18 @@ data class ArchiveUndo(val chat: Chat, val index: Int, val waiting: Boolean, val
 fun chatKey(chat: Chat) = chat.app + ":" + chat.id
 /** [text] is the first message carried over when the source is switched inside the sheet ([switching]: keep it open). */
 data class NewTarget(val app:String,val folder:String,val projectless:Boolean,val text:String="",val switching:Boolean=false,val restore:NewJob?=null)
-/** The Teleply service every ordinary user signs in to (mobile/src/settings.mjs DEFAULT_ORIGIN, deploy/relay). */
-const val DefaultOrigin = "https://8.166.15.235"
+/** The Teleply service every ordinary user signs in to: its domain since 10-31 (deploy/relay). */
+const val DefaultOrigin = "https://app.pocketagentdesk.com"
+/** The default before 10-31, the service's IP. The service still answers there; [moveService] takes phones off it once. */
+const val OldDefaultOrigin = "https://8.166.15.235"
 
-/** [defaultOrigin] is used until another service address is set under 设置 → 更改服务地址 (0.9: none to type at first). */
-class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin: String = DefaultOrigin, private val apiFactory: (String) -> ReadApi) : ViewModel() {
+/**
+ * [defaultOrigin] is used until another service address is set under 设置 → 更改服务地址 (0.9: none to type at first).
+ * [prepare] runs as the app starts, before the saved service is read: the move off the old default (10-31, [moveService]).
+ * [accountDeleted] runs once 删除账号 is done, for what the phone keeps of the account outside the app's pages: the
+ * background check of a conversation (10-31; 退出登录 leaves it on).
+ */
+class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin: String = DefaultOrigin, private val prepare: suspend () -> Unit = {}, private val accountDeleted: () -> Unit = {}, private val apiFactory: (String) -> ReadApi) : ViewModel() {
     private val mutable = MutableStateFlow(ReaderState())
     val state: StateFlow<ReaderState> = mutable.asStateFlow()
     private var api: ReadApi? = null
@@ -151,7 +169,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     private var pendingNotification:WatchTarget?=null
     fun openNotification(target:WatchTarget) { pendingNotification=target;operation { g ->
         val s=state.value;val key=target.key
-        require(s.origin==target.origin && s.scope==key.scope && s.account!=null) { "通知登录范围已变化，请重新选择会话" }
+        require(sameService(s.origin,target.origin) && s.scope==key.scope && s.account!=null) { "通知登录范围已变化，请重新选择会话" }
         api?.close();api=apiFactory(s.origin).forSource(key.app)
         val service=requireNotNull(api);val account=service.account()
         val device=account.devices.firstOrNull { it.id==key.device && it.connectable } ?: error("通知对应电脑不可用")
@@ -200,7 +218,11 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     }
     init { launch() }
     /** Starts as the app opens: the saved service, or the default one, with the mark shown meanwhile (web booting). */
-    private fun launch() = operation { g -> begin(g) }
+    private fun launch() = operation { g ->
+        // A move that fails (the phone's storage) is tried again at the next start; the app starts all the same.
+        try { prepare() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        begin(g)
+    }
     /** From nothing held (leaving the local demo, another service): only what this phone saved carries over. */
     private suspend fun begin(g: Int) {
         val p = store.preferences(); pendingRestore = p
@@ -275,8 +297,34 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         pendingNotification=null
         val s=state.value
         try { api?.logout() } catch (e: CancellationException) { throw e } catch (_: Exception) { /* the cookie is gone here either way */ }
+        signedOut(g,s)
+    }
+    /**
+     * 删除账号 (设置 → 账号, web account menu): the service deletes the account once its password is given again, and this
+     * phone then signs out as 退出登录 does, onto 登录 with 账号已删除; the background check stops too ([accountDeleted]).
+     * A wrong password or too many tries come back to the dialog in the service's words ([refused]) and it stays open; a
+     * sign-in that ran out goes to 登录 as anywhere else.
+     */
+    fun deleteAccount(password: String, refused: (String) -> Unit) = operation { g ->
+        pendingNotification=null
+        val s=state.value
+        try {
+            require(password.isNotEmpty()) { "请输入当前密码。" }
+            requireNotNull(api).deleteAccount(password)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (e is ServiceFailure && e.status == 401) throw e
+            refused(if (e is ServiceFailure || e is IllegalArgumentException) e.message.orEmpty() else "连接失败，请检查网络和服务地址后重试。")
+            return@operation
+        }
+        // Gone for good, whatever happens to this page next.
+        runCatching { accountDeleted() }
+        signedOut(g,s,"账号已删除")
+    }
+    /** What 退出登录 leaves: 登录 on the same service, nothing of the account or of where it was; [note] under the form. */
+    private suspend fun signedOut(g:Int,s:ReaderState,note:String?=null) {
         persistSelection(s.scope,"","","")
-        commit(g) { ReaderState(app=s.app,origin=s.origin,screen=Screen.Login,theme=s.theme,dynamic=s.dynamic,serverVersion=s.serverVersion,emailEnabled=s.emailEnabled,fixture=s.fixture) }
+        commit(g) { ReaderState(app=s.app,origin=s.origin,screen=Screen.Login,theme=s.theme,dynamic=s.dynamic,serverVersion=s.serverVersion,emailEnabled=s.emailEnabled,fixture=s.fixture,accountNote=note) }
     }
     /** 重命名 a computer (web device menu); the list is read again. */
     fun renameDevice(device: Computer, label: String) = operation { g ->

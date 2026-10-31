@@ -470,6 +470,9 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("主题").assertExists()
         compose.onNodeWithText("录音后自动整理").performScrollTo().assertIsOn()
         compose.onNodeWithText("显示操作耗时").assertDoesNotExist()
+        // The demo has no account to delete; 隐私政策 is there all the same (not tapped here: it opens the browser).
+        compose.onNodeWithText("删除账号").assertDoesNotExist()
+        compose.onNodeWithText("隐私政策").performScrollTo().assertHasClickAction()
         compose.onNodeWithText("开发者选项").performScrollTo().performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Developer }
         compose.onNodeWithText("显示操作耗时").performScrollTo().performClick()
@@ -499,6 +502,27 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithContentDescription("账号菜单").performClick()
         compose.onNodeWithText("退出登录").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Login && vm.state.value.account==null && !vm.state.value.busy }
+    }
+    /** 删除账号 (设置 → 账号): one sheet asks for the password; turned down it says why and stays; done, 登录 says 账号已删除. */
+    @Test fun deletingTheAccountAsksForThePasswordOnOneSheet() {
+        launch();compose.waitUntil(10000) { vm.state.value.screen==Screen.Login && !vm.state.value.busy }
+        // Signed in to a service (the demo's, not the demo itself, which has no account to delete).
+        compose.runOnIdle { vm.login("测试账号","测试密码") }
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Devices && !vm.state.value.busy }
+        compose.runOnIdle { vm.settings() }
+        compose.onNodeWithText("删除账号").performScrollTo().performClick()
+        compose.onNodeWithText("删除账号？").assertIsDisplayed()
+        compose.onNodeWithText("账号、关联的邮箱、绑定的电脑和通知设置都会删除，不能恢复。电脑上的文件和对话不受影响。").assertIsDisplayed()
+        compose.onNodeWithText("删除").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("当前密码").performTextInput("不对")
+        compose.onNodeWithText("删除").performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithText("当前密码错误").fetchSemanticsNodes().isNotEmpty() && !vm.state.value.busy }
+        compose.onNodeWithText("删除账号？").assertIsDisplayed()
+        compose.runOnIdle { org.junit.Assert.assertNotNull(vm.state.value.account) }
+        compose.onNodeWithContentDescription("当前密码").performTextReplacement("fixture")
+        compose.onNodeWithText("删除").performClick()
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Login && vm.state.value.account==null && !vm.state.value.busy }
+        compose.onNodeWithText("账号已删除").assertIsDisplayed()
     }
     /** 0.9 (web sidebar): sources behind their marks and open, projects behind folders with ＋ and folded at first. */
     @Test fun sidebarShowsSourcesAndProjectsAndFolds() {

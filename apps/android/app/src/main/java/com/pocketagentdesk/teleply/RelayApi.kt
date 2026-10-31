@@ -30,6 +30,8 @@ fun serviceOrigin(value: String): HttpUrl {
     require(url.scheme == "https" && url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null && url.encodedPath == "/") { "请输入 HTTPS 服务根地址，不含账号、路径或参数。" }
     return url
 }
+/** Whether [a] and [b] are one service address, however written ("https://host" or "https://host/"); never for a non-address. */
+fun sameService(a: String, b: String) = runCatching { serviceOrigin(a) == serviceOrigin(b) }.getOrDefault(false)
 interface ReadApi {
     fun forSource(app:String):ReadApi = this
     suspend fun detail(device:String,route:String,query:Map<String,String?> = emptyMap(),body:JSONObject?=null):JSONObject = error("当前服务不支持此功能")
@@ -57,6 +59,8 @@ interface ReadApi {
     /** 我的电脑's ⋯ (web device menu): a new name, or remote access taken away (the computer's files stay). */
     suspend fun renameDevice(device: String, label: String) { error("当前服务不支持重命名电脑") }
     suspend fun revokeDevice(device: String) { error("当前服务不支持移除电脑") }
+    /** 删除账号 (web account menu): the password again; the account, its email, computers and notices go for good. */
+    suspend fun deleteAccount(password: String) { error("当前服务不支持删除账号") }
     suspend fun account(): Account
     suspend fun select(device: String)
     suspend fun chats(device: String, query: String, cursor: String?): Page<Chat>
@@ -137,6 +141,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     override suspend fun logout() { try { request("/account/logout", body = JSONObject()) } finally { vault.write(key, null) } }
     override suspend fun renameDevice(device: String, label: String) { devicePath(device, ""); request("/account/rename", body = JSONObject().put("id", device).put("label", label)) }
     override suspend fun revokeDevice(device: String) { devicePath(device, ""); request("/account/revoke", body = JSONObject().put("id", device)) }
+    /** Done, the service has ended every sign-in of the account: the cookie here goes too, as for 退出登录. */
+    override suspend fun deleteAccount(password: String) { request("/account/delete", body = JSONObject().put("password", password)); vault.write(key, null) }
     override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
         require(route in DetailRoutes)
         return request(devicePath(device,"/api/$route"),query,body,timeout=SlowRoutes[route] ?: 0)
