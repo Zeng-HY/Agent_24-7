@@ -223,5 +223,13 @@
       "Claude 压缩完不再让岛写二十分钟「在干活」。"
     ],
     "details": "输入框命令\n新接口 /api/composer/commands 给出每个对话能从手机用的命令：Codex 是 /compact；Claude 是 /compact、/init、/review、/security-review，加上自己的命令和技能；DeepSeek 用它自己的命令列表（export 是下载到电脑的，不列）。Codex 的 /compact 交给桌面自己的压缩（thread-follower-compact-thread），正在跑时不接；DeepSeek 的命令走 commands/execute。$ 列出的技能仍走原来的引用技能。\n\n压缩中和上下文\nCodex 看桌面状态里没完成的 contextCompaction，Claude 看它从队列取走 /compact 的那一刻，DeepSeek 看 compaction/start 和 compaction/end，状态里都带 compacting 和开始时间。Codex 和 DeepSeek 的时间线也有「对话已压缩」。DeepSeek 的状态和页面带上下文用量（projectedTokens / 窗口）；Claude 压缩后用记录里的 postTokens，桌面的上下文面板关着时用上次读到的窗口算百分比。\n\n通知\nClaude 的压缩摘要和「Compacted」不再算成新的一轮。\n\n安装\nWindows 0.27.0-dev.32 / build 32，试验构建，没有正式发布。"
+  },
+  "0.27.0-dev.33": {
+    "summary": [
+      "Claude 的 /compact 不再留下两行：压缩完再发消息会变成「正在思考」，电脑记的排队清单也会自己纠正。",
+      "压缩后 Claude 把旧记录又写一遍时按 uuid 去重，旧对话不会再出现一遍；列表摘要和「下一步」框也不受影响。",
+      "发出的消息按电脑的钟或记录位置对照：带图片的消息不再留一条淡色的「已送达」重影。"
+    ],
+    "details": "压缩状态和排队\n逐行读 Claude 的记录时，一行把步骤清空（新的用户消息、compact_boundary、Compacted、一轮结束、被打断）现在真的会清空，不再一直显示「正在压缩上下文」；Codex 同样处理。电脑自己记的排队清单每条记下入队时间，超过 30 分钟丢掉；撤下时先按原文字、再按去掉 cross-session-message 开头标签属性（如 hop-chain）的文字、再按前 60 字匹配；用户消息出现时，把清单里相同的一条及它前面的全部删掉，不会再错一位。\n\n重复的记录\nClaude 压缩时有时会把旧记录原样再写一遍（uuid 相同）。现在按 uuid 整行跳过：不出消息、不改状态、不改排队清单；列表摘要、「下一步」框和通知也一起去了重。\n\n发出的消息\nClaude、Codex、DeepSeek 的发送结果多带一个 accepted_at（电脑自己的时间，毫秒）。手机 0.7.1 用它或 Claude 的记录位置对照，不再拿手机的钟和电脑的钟比；这台电脑慢 13 秒也能对上，带图片的消息不会留下淡色重影。\n\n安装\nWindows 0.27.0-dev.33 / build 33，试验构建，没有正式发布。"
   }
 }
