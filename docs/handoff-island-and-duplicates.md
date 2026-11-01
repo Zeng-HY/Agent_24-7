@@ -263,8 +263,38 @@ sudo journalctl -u agent-relay-027 --since "2026-10-31 15:00" --until "2026-11-0
 
 ## 9. 结果记录（接手的会话填）
 
-- 中转日志看到的断开原因：
+- 中转日志看到的断开原因（11-01 查，证据在下面）：
+  - **不是文档原先猜的「404 睡 30 分钟」**。中转日志里 10-31 23:17:29 是最后一次读到电脑（`push: snapshot …298b1d -> 2 个在干活/等你`）；到 11-01 08:23:28 为止一条 `push: running / step / done / snapshot` 都没有。这中间中转没有重启（进程号 150477 一直不变），岛每 10 分钟照常 `refresh island`，手机回前台时还 `register island` 补推旧状态。
+  - 日志里也没有「电脑断开超过一分钟，变灰」那一行，说明中转一直认为电脑的隧道连着；断的是「读电脑事件的那条流」。
+  - 数据库：`/var/lib/agent-relay/accounts.sqlite3` 的 `push_phones` 表是**空的**（09:54 查）；同时 `devices` 里这台电脑（`c9f98709…`，名「🤩」）和 `push_activities` 里那座岛（`state=working`）都属于同一个账号 `029ec66e…`。
+  - 代码：`relay_push.py` 的 `look()` 只为「`hub.connections` 里、且它所属账号在 `push_phones` 里有手机」的电脑建读流任务；账号没有推送手机时，`owners` 为空，所有电脑一条流都不读。岛的刷新和「变灰/收起」只看 `push_activities` 与 `hub.connections`，跟 `push_phones` 无关。所以推送手机登记一没（23:14 重启后还能读到，23:17:29 起读不到了），读流就停了；岛却每 10 分钟被刷新成「新的」，直到 8 小时被苹果收掉。
+  - 触发「推送手机登记没了」的具体动作日志里没有：可能是在 App 里关了遥应通知/解绑了令牌，也可能是找回密码（会清 `push_phones`）。下一次有 4.7 加的「中转开始读通知」和读流状态日志，就能直接看到。
+  - 4.5 起把「有没有手机」和「读不读电脑」解耦（有岛也读），并且读流 60 秒没动静就按离线处理，这一类断法就不会再让岛冻住。
 - 每条毛病的改法、提交号、测试名：
+  - **压-1、压-2、两-1：提交 `7ec157e`**（`chats.py`、`chat_history.py`、`notify.py`）。
+    - 压-2：逐行解析（传了 context）只返回这一行真的设置过的字段，空值也合并；`compact_boundary`、新的用户消息、`Compacted` 输出、一轮结束、被打断都会清空 step；Codex 同样处理。测试 `tests/test_claude_send.py::LineStateTests`（两条）、`tests/test_live_history.py::test_a_new_codex_turn_clears_the_step_and_the_turn_end`。
+    - 压-1：排队清单每条记入队时间，超过 30 分钟丢掉；`remove` 先精确、再规范化（去掉 cross-session-message 开头标签的属性，如 hop-chain）、再比前 60 字；用户消息或带标签命令出现时，把清单里相同的一条及它前面的全部删掉。测试 `QueueShadowTests`（三条）。
+    - 两-1：`Transcript` 和 `notify` 的增量读取按 uuid 整行跳过（不出消息、不改状态、不改排队清单）；`summary`、`claude_open_next`、`turn_end` 在同一次读取里也去重。测试 `tests/test_claude_record_repeats.py`（四条）、`tests/test_notify.py::ClaudeCopy`。
+  - **两-2：提交 `de4fee2`**（`remote.py`、`Outbox.swift`、`ChatModel.swift`）。
+    - 电脑三个发送结果都加 `accepted_at`（电脑自己的时间，毫秒，只加字段）；手机把 `accepted_at` 存进发送备注；Claude 按记录位置对照（消息 `order` 大于 `_claude_offset`）、不比时间，其它情况用 `accepted_at − 5 秒`，老电脑两者都没有时放宽到 120 秒；「10 分钟后放弃」也用同一时间基准。测试 `tests/test_send_accepted_at.py`（两条）、`OutboxTests.swift` 新增五条、`ChatModelTests.swift` 的 `theComputersTimeOfAcceptingIsKeptOnTheSend`。
+  - **岛-1 到岛-4：提交 `0915366`**（`relay_push.py`、`notify.py`、`remote.py`）。
+    - 岛-1：读流不再只看「账号有没有推送手机」——有岛的电脑也读（这次断开的真正开关）；404 不再等 30 分钟，一分钟重试；退避上限 60 秒；隧道连接换了立刻重建；电脑和中转都加「开始/停止读通知」日志。测试 `IslandTests::test_a_computer_with_an_island_is_read_even_with_no_phone_registered`、`test_a_reconnected_tunnel_gets_a_new_reader_at_once`、`test_a_refused_route_is_retried_in_a_minute_and_a_break_within_seconds`。
+    - 岛-2：每台电脑记最后一次从事件流读到东西的时间（keepalive 也算），60 秒没有就当离线：岛变灰、不再做 10 分钟刷新；恢复后等电脑快照到了才改回内容。测试 `test_a_silent_stream_turns_the_island_grey_though_the_tunnel_is_up`；老测试 `test_a_computer_gone_goes_grey_and_comes_back` 按新规矩改成「先变灰，快照到了再恢复」。
+    - 岛-3：读到的位置从 `push_events` 取，重启不丢，没有就问 12 小时；超过 10 分钟的补报事件只改岛、不弹不响；快照里缺席、最后一次事件已过 60 秒的对话一次就标停（刚开始的仍等第二次快照）；空快照 60 秒后再补一次。测试 `test_the_last_event_read_is_kept_for_a_restart_and_twelve_hours_are_asked_first`、`test_a_replayed_old_event_changes_the_island_but_shows_no_banner`、`test_a_snapshot_drops_a_conversation_whose_last_event_is_a_minute_old`、`test_notify.py::test_an_empty_snapshot_is_sent_once_when_the_last_work_ends`（按新规矩改了期望）。
+    - 岛-4：开了 7 小时 45 分的岛先用最终状态结束（立即收起）；电脑上还有对话在跑就立刻远程开一个新的（不受 `START_HOLD` 限制）。测试 `test_an_island_seven_hours_and_45_minutes_old_is_ended_and_started_again`。手机端查过：没有「岛开了多久」的假设，`since/turn` 只用来显示计时，不用改。
 - 没做或改了方案的地方，和原因：
+  - 4.7 的「只有电脑明确是老版本才长等」没做：中转手里没有电脑版本号（握手只报带不带这个接口，没把版本存下来），所以 404 一律 60 秒重试。代价是老电脑会每分钟问一次；等握手报出版本再细分。
+  - 岛-1 的真实原因和文档原先猜的「404 退避 30 分钟」不同（见上面的日志和数据库证据）。所以 4.5 多了一条文档原文没有的改动：**有岛也读**——这是这次真正把它救回来的开关。
+  - 因为离线判断改成看事件流，两条老测试按新规矩改了期望：`test_a_computer_gone_goes_grey_and_comes_back`（恢复要等快照）、`test_an_empty_snapshot_is_sent_once_when_the_last_work_ends`（空快照要多补一次）；另有一条计数测试改成看最后一次推送（running 的静默更新现在是分开的）。不是悄悄改。
+  - 中转数据库里 `push_phones` 是空的：这部 iPhone 现在没有向中转登记「遥应通知」的令牌（岛是另一套）。有岛之后读流不再依赖它，岛能正常跟；要收普通通知得在 App 的 设置 → 手机通知 里把「遥应通知」打开（这一步我没动）。
+  - 本机 `.venv` 原来没装 pytest，这次装了 9.0.3（只是测试工具，不进仓库）。
 - 安卓查到的情况、用户的决定：
+  - 安卓的淡色气泡只显示 `label == "提交中"`，电脑一回「已接收」就撤掉（`ChatUi.kt:270`），不会像 iPhone 那样留一条重复的淡色气泡。
+  - 安卓的图片对照（`SentPictures.kt:36`）两边都用电脑时间和电脑记的 `created`，同一个钟，不受手机快 13 秒影响。
+  - 结论：安卓没有这两个症状，不需要改。只查没改；要不要以后也保留淡色气泡，等用户决定。
 - 发布情况（哪个版本、谁在什么时候同意的）：
+  - 还没发布。Windows dev.33、中转包、iOS 0.7.1 按第 8 节每一步都要单独问，这一步还没问、没做。
+- 验证记录（11-01）：
+  - 全量 pytest（`.venv`）：703 项通过，3 项失败都是原来就有的——`test_mobile_polish` 找「复制命令」按钮的两项，和 `test_relay_mobile_layout::test_account_home_and_connection_panel`（在干净的 HEAD 临时工作树上复跑同样失败，确认与这次无关）。
+  - iOS `swift test`：241 项全过（本机 Swift 6.4.1 + VS 2022 Build Tools；`--scratch-path` 指到工作区，没碰仓库里的 `.build`）。
+  - 真机没验，等新版本装上以后照 7.2 做。
