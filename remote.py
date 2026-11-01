@@ -736,6 +736,9 @@ class Handler(BaseHTTPRequestHandler):
         # replace_draft: the text the phone was shown in Claude's box (DesktopDraft) and agreed may go
         replace={'replace':body['replace_draft'][:2000]} if app=='claude' and isinstance(body.get('replace_draft'),str) else {}
         result=self.desktop.send(app,tid,text,images,**replace) if images else self.desktop.send(app,tid,text,**replace)
+        # 11-01: the computer's own time when it took the message. Claude's and DeepSeek's records carry this
+        # computer's clock, so the phone compares against this instead of its own (which was 13 s fast here).
+        result['accepted_at']=int(time.time()*1000)
         for image in images:
             image['used']=True;self.server.codex._write_meta(image)
         if body.get('references') or images:result['check_text']=text
@@ -826,7 +829,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif path=='/api/deepseek/receipt':result=bridge.receipt(q.get('request_id',''))
                 elif path=='/api/deepseek/permissions':result=bridge.permissions(q.get('id',''))
                 else:raise deepseek_control.DeepSeekError('没有这个接口',404)
-            elif path=='/api/deepseek/send':result=bridge.send(body)
+            elif path=='/api/deepseek/send':
+                result=bridge.send(body)
+                result['accepted_at']=int(time.time()*1000)  # 11-01: the computer's own clock; see _send_with_references
             elif path=='/api/deepseek/permission':result=bridge.set_permission(body.get('id'),body.get('preset'),body.get('confirmed') is True)
             elif path=='/api/deepseek/queue':result=bridge.queue_action(body.get('id'),body.get('item_id'),body.get('action'))
             elif path=='/api/deepseek/stop':result=bridge.stop(body.get('id'),body.get('expected_turn'))
@@ -983,6 +988,7 @@ class Handler(BaseHTTPRequestHandler):
             bridge = self.server.codex
             if path == "/api/codex/send":
                 result = bridge.send(body)
+                result['accepted_at'] = int(time.time()*1000)  # 11-01: the computer's own clock; see _send_with_references
             elif path == "/api/codex/stop":
                 result = bridge.stop_turn(body)
             elif path == "/api/codex/answer":

@@ -6,13 +6,15 @@ import TeleplyModel
 /// stood when the computer pressed Enter and the words to look for there (web chat/check), and, for a send the
 /// computer turned away, what was in Claude's box and why.
 public enum SendNote {
-    public static let claudeOffset = "_claude_offset"
+    public static let claudeOffset = claudeOffsetNote
     public static let claudeCheckText = "_claude_check_text"
     public static let desktopDraft = "_desktop_draft"
     public static let sendError = "_send_error"
+    /// 11-01: when the computer took this send on its own clock (ms); Outbox.swift compares the record's time to it.
+    public static let acceptedAt = acceptedAtNote
     /// 0.6.6: the command the source ran itself (Outbox.swift).
     public static let command = commandNote
-    static let all = [claudeOffset, claudeCheckText, desktopDraft, sendError, command]
+    static let all = [claudeOffset, claudeCheckText, desktopDraft, sendError, command, acceptedAt]
 }
 
 /// Labels of sends still to be settled, and of a send taken off the list by the user.
@@ -559,6 +561,8 @@ public final class ChatModel {
                 notes[SendNote.claudeOffset] = .number(Double(result["offset"].int64()))
                 let check = result["check_text"].string()
                 notes[SendNote.claudeCheckText] = .string(check.isEmpty ? body["text"].string() : check)
+                let accepted = result["accepted_at"].int64()  // 11-01: the computer's own clock, for Outbox.swift
+                if accepted > 0 { notes[SendNote.acceptedAt] = .number(Double(accepted)) }
                 var pressed = record
                 pressed.label = "已接收"
                 pressed.body = jsonText(.object(notes))
@@ -566,17 +570,24 @@ public final class ChatModel {
                 Task { [weak self] in await self?.confirmClaude(pressed, client, synthetic) }
             } else {
                 var done = record
+                var notes = jsonValue(record.body).object
+                var changed = false
                 if action == "stop" && result["ended"].bool() {
                     done.label = "该轮已结束"
                 } else {
                     let state = result["delivery_state"].string()
                     done.label = receiptLabel(state: state.isEmpty ? (result["accepted"].bool() ? "accepted" : "unknown") : state, result: result, action: action)
                     if action == "send", !result["command"].string().isEmpty {
-                        var notes = jsonValue(record.body).object
                         notes[SendNote.command] = result["command"]
-                        done.body = jsonText(.object(notes))
+                        changed = true
                     }
                 }
+                let accepted = result["accepted_at"].int64()  // 11-01: the computer's own clock, for Outbox.swift
+                if action == "send", accepted > 0 {
+                    notes[SendNote.acceptedAt] = .number(Double(accepted))
+                    changed = true
+                }
+                if changed { done.body = jsonText(.object(notes)) }
                 await save(done, synthetic)
             }
             if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat), binding == token, foreground, self.key == key {

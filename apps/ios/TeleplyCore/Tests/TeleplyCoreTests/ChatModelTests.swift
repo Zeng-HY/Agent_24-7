@@ -65,7 +65,8 @@ final class CommandComputer: RelayStreamingTransport, @unchecked Sendable {
             await gate.wait()
             if unknown { throw Timeout() }
             let body = (try? JSONValue.parse(request.body ?? Data())) ?? [:]
-            return .json(#"{"request_id":"\#(body["request_id"].string())","delivery_state":"accepted"}"#)
+            // 11-01: the computer's own clock when it took the send
+            return .json(#"{"request_id":"\#(body["request_id"].string())","delivery_state":"accepted","accepted_at":1700000000000}"#)
         }
         if path.hasSuffix("/receipt") {
             await counts.receipt()
@@ -215,6 +216,23 @@ struct ChatModelTests {
         bind(recovered, computer, key)
         await until { recovered.ready }
         #expect(recovered.draft == "中文草稿")
+    }
+
+    @Test func theComputersTimeOfAcceptingIsKeptOnTheSend() async {
+        // 11-01: the phone's clock was 13 s fast, so the record's time (the computer's clock) must be compared to the
+        // computer's own time of accepting, not to the phone's.
+        let store = LocalStore(folder: temporaryFolder())
+        let computer = CommandComputer()
+        let model = chat(computer, store: store)
+        bind(model, computer, key)
+        await until { model.ready && model.control.available }
+        model.edit("记下电脑的时间")
+        model.send()
+        await until { await computer.counts.sends == 1 }
+        await computer.gate.open()
+        await model.settleSends()
+        let kept = await store.submissions(key).first
+        #expect(jsonValue(kept?.body ?? "{}")[SendNote.acceptedAt].int64() == 1_700_000_000_000)
     }
 
     @Test func claudePollsEveryFiveSecondsWithoutFreshReads() async {
