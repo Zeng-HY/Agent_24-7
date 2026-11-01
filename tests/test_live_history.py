@@ -64,6 +64,23 @@ class LiveHistoryTests(unittest.TestCase):
         with patch('live_events.select.select',return_value=([],[],[])),patch('live_events.time.sleep',side_effect=tick):stream(handler,history,bridge,None,'codex','thread')
         events=[json.loads(line[6:]) for line in handler.wfile.getvalue().decode().splitlines() if line.startswith('data: ')]
         self.assertEqual(len(events),2);self.assertEqual(events[0]['streaming_ids'],['live']);self.assertEqual(events[1]['streaming_ids'],[]);self.assertEqual(events[1]['messages'][0]['text'],'new progress');self.assertTrue(events[1]['messages'][0]['sync_pending'])
+    def test_a_new_codex_turn_clears_the_step_and_the_turn_end(self):
+        # 11-01: the same merge that kept Claude's step="compact" also kept a Codex turn's end and action; both apps
+        # now hand the reader the empty values a line sets.
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/'log.jsonl'
+            def event(ts,payload):return json.dumps({'type':'event_msg','timestamp':ts,'payload':payload})+'\n'
+            tool=json.dumps({'type':'response_item','timestamp':'2026-10-11T08:00:05Z',
+                             'payload':{'type':'custom_tool_call','name':'exec','input':'dir'}})+'\n'
+            p.write_text(event('2026-10-11T08:00:00Z',{'type':'task_started','turn_id':'t1'})+tool+
+                         event('2026-10-11T08:00:10Z',{'type':'task_complete','turn_id':'t1'}),encoding='utf-8')
+            entry=Transcript(p,'codex').refresh()
+            self.assertEqual((entry.state['running'],entry.state['step'],entry.state['turn_ended']),
+                             (False,'','2026-10-11T08:00:10Z'))
+            with p.open('a',encoding='utf-8') as f:f.write(event('2026-10-11T08:01:00Z',{'type':'task_started','turn_id':'t2'}))
+            entry.refresh()
+            self.assertEqual((entry.state['running'],entry.state['step'],entry.state['turn_ended']), (True,'',''))
+
     def test_transcript_tracks_turn_and_preserves_order_across_updates(self):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/'log.jsonl'

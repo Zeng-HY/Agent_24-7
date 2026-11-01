@@ -136,11 +136,17 @@ def _claude_end(lines: list[bytes]) -> dict | None:
     # id; an answer that stops to use a tool, or a tool's result, means the turn goes on.
     end = None
     asks = {}  # next-step boxes with a question, by their call: the turn ends at their result (10-16)
+    seen = set()  # 11-01: a record Claude wrote twice (same uuid) is read once
     for raw in lines:
         try:
             rec = json.loads(raw)
         except ValueError:
             continue
+        uuid = rec.get("uuid")
+        if isinstance(uuid, str) and uuid:
+            if uuid in seen:
+                continue
+            seen.add(uuid)
         kind = rec.get("type")
         if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
             continue
@@ -238,7 +244,7 @@ def turn_start(previous, starts, now):
 def new_scan(app: str) -> dict:
     """What one conversation's turn looks like while its record is read a piece at a time (0.6.4)."""
     return {"app": app, "state": None, "started": "", "ended": "", "latest": "", "key": "", "text": "", "action": "",
-            "asks": set(), "answer_id": "", "last_kind": None, "last_stop": None}
+            "asks": set(), "answer_id": "", "last_kind": None, "last_stop": None, "uuids": set()}
 
 
 def scan_lines(scan: dict, lines: list[bytes]) -> dict:
@@ -282,6 +288,14 @@ def _scan_codex(scan: dict, rec: dict) -> None:
 
 
 def _scan_claude(scan: dict, rec: dict) -> None:
+    # 11-01: after a /compact Claude wrote 1226 old records again, every uuid twice. Read as new lines they began a
+    # turn that had ended days before and ended it again, so the island and the banners started over.
+    uuid = rec.get("uuid")
+    if isinstance(uuid, str) and uuid:
+        seen = scan.setdefault("uuids", set())
+        if uuid in seen:
+            return
+        seen.add(uuid)
     kind = rec.get("type")
     if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
         return

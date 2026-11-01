@@ -575,4 +575,101 @@ class SendTests(unittest.TestCase):
             with self.assertRaises(chats.ChatError):c.choose('s',token)
         c._invoke.assert_not_called()
 
+class QueueShadowTests(unittest.TestCase):
+    """11-01: the queue this service keeps of Claude's own had drifted by one, so a /compact queued at 08:02 came out
+    at 08:06 as if the user had just sent it. It is our copy, not Claude's: it must mend itself."""
+
+    CROSS=('<cross-session-message from="uds:\\\\pipe\\\\x" from-session="local_1" hop-chain="4f0e" '
+           'from-name="别处">同事的消息</cross-session-message>')
+
+    def line(self,op=None,content=None,ts=None):
+        record={'type':'queue-operation'}
+        if op:record['operation']=op
+        if content is not None:record['content']=content
+        if ts:record['timestamp']=ts
+        return json.dumps(record,ensure_ascii=False).encode()
+
+    def said(self,text,ts):
+        return json.dumps({'type':'user','uuid':'u-'+ts,'timestamp':ts,'message':{'content':text}},
+                          ensure_ascii=False).encode()
+
+    def test_removing_a_cross_session_message_ignores_its_hop_chain(self):
+        # enqueue carries hop-chain="…", remove leaves it off: the exact words differed, so the entry stayed for good
+        lines=[self.line('enqueue',self.CROSS,'2026-10-31T14:05:45Z'),
+               self.line('remove',self.CROSS.replace(' hop-chain="4f0e"',''),'2026-10-31T14:08:45Z'),
+               self.line('enqueue','/compact','2026-10-31T14:10:00Z'),
+               self.line('dequeue',None,'2026-10-31T14:10:00.002Z')]
+        msgs,state=chats.parse_claude(lines)
+        self.assertEqual([(m['role'],m['text']) for m in msgs],[('user','/compact')])
+        self.assertEqual(state['step'],'compact')
+
+    def test_a_message_waiting_over_thirty_minutes_no_longer_shifts_the_queue(self):
+        lines=[self.line('enqueue',self.CROSS,'2026-10-31T14:05:45Z'),  # never removed: hop-chain differs
+               self.line('enqueue','/compact','2026-11-01T00:02:46.227Z'),
+               self.line('dequeue',None,'2026-11-01T00:02:46.229Z')]
+        msgs,state=chats.parse_claude(lines)
+        self.assertEqual([m['text'] for m in msgs if m['role']=='user'],['/compact'])
+        self.assertEqual((state['step'],state['running']),('compact',True))
+
+    def test_the_message_that_is_written_takes_its_queued_copy_and_everything_before(self):
+        lines=[self.line('enqueue','先查一下','2026-11-01T07:59:00Z'),
+               self.line('enqueue','再整理','2026-11-01T07:59:02Z'),
+               self.line('dequeue',None,'2026-11-01T07:59:03Z'),          # took 先查一下, 再整理 stays behind
+               self.said('再整理','2026-11-01T07:59:04Z'),                # written: the stale copy goes now
+               self.line('enqueue','/compact','2026-11-01T08:02:00Z'),
+               self.line('dequeue',None,'2026-11-01T08:02:00.002Z')]
+        msgs,_=chats.parse_claude(lines)
+        self.assertEqual([m['text'] for m in msgs if m['role']=='user'],['再整理','/compact'])
+
+
+class LineStateTests(unittest.TestCase):
+    """11-01: read a line at a time, an empty value was skipped, so '正在压缩上下文' (step=compact) stayed until the
+    next tool call, four minutes of a /compact and a whole image message later."""
+
+    def records(self):
+        return [json.dumps({'type':'queue-operation','operation':'enqueue','content':'/compact',
+                            'timestamp':'2026-11-01T08:02:46Z'}).encode(),
+                json.dumps({'type':'queue-operation','operation':'dequeue',
+                            'timestamp':'2026-11-01T08:02:46.002Z'}).encode(),
+                json.dumps({'type':'system','subtype':'compact_boundary','uuid':'c1',
+                            'timestamp':'2026-11-01T08:02:47Z'}).encode(),
+                json.dumps({'type':'assistant','uuid':'a1','timestamp':'2026-11-01T08:03:00Z',
+                            'message':{'content':[{'type':'tool_use','id':'t1','name':'Bash',
+                                                   'input':{'command':'dir'}}],'stop_reason':'tool_use'}}).encode(),
+                json.dumps({'type':'user','uuid':'u1','timestamp':'2026-11-01T08:06:59Z',
+                            'message':{'content':'这俩对话早结束了'}},ensure_ascii=False).encode(),
+                json.dumps({'type':'assistant','uuid':'a2','timestamp':'2026-11-01T08:07:30Z',
+                            'message':{'content':[{'type':'text','text':'改好了。'}],'stop_reason':'end_turn'}},
+                           ensure_ascii=False).encode()]
+
+    def read(self,lines):
+        """What chat_history.Transcript.refresh keeps, line by line into one state dict."""
+        context,state={},{}
+        for line in lines:
+            msgs,changed=chats.parse_claude([line],context)
+            state.update(changed)
+        return state
+
+    def test_the_dequeued_command_shows_and_its_step_clears_at_the_next_message(self):
+        lines=self.records()
+        self.assertEqual(self.read(lines[:2])['step'],'compact')
+        after_boundary=self.read(lines[:3])
+        self.assertEqual((after_boundary['step'],after_boundary['running']),('',True))  # compact_boundary clears it
+        # without a boundary (the command's own "Compacted" is later): the next user message clears it too
+        state=self.read([lines[0],lines[1],lines[4]])
+        self.assertEqual((state['step'],state['turn_ended']),('',''))
+        self.assertIs(state['running'],True)
+
+    def test_a_tool_step_and_a_turn_end_clear_it_the_same_way(self):
+        state=self.read(self.records())
+        self.assertEqual((state['step'],state['turn_ended']),('','2026-11-01T08:07:30Z'))
+        self.assertIs(state['running'],False)
+        tool=json.dumps({'type':'assistant','uuid':'b1','timestamp':'2026-11-01T08:08:00Z',
+                         'message':{'content':[{'type':'tool_use','id':'t2','name':'Bash','input':{'command':'dir'}}],
+                                    'stop_reason':'tool_use'}}).encode()
+        running=self.read([tool])
+        self.assertEqual((running['step'],running['running']),('run',True))
+
+
 if __name__=='__main__':unittest.main()
+

@@ -38,10 +38,18 @@ class Transcript:
                     if not raw.endswith(b'\n'):break
                     self.offset=f.tell()
                     if self.app=='codex' and b'"event_msg"' not in raw[:160] and b'"response_item"' not in raw[:160] and b'"compacted"' not in raw[:160]:continue
+                    if self.app=='claude':
+                        # 11-01: a /compact made Claude write 1226 old records into the file again, every uuid twice.
+                        # The copy is not new talk: no message, no state, no queue change (and no turn clock).
+                        uuid=chats.record_uuid(raw)
+                        if uuid:
+                            seen=self.context.setdefault('uuids',set())
+                            if uuid in seen:continue
+                            seen.add(uuid)
                     msgs,state=chats._parse(self.app,[raw],self.context)
                     msgs=activity_records.enrich(self.app,raw,msgs,self.context)
                     for k,v in state.items():
-                        if v is not None and v!='':self.state[k]=v
+                        self.state[k]=v
                     for m in msgs:
                         if self.app=='codex' and m.get('role')=='assistant' and m.get('phase')=='final_answer':
                             plan_text=lambda value:re.sub(r'</?proposed_plan>','',value).strip()

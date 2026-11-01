@@ -505,5 +505,54 @@ class Watcher(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
 
 
+class ClaudeCopy(unittest.TestCase):
+    """11-01: after a /compact Claude desktop wrote 1226 old records into the same file again, every uuid twice.
+    Appended after a finished turn they began that old turn again on the island and could end it again."""
+
+    NOW = 1_800_000_000.0  # 2027-01-15T08:00:00Z
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = Path(self.dir.name) / "s.jsonl"
+        self.item = {"app": "claude", "id": "c1", "title": "压缩", "path": str(self.path)}
+        self.sent, self.logged = [], []
+        patches = [mock.patch.object(notify.chats, "_codex_rows", lambda where, args, limit: []),
+                   mock.patch.object(notify.chats, "claude_sessions", lambda limit: [dict(self.item)]),
+                   mock.patch.object(notify.chats, "conv_path", lambda item: Path(item["path"])),
+                   mock.patch("deepseek_control.catalog", lambda: [])]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.notifier = notify.Notifier({"token": "secret"}, "家里电脑", self.logged.append, lambda: None,
+                                        clock=lambda: self.NOW, sender=lambda *a, **k: self.sent.append((a, k)),
+                                        page_url=lambda: "https://pc.example.ts.net/")
+
+    def write(self, *lines):
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write("".join(line + "\n" for line in lines))
+
+    def test_a_copied_block_does_not_begin_the_old_turn_again(self):
+        old = [claude_line("user", "2026-10-28T08:00:00Z", uuid="00000000-0000-4000-8000-000000000001",
+                           message={"content": "旧问题"}),
+               claude_line("assistant", "2026-10-28T08:00:05Z", uuid="00000000-0000-4000-8000-000000000002",
+                           **answer("m-old", "end_turn", {"type": "text", "text": "旧回答"})),
+               claude_line("user", "2026-10-30T09:51:29Z", uuid="00000000-0000-4000-8000-000000000003",
+                           message={"content": "旧问题二"})]
+        self.write(*old)
+        self.write(claude_line("user", "2027-01-15T08:00:10Z", uuid="00000000-0000-4000-8000-000000000004",
+                               message={"content": "新问题"}))
+        self.write(claude_line("assistant", "2027-01-15T08:00:20Z", uuid="00000000-0000-4000-8000-000000000005",
+                               **answer("m-new", "end_turn", {"type": "text", "text": "新回答"})))
+        with self.notifier.relay.listener():
+            self.notifier.look()
+            self.write(*old)  # the copy, appended after the turn ended; its last line is a user message
+            self.notifier.look()
+        # the finished turn is told once; the copy brings no second "running" and no second "done"
+        self.assertEqual([e["kind"] for e in self.notifier.relay.wait(0, 0)[0]], ["done", "snapshot"])
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual(self.sent, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -562,9 +562,11 @@ def _step_of(app: str, name: str, argument: str = '') -> str:
     return action or ''
 
 
-def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
+def parse_codex(lines: list[bytes], context: dict | None = None) -> tuple[list[dict], dict]:
+    """context: as parse_claude's; with one, the state returned is only what these lines set (empty values too)."""
     msgs: list[dict] = []
-    state = {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
+    state = _LineState({"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}) \
+        if context is not None else {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
     saw_items = False
     for raw in lines:
         if b"event_msg" not in raw[:160] and b"response_item" not in raw[:160] and b'"compacted"' not in raw[:160]:
@@ -637,10 +639,29 @@ def parse_codex(lines: list[bytes]) -> tuple[list[dict], dict]:
     for m in msgs:  # the second copy of an answer goes, as in chat_history.Transcript
         if not any(codex_twins(v, m) for v in kept[-4:]):
             kept.append(m)
+    if context is not None:
+        return kept, {key: state[key] for key in state.set_fields}
     return kept, state
 
 
 TWIN_SECONDS = 5
+_UUID_FIELD = re.compile(rb'"uuid"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"')
+
+
+def record_uuid(raw: bytes) -> str:
+    """The uuid a Claude record line carries, or '' when it has none (11-01). Claude appended 1226 old records again
+    after a /compact, every uuid twice; a reader that knows the uuids it has seen leaves the copy out. A pattern,
+    not a parse: the readers call this for every line of a file up to 64 MB."""
+    found = _UUID_FIELD.findall(raw)
+    if len(found) == 1:
+        return found[0].decode()
+    if not found:
+        return ""
+    try:  # more than one: a tool's own data holds one too, so the record's own field decides
+        value = (json.loads(raw) or {}).get("uuid")
+    except (ValueError, AttributeError, TypeError):
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 def codex_twins(a: dict, b: dict) -> bool:
@@ -762,11 +783,89 @@ def mark_open_next(msgs: list[dict]) -> None:
         msgs[last]["open"] = True
 
 
+class _LineState(dict):
+    """One record line's state, remembering the fields this line itself set (11-01). A reader that goes a line at a
+    time (chat_history.Transcript) has to be told when a line clears something: a dict that only ever carries
+    non-empty values kept step="compact" from 08:02 until the next tool call (08:12)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.set_fields = set()
+
+    def __setitem__(self, key, value):
+        self.set_fields.add(key)
+        super().__setitem__(key, value)
+
+    def update(self, *args, **kwargs):
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+
+# Claude's queue shadow, kept in Transcript.context: what the user queued and Claude has not taken yet (0.6.6). It is
+# ours, not Claude's, so it corrects itself rather than trust every enqueue/remove pair (11-01).
+QUEUE_SECONDS = 30 * 60
+_CROSS_SESSION_OPEN = re.compile(r"<cross-session-message\b[^>]*>")
+
+
+def _queue_norm(text: str) -> str:
+    """A queued message for comparing: a cross-session message's opening tag loses its attributes (hop-chain is written
+    on enqueue and left off on remove, 11-01), and the whitespace is squeezed."""
+    return " ".join(_CROSS_SESSION_OPEN.sub("<cross-session-message>", text or "").split())
+
+
+def _queue_time(ts: str) -> float:
+    try:
+        return _seconds(ts)
+    except (ValueError, AttributeError, TypeError):
+        return time.time()
+
+
+def _queue_expire(queue: list[dict], now: float) -> None:
+    """A message waiting longer than QUEUE_SECONDS is no longer Claude's next: drop it, or it shifts every later
+    dequeue by one (11-01: a cross-session message queued at 14:05 was still there after midnight)."""
+    queue[:] = [entry for entry in queue if now - entry["at"] <= QUEUE_SECONDS]
+
+
+def _queue_remove(queue: list[dict], text: str) -> bool:
+    """Claude took a message back: exact first, then the same words normalized, then the same first 60 characters."""
+    for i, entry in enumerate(queue):
+        if entry["text"] == text:
+            del queue[i]
+            return True
+    key = _queue_norm(text)
+    if not key:
+        return False
+    for i, entry in enumerate(queue):
+        if _queue_norm(entry["text"]) == key:
+            del queue[i]
+            return True
+    head = key[:60]
+    for i, entry in enumerate(queue):
+        if _queue_norm(entry["text"])[:60] == head:
+            del queue[i]
+            return True
+    return False
+
+
+def _queue_resync(queue: list[dict], text: str) -> None:
+    """A user message or a tagged command has been written: the copy of it still in the queue, and anything queued
+    before that copy, are done. A mismatch we did not foresee then costs one message, not every message after."""
+    key = _queue_norm(text)
+    if not key:
+        return
+    for i, entry in enumerate(queue):
+        if _queue_norm(entry["text"]) == key:
+            del queue[: i + 1]
+            return
+
+
 def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[dict], dict]:
     """context: kept by a caller that reads a record a line at a time (chat_history.Transcript), for what one line needs
-    to know of earlier ones."""
+    to know of earlier ones. With a context, the state returned is only what this line set (empty values too)."""
     msgs: list[dict] = []
-    state = {"running": None, "title": "", "turn_started": "", "turn_ended": "", "step": ""}
+    state = _LineState({"running": None, "title": "", "turn_started": "", "turn_ended": "", "step": ""}) \
+        if context is not None else {"running": None, "title": "", "turn_started": "", "turn_ended": "", "step": ""}
+    seen: set[str] = set()  # records this call has read: a repeated uuid is the same record written twice (11-01)
     last_kind, last_stop = None, None
     # next-step boxes with a question: the turn ends at their result, the record's last line (10-16)
     asks = context.setdefault("asks", set()) if context is not None else set()
@@ -778,6 +877,11 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
             rec = json.loads(raw)
         except ValueError:
             continue
+        uuid = rec.get("uuid")
+        if isinstance(uuid, str) and uuid:
+            if uuid in seen:
+                continue
+            seen.add(uuid)
         t = rec.get("type")
         if t == "custom-title":
             state["title"] = rec.get("customTitle") or state["title"]
@@ -786,13 +890,16 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
             # 0.6.6: a slash command shows when Claude takes it from its queue. A /compact then runs for minutes with
             # nothing else written; its tagged line comes only after the summary (10-05: 4 min 12 s).
             op, ts = rec.get("operation"), rec.get("timestamp") or ""
+            now = _queue_time(ts)
+            _queue_expire(queue, now)
+            text = " ".join(str(rec.get("content") or "").split())
             if op == "enqueue":
-                queue.append(" ".join(str(rec.get("content") or "").split()))
+                queue.append({"text": text, "at": now})
                 del queue[:-20]
-            elif op == "remove" and " ".join(str(rec.get("content") or "").split()) in queue:
-                queue.remove(" ".join(str(rec.get("content") or "").split()))
+            elif op == "remove":
+                _queue_remove(queue, text)
             elif op == "dequeue" and queue:
-                taken = queue.pop(0)
+                taken = queue.pop(0)["text"]
                 if _SLASH.fullmatch(taken):
                     msgs.append({"role": "user", "text": taken, "time": ts})
                     kept["claude_shown"], last_kind = taken, "user"
@@ -802,7 +909,8 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                         state["latest_event_time"] = ts
             continue
         if t == "system" and rec.get("subtype") == "compact_boundary":
-            if state.get("step") == "compact":
+            # with a context this line is read alone, so it cannot see the step it clears: clear it regardless
+            if context is not None or state.get("step") == "compact":
                 state["step"] = ""  # the summary and "Compacted" follow at once
             continue
         steered=_claude_steer_message(rec)
@@ -845,6 +953,11 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                     last_kind = "asked"  # read as running before 10-16: the phone offered 停止这一轮 for a turn long over
                     state["turn_ended"], state["step"] = ts, ""
             if text:
+                # the queue held a copy of this message: it and everything before it are written now (11-01)
+                _queue_resync(queue, text)
+                bare = re.sub(r"^(\[图片\]\s*)+", "", text)
+                if bare != text:
+                    _queue_resync(queue, bare)
                 if text.startswith("[Request interrupted"):
                     last_kind, last_stop = "interrupted", None
                     state["turn_ended"] = ts
@@ -881,8 +994,10 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
         state["running"] = not (last_kind in ("interrupted", "asked", "command_done") or (last_kind == "assistant" and last_stop not in (None, "tool_use")))
         if last_kind == "assistant" and last_stop not in (None, "tool_use"):
             state["turn_ended"], state["step"] = ts, ""
-        elif last_kind == "interrupted":
+        elif last_kind in ("interrupted", "command_done"):
             state["turn_ended"], state["step"] = ts, ""
+    if context is not None:
+        return msgs, {key: state[key] for key in state.set_fields}
     return msgs, state
 
 
@@ -923,7 +1038,7 @@ def claude_last_sent(lines: list[bytes]) -> list[str]:
 
 
 def _parse(app: str, lines: list[bytes], context: dict | None = None) -> tuple[list[dict], dict]:
-    return parse_codex(lines) if app == "codex" else parse_claude(lines, context)
+    return parse_codex(lines, context) if app == "codex" else parse_claude(lines, context)
 
 
 def _status(state: dict, mtime: float) -> str:
