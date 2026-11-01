@@ -1247,6 +1247,10 @@ class Push:
             device = row['device']
             if device not in online:  # nothing to show from a computer we cannot hear
                 continue
+            if now - self.snapshots.get(device, 0) > OFFLINE_AFTER:
+                # no fresh snapshot (the computer sends one every minute while it works): after a relay restart the
+                # conversations it knows may be old, and starting a new island for finished work would open one wrongly
+                continue
             agg = self.aggregate(device, now)
             if not await self.end_island(row, int(now), agg['state']):
                 continue  # Apple did not take it: try again at the next sweep

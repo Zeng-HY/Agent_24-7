@@ -1141,6 +1141,9 @@ class IslandTests(RelayTests):
         later = clock + relay_push.ISLAND_ROTATE + 1
         self.service.push.clock = lambda: later
         self.service.push.last_event[self.devices[0]] = later  # its keepalives keep coming
+        await self.service.push.deliver(self.devices[0], {'id': 's1', 'event': 'message', 'kind': 'snapshot',
+                                                          'items': [{'app': 'claude', 'chat': 'c1', 'state': 'working',
+                                                                     'started': 1761630000}]})  # says what runs now
         await self.service.push.sweep_islands()
         events = [(s['push_type'], s['payload']['aps'].get('event')) for s in self.sender.sent]
         self.assertIn(('liveactivity', 'end'), events)    # the old island is ended at once
