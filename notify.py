@@ -44,6 +44,7 @@ POLL_SECONDS = 5   # between looks while nothing runs (user 10-28: pushes felt s
 POLL_FAST = 2      # between looks while any turn is running
 HISTORY_BYTES = 64 << 20  # the first look reads back this far for the last start and end (0.6.4)
 SNAPSHOT_EVERY = 60       # a running conversation's record reaches the relay this often (0.6.4)
+SNAPSHOT_AGAIN = 60       # an empty snapshot, sent again once this later, for a relay that missed the first (11-01)
 STEP_GAP = 15             # seconds between two progress events of one conversation (0.6.4)
 LIMIT = 30              # conversations of each app looked at, newest first
 DEFAULT_SERVER = "https://api.day.app"
@@ -377,6 +378,7 @@ class Notifier:
         self.steps: dict[tuple, tuple] = {}          # (app, id) -> (action, when it was last told)
         self.last_snapshot = 0.0
         self.last_snapshot_empty = True
+        self.snapshot_again = False  # the backup empty snapshot has gone (11-01)
         self.snapshot_force = True
         self.relay_was_on = False
         self.relay_was_listening = False
@@ -668,11 +670,16 @@ class Notifier:
                           "since": int(info["since"]), "title": info.get("title", ""),
                           "step": (self.steps.get(conv) or ("", ""))[0]})
         if not items and self.last_snapshot_empty and not force:
-            return
+            # 11-01: an older relay may have been reading nothing at the moment the first empty snapshot went; send it
+            # once more a minute later, never again until something ran.
+            if self.snapshot_again or self.clock() - self.last_snapshot < SNAPSHOT_AGAIN:
+                return
+        again = not items and not force and self.last_snapshot_empty
         try:
             self.relay.publish("", "", extra={"kind": "snapshot", "items": items}, keep=False)
             self.last_snapshot = self.clock()
             self.last_snapshot_empty = not items
+            self.snapshot_again = again
             self.snapshot_force = False
         except Exception:
             self.log("通知：快照没报给中转\n" + traceback.format_exc())

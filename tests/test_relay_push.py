@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 from aiohttp import web, ClientSession, ClientTimeout
 
@@ -541,9 +542,11 @@ class IslandTests(RelayTests):
             return [s for s in self.sender.sent if s['payload']['aps'].get('event') == 'start']
 
         self.service.push.clock = lambda: 1761630061.0
+        self.service.push.last_event[self.devices[0]] = 1761630061.0  # its keepalive keeps the stream alive
         await self.service.push.sweep_islands()
         self.assertEqual(len(starts()), 1)
         self.service.push.clock = lambda: 1761630200.0
+        self.service.push.last_event[self.devices[0]] = 1761630200.0
         await self.service.push.sweep_islands()
         self.assertEqual(len(starts()), 1)
         await self.post('activity', self.computer(token='ab' * 32, since=1761630000, turn=1761630000))
@@ -594,6 +597,7 @@ class IslandTests(RelayTests):
                                                           'app': 'claude', 'chat': 'chat-1', 'since': 1761630000})
         self.assertEqual(self.sender.sent, [])  # not after the first look
         self.service.push.clock = lambda: 1761630061.0
+        self.service.push.last_event[self.devices[0]] = 1761630061.0  # its keepalive keeps the stream alive
         await self.service.push.sweep_islands()
         self.assertEqual(len(self.sender.sent), 1)
         sent = self.sender.sent[0]
@@ -674,6 +678,13 @@ class IslandTests(RelayTests):
         self.sender.sent.clear()
         self.service.push.clock = lambda: clock + 120
         await self.service.push.sweep_islands()
+        # 11-01: the stream is back, but the old content is not evidence: the island stays grey until the computer's
+        # snapshot says what it is doing now (notify.py sends one as soon as the relay reads it again).
+        self.assertEqual(self.sender.sent, [])
+        await self.service.push.deliver(self.devices[0], {'id': 'snap1', 'event': 'message', 'kind': 'snapshot',
+                                                          'items': [{'app': 'claude', 'chat': 'chat-1',
+                                                                     'state': 'working', 'started': int(clock)}]})
+        await self.service.push.sweep_islands()  # now the computer has said what it is doing: restore
         self.assertEqual(len(self.sender.sent), 1)
         self.assertEqual(self.sender.sent[0]['payload']['aps']['content-state']['state'], 'working')
         self.assertEqual(self.activities()[0]['state'], 'working')
@@ -714,7 +725,10 @@ class IslandTests(RelayTests):
         await self.service.push.deliver(self.devices[0], {'id': 'w1', 'event': 'message', 'kind': 'waiting',
                                                           'app': 'claude', 'chat': 'c3', 'title': '选方案'})
         await self.service.push.flush_islands()
-        self.assertEqual([('alert' in s['payload']['aps']) for s in self.sender.sent], [True])
+        # running updates the island silently (one per change); the waiting one is the alert, and the last push
+        alerts = [('alert' in s['payload']['aps']) for s in self.sender.sent]
+        self.assertTrue(alerts and alerts[-1])
+        self.assertFalse(any(alerts[:-1]))
         sent = self.sender.sent[-1]
         content = sent['payload']['aps']['content-state']
         self.assertEqual((content['state'], content['working'], content['waiting']), ('waiting', 2, 1))
@@ -1030,6 +1044,152 @@ class IslandTests(RelayTests):
                          [(self.store.owner(self.tokens[1]), 'development')])
         await asyncio.to_thread(self.store.change_password, self.tokens[1], 'password-for-bob', 'a-new-password-for-bob')
         self.assertEqual(self.starts(), [])
+
+
+    # -- 11-01: the event stream, not just the tunnel (the night the island stayed on old work for nine hours)
+
+    async def test_a_computer_with_an_island_is_read_even_with_no_phone_registered(self):
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM push_phones').fetchone()[0], 0)
+        await self.post('activity', self.computer())
+        self.service.push.look()
+        self.assertIn(self.devices[0], self.service.push.watchers)
+        self.assertNotIn(self.devices[1], self.service.push.watchers)
+        for _ in range(100):
+            if self.asked[0]:
+                break
+            await asyncio.sleep(.05)
+        self.assertEqual(self.asked[0][0], relay_push.SINCE)
+
+    async def test_a_silent_stream_turns_the_island_grey_though_the_tunnel_is_up(self):
+        clock = 1761630000.0
+        self.service.push.clock = lambda: clock
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761630000})
+        self.sender.sent.clear()
+        self.assertIn(self.devices[0], self.service.hub.connections)  # the tunnel never drops
+        self.service.push.clock = lambda: clock + 61
+        await self.service.push.sweep_islands()
+        grey = [s for s in self.sender.sent
+                if s['payload']['aps'].get('content-state', {}).get('state') == 'offline']
+        self.assertEqual(len(grey), 1)
+        self.assertNotIn('alert', grey[0]['payload']['aps'])
+
+    async def test_the_last_event_read_is_kept_for_a_restart_and_twelve_hours_are_asked_first(self):
+        self.assertEqual(relay_push.SINCE, '12h')
+        await self.post('register', {'token': PHONE})
+        for _ in range(100):
+            if self.asked[0]:
+                break
+            await asyncio.sleep(.05)
+        await self.service.push.receive(self.devices[0], json.dumps({
+            'id': 'e1', 'event': 'message', 'kind': 'done', 'app': 'claude', 'chat': 'c1'}).encode())
+        self.assertEqual(self.service.push.since[self.devices[0]], 'e1')
+        self.assertEqual(self.service.push.stored_since(self.devices[0]), 'e1')
+        # a restarted relay (nothing in memory) asks from there, not for the whole twelve hours again
+        self.service.push.since.clear()
+        self.service.push.watchers[self.devices[0]].cancel()
+        del self.service.push.watchers[self.devices[0]]
+        self.service.push.look()
+        for _ in range(100):
+            if self.asked[0] and self.asked[0][-1] == 'e1':
+                break
+            await asyncio.sleep(.05)
+        self.assertEqual(self.asked[0][-1], 'e1')
+
+    async def test_a_snapshot_drops_a_conversation_whose_last_event_is_a_minute_old(self):
+        clock = 1761630000.0
+        self.service.push.clock = lambda: clock
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761630000})
+        self.service.push.clock = lambda: clock + 61
+        await self.service.push.deliver(self.devices[0], {'id': 's1', 'event': 'message', 'kind': 'snapshot',
+                                                          'items': []})
+        self.assertEqual([(r['chat'], r['state']) for r in self.conversations()], [('c1', 'gone')])
+
+    async def test_a_replayed_old_event_changes_the_island_but_shows_no_banner(self):
+        clock = 1761630000.0
+        self.service.push.clock = lambda: clock
+        await self.post('register', {'token': PHONE})
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.deliver(self.devices[0], {'id': 'r0', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761630000})
+        self.service.push.clock = lambda: clock + 11
+        await self.service.push.flush_islands()
+        self.sender.sent.clear()
+        # a turn that ended over ten minutes ago, read back when the relay started listening again
+        await self.service.push.deliver(self.devices[0], {'id': 'old1', 'time': int(clock) - 11 * 60,
+                                                          'event': 'message', 'kind': 'done',
+                                                          'app': 'claude', 'chat': 'c1'})
+        self.service.push.clock = lambda: clock + 22
+        await self.service.push.flush_islands()
+        pushes = [s for s in self.sender.sent if s['push_type'] == 'liveactivity']
+        self.assertEqual(len(pushes), 1)
+        self.assertEqual(pushes[0]['payload']['aps']['content-state']['state'], 'done')
+        self.assertNotIn('alert', pushes[0]['payload']['aps'])  # no banner or sound for old work
+        self.assertEqual(self.activities()[0]['state'], 'done')
+
+    async def test_an_island_seven_hours_and_45_minutes_old_is_ended_and_started_again(self):
+        clock = 1761630000.0
+        self.service.push.clock = lambda: clock
+        await self.post('start-token', {'token': 'ef' * 32, 'environment': 'production'})
+        await self.post('activity', self.computer(state='working', since=1761630000, turn=1761630000))
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761630000})
+        self.sender.sent.clear()
+        later = clock + relay_push.ISLAND_ROTATE + 1
+        self.service.push.clock = lambda: later
+        self.service.push.last_event[self.devices[0]] = later  # its keepalives keep coming
+        await self.service.push.sweep_islands()
+        events = [(s['push_type'], s['payload']['aps'].get('event')) for s in self.sender.sent]
+        self.assertIn(('liveactivity', 'end'), events)    # the old island is ended at once
+        self.assertIn(('liveactivity', 'start'), events)  # work goes on: a new one, START_HOLD or not
+        self.assertEqual(self.activities(), [])           # the old row is gone; the new one registers itself
+
+    async def test_a_reconnected_tunnel_gets_a_new_reader_at_once(self):
+        device = self.devices[0]
+        await self.post('register', {'token': PHONE})
+        self.service.push.look()
+        first = self.service.push.watchers[device]
+        connection = self.service.hub.connections[device]
+        self.service.hub.connections[device] = object()  # the same computer, a new tunnel connection
+        self.service.push.look()
+        second = self.service.push.watchers[device]
+        self.assertIsNot(first, second)
+        self.assertTrue(first.cancelled() or first.cancelling())
+        self.service.hub.connections[device] = connection
+
+    async def test_a_refused_route_is_retried_in_a_minute_and_a_break_within_seconds(self):
+        device = 'a' * 32
+        waits = []
+
+        async def sleep(seconds):
+            waits.append(seconds)
+            raise asyncio.CancelledError
+
+        class Hub:
+            connections = {device: object()}
+
+            def fetch(self, *a, **k):
+                raise relay_push.Refused(404)
+
+        clock = lambda: 1761630000.0
+        with unittest.mock.patch.object(relay_push.asyncio, 'sleep', sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await relay_push.Push(self.store, Hub(), sender=self.sender, clock=clock).watch(device)
+        self.assertEqual(waits, [60])  # not the half hour that kept a night unread
+
+        waits.clear()
+
+        class Down(Hub):
+            def fetch(self, *a, **k):
+                raise ConnectionError()
+
+        with unittest.mock.patch.object(relay_push.asyncio, 'sleep', sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                await relay_push.Push(self.store, Down(), sender=self.sender, clock=clock).watch(device)
+        self.assertEqual(waits, [5])
 
 
 if __name__ == '__main__':

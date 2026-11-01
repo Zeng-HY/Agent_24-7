@@ -59,7 +59,11 @@ OFFLINE_AFTER = 60              # a computer gone this long turns its islands gr
 OFFLINE_END_AFTER = 30 * 60     # gone this long ends them; the lock screen keeps one an hour
 END_AFTER = 2 * 60              # done or failed islands end this long after the state began (0.6.4: was 5 min)
 ISLAND_REFRESH = 10 * 60        # a working island is pushed again this often, so 可能不是最新 never shows
-STEP_GAP = 15                   # seconds between two progress updates of one conversation (0.6.4)
+ISLAND_LIFE = 8 * 3600          # iOS ends a Live Activity 8 hours after it started, whatever is pushed
+ISLAND_ROTATE = ISLAND_LIFE - 45 * 60  # 11-01: an island this old ends and, if work goes on, a new one is started
+BACKLOG_AFTER = 10 * 60         # events replayed after a break older than this only change the island (11-01)
+SNAPSHOT_MISS_AGE = 60           # a working conversation not in a snapshot whose last event is this old has stopped
+STEP_GAP = 15                    # seconds between two progress updates of one conversation (0.6.4)
 SNAPSHOT_MISSES = 2             # snapshots without a working conversation before it is taken as gone
 GONE_REASONS = ('BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered', 'ExpiredToken')
 KEEP = {'done': 86400, 'failed': 86400, 'waiting': 3 * 86400}  # how long Apple holds one for a phone that is away
@@ -70,7 +74,7 @@ RING_GAP = 10               # seconds in which an account's events make one soun
 NOTICE_CATEGORY = 'teleply.conversation'   # the app registers it: its group summary reads 还有 N 个对话
 SWEEP = 10                  # seconds between looks at which computers to listen to (user 10-28: faster islands)
 TOKEN_AGE = 50 * 60         # a provider token is used this long (APNs: renewed after 20 to 60 minutes)
-SINCE = '10m'               # what a computer is asked for when the relay has not read from it yet (a restart)
+SINCE = '12h'               # what a computer is asked for when the relay has read nothing from it yet (a restart)
 TOKEN = re.compile(r'[0-9a-f]{32,256}')
 NDJSON = 'application/x-ndjson'
 
@@ -262,6 +266,10 @@ class Push:
         self.store, self.hub, self.sender, self.clock = store, hub, sender, clock
         self.watchers = {}          # computer -> the task reading its events
         self.since = {}             # computer -> the id of the last event read from it
+        self.last_event = {}        # computer -> when its stream last said anything (a keepalive counts, 11-01)
+        self.watcher_started = {}   # computer -> when its reader was (re)made; grace before "nothing heard" counts
+        self.conn_seen = {}         # computer -> the tunnel connection its reader was made for (a reconnect remakes it)
+        self.snapshots = {}         # computer -> when its last snapshot was read (the truth after a break)
         self.sent = {}              # (computer, app, conversation, kind) -> when its last notice went
         self.hours = {}             # account -> when its notices of the last hour went
         self.rang = {}              # account -> when something last made a sound (RING_GAP)
@@ -553,32 +561,63 @@ class Push:
             self.woken.clear()
 
     def look(self):
-        """Listen to each connected computer of an account with a phone, and to no other."""
+        """Listen to each connected computer that matters: one with a phone on its account, or with an island (11-01:
+        an island needs the event stream too, and it is what kept showing old work when this depended on phones only)."""
         self.seen |= set(self.hub.connections)
         with self.store.connect() as db:
             owners = {r[0] for r in db.execute('SELECT DISTINCT owner FROM push_phones')}
+            islanded = {r[0] for r in db.execute('SELECT DISTINCT device FROM push_activities')}
             owned = {r['id']: r['owner'] for r in db.execute('SELECT id,owner FROM devices WHERE revoked=0')}
-        wanted = {device for device in self.hub.connections if owned.get(device) in owners}
+        wanted = {device for device in self.hub.connections
+                  if owned.get(device) in owners or device in islanded}
+        now = self.clock()
         for device, task in list(self.watchers.items()):
-            if device not in wanted or task.done():
-                task.cancel()
-                del self.watchers[device]
+            # a tunnel that dropped and came back is a new connection: the old reader may be asleep on the old one
+            if device not in wanted or task.done() or self.hub.connections.get(device) is not self.conn_seen.get(device):
+                if device in self.watchers:
+                    task.cancel()
+                    del self.watchers[device]
+                self.conn_seen.pop(device, None)
+                log.info('push: watch %s -> 停止读通知（电脑重连或没有岛和手机了）', chat_tail(device))
         for device in wanted - set(self.watchers):
+            self.conn_seen[device] = self.hub.connections.get(device)
+            self.watcher_started[device] = now
             self.watchers[device] = asyncio.create_task(self.watch(device))
 
+    def heard(self, device, now):
+        """Whether this computer's event stream has said anything lately: a keepalive every 45 s counts, so 60 s of
+        silence means the reader is not working even if the tunnel still is (11-01: the island stayed fresh for 9 h)."""
+        if device not in self.hub.connections:
+            return False
+        when = self.last_event.get(device) or self.watcher_started.get(device)
+        return when is not None and now - when <= OFFLINE_AFTER
+
+    def stored_since(self, device):
+        """The last event id read from this computer before a restart (push_events keeps them for a week, 11-01)."""
+        with self.store.connect() as db:
+            row = db.execute('SELECT id FROM push_events WHERE id LIKE ? ORDER BY time DESC LIMIT 1',
+                             (device + ':%',)).fetchone()
+        return row['id'].split(':', 1)[1] if row else ''
+
     async def watch(self, device):
-        """One computer's events, read again after a break; a computer without the route is asked every 30 minutes."""
+        """One computer's events, read again after a break. A break is retried within seconds; a 404 on a computer that
+        is still connected no longer waits half an hour (11-01: that kept a whole night unread)."""
         delay = 5
         while device in self.hub.connections:
             started = self.clock()
             try:
-                target = '/api/notify/push?since=' + quote(self.since.get(device, SINCE), safe='')
+                since = self.since.get(device) or self.stored_since(device) or SINCE
+                target = '/api/notify/push?since=' + quote(since, safe='')
                 chunks = self.hub.fetch(device, target, {'Accept': NDJSON})
+                log.info('push: watch %s -> 开始读通知', chat_tail(device))
                 try:  # not contextlib.aclosing: the server's Python may be 3.9
                     rest = b''
                     async for chunk in chunks:
                         *lines, rest = (rest + chunk).split(b'\n')
                         for line in lines:
+                            if not line.strip():
+                                continue
+                            self.last_event[device] = self.clock()  # a keepalive says the reader is alive too
                             await self.receive(device, line)
                         if len(rest) > 65536:
                             raise ValueError('line too long')
@@ -588,10 +627,13 @@ class Push:
             except asyncio.CancelledError:
                 raise
             except Refused as exc:
-                wait = 1800 if exc.status == 404 else 60
-            except Exception:
+                wait = 60  # the computer is connected (the while above), so try the route again soon
+                log.info('push: watch %s -> 电脑回了 %s，一分钟后再读', chat_tail(device), exc.status)
+            except Exception as exc:
                 wait = delay
-            delay = 5 if self.clock() - started > 120 else min(delay * 2, 300)
+                log.info('push: watch %s -> 读通知断开（%s），%s 秒后再读', chat_tail(device), type(exc).__name__, wait)
+            delay = 5 if self.clock() - started > 120 else min(delay * 2, 60)
+            log.info('push: watch %s -> 停止读通知（读了约 %s 秒）', chat_tail(device), int(self.clock() - started))
             await asyncio.sleep(wait)
 
     async def receive(self, device, line):
@@ -614,6 +656,7 @@ class Push:
         if kind not in (*WORDS, 'running', 'step') or app not in APPS or not isinstance(chat, str) or not 0 < len(chat) <= 200:
             return
         now = self.clock()
+        self.last_event[device] = now  # an event just came from this computer: its stream is alive
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute('DELETE FROM push_events WHERE time<?', (now - 7 * 86400,))
@@ -631,7 +674,8 @@ class Push:
         if not fresh or not computer:
             return
         owner, conv = computer['owner'], (device, app, chat)
-        quiet = bool(event.get('quiet'))  # the phone has this conversation open: no banner, but the island still changes
+        aged = self._aged(event, now)  # read back after a break: only the island changes, no banner or sound
+        quiet = bool(event.get('quiet')) or aged  # the phone has this conversation open: no banner, but the island still changes
         title = str(event.get('title', '')).strip()[:200]
         if kind == 'step':  # 方案六: progress, priority 5, never a banner, never a record, at most every STEP_GAP
             action = str(event.get('step') or '')
@@ -654,7 +698,7 @@ class Push:
             return
         state, since, turn, started, ended, source = self.remember(owner, device, app, chat, kind, event, title, now)
         if islands:  # 0.6.3: one island for the whole computer, its counts and list built from every conversation
-            if kind in ('done', 'failed'):
+            if kind in ('done', 'failed') and not aged:
                 # The record goes in at once (user 10-28): the island can stay up for the computer's other work.
                 await self.notice(owner, device, app, chat, kind, computer['label'], phones, now, turn, title,
                                   loud=False, force=True, ended=ended)
@@ -665,6 +709,8 @@ class Push:
             agg = self.aggregate(device, now, last_kind=kind)
             state_change = kind in ('running', 'waiting', 'done', 'failed')
             async def fallback_notice():
+                if aged:  # a replayed turn: the island only
+                    return
                 loud2 = self.may_ring(owner, now)
                 went, why = await self.notice(owner, device, app, chat, kind, computer['label'], phones, now, turn,
                                               title, loud2, ended=ended)
@@ -731,7 +777,8 @@ class Push:
                 return
             fallback = '岛的令牌失效了，改发通知；'
         if quiet:
-            self.decided(kind, app, chat, '不发', fallback + '手机正开着这个对话，也没有岛',
+            why = '补回来的旧事件，只改岛，不发通知' if aged else fallback + '手机正开着这个对话，也没有岛'
+            self.decided(kind, app, chat, '不发', why,
                          started=started, ended=ended, source=source)
             return
         loud = self.may_ring(owner, now)
@@ -749,6 +796,16 @@ class Push:
             return number if number > 0 else int(fallback or 0)
         except (TypeError, ValueError):
             return int(fallback or 0)
+
+    @staticmethod
+    def _aged(event, now):
+        """Whether this event is older than BACKLOG_AFTER: read back from the computer after a break, it may describe
+        work that is long over, so it only moves the island (11-01)."""
+        try:
+            when = int(event.get('time') or 0)
+        except (TypeError, ValueError):
+            return False
+        return bool(when) and now - when > BACKLOG_AFTER
 
     def remember(self, owner, device, app, chat, kind, event, title, now):
         """One conversation's latest state and the record's own times (0.6.4). Returns state, since, turn, started,
@@ -814,6 +871,8 @@ class Push:
         if not isinstance(items, list):
             return
         now = self.clock()
+        self.snapshots[device] = now  # the computer's own word on what it is doing, after a break (11-01)
+        self.last_event[device] = now  # a snapshot is an event too: the stream is alive
         with self.store.connect() as db:
             computer = db.execute('SELECT owner,label FROM devices WHERE id=? AND revoked=0', (device,)).fetchone()
             if not computer:
@@ -849,7 +908,7 @@ class Push:
                                 started if state == 'working' else now))
                 seen.add((app, chat))
             active = [dict(r) for r in db.execute(
-                'SELECT app,chat,state FROM push_conversations WHERE device=? AND state IN ("working","waiting")',
+                'SELECT app,chat,state,refreshed FROM push_conversations WHERE device=? AND state IN ("working","waiting")',
                 (device,))]
             for row in active:
                 key = (row['app'], row['chat'])
@@ -857,6 +916,13 @@ class Push:
                     self.snapshot_misses.pop((device, *key), None)
                     continue
                 if row['state'] == 'waiting':  # a waiting turn stays until its own event says otherwise
+                    continue
+                if now - (row['refreshed'] or 0) >= SNAPSHOT_MISS_AGE:
+                    # its last event is a minute old and the computer does not list it: it has stopped (11-01).
+                    # A turn that just started may not be in this snapshot yet, so only a young one waits for the next.
+                    db.execute('UPDATE push_conversations SET state="gone",refreshed=?,step="" '
+                               'WHERE device=? AND app=? AND chat=?', (now, device, *key))
+                    self.snapshot_misses.pop((device, *key), None)
                     continue
                 misses = self.snapshot_misses.get((device, *key), 0) + 1
                 self.snapshot_misses[(device, *key)] = misses
@@ -1168,11 +1234,50 @@ class Push:
                      '跑过一分钟了，带提醒文字但不带声音' if sent else '启动令牌没能用上')
         return sent
 
+    async def rotate_islands(self, rows, online, now):
+        """11-01: iOS ends a Live Activity 8 hours after it starts and keeps its last picture up to 4 hours more. An
+        island 7 h 45 min old is ended now, and if the computer is still working a new one is started at once. The
+        START_HOLD does not apply: this is the one case where the old island cannot go on."""
+        for row in rows:
+            if row['app'] or row['state'] not in ('working', 'waiting'):
+                continue
+            created = row.get('created') or 0
+            if not created or now - created < ISLAND_ROTATE:
+                continue
+            device = row['device']
+            if device not in online:  # nothing to show from a computer we cannot hear
+                continue
+            agg = self.aggregate(device, now)
+            if not await self.end_island(row, int(now), agg['state']):
+                continue  # Apple did not take it: try again at the next sweep
+            self.pending.pop(row['id'], None)
+            self.sent_content.pop(row['id'], None)
+            self.island_last.pop(row['id'], None)
+            self.island_refreshed.pop(row['id'], None)
+            with self.store.connect() as db:
+                db.execute('DELETE FROM push_activities WHERE id=?', (row['id'],))
+                computer = db.execute('SELECT owner,label FROM devices WHERE id=? AND revoked=0', (device,)).fetchone()
+                starts = [dict(r) for r in db.execute('SELECT * FROM push_start WHERE owner=?',
+                                                      (computer['owner'],))] if computer else []
+                conv = db.execute('SELECT app,chat,since,turn,title FROM push_conversations WHERE device=? '
+                                  'AND state IN ("working","waiting") ORDER BY refreshed DESC LIMIT 1',
+                                  (device,)).fetchone()
+            log.info('push: rotate island %s -> 岛静默 (开了 %s 小时，先收起；%s)', chat_tail(device),
+                     round((now - created) / 3600, 1), '电脑上还有对话在跑，再开一个新的' if conv else '电脑上已经没有了')
+            if conv and starts and computer:
+                key = (device, conv['app'], conv['chat'])
+                if await self.remote_start(device, conv['app'], conv['chat'],
+                                           int(conv['turn'] or conv['since'] or now), computer, starts,
+                                           conv['title'] or ''):
+                    self.start_sent[device] = now
+                    self.starts.pop(key, None)
+
     async def sweep_islands(self):
         """Every SWEEP seconds: remote starts, done or failed islands ending, and a computer gone grey."""
         now = self.clock()
         connected = set(self.hub.connections)
         self.seen |= connected
+        online = {device for device in connected if self.heard(device, now)}  # the event stream, not just the tunnel
         with self.store.connect() as db:
             rows = [dict(r) for r in db.execute('SELECT a.*, d.label FROM push_activities a '
                                                 'JOIN devices d ON d.id=a.device')]
@@ -1197,8 +1302,8 @@ class Push:
                                      step=agg.get('step'), ended=agg.get('ended'), more=agg.get('more'))
             log.info('push: register island %s -> 岛静默 (岛刚登记，补推这台电脑当前的状态)', chat_tail(row['device']))
         for row in rows:  # 0.6.4: a long silence on a working island still gets a fresh stale-date every 10 minutes
-            if row['app'] or row['state'] != 'working':
-                continue
+            if row['app'] or row['state'] != 'working' or row['device'] not in online:
+                continue  # 11-01: a computer we cannot hear is not "fresh"; it goes grey below instead
             if now - self.island_refreshed.get(row['id'], 0) < ISLAND_REFRESH:
                 continue
             agg = aggs.get(row['device']) or self.aggregate(row['device'], now)
@@ -1207,6 +1312,7 @@ class Push:
                                      refresh=True, working=agg['working'], waiting=agg['waiting'], peers=agg['peers'],
                                      step=agg.get('step'), ended=agg.get('ended'), more=agg.get('more'))
             log.info('push: refresh island %s -> 岛静默 (十分钟没有变化，更新一次)', chat_tail(row['device']))
+        await self.rotate_islands(rows, online, now)
         # 0.6.4: a remote start comes from the conversations the relay knows, not from memory, so it survives a restart.
         with self.store.connect() as db:
             waiting_start = [dict(r) for r in db.execute(
@@ -1215,7 +1321,7 @@ class Push:
         tried = set()  # 0.6.6: one start per computer a sweep, not one per running conversation
         for conv in waiting_start:
             device, app, chat = conv['device'], conv['app'], conv['chat']
-            if device not in connected or device in tried:
+            if device not in online or device in tried:  # a computer we cannot hear may be running nothing
                 continue
             with self.store.connect() as db:
                 island = db.execute('SELECT 1 FROM push_activities WHERE device=? AND app="" AND chat=""',
@@ -1245,9 +1351,13 @@ class Push:
             if not row['app']:  # a computer island's counts and list (0.6.3)
                 agg = aggs.get(device) or self.aggregate(device, now)
                 aggs[device] = agg
-            if device in connected:
-                self.away.pop(device, None)
+            if device in online:
                 if row['state'] == 'offline' and row['saved_state']:
+                    first = self.away.get(device)
+                    if first is not None and self.snapshots.get(device, 0) < first:
+                        # 11-01: the stream is back, but its old content is not evidence: wait for the computer's
+                        # snapshot, which says what it is doing now.
+                        continue
                     if agg:
                         await self.update_island(row, agg['state'], agg['since'], agg['turn'], alert=False, priority=10,
                                                  force=True, clear_saved=True, working=agg['working'], waiting=agg['waiting'],
@@ -1257,9 +1367,12 @@ class Push:
                         await self.update_island(row, row['saved_state'], row['saved_since'] or int(now),
                                                  row['saved_turn'] or int(now), alert=False, priority=10, clear_saved=True)
                     self.decided(row['saved_state'], row['app'], row['chat'], '岛静默', '电脑连回来了，恢复原状态')
+                self.away.pop(device, None)
             elif device in self.seen:
-                first = self.away.setdefault(device, now)
-                if row['state'] != 'offline' and now - first >= OFFLINE_AFTER:
+                # 11-01: the tunnel may still be up while the event stream is silent; the island must show that rather
+                # than a fresh stale-date. The silence counts from the last thing read (or the reader's start).
+                first = self.away.setdefault(device, int(self.last_event.get(device) or self.watcher_started.get(device) or now))
+                if row['state'] in ('working', 'waiting') and now - first >= OFFLINE_AFTER:
                     with self.store.connect() as db:
                         db.execute('UPDATE push_activities SET saved_state=?,saved_since=?,saved_turn=? WHERE id=?',
                                    (row['state'], row['since'], row['turn'], row['id']))

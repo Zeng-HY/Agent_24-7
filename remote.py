@@ -426,7 +426,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(self.server.notifier.public())
             return
         if path == "/api/notify/push":  # the relay reads what happened, for 遥应's own notifications (relay_push.py)
-            ntfy_feed.relay_stream(self, self.server.notifier.relay, self._query().get("since", "none"))
+            # 11-01: a relay that stopped reading (or never started) left nothing in this log; one line per change.
+            self.log.write("通知：中转开始读通知")
+            read_from = time.time()
+            try:
+                ntfy_feed.relay_stream(self, self.server.notifier.relay, self._query().get("since", "none"))
+            finally:
+                self.log.write(f"通知：中转停止读通知（读了 {int(time.time() - read_from)} 秒）")
             return
         if path == "/api/voice/status":
             self._json({"local": self.server.local_asr.status(), "cloud": self.server.voice.status()})

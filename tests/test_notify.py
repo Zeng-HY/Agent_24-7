@@ -454,7 +454,13 @@ class Watcher(unittest.TestCase):
             self.now += 61
             self.notifier.look()
             second = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
-            self.assertEqual((first, second), (1, 1))
+            # 11-01: after an empty snapshot one more goes a minute later (a relay may have missed the first), never
+            # more than that until something ran.
+            self.assertEqual((first, second), (1, 2))
+            self.now += 61
+            self.notifier.look()
+            third = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
+            self.assertEqual(third, 2)
             self.turn('task_started', 't1', ts='2027-01-15T08:02:00Z')
             self.notifier.look()
             self.turn('task_complete', 't1', '好了', ts='2027-01-15T08:02:10Z')
@@ -463,7 +469,10 @@ class Watcher(unittest.TestCase):
             self.now += 61
             self.notifier.look()
             after_idle = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
-            self.assertEqual((after_done, after_idle), (3, 3))
+            self.now += 61
+            self.notifier.look()
+            after_two = len([m for m in self.notifier.relay.wait(0, 0)[0] if m.get('kind') == 'snapshot'])
+            self.assertEqual((after_done, after_idle, after_two), (4, 5, 5))
 
     def test_deepseek_running_is_told_the_same_way(self):
         self.cfg.pop("bark")
