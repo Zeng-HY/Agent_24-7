@@ -293,7 +293,10 @@ sudo journalctl -u agent-relay-027 --since "2026-10-31 15:00" --until "2026-11-0
   - 安卓的图片对照（`SentPictures.kt:36`）两边都用电脑时间和电脑记的 `created`，同一个钟，不受手机快 13 秒影响。
   - 结论：安卓没有这两个症状，不需要改。只查没改；要不要以后也保留淡色气泡，等用户决定。
 - 发布情况（哪个版本、谁在什么时候同意的）：
-  - 还没发布。Windows dev.33、中转包、iOS 0.7.1 按第 8 节每一步都要单独问，这一步还没问、没做。
+  - **Windows `0.27.0-dev.33`（build 33）**：11-01 14:00 左右用户同意打包、14:05 左右同意安装。从 `ac29323` 的干净工作树打包；`dist/AgentRemote-0.27.0-dev.33-Setup.exe`，32,530,487 字节，SHA256 `2AC356E3…`。已装到 `G:\AgentRemote` 并启动，本机接口回 `ui_version 0.27.0-dev.33`、`chat.available: true`。**还没发布**（阿里云和 GitHub 都没动），发布要再问。
+  - **中转包**：11-01 14:14 用户同意打包并更新。从 `b2cdb1f` 的干净工作树打包；`dist/agent-relay-0.27.0-dev.zip`，128,920 字节，SHA256 `71C969FE…`，包里的 `relay_push.py` 与 HEAD 一致。用户 14:16 在 Workbench 运行 `update-027.sh`，换下的文件在 `/opt/agent-relay-027/previous-20261101-141633`；**没有运行 `switch-domain.py`**。更新后 14:17:01 `push: watch … 开始读通知`（没有推送手机也读了），14:17:13 读到 `snapshot … 0 个在干活/等你`；电脑日志 14:16:48「中转开始读通知」、14:17:44「停止（读了 56 秒）」。旧岛开了十几个小时、令牌已被苹果作废，这次更新时被丢掉。
+  - **iOS `0.7.1`（build 26）**：11-01 14:30 用户同意改版本号（`MARKETING_VERSION 0.7.0 -> 0.7.1`，提交 `da25568`）；14:32 同意 `ios-native-check`（`6ae6dcf9a9a1f6e314c1f983`，2 分钟，Mac 上 241 项全过）；15:06 同意 `ios-native-testflight`（`6ae6e4fa6c3d28efa550f660`，6 分钟，Delivery UUID `6a15ec8b-ab3d-403b-a0f8-205d5302f782`），已进内部测试，没提交审核。`apps/ios/README.md` 已补 0.7.1 一节。
+  - 真机还没验：0.7.1 装上以后照 `apps/ios/README.md` 的 0.7.1 三条和本文 7.2 做。
 - 验证记录（11-01）：
   - 全量 pytest（`.venv`）：703 项通过，3 项失败都是原来就有的——`test_mobile_polish` 找「复制命令」按钮的两项，和 `test_relay_mobile_layout::test_account_home_and_connection_panel`（在干净的 HEAD 临时工作树上复跑同样失败，确认与这次无关）。
   - iOS `swift test`：241 项全过（本机 Swift 6.4.1 + VS 2022 Build Tools；`--scratch-path` 指到工作区，没碰仓库里的 `.build`）。
