@@ -600,10 +600,13 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         val merge:(ReaderState)->ReaderState={ now ->
             if(now.device?.id!=device.id || listOf(now.listSource,now.query,now.listSort,now.listStatus)!=listOf(s.listSource,s.query,s.listSort,s.listStatus)) now
             else {
-                // Pages read past the first stay as they were, with where the next one starts.
+                // Pages read past the first stay as they were, with where the next one starts. 11-02 (as iOS): not in a list of
+                // one state, where a row the first page leaves out has left that state (运行中: it ended). Kept, nothing would
+                // read it again: it said 运行中, its timer ticking, hours after the turn ended.
                 val fresh=page.items.map(::chatKey).toSet()
-                val beyond=now.chats.any { chatKey(it) !in fresh }
-                now.copy(chats=(page.items+now.chats.filter { chatKey(it) !in fresh }).filter { chatKey(it) !in now.hidden },listCursor=if(beyond) now.listCursor else page.cursor,listMore=if(beyond) now.listMore else page.hasMore)
+                val kept=if(now.listStatus=="all") now.chats.filter { chatKey(it) !in fresh } else emptyList()
+                val beyond=kept.isNotEmpty()
+                now.copy(chats=(page.items+kept).filter { chatKey(it) !in now.hidden },listCursor=if(beyond) now.listCursor else page.cursor,listMore=if(beyond) now.listMore else page.hasMore)
             }
         }
         if(g!=null) commit(g,merge) else mutable.update(merge)

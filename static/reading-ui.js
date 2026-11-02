@@ -18,9 +18,11 @@
     // Reuse the request started by the inline shell, even if it finished before this module downloaded.
     const first=takeInitialConvPage(convApp);
     try{const j=await ((!more&&!query&&!display&&first)||api('/api/chats?app='+convApp+'&limit='+CONV_PAGE_SIZE+'&query='+encodeURIComponent(query)+display+(more&&listCursor?'&cursor='+encodeURIComponent(listCursor):'')));if(key!==convApp+'|'+query+(window.interactionUI?.query()||''))return;
-      const incoming=j.items||[];
-      if(reset)convItems=incoming;else if(more){const ids=new Set(convItems.map(v=>v.app+':'+v.id));convItems.push(...incoming.filter(v=>!ids.has(v.app+':'+v.id)));}else{const fresh=new Map(incoming.map(v=>[v.app+':'+v.id,v]));const olderItems=convItems.filter(v=>!fresh.has(v.app+':'+v.id));convItems=[...incoming,...olderItems];}
-      if(more||reset||!listCursor){listCursor=j.next_cursor;listHasMore=!!j.has_more;}
+      const incoming=j.items||[],oneState=display.includes('&status=');
+      // 11-02 (as iOS): in a list of one state, a row the first page leaves out has left that state (运行中: it ended). Kept,
+      // nothing would read it again: it said 运行中 hours after the turn ended. So the rows and the next page follow the first page.
+      if(reset)convItems=incoming;else if(more){const ids=new Set(convItems.map(v=>v.app+':'+v.id));convItems.push(...incoming.filter(v=>!ids.has(v.app+':'+v.id)));}else{const fresh=new Map(incoming.map(v=>[v.app+':'+v.id,v]));const olderItems=oneState?[]:convItems.filter(v=>!fresh.has(v.app+':'+v.id));convItems=[...incoming,...olderItems];}
+      if(more||reset||oneState||!listCursor){listCursor=j.next_cursor;listHasMore=!!j.has_more;}
       // the list is read every 10 s; rebuilt only when it changed, or once a minute for its "x 分钟前" (10-14: a rebuild under
       // a finger made scrolling and tapping catch)
       const sig=JSON.stringify([convItems,Math.floor(Date.now()/60000)]);if(more||reset||sig!==listSig){listSig=sig;preserveList(renderConvs);}$('convHint').textContent=(query?'搜索结果':window.interactionUI?.sortLabel()||'按最近活动排序')+(j.total!=null?' · '+j.total+' 个对话':'');listMore.hidden=!listHasMore;

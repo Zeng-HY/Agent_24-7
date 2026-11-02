@@ -360,13 +360,16 @@ fun Modifier.edgeFade(scroll: ScrollState, width: Dp = 24.dp): Modifier = compos
         }
 }
 
+/** The states a list can show. The values are what the computer takes (chat_history.py, the same as the web's). */
+internal val ListStates = listOf("all" to "全部", "running" to "运行中", "waiting" to "等待处理", "idle" to "已结束")
+
 /** 分组 / 排序 / 状态 / 来源, each with its current value; a row opens its options in the same menu (web). */
 @Composable
 private fun MenuScope.ListDisplayMenu(s: ReaderState, vm: ReaderViewModel) {
     var page by remember { mutableStateOf<String?>(null) }
     val groups = listOf("none" to "不分组", "project" to "按项目", "app" to "按来源应用")
     val sorts = listOf("updated" to "最近活动", "created" to "创建时间")
-    val states = listOf("all" to "全部", "running" to "运行中", "waiting" to "等待处理", "done" to "已结束")
+    val states = ListStates
     // The same apps as the chips (0.9.1): this computer's, or while not known only a filter already chosen.
     val known = s.knownApps()
     val sources = listOf("all" to "全部应用") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it) }
@@ -594,7 +597,7 @@ private fun EmptyList(s: ReaderState, vm: ReaderViewModel, searching: Boolean, c
         Text(if (s.error == null) "没有找到对话" else "暂时无法读取对话", style = MaterialTheme.typography.titleMedium, color = p.text)
         val conditions = buildList {
             if (s.listSource != "all") add("来源：${sourceName(s.listSource)}")
-            if (s.listStatus != "all") add("状态：" + mapOf("running" to "运行中", "waiting" to "等待处理", "done" to "已结束")[s.listStatus].orEmpty())
+            if (s.listStatus != "all") add("状态：" + ListStates.toMap()[s.listStatus].orEmpty())
             if (searching) add("搜索：${s.query}")
         }
         if (conditions.isNotEmpty()) Text("当前条件：" + conditions.joinToString("，"), style = MaterialTheme.typography.note, color = p.muted)

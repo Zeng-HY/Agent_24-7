@@ -143,7 +143,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     private fun statusMatches(value: String, filter: String) = when (filter) {
         "running" -> value == "running"
         "waiting" -> value == "waiting"
-        "done" -> value in setOf("idle", "stopped", "failed")
+        "idle" -> value in setOf("idle", "stopped", "failed")
         else -> true
     }
 

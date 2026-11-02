@@ -759,6 +759,15 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("清除筛选").performClick()
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==9 }
     }
+    /** 11-02: 已结束 asked for done, which the computer refuses: 状态筛选无效 instead of the rows. */
+    @Test fun theEndedStateShowsTheFinishedRows() {
+        launch();fixtureList()
+        compose.onNodeWithContentDescription("列表显示选项").performClick()
+        compose.onNodeWithText("状态").performClick()
+        compose.onNodeWithText("已结束").performClick()
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="idle" }
+        compose.runOnIdle { org.junit.Assert.assertTrue(vm.state.value.error==null && vm.state.value.chats.size in 1..8 && vm.state.value.chats.all { it.status=="idle" }) }
+    }
     @Test fun lightLargeTextHasReachableServiceAndSettings() {
         launch("light",2f)
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Login && !vm.state.value.busy }
