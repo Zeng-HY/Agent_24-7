@@ -274,8 +274,9 @@ def _strip_unc(path: str) -> str:
 # ---------------------------------------------------------------- reading files
 
 
-def read_tail(path: Path, nbytes: int) -> tuple[list[bytes], bool]:
-    """Whole lines from the last nbytes of a file, and whether the start of the file was reached."""
+def read_tail_span(path: Path, nbytes: int) -> tuple[list[bytes], int, int]:
+    """Whole lines from the last nbytes of a file, where in the file the first of them starts (0: at its start) and
+    where the read stopped."""
     with open(path, "rb") as f:
         f.seek(0, 2)
         size = f.tell()
@@ -285,7 +286,13 @@ def read_tail(path: Path, nbytes: int) -> tuple[list[bytes], bool]:
     if offset:
         cut = data.find(b"\n")
         data = data[cut + 1:] if cut >= 0 else b""
-    return [ln for ln in data.split(b"\n") if ln.strip()], offset == 0
+    return [ln for ln in data.split(b"\n") if ln.strip()], size - len(data), size
+
+
+def read_tail(path: Path, nbytes: int) -> tuple[list[bytes], bool]:
+    """Whole lines from the last nbytes of a file, and whether the start of the file was reached."""
+    lines, first, _ = read_tail_span(path, nbytes)
+    return lines, first == 0
 
 
 def read_from(path: Path, offset: int) -> list[bytes]:
@@ -685,6 +692,13 @@ def _seconds(ts: str) -> float:
     return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
 
 
+def _older(ts: str, than: str) -> bool:
+    try:
+        return _seconds(ts) < _seconds(than)
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 def _claude_tool(block: dict) -> str:
     name = block.get("name") or "工具"
     args = block.get("input") or {}
@@ -962,7 +976,9 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
                     last_kind, last_stop = "interrupted", None
                     state["turn_ended"] = ts
                     state["step"] = ""
-                else:
+                elif not _older(ts, state["turn_started"]):
+                    # 11-02: turns only begin later. A compaction writes old lines into the record again, right after
+                    # the turn that set it off began; with their originals out of reach they would hide that start
                     state["turn_started"], state["turn_ended"], state["step"] = ts, "", ""
                 notice = task_notice(text)
                 msgs.append({"role": "event", "text": notice, "time": ts} if notice else {"role": "user", "text": text, "time": ts})
@@ -1056,7 +1072,9 @@ def _status(state: dict, mtime: float) -> str:
 
 
 _summary_cache: dict[str, tuple[tuple, dict]] = {}
-_started_cache: dict[str, str] = {}  # conversation file -> its running turn's start (0.6.4; a long turn stays cheap)
+# conversation file -> its running turn's start, and how far the file had been read when that held (0.6.4; a long turn
+# stays cheap)
+_started_cache: dict[str, tuple[str, int]] = {}
 
 
 def summary(item: dict) -> dict:
@@ -1077,33 +1095,49 @@ def summary(item: dict) -> dict:
     hit = _summary_cache.get(str(path))
     if hit and hit[0] == key:
         return hit[1]
+    def unix(value):
+        try:
+            return int(_seconds(value))
+        except (TypeError, ValueError, AttributeError):
+            return 0
     nbytes, msgs, state = 256 << 10, [], {}
     while True:
-        lines, at_start = read_tail(path, nbytes)
+        lines, first, end = read_tail_span(path, nbytes)
+        at_start = first == 0
         msgs, state = _parse(item["app"], lines)
         have_message=any(m["role"] in ("user", "assistant") for m in msgs)
-        have_status=item['app']!='codex' or state.get('running') is not None
         # 0.6.4: a running turn whose start record is farther back still needs its own start for the timer. Once
         # found it is kept by file, so a growing turn does not rescan tens of megabytes on every list poll.
+        # 11-02: kept with how far the file had been read then. One turn can end and the next begin between two polls
+        # (no phone had the list open), so it holds only when these lines reach back to that point: then no record since
+        # began or ended a turn, which settles a Codex record's status as well (it had no use of the cache before).
+        # A start no newer than the kept one is no new turn: a compaction writes old lines into the record again (up to
+        # 33 MB, their originals too far back for their uuids to show them as copies), and the last of them may read as a
+        # turn ended. So an idle reading does not clear what is kept either.
         key_path = str(path)
-        if state.get('turn_started'):
-            _started_cache[key_path] = state['turn_started']
-        elif state.get('running') and key_path in _started_cache:
-            state['turn_started'] = _started_cache[key_path]
-        elif state.get('running') is False:
-            _started_cache.pop(key_path, None)
-        need_start=bool(state.get('running')) and not state.get('turn_started')
+        need_start=False
+        kept = _started_cache.get(key_path)
+        if kept and kept[1] > end:  # the file was rewritten
+            kept = None
+        if state.get('running') is not False:
+            if kept and kept[0] and 0 < unix(state.get('turn_started')) <= unix(kept[0]):
+                state['turn_started'] = ''
+            if state.get('turn_started'):
+                _started_cache[key_path] = (state['turn_started'], end)
+            elif kept and first <= kept[1]:
+                state.update(running=True, turn_started=kept[0])
+                _started_cache[key_path] = (kept[0], end)
+            elif state.get('running') or nbytes >= (64 << 20):
+                need_start=not at_start and nbytes < (64 << 20)
+                if not need_start:  # no start to be had: no timer rather than a wrong one, and no search on every poll
+                    _started_cache[key_path] = ('', end)
+        have_status=item['app']!='codex' or state.get('running') is not None
         if (have_message and have_status and not need_start) or at_start or nbytes >= (64 << 20):
             break
         nbytes = min(nbytes * 4, 64 << 20)
     last = next((m for m in reversed(msgs) if m["role"] in ("user", "assistant")), None)
     prefix = "来自其他对话：" if last and last.get("origin") == "other_chat" else "你：" if last and last["role"] == "user" else ""
     status = _status(state, st.st_mtime)
-    def unix(value):
-        try:
-            return int(_seconds(value))
-        except (TypeError, ValueError, AttributeError):
-            return 0
     out = {"status": status, "modified": int(st.st_mtime * 1000),
            "preview": prefix + one_line(plain(last["text"]), 90) if last else "",
            # 0.6.4: the turn's own start and end, Unix seconds, for the phone's timer. 0 when the record has none.
