@@ -601,7 +601,7 @@ enum DemoData {
     static func row(_ id: String, _ title: String, _ folder: String, _ preview: String, _ status: String, _ app: String,
                     _ updated: Int64, _ extra: [String: JSONValue] = [:]) -> JSONValue {
         var fields: [String: JSONValue] = ["id": .string(id), "title": .string(title), "folder": .string(folder), "preview": .string(preview),
-                                           "status": .string(status), "app": .string(app), "updated": .number(Double(updated))]
+                                           "status": .string(status), "app": .string(app), "updated": .number(Double(updated)), "created": .number(Double(updated))]
         fields.merge(extra) { _, new in new }
         return .object(fields)
     }

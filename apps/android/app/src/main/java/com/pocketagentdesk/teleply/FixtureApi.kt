@@ -136,8 +136,9 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         val rows = if (cursor == null) world.firstPage() else listOf(Chat("older", "更早的对话", "测试项目", "第二页", "idle", "codex", FixtureWorld.NOW - 86_400_000L * 3))
         val has = world.appsOf(device)
         val shown = rows.filter { it.app in has && (app == "all" || it.app == app) && (query.isBlank() || it.title.contains(query) || it.folder.contains(query)) && statusMatches(it.status, status) }
-        val more = cursor == null && query.isBlank()
-        return Page(shown, if (more) "page2" else null, more)
+        // The second page is the one finished row above: a list of another state has none.
+        val more = cursor == null && query.isBlank() && statusMatches("idle", status)
+        return Page(shown.map { it.copy(created = it.updated) }, if (more) "page2" else null, more)
     }
 
     private fun statusMatches(value: String, filter: String) = when (filter) {

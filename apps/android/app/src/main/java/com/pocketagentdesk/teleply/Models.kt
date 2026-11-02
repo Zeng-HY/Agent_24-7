@@ -12,7 +12,7 @@ data class Account(val devices: List<Computer>, val email: String)
  */
 data class Chat(val id: String, val title: String, val folder: String = "", val preview: String = "", val status: String = "", val app: String = "", val updated: Long = 0,
                 val group: Boolean = false, val kind: String = "", val parent: String = "", val parentTitle: String = "",
-                val children: List<Chat> = emptyList(), val childCount: Int = 0, val childRunning: Int = 0)
+                val children: List<Chat> = emptyList(), val childCount: Int = 0, val childRunning: Int = 0, val created: Long = 0)
 /**
  * [phase] is commentary / final_answer / thinking for assistant text; [request] is a user message's client_request_id;
  * [length] is the whole message's length as the computer counts it, what 展开全文 says when [truncated].
@@ -27,7 +27,12 @@ fun JSONObject.string(key: String) = if (isNull(key)) "" else optString(key, "")
  */
 fun <T> JSONObject.rows(key: String, parse: (JSONObject) -> T): List<T> = optJSONArray(key)?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map(parse) } ?: emptyList()
 fun parseChat(j: JSONObject): Chat = Chat(j.getString("id"), j.string("title").ifBlank { "未命名对话" }, j.string("folder"), j.string("preview"), j.string("status"), j.string("app"), j.optLong("updated"),
-    j.optBoolean("group"), j.string("kind"), j.string("parent"), j.string("parent_title"), j.rows("children", ::parseChat), j.optInt("child_count"), j.optInt("child_running"))
+    j.optBoolean("group"), j.string("kind"), j.string("parent"), j.string("parent_title"), j.rows("children", ::parseChat), j.optInt("child_count"), j.optInt("child_running"), j.optLong("created"))
+/** Whether [a] comes after [b] in the computer's order for [sort] (chat_history.py sort_key): newest first, then app, then id. */
+fun sortsAfter(a: Chat, b: Chat, sort: String): Boolean {
+    fun order(c: Chat) = if (sort == "created") c.created else c.updated
+    return compareValuesBy(a, b, { -order(it) }, { it.app }, { it.id }) > 0
+}
 /**
  * Fields a message keeps besides its text: a tool step's title and changes; Claude's checklist (plan: items), next-step
  * box (next: tool_id, recap, ask, actions, open) and proposed task (task: title, brief, offer); a DeepSeek subagent

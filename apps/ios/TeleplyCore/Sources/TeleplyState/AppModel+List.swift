@@ -69,9 +69,15 @@ extension AppModel {
         if let g, !current(g) { return }
         guard self.device?.id == device.id, (listSource, query, listSort, listStatus) == asked else { return }
         let fresh = Set(page.items.map(rowKey))
-        // 11-02: in a list of one state, a row the first page leaves out has left that state (运行中: it ended). Kept,
-        // nothing would read it again: it said 运行中, its timer ticking, hours after the turn ended.
-        let kept = asked.3 == "all" ? chats.filter { !fresh.contains(rowKey($0)) } : []
+        // 11-02: in a list of one state the first page speaks for every row up to its last. One of those it leaves out has
+        // left that state (运行中: it ended). Kept, nothing would read it again: it said 运行中, its timer ticking, hours
+        // after the turn ended. Rows past its last are pages read with 加载更多: taken away, the list went back to one page.
+        let end = page.hasMore ? page.items.last : nil
+        let kept = chats.filter { row in
+            guard !fresh.contains(rowKey(row)) else { return false }
+            if asked.3 == "all" { return true }
+            return end.map { sortsAfter(row, $0, sort: asked.2) } ?? false
+        }
         let beyond = !kept.isEmpty
         // The 10 s read mostly brings the same rows: equal values are not written again (as ChatModel.take).
         let merged = (page.items + kept).filter { !hidden.contains(rowKey($0)) }

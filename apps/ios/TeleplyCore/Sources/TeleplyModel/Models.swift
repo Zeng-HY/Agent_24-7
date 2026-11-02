@@ -22,7 +22,7 @@ public struct Account: Sendable, Equatable {
 }
 
 /// A conversation row (Android Models.kt Chat). [app] is the source ("" when a single-source list did not say);
-/// [updated] is milliseconds. A row may carry [children] that fold under it (DeepSeek subagents, one-shot sessions
+/// [updated] and [created] are milliseconds. A row may carry [children] that fold under it (DeepSeek subagents, one-shot sessions
 /// a script started from it), [childCount] in all; a [group] row (DeepSeek's 未分组的会话) only folds and opens
 /// nothing. A child row has a [kind] ("subagent" or another) and its [parent].
 public struct Chat: Sendable, Equatable, Identifiable {
@@ -33,6 +33,7 @@ public struct Chat: Sendable, Equatable, Identifiable {
     public var status: String = ""
     public var app: String = ""
     public var updated: Int64 = 0
+    public var created: Int64 = 0
     public var group: Bool = false
     public var kind: String = ""
     public var parent: String = ""
@@ -119,6 +120,13 @@ public func rowKey(_ chat: Chat) -> String {
     chat.app + ":" + chat.id
 }
 
+/// Whether [a] comes after [b] in the computer's order for [sort] (chat_history.py sort_key): newest first, then app, then id.
+public func sortsAfter(_ a: Chat, _ b: Chat, sort: String) -> Bool {
+    let order = { (chat: Chat) in sort == "created" ? chat.created : chat.updated }
+    if order(a) != order(b) { return order(a) < order(b) }
+    return (a.app, a.id) > (b.app, b.id)
+}
+
 /// The computer broke the contract (wrong identity, source or path), with Android's words for it.
 public struct ReadFailure: Error, Sendable, Equatable {
     public let message: String
@@ -144,6 +152,7 @@ public func parseChat(_ json: JSONValue) throws -> Chat {
     chat.status = json["status"].string()
     chat.app = json["app"].string()
     chat.updated = json["updated"].int64()
+    chat.created = json["created"].int64()
     chat.group = json["group"].bool()
     chat.kind = json["kind"].string()
     chat.parent = json["parent"].string()

@@ -13,16 +13,20 @@
   function menu(label,fn){const b=el('button','menu-row',label);b.onclick=()=>{dismissOverlays();fn();};$('convMenu').querySelector('.sh-body').append(b);}
   menu('查找消息',openSearch);menu('对话文件',openFiles);menu('常用提示语',openTemplates);
   function preserveList(render){const top=document.querySelector('header').getBoundingClientRect().bottom,row=[...document.querySelectorAll('.conv')].find(n=>n.getBoundingClientRect().bottom>top),key=row?.dataset.key,y=row?.getBoundingClientRect().top;render();if(scrollY>40&&key){const n=[...document.querySelectorAll('.conv')].find(n=>n.dataset.key===key);if(n)window.scrollBy(0,n.getBoundingClientRect().top-y);}}
+  // Whether row a comes after row b in the computer's order (chat_history.py sort_key): newest first, then app, then id.
+  function sortsAfter(a,b,field){const newer=(Number(b[field])||0)-(Number(a[field])||0);return newer?newer>0:a.app+'\0'+a.id>b.app+'\0'+b.id;}
   async function loadList(more=false,reset=false){
     if(listBusy||!window.workspaceUI?.canPoll())return;const display=window.interactionUI?.query()||'';const key=convApp+'|'+query+display;if(key!==listKey){reset=true;listKey=key;}listBusy=true;listMore.disabled=true;
     // Reuse the request started by the inline shell, even if it finished before this module downloaded.
     const first=takeInitialConvPage(convApp);
     try{const j=await ((!more&&!query&&!display&&first)||api('/api/chats?app='+convApp+'&limit='+CONV_PAGE_SIZE+'&query='+encodeURIComponent(query)+display+(more&&listCursor?'&cursor='+encodeURIComponent(listCursor):'')));if(key!==convApp+'|'+query+(window.interactionUI?.query()||''))return;
-      const incoming=j.items||[],oneState=display.includes('&status=');
-      // 11-02 (as iOS): in a list of one state, a row the first page leaves out has left that state (运行中: it ended). Kept,
-      // nothing would read it again: it said 运行中 hours after the turn ended. So the rows and the next page follow the first page.
-      if(reset)convItems=incoming;else if(more){const ids=new Set(convItems.map(v=>v.app+':'+v.id));convItems.push(...incoming.filter(v=>!ids.has(v.app+':'+v.id)));}else{const fresh=new Map(incoming.map(v=>[v.app+':'+v.id,v]));const olderItems=oneState?[]:convItems.filter(v=>!fresh.has(v.app+':'+v.id));convItems=[...incoming,...olderItems];}
-      if(more||reset||oneState||!listCursor){listCursor=j.next_cursor;listHasMore=!!j.has_more;}
+      const incoming=j.items||[],oneState=display.includes('&status=');let kept=[];
+      if(reset)convItems=incoming;else if(more){const ids=new Set(convItems.map(v=>v.app+':'+v.id));convItems.push(...incoming.filter(v=>!ids.has(v.app+':'+v.id)));}else{const fresh=new Map(incoming.map(v=>[v.app+':'+v.id,v]));
+        // 11-02: in a list of one state the first page speaks for every row up to its last. One of those it leaves out has left
+        // that state (运行中: it ended). Kept, nothing would read it again: it said 运行中 hours after the turn ended.
+        const end=j.has_more?incoming.at(-1):null,field=display.includes('&sort=created')?'created':'updated';
+        kept=convItems.filter(v=>!fresh.has(v.app+':'+v.id)&&(!oneState||(end&&sortsAfter(v,end,field))));convItems=[...incoming,...kept];}
+      if(more||reset||!listCursor||(oneState&&!kept.length)){listCursor=j.next_cursor;listHasMore=!!j.has_more;}
       // the list is read every 10 s; rebuilt only when it changed, or once a minute for its "x 分钟前" (10-14: a rebuild under
       // a finger made scrolling and tapping catch)
       const sig=JSON.stringify([convItems,Math.floor(Date.now()/60000)]);if(more||reset||sig!==listSig){listSig=sig;preserveList(renderConvs);}$('convHint').textContent=(query?'搜索结果':window.interactionUI?.sortLabel()||'按最近活动排序')+(j.total!=null?' · '+j.total+' 个对话':'');listMore.hidden=!listHasMore;

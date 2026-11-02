@@ -342,7 +342,8 @@ public struct DemoTransport: RelayFileTransport {
                 && (words.isEmpty || row["title"].string().contains(words) || row["folder"].string().contains(words))
                 && Self.statusMatches(row["status"].string(), status)
         }
-        let more = cursor == nil && words.isEmpty
+        // The second page is the one finished row: a list of another state has none.
+        let more = cursor == nil && words.isEmpty && Self.statusMatches(DemoData.older["status"].string(), status)
         return Self.json(["items": .array(rows), "next_cursor": more ? "page2" : .null, "has_more": .bool(more)])
     }
 

@@ -66,9 +66,10 @@ class RelayApiTest {
         val get=server.takeRequest();assertEquals("r",get.requestUrl!!.queryParameter("request_id"));assertEquals("GET",get.method)
     }
     @Test fun mixedListKeepsEachRowSourceAndRejectsUnknownSources()=runTest {
-        response("""{"items":[{"id":"a","app":"codex","title":"A"},{"id":"b","app":"claude","title":"B"},{"id":"c","app":"deepseek","title":"C"}],"has_more":false}""")
+        response("""{"items":[{"id":"a","app":"codex","title":"A","updated":2000,"created":1000},{"id":"b","app":"claude","title":"B"},{"id":"c","app":"deepseek","title":"C"}],"has_more":false}""")
         val page=api.chatList(device,"all","",null,"created","waiting")
         assertEquals(listOf("codex","claude","deepseek"),page.items.map { it.app })
+        assertEquals(2000L to 1000L,page.items[0].updated to page.items[0].created)
         val request=server.takeRequest().requestUrl!!
         assertEquals("all",request.queryParameter("app"));assertEquals("created",request.queryParameter("sort"));assertEquals("waiting",request.queryParameter("status"))
         response("""{"items":[{"id":"x","app":"other","title":"X"}]}""")

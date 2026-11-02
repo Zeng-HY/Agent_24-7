@@ -48,6 +48,49 @@ final class ChosenListTransport: RelayTransport {
     }
 }
 
+/// The demo computer with a list a test chose, answered as chat_history.py does: only the asked state, in its order, two
+/// rows at a time, each page starting after the end of the one before (the cursor here is that row's id).
+final class PagedListTransport: RelayTransport {
+    struct Row: Sendable {
+        var id: String
+        var status: String
+        var updated: Int64
+        var created: Int64 = 0
+    }
+
+    let demo = DemoTransport()
+    let rows: Mutex<[Row]>
+
+    /// A row for each letter, newest first.
+    init(_ names: String, status: String = "running") {
+        rows = Mutex(names.enumerated().map { Row(id: String($1), status: status, updated: 1_000 - Int64($0)) })
+    }
+
+    init(rows: [Row]) {
+        self.rows = Mutex(rows)
+    }
+
+    func end(_ names: String) {
+        rows.withLock { list in
+            for index in list.indices where names.contains(list[index].id) { list[index].status = "idle" }
+        }
+    }
+
+    func send(_ request: RelayRequest) async throws -> RelayResponse {
+        guard request.url.path.hasSuffix("/api/chats") else { return try await demo.send(request) }
+        let query = URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let value = { (name: String) in query.first { $0.name == name }?.value }
+        let byCreated = value("sort") == "created", status = value("status") ?? "all", cursor = value("cursor")
+        let order = { (row: Row) in byCreated ? row.created : row.updated }
+        let all = rows.withLock { $0 }
+        var rest = all.filter { status == "all" || $0.status == status }.sorted { (order($0), $1.id) > (order($1), $0.id) }
+        if let end = all.first(where: { $0.id == cursor }) { rest = rest.filter { (order($0), end.id) < (order(end), $0.id) } }
+        let items = rest.prefix(2).map { #"{"id":"\#($0.id)","title":"\#($0.id)","app":"codex","status":"\#($0.status)","updated":\#($0.updated),"created":\#($0.created)}"# }
+        let next = rest.count > 2 ? #""\#(rest[1].id)""# : "null"
+        return .json(#"{"items":[\#(items.joined(separator: ","))],"next_cursor":\#(next),"has_more":\#(rest.count > 2)}"#)
+    }
+}
+
 /// The demo computer, with every conversation opening on a message cut short the way the computer cuts one over 6000
 /// characters (chat_history.public_message; the user's prompt of 7545, 10-27).
 struct CutMessageTransport: RelayTransport {
@@ -334,6 +377,113 @@ struct AppModelTests {
         transport.rows.withLock { $0 = ["a"] }
         try await model.mergeFirstPage()
         #expect(model.chats.map(\.id) == ["a"])
+        #expect(!model.listMore)
+    }
+
+    /// Signed in on a computer whose list is [transport]'s, showing the rows of [status], [sort] first.
+    func onPagedList(_ transport: PagedListTransport, status: String, sort: String = "updated") async -> AppModel {
+        let model = AppModel(services: AppServices(store: LocalStore(folder: temporaryFolder()), vault: MemoryCookieVault(),
+                                                   transport: transport, demo: { DemoTransport() }, pacer: IdlePacer(),
+                                                   newScope: { "scope-1" }))
+        await signedInOnA(model)
+        model.listDisplay(sort: sort, status: status)
+        await model.settle()
+        return model
+    }
+
+    func more(_ model: AppModel) async {
+        model.moreChats()
+        await model.settle()
+    }
+
+    func shown(_ model: AppModel) -> String { model.chats.map(\.id).joined() }
+
+    /// 11-02: 加载更多 is not taken back at the next read: 已结束 could not be read past its first page.
+    @Test func thePagesReadPastTheFirstStayInAListOfOneState() async throws {
+        let transport = PagedListTransport("abcde", status: "idle")
+        let model = await onPagedList(transport, status: "idle")
+        await more(model)
+        #expect(shown(model) == "abcd")
+        try await model.mergeFirstPage()
+        #expect(shown(model) == "abcd")
+        #expect(model.listCursor == "d")
+        #expect(model.listMore)
+        await more(model)
+        #expect(shown(model) == "abcde")
+    }
+
+    @Test func aRowThatLeftItsStateGoesEvenWithLaterPagesRead() async throws {
+        let transport = PagedListTransport("abcdef")
+        let model = await onPagedList(transport, status: "running")
+        await more(model)
+        #expect(shown(model) == "abcd")
+        transport.end("b")
+        try await model.mergeFirstPage()
+        #expect(shown(model) == "acd")
+        #expect(model.listCursor == "d")
+        await more(model)
+        #expect(shown(model) == "acdef")
+    }
+
+    /// A newer row takes the first page's place: the last one there has not left its state, it is on the next page.
+    @Test func aRowPushedOffTheFirstPageStays() async throws {
+        let transport = PagedListTransport("abcde")
+        let model = await onPagedList(transport, status: "running")
+        #expect(shown(model) == "ab")
+        transport.rows.withLock { $0.insert(PagedListTransport.Row(id: "n", status: "running", updated: 2_000), at: 0) }
+        try await model.mergeFirstPage()
+        #expect(shown(model) == "nab")
+        #expect(model.listCursor == "b")
+        await more(model)
+        #expect(shown(model) == "nabcd")
+    }
+
+    @Test func rowsPastTheFirstPageGoOnceTheListFitsOnIt() async throws {
+        let transport = PagedListTransport("abcde")
+        let model = await onPagedList(transport, status: "running")
+        await more(model)
+        #expect(shown(model) == "abcd")
+        transport.end("cde")
+        try await model.mergeFirstPage()
+        #expect(shown(model) == "ab")
+        #expect(model.listCursor == nil)
+        #expect(!model.listMore)
+    }
+
+    /// Sorted by 创建时间, that order says which rows come after the first page: here newly active ones still do.
+    @Test func sortedByCreationThatOrderDecidesWhatStays() async throws {
+        let rows = [(50, 1), (40, 2), (30, 99), (20, 98), (10, 3)].enumerated().map { index, dates in
+            PagedListTransport.Row(id: String(Array("abcde")[index]), status: "idle", updated: Int64(dates.1), created: Int64(dates.0))
+        }
+        let model = await onPagedList(PagedListTransport(rows: rows), status: "idle", sort: "created")
+        await more(model)
+        #expect(shown(model) == "abcd")
+        try await model.mergeFirstPage()
+        #expect(shown(model) == "abcd")
+    }
+
+    /// The whole list as before: a row the first page leaves out may be on a later page, and where the next page starts stays.
+    @Test func theWholeListKeepsThePagesReadPastTheFirst() async throws {
+        let transport = PagedListTransport("abcde")
+        let model = await onPagedList(transport, status: "all")
+        await more(model)
+        #expect(shown(model) == "abcd")
+        transport.rows.withLock { $0.insert(PagedListTransport.Row(id: "n", status: "running", updated: 2_000), at: 0) }
+        try await model.mergeFirstPage()
+        #expect(shown(model) == "nabcd")
+        #expect(model.listCursor == "d")
+        #expect(model.listMore)
+    }
+
+    /// The demo's second page is its one finished row: another state's list has none to promise.
+    @Test func onlyTheDemosEndedListHasASecondPage() async {
+        let model = makeApp()
+        await signedInOnA(model)
+        model.listDisplay(status: "idle")
+        await model.settle()
+        #expect(model.listMore)
+        model.listDisplay(status: "running")
+        await model.settle()
         #expect(!model.listMore)
     }
 
