@@ -43,7 +43,7 @@ struct ConversationView: View {
         // computer (已接收 etc.) stays here until the record has it, so it no longer disappears for 88 seconds while
         // Codex compacts a long conversation.
         let outbox = outboxSends(submissions, messages: model.messages,
-                                 now: Int64(Date().timeIntervalSince1970 * 1000))
+                                 now: Int64(Date().timeIntervalSince1970 * 1000), olderUnread: model.olderAvailable)
         let cards = timeline.cards
         ScrollView {
             // A plain stack, not a lazy one: with LazyVStack the area above the input card went blank after the

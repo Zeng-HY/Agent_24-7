@@ -74,12 +74,18 @@ struct ChatListView: View {
         .padding(.vertical, 8)
     }
 
+    private static let stateNotes = ["running": "只显示运行中的对话", "waiting": "只显示等待处理的对话", "idle": "只显示已结束的对话"]
+
     @ViewBuilder
     private var notes: some View {
         VStack(spacing: 0) {
             DelayedProgressLine(busy: model.busy)
             if model.fixture {
                 NoteBar(text: "本地示例 · 固定数据 · 未连接真实服务", tone: .info)
+            }
+            // 11-02: the island's 还有 N 个 leaves the list on one state, with nothing on the page to say so.
+            if let note = Self.stateNotes[model.listStatus] {
+                NoteBar(text: note, tone: .info, action: "显示全部", actionEnabled: !model.busy) { model.listDisplay(status: "all") }
             }
             if let error = model.error {
                 NoteBar(text: error, tone: .error, action: "重试", actionEnabled: !model.busy, onAction: model.retry)
@@ -443,7 +449,7 @@ private struct ListDisplayMenu: View {
                 Text("全部").tag("all")
                 Text("运行中").tag("running")
                 Text("等待处理").tag("waiting")
-                Text("已结束").tag("done")
+                Text("已结束").tag("idle")
             }
             .pickerStyle(.menu)
             Picker("来源", selection: Binding(get: { model.listSource }, set: { model.listDisplay(source: $0) })) {
@@ -603,7 +609,7 @@ private struct EmptyList: View {
     private var conditions: [String] {
         var parts: [String] = []
         if model.listSource != "all" { parts.append("来源：" + Labels.sourceName(model.listSource)) }
-        let states = ["running": "运行中", "waiting": "等待处理", "done": "已结束"]
+        let states = ["running": "运行中", "waiting": "等待处理", "idle": "已结束"]
         if model.listStatus != "all" { parts.append("状态：" + (states[model.listStatus] ?? "")) }
         if searching { parts.append("搜索：" + model.query) }
         return parts

@@ -29,7 +29,6 @@ struct ChatRow: View {
     var body: some View {
         // At the largest text sizes the parts take their own lines instead of cutting the title (spec 2.3).
         let large = typeSize.isAccessibilitySize
-        let ago = Labels.ago(chat.updated)
         VStack(alignment: .leading, spacing: 0) {
             if !first {
                 Rectangle()
@@ -40,14 +39,14 @@ struct ChatRow: View {
                 if large {
                     if !chat.app.isEmpty { SourceBadge(app: chat.app) }
                     title.lineLimit(3)
-                    if !ago.isEmpty { time(ago) }
+                    if chat.updated > 0 { RowTime(updated: chat.updated) }
                 } else {
                     HStack(spacing: 8) {
                         if !chat.app.isEmpty { SourceBadge(app: chat.app) }
                         title
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        if !ago.isEmpty { time(ago) }
+                        if chat.updated > 0 { RowTime(updated: chat.updated) }
                     }
                 }
                 let state = stateView
@@ -99,13 +98,6 @@ struct ChatRow: View {
             .foregroundStyle(Palette.ink)
     }
 
-    private func time(_ ago: String) -> some View {
-        Text(ago)
-            .captionFont()
-            .foregroundStyle(Palette.muted)
-            .lineLimit(1)
-    }
-
     /// 0.6.4: a running row ticks by itself, from the computer's turn start: "运行中 · 3 分 12 秒".
     @ViewBuilder private var stateView: some View {
         if chat.status == "running" && chat.turnStarted > 0 {
@@ -132,6 +124,21 @@ struct ChatRow: View {
             text += chat.parentTitle.isEmpty ? " · 未分组" : " · 属于「\(chat.parentTitle)」"
         }
         return text
+    }
+}
+
+/// A row's time, worked out again every minute. 11-02: a row whose values have not changed is not drawn again, so a
+/// row read at 12:23 still said 刚刚 at 13:23 (the web list is rebuilt once a minute for the same reason).
+struct RowTime: View {
+    let updated: Int64
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            Text(Labels.ago(updated, now: context.date))
+                .captionFont()
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
+        }
     }
 }
 
@@ -195,13 +202,7 @@ struct ChildRow: View {
                         .foregroundStyle(Palette.ink)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    let ago = Labels.ago(chat.updated)
-                    if !ago.isEmpty {
-                        Text(ago)
-                            .captionFont()
-                            .foregroundStyle(Palette.muted)
-                            .lineLimit(1)
-                    }
+                    if chat.updated > 0 { RowTime(updated: chat.updated) }
                 }
                 HStack(spacing: 0) {
                     Text(Labels.status(chat.status))

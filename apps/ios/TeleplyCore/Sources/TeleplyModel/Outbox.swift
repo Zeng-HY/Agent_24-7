@@ -18,7 +18,12 @@ public let acceptedAtNote = "_accepted_at"
 /// are matched by words, and then by where the record stood (Claude, its position) or by the computer's own time of
 /// accepting the send (both). Without either (an older computer) the words and 120 s are all there is. If ten minutes
 /// have passed and the record already has a later user message, the send is given up and left to 核对发送记录.
-public func outboxSends(_ submissions: [Submission], messages: [Message], now: Int64) -> [Submission] {
+///
+/// 11-02: the page holds the newest 60 rows, so a send's row leaves it once a long turn has written that many more.
+/// [olderUnread] says older rows are not read: when the page begins after a send, its row is back there, not missing.
+/// Three sends of the day before sat under a turn's newest rows, through several compactions, with no later user
+/// message in the page to give them up. One still queued is not in the record at all, and stays.
+public func outboxSends(_ submissions: [Submission], messages: [Message], now: Int64, olderUnread: Bool = false) -> [Submission] {
     let users = messages.filter { $0.role == "user" }
     var used = Set<String>()
     var kept: [Submission] = []
@@ -35,6 +40,7 @@ public func outboxSends(_ submissions: [Submission], messages: [Message], now: I
             used.insert(found.id)
             continue
         }
+        if olderUnread, record.label != Hints.text("已排队"), pageBegins(messages, after: record) { continue }
         let sentAt = Double(sendBase(record)) / 1000
         let later = users.contains { message in
             guard let written = writtenAt(message) else { return false }
@@ -55,6 +61,17 @@ private func sendBase(_ record: Submission) -> Int64 {
 
 private func notesOf(_ record: Submission) -> JSONValue {
     (try? JSONValue.parse(Data(record.body.utf8))) ?? [:]
+}
+
+/// Whether the first row of the page came after this send: by the record's position for Claude, as in [matches], and
+/// otherwise by the computer's time, with the two minutes [matches] gives a phone's own clock.
+private func pageBegins(_ messages: [Message], after record: Submission) -> Bool {
+    let notes = notesOf(record)
+    if record.app == "claude", notes[claudeOffsetNote].double() > 0, let order = messages.first?.order {
+        return order > notes[claudeOffsetNote].double()
+    }
+    guard let first = messages.lazy.compactMap(writtenAt).first else { return false }
+    return first > Double(sendBase(record)) / 1000 + (notes[acceptedAtNote].double() > 0 ? 1 : 120)
 }
 
 /// A Claude/DeepSeek user message that is this send: the same words (after any picture marks), and then:

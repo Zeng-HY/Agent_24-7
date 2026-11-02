@@ -69,9 +69,12 @@ extension AppModel {
         if let g, !current(g) { return }
         guard self.device?.id == device.id, (listSource, query, listSort, listStatus) == asked else { return }
         let fresh = Set(page.items.map(rowKey))
-        let beyond = chats.contains { !fresh.contains(rowKey($0)) }
+        // 11-02: in a list of one state, a row the first page leaves out has left that state (运行中: it ended). Kept,
+        // nothing would read it again: it said 运行中, its timer ticking, hours after the turn ended.
+        let kept = asked.3 == "all" ? chats.filter { !fresh.contains(rowKey($0)) } : []
+        let beyond = !kept.isEmpty
         // The 10 s read mostly brings the same rows: equal values are not written again (as ChatModel.take).
-        let merged = (page.items + chats.filter { !fresh.contains(rowKey($0)) }).filter { !hidden.contains(rowKey($0)) }
+        let merged = (page.items + kept).filter { !hidden.contains(rowKey($0)) }
         if merged != chats { chats = merged }
         if !beyond {
             if listCursor != page.cursor { listCursor = page.cursor }
@@ -158,10 +161,11 @@ extension AppModel {
             showComputers()
             return
         }
-        listStatus = target.status
         if device?.id == computer.id {
+            // 11-02: with listStatus set first this saw no change and read nothing: the rows of every state stayed.
             listDisplay(status: target.status)
         } else {
+            listStatus = target.status
             select(computer)
         }
     }

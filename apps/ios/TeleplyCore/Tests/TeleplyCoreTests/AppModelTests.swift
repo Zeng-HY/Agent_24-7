@@ -36,6 +36,18 @@ func makeApp(world: DemoWorld = DemoWorld(), store: LocalStore = LocalStore(fold
                                    pacer: IdlePacer(), newScope: { "scope-1" }))
 }
 
+/// The demo computer with a list of the rows a test chose, all running: what a list brings changes from read to read.
+final class ChosenListTransport: RelayTransport {
+    let demo = DemoTransport()
+    let rows = Mutex(["a", "b"])
+
+    func send(_ request: RelayRequest) async throws -> RelayResponse {
+        guard request.url.path.hasSuffix("/api/chats") else { return try await demo.send(request) }
+        let items = rows.withLock { $0 }.map { #"{"id":"\#($0)","title":"\#($0)","app":"codex","status":"running"}"# }
+        return .json(#"{"items":[\#(items.joined(separator: ","))],"has_more":false}"#)
+    }
+}
+
 /// The demo computer, with every conversation opening on a message cut short the way the computer cuts one over 6000
 /// characters (chat_history.public_message; the user's prompt of 7545, 10-27).
 struct CutMessageTransport: RelayTransport {
@@ -289,6 +301,40 @@ struct AppModelTests {
         await model.settle()
         try await quiet()
         #expect(await reads() == start + 2)
+    }
+
+    /// 11-02: the island's 还有 N 个 set the state first, so the list saw no change and kept every row. The polls then
+    /// brought the running ones alone and nothing read the others again.
+    @Test func theIslandsListOpensOnTheRunningRowsAlone() async throws {
+        let model = makeApp()
+        await signedInOnA(model)
+        #expect(model.chats.contains { $0.status != "running" })
+        model.openIslandList(try #require(IslandListTarget(url: URL(string: "teleply://list?d=\(model.device!.id)&status=running")!)))
+        await model.settle()
+        #expect(model.listStatus == "running")
+        #expect(model.chats.allSatisfy { $0.status == "running" })
+    }
+
+    /// 11-02: a conversation that ended is not in a running-only list any more; kept, it said 运行中 for hours.
+    @Test func aRowThatEndedLeavesAListOfOneStateAndStaysInTheWholeList() async throws {
+        let transport = ChosenListTransport()
+        let model = AppModel(services: AppServices(store: LocalStore(folder: temporaryFolder()), vault: MemoryCookieVault(),
+                                                   transport: transport, demo: { DemoTransport() }, pacer: IdlePacer(),
+                                                   newScope: { "scope-1" }))
+        await signedInOnA(model)
+        #expect(model.chats.map(\.id) == ["a", "b"])
+        // The whole list: the first page leaving a row out says nothing about it (it may be on a later page).
+        transport.rows.withLock { $0 = ["a"] }
+        try await model.mergeFirstPage()
+        #expect(model.chats.map(\.id) == ["a", "b"])
+        transport.rows.withLock { $0 = ["a", "b"] }
+        model.listDisplay(status: "running")
+        await model.settle()
+        #expect(model.chats.map(\.id) == ["a", "b"])
+        transport.rows.withLock { $0 = ["a"] }
+        try await model.mergeFirstPage()
+        #expect(model.chats.map(\.id) == ["a"])
+        #expect(!model.listMore)
     }
 
     @Test func theLiveConnectionReadsStateFreshOnEntering() async {

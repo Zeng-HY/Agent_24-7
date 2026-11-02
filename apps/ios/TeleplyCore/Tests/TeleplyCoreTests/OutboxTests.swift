@@ -121,4 +121,58 @@ struct OutboxTests {
         let later = user("下一件事", at: "2027-01-15T07:49:02Z")
         #expect(outboxSends([record], messages: [later], now: now).isEmpty)
     }
+
+    // -- 11-02: a long turn moved the page of the newest 60 rows past the sends of the day before
+
+    private func answer(at: String, order: Double? = nil) -> Message {
+        var message = Message(id: "a1", role: "assistant", text: "还在做")
+        message.order = order
+        message.details = ["time": .string(at)]
+        return message
+    }
+
+    @Test func aSendThePageHasMovedPastLeavesTheBottom() {
+        let record = send("跑完了吗", label: "已送达", created: now - 86_400_000, app: "claude",
+                          notes: [claudeOffsetNote: .number(1000)])
+        let newest = answer(at: "2027-01-15T08:00:00Z", order: 5000)
+        #expect(outboxSends([record], messages: [newest], now: now, olderUnread: true).isEmpty)
+        // No older rows left: the page is the whole record, and the record does not have it.
+        #expect(outboxSends([record], messages: [newest], now: now).map(\.request) == ["req-1"])
+    }
+
+    @Test func aSendJustAfterThePagesFirstRowWaitsForItsOwnRow() {
+        let record = send("跑完了吗", label: "已送达", app: "claude", notes: [claudeOffsetNote: .number(1000)])
+        // Written before Enter: the send's row is still to come in this page.
+        let earlier = answer(at: "2027-01-15T07:59:00Z", order: 500)
+        #expect(outboxSends([record], messages: [earlier], now: now, olderUnread: true).map(\.request) == ["req-1"])
+    }
+
+    @Test func aSendOfAnotherSourceGoesByTheComputersTime() {
+        let computerTook: Int64 = 1_799_996_400_000  // 07:00:00
+        let record = send("整理", created: computerTook + 13_000, notes: [acceptedAtNote: .number(Double(computerTook))])
+        let after = answer(at: "2027-01-15T07:00:30Z")
+        #expect(outboxSends([record], messages: [after], now: now, olderUnread: true).isEmpty)
+        let before = answer(at: "2027-01-15T06:59:30Z")
+        #expect(outboxSends([record], messages: [before], now: now, olderUnread: true).map(\.request) == ["req-1"])
+    }
+
+    @Test func anOlderComputerLeavesTwoMinutesForThePhonesClock() {
+        let record = send("旧电脑", created: 1_799_996_400_000)  // 07:00:00 by the phone, no notes at all
+        let soon = answer(at: "2027-01-15T07:01:30Z")
+        #expect(outboxSends([record], messages: [soon], now: now, olderUnread: true).map(\.request) == ["req-1"])
+        let long = answer(at: "2027-01-15T07:03:00Z")
+        #expect(outboxSends([record], messages: [long], now: now, olderUnread: true).isEmpty)
+    }
+
+    @Test func aQueuedSendStaysHoweverFarThePageHasMoved() {
+        let record = send("排着队", label: "已排队", app: "claude", notes: [claudeOffsetNote: .number(1000)])
+        let newest = answer(at: "2027-01-15T08:00:00Z", order: 5000)
+        #expect(outboxSends([record], messages: [newest], now: now, olderUnread: true).map(\.request) == ["req-1"])
+    }
+
+    @Test func aRowStillInThePageIsMatchedAsBefore() {
+        let record = send("跑完了吗", label: "已送达", app: "claude", notes: [claudeOffsetNote: .number(1000)])
+        let own = user("跑完了吗", at: "2027-01-15T07:59:00Z", order: 1200)
+        #expect(outboxSends([record], messages: [own], now: now, olderUnread: true).isEmpty)
+    }
 }

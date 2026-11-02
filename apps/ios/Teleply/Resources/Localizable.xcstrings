@@ -1601,6 +1601,36 @@
         }
       }
     },
+    "只显示已结束的对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing finished conversations only"
+          }
+        }
+      }
+    },
+    "只显示等待处理的对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing conversations waiting for you only"
+          }
+        }
+      }
+    },
+    "只显示运行中的对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing running conversations only"
+          }
+        }
+      }
+    },
     "只有图片或引用": {
       "localizations": {
         "en": {
@@ -3887,6 +3917,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Show"
+          }
+        }
+      }
+    },
+    "显示全部": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show All"
           }
         }
       }
