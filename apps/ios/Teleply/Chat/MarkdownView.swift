@@ -196,7 +196,7 @@ struct CodePanel: View {
         let full = code.hasSuffix("\n") ? String(code.dropLast()) : code
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text(label)
+                Text(L(label))
                     .noteFont()
                     .foregroundStyle(Palette.muted)
                     .lineLimit(1)

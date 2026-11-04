@@ -80,7 +80,7 @@ struct CardTitle: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(text)
+            Text(L(text))
                 .headingFont()
                 .foregroundStyle(Palette.ink)
                 .accessibilityAddTraits(.isHeader)
@@ -504,12 +504,12 @@ struct AskBar: View {
                         Circle().fill(Palette.questionDot).frame(width: 8, height: 8)
                     }
                     .frame(width: 16, height: 16)
-                    Text(line.summary)
+                    Text(L(line.summary))
                         .noteFont()
                         .foregroundStyle(Palette.noteInk)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(line.go)
+                    Text(L(line.go))
                         .noteFont(.semibold)
                         .foregroundStyle(Palette.askGo)
                 }

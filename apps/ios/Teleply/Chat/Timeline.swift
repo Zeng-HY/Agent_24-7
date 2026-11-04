@@ -256,13 +256,13 @@ private struct ProcessHeader: View {
     let toggle: () -> Void
 
     /// 0.6.4: a finished turn says how long it thought, from the record's own start and end.
-    private var title: String {
-        if group.waiting { return "需要你回答 · \(group.steps) 步" }
-        if group.live { return "正在处理 · \(group.steps) 步" }
+    private var title: Text {
+        if group.waiting { return Text("需要你回答 · \(group.steps) 步") }
+        if group.live { return Text("正在处理 · \(group.steps) 步") }
         if group.turnStarted > 0, group.turnEnded >= group.turnStarted {
-            return IslandWords.thoughtLine(started: group.turnStarted, ended: group.turnEnded)
+            return Text(verbatim: IslandWords.thoughtLine(started: group.turnStarted, ended: group.turnEnded))
         }
-        return "处理过程 · \(group.steps) 步"
+        return Text("处理过程 · \(group.steps) 步")
     }
 
     var body: some View {
@@ -272,7 +272,7 @@ private struct ProcessHeader: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Palette.muted)
                     .rotationEffect(.degrees(open ? 90 : 0))
-                Text(title)
+                title
                     .processFont()
                     .foregroundStyle(group.waiting ? Palette.askGo : Palette.muted)
                     .monospacedDigit()

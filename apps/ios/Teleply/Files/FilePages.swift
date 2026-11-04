@@ -6,16 +6,16 @@ import TeleplyState
 /// What a file's state means, in the web's words (operationLabel).
 func operationLabel(_ value: String) -> String {
     switch value {
-    case "pending": return "待回答"
-    case "answered": return "已回答"
-    case "draft": return "草稿"
-    case "submitting", "creating", "dispatching": return "正在提交，结果可核对"
-    case "unconfirmed", "unknown": return "结果待确认"
-    case "accepted": return "已接收"
-    case "failed": return "失败"
-    case "current": return "当前版本"
-    case "updated": return "文件已更新"
-    case "missing": return "文件缺失"
+    case "pending": return L("待回答")
+    case "answered": return L("已回答")
+    case "draft": return L("草稿")
+    case "submitting", "creating", "dispatching": return L("正在提交，结果可核对")
+    case "unconfirmed", "unknown": return L("结果待确认")
+    case "accepted": return L("已接收")
+    case "failed": return L("失败")
+    case "current": return L("当前版本")
+    case "updated": return L("文件已更新")
+    case "missing": return L("文件缺失")
     default: return value
     }
 }

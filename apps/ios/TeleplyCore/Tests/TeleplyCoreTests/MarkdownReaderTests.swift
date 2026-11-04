@@ -3,6 +3,11 @@ import Testing
 @testable import TeleplyModel
 
 struct MarkdownReaderTests {
+    @Test func tableCellsLoseTheirMarks() {
+        let blocks = MarkdownReader.blocks("| 文件 | 改动 |\n|---|---|\n| `list.py` | **加了** 3 个测试 |")
+        #expect(blocks == [.table(header: ["文件", "改动"], rows: [["list.py", "加了 3 个测试"]])])
+    }
+
     @Test func readsTheBlocksAndroidDraws() throws {
         let blocks = MarkdownReader.blocks("""
         # 标题

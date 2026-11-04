@@ -32,10 +32,10 @@ public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
         if total == 0 { return [] }
         if let first = approvals.first {
             let tool = first["request"]["toolName"].string()
-            return [PendingCard(kind: "approval", summary: "批准这一步吗？" + (tool.isEmpty ? "" : " · " + tool), count: total)]
+            return [PendingCard(kind: "approval", summary: (Labels.english ? "Approve This Step?" : "批准这一步吗？") + (tool.isEmpty ? "" : " · " + tool), count: total)]
         }
         let question = questions.first?["questions"].array.first?["question"].string() ?? ""
-        return [PendingCard(kind: "question", summary: question.isEmpty ? "有问题要回答" : question, count: total)]
+        return [PendingCard(kind: "question", summary: question.isEmpty ? (Labels.english ? "Question to Answer" : "有问题要回答") : question, count: total)]
     default:
         return raw["questions"].array.filter { $0["status"].string() == "pending" }.map { card in
             let question = card["questions"].array.first?["question"].string() ?? ""

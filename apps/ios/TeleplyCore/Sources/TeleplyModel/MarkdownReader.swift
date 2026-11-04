@@ -147,8 +147,8 @@ public enum MarkdownReader {
             return .list(ordered: true, start: Int(list.startIndex), items: list.listItems.map { $0.children.compactMap(block) })
         case let table as Table:
             // The types pick the eager map: cells and rows are lazy sequences in swift-markdown.
-            let header: [String] = table.head.cells.map { $0.plainText }
-            let rows: [[String]] = table.body.rows.map { row in row.cells.map { $0.plainText } }
+            let header: [String] = table.head.cells.map { cellText($0) }
+            let rows: [[String]] = table.body.rows.map { row in row.cells.map { cellText($0) } }
             return .table(header: header, rows: rows)
         case is ThematicBreak:
             return .rule
@@ -162,6 +162,11 @@ public enum MarkdownReader {
     struct Look {
         var bold = false, italic = false, strike = false
         var link: String?
+    }
+
+    /// A cell's words without their marks: plainText keeps the backticks round inline code.
+    static func cellText(_ cell: Table.Cell) -> String {
+        runs(cell.children).map(\.text).joined()
     }
 
     static func runs(_ children: MarkupChildren, _ look: Look = Look()) -> [InlineRun] {

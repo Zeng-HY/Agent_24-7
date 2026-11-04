@@ -2,7 +2,10 @@ import Foundation
 
 /// Effort names as the web writes them (remote.html EFFORT; Android EffortNames).
 public func effortName(_ value: String) -> String {
-    ["none": "无", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "极高", "max": "最高", "ultra": "Ultra"][value] ?? value
+    if Labels.english {
+        return ["none": "None", "minimal": "Minimal", "low": "Low", "medium": "Medium", "high": "High", "xhigh": "Very High", "max": "Max", "ultra": "Ultra"][value] ?? value
+    }
+    return ["none": "无", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "极高", "max": "最高", "ultra": "Ultra"][value] ?? value
 }
 
 /// Claude's effort levels by the first word of the desktop's names (claude_control EFFORT_LABELS), as Claude records them.

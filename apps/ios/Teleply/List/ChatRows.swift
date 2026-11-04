@@ -155,7 +155,7 @@ struct RunningStatus: View {
                 .foregroundStyle(Palette.success)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
-                .frame(width: 112, alignment: .leading)
+                .frame(width: Labels.language.hasPrefix("en") ? 156 : 112, alignment: .leading)
         }
         .accessibilityLabel("运行中")
     }

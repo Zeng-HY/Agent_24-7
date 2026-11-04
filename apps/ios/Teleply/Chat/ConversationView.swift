@@ -418,6 +418,7 @@ private struct StopPill: View {
                 .captionFont(.medium)
                 .foregroundStyle(Palette.stopInk.opacity(enabled ? 1 : 0.45))
                 .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, 12)
                 .frame(minHeight: 36)
                 .background(Palette.stopFill, in: Capsule())

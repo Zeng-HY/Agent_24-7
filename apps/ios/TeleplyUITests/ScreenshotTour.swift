@@ -40,22 +40,30 @@ final class ScreenshotTour: XCTestCase {
         app.buttons.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
+    /// The simulator's own notice ("Ready for Apple Intelligence", 11-04) covers the top of the page for some seconds.
+    @MainActor private func siteSnap(_ app: XCUIApplication, page: String, variant: String) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let notice = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Apple Intelligence")).firstMatch
+        for _ in 0..<30 where notice.exists { sleep(1) }
+        snap(app, page: page, variant: variant)
+    }
+
     @MainActor private func siteShots(variant: String, language: String) throws {
         continueAfterFailure = true
         let app = launch(appearance: "light", language: language, extra: ["-TeleplyDemo", "-TeleplyDemoSite"])
         let enter = app.buttons[word("进入示例", "Open Sample", language)]
         XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
-        snap(app, page: "site-login", variant: variant)
+        siteSnap(app, page: "site-login", variant: variant)
         enter.tap()
         XCTAssertTrue(app.staticTexts[word("我的电脑", "My Computers", language)].waitForExistence(timeout: 10), "我的电脑 never showed")
-        snap(app, page: "site-devices", variant: variant)
+        siteSnap(app, page: "site-devices", variant: variant)
         let connect = row(app, word("书房的电脑", "Home PC", language))
         XCTAssertTrue(connect.waitForExistence(timeout: 5), "the demo computer had no connect button")
         connect.tap()
 
         let question = row(app, word("重做登录页的样式", "Restyle the login page", language))
         XCTAssertTrue(question.waitForExistence(timeout: 10), "the list never showed its rows")
-        snap(app, page: "site-list", variant: variant)
+        siteSnap(app, page: "site-list", variant: variant)
 
         // The question card with an option chosen (the first picture on the home page).
         question.tap()
@@ -64,7 +72,7 @@ final class ScreenshotTour: XCTestCase {
         if option.exists {
             option.tap()
             app.swipeUp()
-            snap(app, page: "site-question", variant: variant)
+            siteSnap(app, page: "site-question", variant: variant)
         }
         back(app)
 
@@ -74,7 +82,7 @@ final class ScreenshotTour: XCTestCase {
             approval.tap()
             XCTAssertTrue(app.buttons[word("仅允许本次", "Allow Once", language)].waitForExistence(timeout: 10), "the approval card never showed")
             app.swipeUp()
-            snap(app, page: "site-approval", variant: variant)
+            siteSnap(app, page: "site-approval", variant: variant)
             back(app)
         }
 
@@ -84,7 +92,7 @@ final class ScreenshotTour: XCTestCase {
         if running.exists {
             running.tap()
             XCTAssertTrue(app.staticTexts[runningTitle].firstMatch.waitForExistence(timeout: 10), "the running conversation never opened")
-            snap(app, page: "site-running", variant: variant)
+            siteSnap(app, page: "site-running", variant: variant)
             back(app)
         }
 
@@ -96,7 +104,7 @@ final class ScreenshotTour: XCTestCase {
             done.tap()
             XCTAssertTrue(app.staticTexts[doneTitle].firstMatch.waitForExistence(timeout: 10), "the finished conversation never opened")
             sleep(1)
-            snap(app, page: "site-reply", variant: variant)
+            siteSnap(app, page: "site-reply", variant: variant)
             let more = app.buttons[word("对话菜单", "Conversation Menu", language)].firstMatch
             if more.waitForExistence(timeout: 5) {
                 more.tap()
@@ -105,7 +113,7 @@ final class ScreenshotTour: XCTestCase {
                     files.tap()
                     let note = row(app, word("修改说明.md", "change-notes.md", language))
                     XCTAssertTrue(note.waitForExistence(timeout: 10), "对话文件 never listed its files")
-                    snap(app, page: "site-files", variant: variant)
+                    siteSnap(app, page: "site-files", variant: variant)
                 }
             }
         }
