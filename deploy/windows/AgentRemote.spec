@@ -7,8 +7,10 @@ datas=[(str(root/'remote.html'),'.'),(str(root/'voice_tidy_prompt.txt'),'.'),
        (str(root/'windows-version.json'),'.'),(str(root/'windows-release-notes.json'),'.'),(str(root/'build/windows-build.json'),'.'),(str(root/'build/AgentRemote.Chrome.dll'),'.')]
 datas+=collect_data_files('webview')
 hidden=collect_submodules('comtypes',filter=lambda name:'.test' not in name)+collect_submodules('win32com',filter=lambda name:'.test' not in name)
+# cryptography is in .venv for the relay's tests. Only the relay and publish.py use it; this program checks update signatures
+# with Windows' own CNG, and PyInstaller would otherwise follow the optional imports in relay_push and webview (10 MB).
 a=Analysis([str(root/'relay_desktop.py')],pathex=[str(root)],binaries=collect_dynamic_libs('uiautomation'),datas=datas,
-    hiddenimports=hidden,excludes=['pytest','playwright','IPython','matplotlib','numpy','pandas'],
+    hiddenimports=hidden,excludes=['pytest','playwright','IPython','matplotlib','numpy','pandas','cryptography'],
     noarchive=False)
 pyz=PYZ(a.pure)
 exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name='AgentRemote',debug=False,
