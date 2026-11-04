@@ -184,11 +184,12 @@ public struct DemoTransport: RelayFileTransport {
             fields["id"] = .string(chat)
             return Self.json(.object(fields))
         case "/api/deepseek/models":
-            return Self.json(DemoData.deepseekModels)
+            return Self.json(world.site?.models ?? DemoData.deepseekModels)
         case "/api/deepseek/permissions":
             return Self.json(DemoData.deepseekPermissions)
         case "/api/chat/projects":
-            return Self.json(DemoData.tree(device: device, apps: world.apps(of: device), more: query["more"], rows: world.firstPage()))
+            return Self.json(DemoData.tree(device: device, apps: world.apps(of: device), more: query["more"], rows: world.firstPage(),
+                                           deepseekProject: world.site?.project ?? "固定测试项目"))
         case "/api/chats/children":
             let offset = Int(query["offset"] ?? "") ?? 0
             let kids = chat == "deepseek-demo" ? DemoData.deepseekChildren : []
@@ -217,7 +218,7 @@ public struct DemoTransport: RelayFileTransport {
             return Self.json(world.voiceTerms(nil))
         case "/api/chat/files":
             // DeepSeek's presented file is listed too; asked for one message, only that message's files.
-            let all = DemoData.files + (app == "deepseek" ? [DemoData.deliverable] : [])
+            let all = world.site?.files ?? (DemoData.files + (app == "deepseek" ? [DemoData.deliverable] : []))
             let message = query["message"] ?? ""
             return Self.json(["items": .array(message.isEmpty ? all : all.filter { $0["message_id"].string() == message })])
         case "/api/file/meta":
@@ -229,7 +230,7 @@ public struct DemoTransport: RelayFileTransport {
             if query["file"] == "fixture-office-big" {
                 return Self.json(["kind": "download", "name": "季度汇报.pptx", "state": "current", "size": 31_457_280, "preview": "pdf"])
             }
-            let file = (DemoData.files + [DemoData.deliverable]).first { $0["id"].string() == query["file"] }
+            let file = (world.site?.files ?? (DemoData.files + [DemoData.deliverable])).first { $0["id"].string() == query["file"] }
             var meta: [String: JSONValue] = ["kind": file?["kind"] ?? "text", "name": file?["name"] ?? "安全预览.html", "state": "current", "size": file?["size"] ?? 60]
             if let preview = file?["preview"], !preview.isNull { meta["preview"] = preview }
             return Self.json(.object(meta))
@@ -343,7 +344,7 @@ public struct DemoTransport: RelayFileTransport {
                 && Self.statusMatches(row["status"].string(), status)
         }
         // The second page is the one finished row: a list of another state has none.
-        let more = cursor == nil && words.isEmpty && Self.statusMatches(DemoData.older["status"].string(), status)
+        let more = world.site == nil && cursor == nil && words.isEmpty && Self.statusMatches(DemoData.older["status"].string(), status)
         return Self.json(["items": .array(rows), "next_cursor": more ? "page2" : .null, "has_more": .bool(more)])
     }
 
@@ -359,8 +360,10 @@ public struct DemoTransport: RelayFileTransport {
     func history(app: String, chat: String, before: String?) -> RelayResponse {
         let title = world.firstPage().first { $0["id"].string() == chat }?["title"].string() ?? "固定对话"
         var page: [String: JSONValue] = ["app": .string(app), "id": .string(chat), "title": .string(title),
-                                         "folder": .string(app == "deepseek" ? "固定测试项目" : "测试项目"), "runtime": DemoData.runtime(app)]
-        if chat == "performance" {
+                                         "folder": .string(world.site?.project ?? (app == "deepseek" ? "固定测试项目" : "测试项目")), "runtime": DemoData.runtime(app)]
+        if let site = world.site, world.createdText(chat) == nil {
+            page["messages"] = .array(site.messages(chat: chat))
+        } else if chat == "performance" {
             page["messages"] = .array(DemoData.performance)
         } else if let text = world.createdText(chat) {
             page["messages"] = [DemoData.message(chat + "-1", "user", text.isEmpty ? "请查看这些图片或引用。" : text),

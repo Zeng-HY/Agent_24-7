@@ -1,6 +1,19 @@
 import SwiftUI
 import TeleplyIsland
 
+/// The website's pictures (-TeleplyDemoSite) name DeepSeek alone, in the phone's language; otherwise the usual samples.
+private enum PreviewSample {
+    static var site: Bool { LaunchOptions.siteShots }
+    static var first: String { site ? "deepseek" : "claude" }
+    static var second: String { site ? "deepseek" : "codex" }
+    static var fallback: String { (site ? "DeepSeek · " : "Claude · ") + computer }
+    static var computer: String { word("我的电脑", "My PC") }
+
+    static func word(_ chinese: String, _ other: String) -> String {
+        site && LaunchOptions.english ? other : chinese
+    }
+}
+
 /// 设置 → 开发者选项 → 灵动岛样子 (handoff 5.4): the island's states as near to their real sizes as a page can draw
 /// them, so the look can be discussed before a build reaches the phone. The real island is Apple's; this is a sketch.
 struct IslandPreviewPage: View {
@@ -15,10 +28,10 @@ struct IslandPreviewPage: View {
 
     /// 0.6.3's list samples: three conversations, one of them waiting.
     private var several: [IslandPeer] {
-        [IslandPeer(app: "deepseek", chat: "c3", title: "选方案", state: "waiting", since: now - 30, turn: now - 200),
-         IslandPeer(app: "codex", chat: "c2", title: "跑测试", state: "working", since: now - 200, turn: now - 200,
+        [IslandPeer(app: "deepseek", chat: "c3", title: PreviewSample.word("选方案", "Pick an approach"), state: "waiting", since: now - 30, turn: now - 200),
+         IslandPeer(app: PreviewSample.second, chat: "c2", title: PreviewSample.word("跑测试", "Run the tests"), state: "working", since: now - 200, turn: now - 200,
                     step: "run"),
-         IslandPeer(app: "claude", chat: "c1", title: "改登录页", state: "working", since: now - 300, turn: now - 300,
+         IslandPeer(app: PreviewSample.first, chat: "c1", title: PreviewSample.word("改登录页", "Restyle the login page"), state: "working", since: now - 300, turn: now - 300,
                     step: "edit")]
     }
 
@@ -29,8 +42,8 @@ struct IslandPreviewPage: View {
             Sample(id: "waiting", status: .waiting, state: IslandState(status: .waiting, since: now - 30, turn: now - 180,
                                                                       askType: "permission", choices: 2)),
             Sample(id: "done", status: .done, state: IslandState(status: .done, since: now - 245, turn: now - 377,
-                                                                 peers: [IslandPeer(app: "claude", chat: "c1",
-                                                                                    title: "这是一个 word 的双语文件…",
+                                                                 peers: [IslandPeer(app: PreviewSample.first, chat: "c1",
+                                                                                    title: PreviewSample.word("这是一个 word 的双语文件…", "The API notes as a Word file…"),
                                                                                     state: "done", since: now - 5,
                                                                                     turn: now - 377, ended: now - 5)],
                                                                  ended: now - 5)),
@@ -199,8 +212,8 @@ private struct ExpandedPreview: View {
                 }
             } else {
                 HStack(spacing: 8) {
-                    SourceMark(app: "claude", size: 16)
-                    Text(IslandWords.cardPeer(state).map { IslandWords.title($0, computer: "我的电脑") } ?? "Claude · 我的电脑")
+                    SourceMark(app: PreviewSample.first, size: 16)
+                    Text(IslandWords.cardPeer(state).map { IslandWords.title($0, computer: PreviewSample.computer) } ?? PreviewSample.fallback)
                         .font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     Spacer(minLength: 8)
                     trailing
@@ -270,8 +283,8 @@ private struct LockCardPreview: View {
                 }
             } else {
                 HStack(spacing: 8) {
-                    SourceMark(app: "claude", size: 20)
-                    Text(IslandWords.cardPeer(state).map { IslandWords.title($0, computer: "我的电脑") } ?? "Claude · 我的电脑")
+                    SourceMark(app: PreviewSample.first, size: 20)
+                    Text(IslandWords.cardPeer(state).map { IslandWords.title($0, computer: PreviewSample.computer) } ?? PreviewSample.fallback)
                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
                     Spacer(minLength: 8)
                     if let symbol = IslandWords.symbol(status) {

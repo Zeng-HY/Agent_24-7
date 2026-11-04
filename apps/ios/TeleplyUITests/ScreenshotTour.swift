@@ -26,6 +26,92 @@ final class ScreenshotTour: XCTestCase {
     @MainActor func testIslandDark() throws { try islandPreview(variant: "dark", appearance: "dark") }
     @MainActor func testIslandEnglish() throws { try islandPreview(variant: "en", appearance: "light", language: "en") }
 
+    /// 11-04: the website's pictures (pocketagentdesk.com) on the demo with DeepSeek alone (DemoSite): the site names no
+    /// other AI product. Run them alone: codemagic.ps1 -Mode shots -Only "testSiteChinese testSiteEnglish ...".
+    @MainActor func testSiteChinese() throws { try siteShots(variant: "site-zh", language: "zh-Hans") }
+    @MainActor func testSiteEnglish() throws { try siteShots(variant: "site-en", language: "en") }
+    @MainActor func testSiteIslandLight() throws { try islandPreview(variant: "site-zh-light", appearance: "light", site: true) }
+    @MainActor func testSiteIslandDark() throws { try islandPreview(variant: "site-zh-dark", appearance: "dark", site: true) }
+    @MainActor func testSiteIslandEnglishLight() throws { try islandPreview(variant: "site-en-light", appearance: "light", language: "en", site: true) }
+    @MainActor func testSiteIslandEnglishDark() throws { try islandPreview(variant: "site-en-dark", appearance: "dark", language: "en", site: true) }
+
+    /// A button by part of its label: rows, computers and option cards read their whole text as their label.
+    @MainActor private func row(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+        app.buttons.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    @MainActor private func siteShots(variant: String, language: String) throws {
+        continueAfterFailure = true
+        let app = launch(appearance: "light", language: language, extra: ["-TeleplyDemo", "-TeleplyDemoSite"])
+        let enter = app.buttons[word("进入示例", "Open Sample", language)]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        snap(app, page: "site-login", variant: variant)
+        enter.tap()
+        XCTAssertTrue(app.staticTexts[word("我的电脑", "My Computers", language)].waitForExistence(timeout: 10), "我的电脑 never showed")
+        snap(app, page: "site-devices", variant: variant)
+        let connect = row(app, word("书房的电脑", "Home PC", language))
+        XCTAssertTrue(connect.waitForExistence(timeout: 5), "the demo computer had no connect button")
+        connect.tap()
+
+        let question = row(app, word("重做登录页的样式", "Restyle the login page", language))
+        XCTAssertTrue(question.waitForExistence(timeout: 10), "the list never showed its rows")
+        snap(app, page: "site-list", variant: variant)
+
+        // The question card with an option chosen (the first picture on the home page).
+        question.tap()
+        let option = row(app, word("保留现在的布局", "Keep the layout", language))
+        XCTAssertTrue(option.waitForExistence(timeout: 10), "the question card never showed")
+        if option.exists {
+            option.tap()
+            app.swipeUp()
+            snap(app, page: "site-question", variant: variant)
+        }
+        back(app)
+
+        let approval = row(app, word("清理构建缓存", "Clear the build cache", language))
+        XCTAssertTrue(approval.waitForExistence(timeout: 10), "the approval row never showed")
+        if approval.exists {
+            approval.tap()
+            XCTAssertTrue(app.buttons[word("仅允许本次", "Allow Once", language)].waitForExistence(timeout: 10), "the approval card never showed")
+            app.swipeUp()
+            snap(app, page: "site-approval", variant: variant)
+            back(app)
+        }
+
+        let runningTitle = word("把接口文档做成 Word", "Turn the API notes into a Word file", language)
+        let running = row(app, runningTitle)
+        XCTAssertTrue(running.waitForExistence(timeout: 10), "the running row never showed")
+        if running.exists {
+            running.tap()
+            XCTAssertTrue(app.staticTexts[runningTitle].firstMatch.waitForExistence(timeout: 10), "the running conversation never opened")
+            snap(app, page: "site-running", variant: variant)
+            back(app)
+        }
+
+        // A finished turn's reply, then its files.
+        let doneTitle = word("修复列表排序", "Fix the list order", language)
+        let done = row(app, doneTitle)
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "the finished row never showed")
+        if done.exists {
+            done.tap()
+            XCTAssertTrue(app.staticTexts[doneTitle].firstMatch.waitForExistence(timeout: 10), "the finished conversation never opened")
+            sleep(1)
+            snap(app, page: "site-reply", variant: variant)
+            let more = app.buttons[word("对话菜单", "Conversation Menu", language)].firstMatch
+            if more.waitForExistence(timeout: 5) {
+                more.tap()
+                let files = app.buttons[word("对话文件", "Conversation Files", language)].firstMatch
+                if files.waitForExistence(timeout: 5) {
+                    files.tap()
+                    let note = row(app, word("修改说明.md", "change-notes.md", language))
+                    XCTAssertTrue(note.waitForExistence(timeout: 10), "对话文件 never listed its files")
+                    snap(app, page: "site-files", variant: variant)
+                }
+            }
+        }
+        app.terminate()
+    }
+
     /// 0.6.5: the first main pages in English: sign-in, computers, list, one conversation.
     @MainActor func testEnglishMain() throws { try englishMain() }
 
@@ -54,14 +140,14 @@ final class ScreenshotTour: XCTestCase {
         language == "en" ? en : zh
     }
 
-    @MainActor private func islandPreview(variant: String, appearance: String, language: String = "zh-Hans") throws {
+    @MainActor private func islandPreview(variant: String, appearance: String, language: String = "zh-Hans", site: Bool = false) throws {
         continueAfterFailure = true
-        let app = launch(appearance: appearance, language: language, extra: ["-TeleplyDemo"])
+        let app = launch(appearance: appearance, language: language, extra: site ? ["-TeleplyDemo", "-TeleplyDemoSite"] : ["-TeleplyDemo"])
         let enter = app.buttons[word("进入示例", "Open Sample", language)]
         XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
         enter.tap()
         XCTAssertTrue(app.staticTexts[word("我的电脑", "My Computers", language)].waitForExistence(timeout: 10), "我的电脑 never showed")
-        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        let connect = row(app, site ? word("书房的电脑", "Home PC", language) : "测试电脑 A")
         if connect.waitForExistence(timeout: 5) { connect.tap() }
         let menu = app.buttons[word("打开导航", "Open Navigation", language)]
         XCTAssertTrue(menu.waitForExistence(timeout: 15), "the list never showed")

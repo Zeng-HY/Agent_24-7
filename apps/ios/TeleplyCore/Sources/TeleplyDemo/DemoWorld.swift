@@ -84,7 +84,13 @@ public final class DemoWorld: Sendable {
 
     let state = Mutex(State())
 
-    public init() {}
+    /// Set for the website's pictures: this computer has DeepSeek alone, in the phone's language (DemoSite).
+    public let site: DemoSite?
+
+    public init(site: DemoSite? = nil) {
+        self.site = site
+        if let site { state.withLock { $0.devices = site.computers } }
+    }
 
     public var network: DemoNetwork {
         get { state.withLock { $0.network } }
@@ -97,7 +103,8 @@ public final class DemoWorld: Sendable {
 
     /// The desktop apps each demo computer has; 测试电脑 B has no Claude, like a tester's (Android 0.9.1).
     func apps(of device: String) -> [String] {
-        device == DemoData.computerB ? ["codex", "deepseek"] : sourceOrder
+        if site != nil { return ["deepseek"] }
+        return device == DemoData.computerB ? ["codex", "deepseek"] : sourceOrder
     }
 
     /// Times the demo computer opened Claude's menus on its desktop (only 刷新 or a first read should).
@@ -109,15 +116,15 @@ public final class DemoWorld: Sendable {
 
     /// A source's state as /api/{app}/state reports it, with the turn, queue and settings that sending changed.
     func control(app: String, chat: String) -> JSONValue {
-        state.withLock { state in Self.control(state, app: app, chat: chat) }
+        state.withLock { state in Self.control(state, app: app, chat: chat, site: site) }
     }
 
-    private static func control(_ state: State, app: String, chat: String) -> JSONValue {
+    private static func control(_ state: State, app: String, chat: String, site: DemoSite? = nil) -> JSONValue {
         let queued = state.queues[app] ?? []
         let fixtureRunning = chat == "running-demo"  // 0.6.4: the list's running row, also on its page
         let run = state.running[app] == true || fixtureRunning
         let turn = state.turns[app] ?? (fixtureRunning ? "fixture-running" : "")
-        var fields = DemoData.state(app: app, chat: chat).object
+        var fields = (site?.state(chat: chat) ?? DemoData.state(app: app, chat: chat)).object
         // The cards as far as they have been answered; a conversation the demo just made has nothing waiting.
         let made = state.created.contains { $0.row["id"].string() == chat }
         switch app {
@@ -168,7 +175,7 @@ public final class DemoWorld: Sendable {
             settings["reasoningEffort"] = .string(state.deepseekEffort)
             fields["settings"] = .object(settings)
             fields["permission"] = .string(state.deepseekPermission)
-            fields["permission_name"] = .string(["read": "仅可查看", "workspace": "工作区内修改", "full": "完全权限"][state.deepseekPermission] ?? state.deepseekPermission)
+            fields["permission_name"] = .string(site?.permissionName ?? ["read": "仅可查看", "workspace": "工作区内修改", "full": "完全权限"][state.deepseekPermission] ?? state.deepseekPermission)
             fields["queued"] = .array(queued.map { ["id": .string($0.id), "text": .string($0.text), "status": .string($0.status)] })
         default:
             fields["queued"] = .array(queued.map { ["id": .string($0.id), "text": .string($0.text), "status": .string($0.status)] })
@@ -289,7 +296,7 @@ public final class DemoWorld: Sendable {
     /// state answering changed saying so (Android FixtureWorld.firstPage).
     func firstPage() -> [JSONValue] {
         state.withLock { state in
-            (Array(state.created.map(\.row).reversed()) + DemoData.firstPage.map { row in
+            (Array(state.created.map(\.row).reversed()) + (site?.rows ?? DemoData.firstPage).map { row in
                 var fields = row.object
                 switch row["id"].string() {
                 case "demo":
@@ -717,7 +724,7 @@ enum DemoData {
         }
     }
 
-    static func tree(device: String, apps: [String], more: String?, rows: [JSONValue] = firstPage) -> JSONValue {
+    static func tree(device: String, apps: [String], more: String?, rows: [JSONValue] = firstPage, deepseekProject: String = "固定测试项目") -> JSONValue {
         func item(_ row: JSONValue) -> JSONValue {
             ["app": row["app"], "id": row["id"], "title": row["title"], "folder": row["folder"], "updated": row["updated"], "status": row["status"]]
         }
@@ -734,7 +741,7 @@ enum DemoData {
             ["app": "codex", "name": "Codex", "count": .number(Double(codex.count)),
              "projects": [project("p-test", "测试项目", codex), project("p-none", "其他对话", [], projectless: true)]],
             ["app": "claude", "name": "Claude", "count": .number(Double(only("claude").count)), "projects": [project("p-claude", "测试项目", only("claude"))]],
-            ["app": "deepseek", "name": "DeepSeek", "count": .number(Double(only("deepseek").count)), "projects": [project("p-deepseek", "固定测试项目", only("deepseek"))]],
+            ["app": "deepseek", "name": "DeepSeek", "count": .number(Double(only("deepseek").count)), "projects": [project("p-deepseek", deepseekProject, only("deepseek"))]],
         ]
         // Only the apps this computer has, even with none of their conversations (remote.py filters the same way).
         return ["now": .number(Double(now)), "apps": .array(groups.filter { apps.contains($0["app"].string()) })]

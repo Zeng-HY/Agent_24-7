@@ -7,7 +7,7 @@ import TeleplyModel
 /// Launch switches for the screenshot tour (plan: 云端检查). Only debug builds read them; a TestFlight build
 /// always talks to the real service and follows the 外观 setting.
 enum LaunchOptions {
-    private static func flag(_ name: String) -> Bool {
+    nonisolated private static func flag(_ name: String) -> Bool {
         #if DEBUG
         return ProcessInfo.processInfo.arguments.contains(name)
         #else
@@ -20,6 +20,12 @@ enum LaunchOptions {
 
     /// -TeleplyDemoUnreachable: the service cannot be reached, for the "连不上服务器" screenshots.
     static var unreachable: Bool { flag("-TeleplyDemoUnreachable") }
+
+    /// -TeleplyDemoSite: the local demo as the website's pictures show it, DeepSeek alone (DemoSite).
+    nonisolated static var siteShots: Bool { flag("-TeleplyDemoSite") }
+
+    /// The phone's language is English, for the words in those pictures.
+    nonisolated static var english: Bool { Locale.preferredLanguages.first?.hasPrefix("en") == true }
 
     /// How the app talks to the service: URLSession with every request timed into 诊断记录; for the screenshots
     /// a demo service that is down.
@@ -50,7 +56,7 @@ nonisolated final class DemoHolder: Sendable {
     private let chosen = Mutex(DemoNetwork.instant)
 
     func fresh() -> any RelayTransport {
-        let next = DemoWorld()
+        let next = LaunchOptions.siteShots ? DemoWorld(site: DemoSite(english: LaunchOptions.english)) : DemoWorld()
         next.network = chosen.withLock { $0 }
         world.withLock { $0 = next }
         return DemoTransport(world: next)

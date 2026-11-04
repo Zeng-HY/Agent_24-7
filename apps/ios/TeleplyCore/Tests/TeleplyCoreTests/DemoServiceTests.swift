@@ -31,6 +31,43 @@ struct DemoServiceTests {
         #expect(treeApps(try await demo.projects(device: a)) == ["codex", "claude", "deepseek"])
     }
 
+    /// The website's pictures come from this demo, and the site names no other AI product (user 11-04).
+    @Test(arguments: [false, true]) func theWebsitesDemoHasDeepSeekAlone(english: Bool) async throws {
+        let world = DemoWorld(site: DemoSite(english: english))
+        let demo = client(world)
+        try await demo.login(name: "x", password: "y")
+        #expect(try await demo.account().devices.map(\.label).first == (english ? "Home PC" : "书房的电脑"))
+        let rows = try await demo.chatList(device: a, app: "all")
+        #expect(rows.items.count == 6 && rows.items.allSatisfy { $0.app == "deepseek" } && !rows.hasMore)
+        #expect(treeApps(try await demo.projects(device: a)) == ["deepseek"])
+
+        // What the screens read, as the computer answers: nothing of another product.
+        let transport = DemoTransport(world: world)
+        var said = ""
+        func read(_ route: String, _ query: [String: String] = [:]) {
+            said += String(decoding: transport.computer(a, route, query).body, as: UTF8.self)
+        }
+        read("/api/chats", ["app": "all"])
+        read("/api/chat/projects")
+        read("/api/deepseek/models")
+        for row in rows.items {
+            read("/api/chat", ["app": "deepseek", "id": row.id])
+            read("/api/deepseek/state", ["app": "deepseek", "id": row.id])
+            read("/api/chat/files", ["app": "deepseek", "id": row.id])
+        }
+        for name in ["codex", "claude", "openai", "anthropic", "gpt", "opus", "sonnet"] {
+            #expect(!said.lowercased().contains(name), "the demo said \(name)")
+        }
+
+        // Each conversation has only its own card.
+        #expect(try await demo.history(device: a, app: "deepseek", chat: "site-question").items.count == 4)
+        #expect(world.control(app: "deepseek", chat: "site-question")["questions"].array.count == 1)
+        #expect(world.control(app: "deepseek", chat: "site-question")["interactions"].array.isEmpty)
+        #expect(world.control(app: "deepseek", chat: "site-approval")["interactions"].array.count == 1)
+        #expect(world.control(app: "deepseek", chat: "site-done")["questions"].array.isEmpty)
+        #expect(world.control(app: "deepseek", chat: "running-demo")["running"].bool())
+    }
+
     @Test func listPagesAndSpecialInputs() async throws {
         let demo = client()
         let first = try await demo.chatList(device: a, app: "all")
