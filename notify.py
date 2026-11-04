@@ -46,7 +46,7 @@ HISTORY_BYTES = 64 << 20  # the first look reads back this far for the last star
 SNAPSHOT_EVERY = 60       # a running conversation's record reaches the relay this often (0.6.4)
 SNAPSHOT_AGAIN = 60       # an empty snapshot, sent again once this later, for a relay that missed the first (11-01)
 STEP_GAP = 15             # seconds between two progress events of one conversation (0.6.4)
-LIMIT = 30              # conversations of each app looked at, newest first
+LIMIT = 30              # conversations of each app looked at, newest first (and any still under way: _followed)
 DEFAULT_SERVER = "https://api.day.app"
 # The Codex threads a person talks in: the desktop's and the command line's, started by the user, by this service's
 # new-conversation button (no thread_source) or by another conversation. Not: codex exec runs (the translation
@@ -619,7 +619,7 @@ class Notifier:
         since = record_start or previous or int(self.clock())
         source = "记录" if record_start else ("电脑注意到" if previous else "不知道")
         self.running[conv] = {"since": int(since), "key": scan.get("key") or "", "source": source,
-                              "title": chats.one_line(item.get("title") or "", 60)}
+                              "title": chats.one_line(item.get("title") or "", 60), "item": item}
         if not self.relay_on() or conv in self.reported_running:
             return
         try:
@@ -718,7 +718,29 @@ class Notifier:
             except sqlite3.Error:
                 codex = []
         import deepseek_control
-        return codex + chats.claude_sessions(LIMIT) + deepseek_control.catalog()[:LIMIT]
+        deepseek = deepseek_control.catalog()
+        rows = codex + chats.claude_sessions(LIMIT) + deepseek[:LIMIT]
+        return rows + self._followed(rows, deepseek)
+
+    def _followed(self, rows: list[dict], deepseek: list[dict]) -> list[dict]:
+        """What the newest LIMIT leave out but is still under way. 11-04: a DeepSeek row keeps the time its turn began, and
+        the translation workflows touched sixty others during one turn. Left unread, its end went untold and every
+        snapshot still said it worked: the lock screen's timer ran on for hours. One the app no longer has counts no
+        more, since nothing would ever say it ended."""
+        shown = {(row["app"], row["id"]) for row in rows}
+        active = {*self.running, *self.waiting}
+        more = [row for row in deepseek if ("deepseek", row["id"]) not in shown
+                and (row.get("_running") or row.get("status") == "waiting" or ("deepseek", row["id"]) in active)]
+        known = shown | {("deepseek", row["id"]) for row in more}
+        for conv in active - known:
+            item = (self.running.get(conv) or self.waiting.get(conv) or {}).get("item")
+            if item and conv[0] != "deepseek" and chats.conv_path(item) is not None:
+                more.append(item)
+            else:
+                self.running.pop(conv, None)
+                self.waiting.pop(conv, None)
+                self.reported_running.discard(conv)
+        return more
 
     def _deepseek(self,found,item):
         """DeepSeek's Harness keeps turn/start and turn/end events with their own times; read them, not the clock."""
@@ -818,7 +840,7 @@ class Notifier:
         body, subtitle, outcomes = _preview(end["text"]), f"{self.name} · {app} {done}", []
         conv = (item["app"], item["id"])
         if end.get("asks"):
-            self.waiting[conv] = {"since": int(end.get("started") or self.clock()), "title": title}
+            self.waiting[conv] = {"since": int(end.get("started") or self.clock()), "title": title, "item": item}
         if self.relay_on():  # what happened, not what was said: the relay writes the words (relay_push.py)
             kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
             # quiet: the phone has this conversation open, so no banner — but its island still needs the state.

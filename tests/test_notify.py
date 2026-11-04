@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -561,6 +562,214 @@ class ClaudeCopy(unittest.TestCase):
         self.assertEqual([e["kind"] for e in self.notifier.relay.wait(0, 0)[0]], ["done", "snapshot"])
         self.assertEqual(self.notifier.running, {})
         self.assertEqual(self.sent, [])
+
+
+def deepseek_row(ident, running=False, status="", questions=()):
+    return {"app": "deepseek", "id": ident, "title": "对话" + ident, "status": status or ("running" if running else "idle"),
+            "_running": running, "_values": {"userQuestions": {"active": list(questions)}}, "updated": 0, "preview": ""}
+
+
+class PastTheNewest(unittest.TestCase):
+    """11-04: each look reads the newest LIMIT of each app. A turn that leaves them while it runs must stay followed:
+    its end went untold, and every snapshot said it still worked, three hours past the end."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.now = 1_800_000_000.0
+        self.catalog, self.records, self.read, self.codex_rows, self.claude_rows = [], {}, [], [], []
+        test = self
+
+        class Events:
+            def for_session(self, sid):
+                return []
+
+        class Bridge:
+            events = Events()
+
+            def records(self, sid, limit=100):
+                test.read.append(sid)
+                return {"records": [{"event": e} for e in test.records.get(sid, [])]}, {}
+
+        patches = [mock.patch.object(notify.chats, "_codex_rows", lambda where, args, limit: [dict(i) for i in self.codex_rows][:limit]),
+                   mock.patch.object(notify.chats, "claude_sessions", lambda limit: [dict(i) for i in self.claude_rows][:limit]),
+                   mock.patch.object(notify.chats, "conv_path", lambda item: Path(item["path"]) if Path(item["path"]).is_file() else None),
+                   mock.patch("deepseek_control.catalog", lambda: [dict(r) for r in self.catalog]),
+                   mock.patch("deepseek_control.bridge", Bridge)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.notifier = notify.Notifier({"token": "secret"}, "家里电脑", lambda text: None, lambda: None, clock=lambda: self.now,
+                                        sender=lambda *a, **k: None, page_url=lambda: "")
+        listening = self.notifier.relay.listener()
+        listening.__enter__()
+        self.addCleanup(listening.__exit__, None, None, None)
+
+    def later(self, seconds=61):
+        self.now += seconds
+
+    def idle(self, count):
+        return [deepseek_row(f"newer-{i}") for i in range(count)]
+
+    def turn_start(self, when):
+        return {"type": "turn/start", "seq": 1, "time": int(when * 1000), "data": {"turn": 6}}
+
+    def turn_end(self, when):
+        return {"type": "turn/end", "seq": 2, "time": int(when * 1000), "data": {"turn": 6, "reason": {"kind": "completed"}}}
+
+    def told(self, ident):
+        return [e for e in self.notifier.relay.since("all") if e.get("chat") == ident]
+
+    def snapshot(self):
+        return [i["chat"] for i in [m for m in self.notifier.relay.wait(0, 0)[0] if m.get("kind") == "snapshot"][-1]["items"]]
+
+    def file_row(self, app, ident):
+        return {"app": app, "id": ident, "title": "对话" + ident, "path": str(Path(self.dir.name) / (ident + ".jsonl"))}
+
+    def write(self, row, *lines):
+        with Path(row["path"]).open("a", encoding="utf-8") as f:
+            f.write("".join(line + "\n" for line in lines))
+
+    def iso(self, when):
+        return datetime.fromtimestamp(when, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def test_a_deepseek_turn_that_ends_past_the_newest_is_told_and_counts_no_more(self):
+        conv = ("deepseek", "long")
+        started = self.now - 5
+        self.records["long"] = [self.turn_start(started)]
+        self.catalog = [deepseek_row("long", running=True)] + self.idle(29)
+        self.notifier.look()
+        self.assertEqual(self.notifier.running[conv]["since"], int(started))
+        self.later()  # the translation workflows touch thirty others while this turn runs
+        self.catalog = self.idle(30) + [deepseek_row("long", running=True)]
+        self.notifier.look()
+        self.assertIn("long", self.snapshot())
+        self.later()
+        ended = self.now - 1
+        self.records["long"].append(self.turn_end(ended))
+        self.catalog = self.idle(30) + [deepseek_row("long")]
+        self.notifier.look()
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual([e["kind"] for e in self.told("long")], ["running", "done"])
+        self.assertEqual((self.told("long")[-1]["started"], self.told("long")[-1]["ended"]), (int(started), int(ended)))
+        self.assertEqual(self.snapshot(), [])  # the lock screen's timer stops here
+        self.later()
+        self.notifier.look()
+        self.assertEqual([e["kind"] for e in self.told("long")], ["running", "done"])  # told once, then no longer read
+        self.read.clear()
+        self.notifier.look()
+        self.assertNotIn("long", self.read)
+
+    def test_a_deepseek_turn_already_running_past_the_newest_is_told(self):
+        started = self.now - 3600  # this service started while a long turn ran
+        self.records["old"] = [self.turn_start(started)]
+        self.catalog = self.idle(30) + [deepseek_row("old", running=True)]
+        self.notifier.look()
+        self.assertEqual([(e["kind"], e["since"]) for e in self.told("old")], [("running", int(started))])
+        self.assertEqual(self.snapshot(), ["old"])
+
+    def test_a_deepseek_question_past_the_newest_waits_until_it_is_answered(self):
+        self.catalog = self.idle(30) + [deepseek_row("ask", status="waiting", questions=[{"callId": "q1"}])]
+        self.notifier.look()
+        self.assertEqual(self.snapshot(), ["ask"])
+        self.later()
+        self.catalog = self.idle(30) + [deepseek_row("ask")]
+        self.notifier.look()
+        self.assertEqual(self.notifier.waiting, {})
+        self.assertEqual(self.snapshot(), [])
+
+    def test_a_deepseek_conversation_gone_from_the_list_counts_no_more(self):
+        self.records["long"] = [self.turn_start(self.now - 5)]
+        self.catalog = [deepseek_row("long", running=True)]
+        self.notifier.look()
+        self.later()
+        self.catalog = self.idle(30)  # archived: the host no longer lists it, and nothing would ever say it ended
+        self.notifier.look()
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual(self.notifier.reported_running, set())
+        self.assertEqual([e["kind"] for e in self.told("long")], ["running"])  # nobody knows how it ended
+        self.assertEqual(self.snapshot(), [])
+
+    def test_a_closed_deepseek_says_nothing_about_a_turn(self):
+        self.records["long"] = [self.turn_start(self.now - 5)]
+        self.catalog = [deepseek_row("long", running=True)]
+        self.notifier.look()
+        self.later()
+        self.catalog = self.idle(30) + [deepseek_row("long", status="unknown")]  # its stored summary: not running, not ended
+        self.notifier.look()
+        self.assertIn(("deepseek", "long"), self.notifier.running)
+
+    def test_idle_rows_past_the_newest_are_not_read(self):
+        self.catalog = self.idle(40)
+        self.notifier.look()
+        self.assertEqual(self.read, [r["id"] for r in self.catalog[:notify.LIMIT]])
+
+    def test_a_codex_turn_that_ends_past_the_newest_is_told_and_counts_no_more(self):
+        row = self.file_row("codex", "x1")
+        self.write(row, codex_line("task_started", self.iso(self.now), turn_id="t1"))
+        self.codex_rows = [row]
+        self.notifier.look()
+        self.assertIn(("codex", "x1"), self.notifier.running)
+        self.later()
+        self.codex_rows = [self.file_row("codex", f"newer-{i}") for i in range(30)]  # no record of their own here
+        self.notifier.look()
+        self.assertEqual(self.snapshot(), ["x1"])
+        self.later()
+        self.write(row, codex_line("task_complete", self.iso(self.now), turn_id="t1", last_agent_message="好了"))
+        self.notifier.look()
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual([e["kind"] for e in self.told("x1")], ["running", "done"])
+        self.assertEqual(self.snapshot(), [])
+
+    def test_a_codex_turn_left_running_past_the_newest_stops_counting_like_any_other(self):
+        row = self.file_row("codex", "x1")
+        self.write(row, codex_line("task_started", self.iso(self.now), turn_id="t1"))
+        self.codex_rows = [row]
+        self.notifier.look()
+        self.codex_rows = []
+        self.later(notify.chats.STALE_SECONDS + 1)  # a killed app: no more lines, no end
+        self.notifier.look()
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual(self.snapshot(), [])
+
+    def test_a_record_deleted_past_the_newest_counts_no_more(self):
+        row = self.file_row("codex", "x1")
+        self.write(row, codex_line("task_started", self.iso(self.now), turn_id="t1"))
+        self.codex_rows = [row]
+        self.notifier.look()
+        self.later()
+        self.codex_rows = []
+        Path(row["path"]).unlink()
+        self.notifier.look()
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual(self.notifier.reported_running, set())
+        self.assertEqual(self.snapshot(), [])
+
+    def test_a_claude_turn_that_ends_past_the_newest_is_told(self):
+        row = self.file_row("claude", "c1")
+        self.write(row, claude_line("user", self.iso(self.now), uuid="u1", message={"content": "帮我看看"}))
+        self.claude_rows = [row]
+        self.notifier.look()
+        self.assertIn(("claude", "c1"), self.notifier.running)
+        self.later()
+        self.claude_rows = []
+        self.write(row, claude_line("assistant", self.iso(self.now), uuid="a1", **answer("m1", "end_turn", {"type": "text", "text": "看完了"})),
+                   json.dumps({"type": "system", "subtype": "stop_hook_summary", "timestamp": self.iso(self.now)}))
+        self.notifier.look()
+        self.assertEqual(self.notifier.running, {})
+        self.assertEqual([e["kind"] for e in self.told("c1")], ["running", "done"])
+
+    def test_a_claude_question_past_the_newest_stops_waiting_when_the_record_goes_on(self):
+        row = self.file_row("claude", "c1")
+        self.write(row, claude_line("user", self.iso(self.now), uuid="u1", message={"content": "帮我看看"}))
+        self.notifier.asking(row, "问：先改方案还是先测？")  # not among the newest: the hook named it
+        self.assertEqual(list(self.notifier.waiting), [("claude", "c1")])
+        self.later()
+        self.write(row, claude_line("assistant", self.iso(self.now), uuid="a1", **answer("m1", "end_turn", {"type": "text", "text": "看完了"})),
+                   json.dumps({"type": "system", "subtype": "stop_hook_summary", "timestamp": self.iso(self.now)}))
+        self.notifier.look()
+        self.assertEqual(self.notifier.waiting, {})
+        self.assertEqual(self.snapshot(), [])
 
 
 if __name__ == "__main__":
