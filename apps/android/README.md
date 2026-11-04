@@ -1,6 +1,14 @@
 # 遥应 Teleply 安卓版（1.0.0 正式版：新包名、新签名，名字只叫遥应；含 0.9.1 的修正）
 
-## 列表筛选：结束的对话不再留着，「已结束」能用了（2026-11-02，还没发版）
+## 1.0.6 发布（2026-11-04）
+
+- **版本**：`1.0.6`（17），提交 `1f97102`。带上下面这节的列表筛选修复（`bfb742a`、`753e1ee`）。
+- **文件**：`build/Teleply-1.0.6-17.apk`（2,672,571 字节，SHA-256 `e32a290636dfade48c6f48935125c8ed7f91c027cfe208103e8781ff021bbceb`，证书 `1df09ab7…b2e22946`），加上签过名的 `android-update.json` 和 `android-update.json.sig`。大小和 1.0.5 碰巧一样，内容不同：哈希、`classes.dex`、`versionCode` 都核对过。
+- **发布**：用户 11-04 说「发布」。GitHub 正式版 `android-v1.0.6`，三个文件都附上，GitHub 记下的 SHA-256 和本地一致。仍只在 GitHub：`dl.pocketagentdesk.com` 还没有解析记录，`ANDROID_FROM_ALIYUN` 还是 False。
+- **检查**：210 项 JVM/Compose 测试通过，release 构建和签名证书核对通过。发布后照 1.0.4、1.0.5 的选版逻辑读了一遍：先问阿里云，回 404，转去 GitHub；两版都选中 1.0.6（17），下载到的文件和本地一致。
+- **没有做的**：真手机上从 1.0.5 点「检查更新」装上 1.0.6；真手机上看筛选和加载更多。
+
+## 列表筛选：结束的对话不再留着，「已结束」能用了（2026-11-02，1.0.6）
 
 用户 11-02 在 iPhone 上看到结束的对话还写着「运行中」。查下来是列表每 10 秒合并时留下了第一页没有的行，安卓是同一个写法。三端一起改。
 
@@ -12,7 +20,7 @@
 - **本地示例**（`FixtureApi`）：也认 `idle`；每行带创建时间；第二页那一行是已结束的，所以别的状态不再说「还有更多」。
 - **代码**：`ReaderViewModel.kt`（`mergeFirstPage`）、`Models.kt`（`created`、`sortsAfter`）、`ListUi.kt`（`ListStates`）、`FixtureApi.kt`。
 - **检查**：`scripts/build.ps1` 全部通过：210 项 JVM/Compose 测试（`ListFilterTest` 9 项、界面场景 `theEndedStateShowsTheFinishedRows`）、lint、开发版和设备测试 APK。新测试先在旧代码上跑过，该失败的都失败了。`tests/test_list_status_filter.py` 读三端的选项，拿电脑的 `chat_history.py` 核对，以后哪一端写错值都会报错。
-- **没有做的**：没在真手机和模拟器上看；没发版。
+- **没有做的**：没在真手机和模拟器上看。
 
 ## 1.0.5 发布（2026-11-01）
 
