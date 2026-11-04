@@ -1904,9 +1904,21 @@
     "处理过程 · %lld 步": {
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Activity · %lld steps"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Activity · %lld step"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Activity · %lld steps"
+                }
+              }
+            }
           }
         }
       }
@@ -4904,9 +4916,21 @@
     "正在处理 · %lld 步": {
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working · %lld steps"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Working · %lld step"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Working · %lld steps"
+                }
+              }
+            }
           }
         }
       }
@@ -7714,9 +7738,21 @@
     "需要你回答 · %lld 步": {
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needs your answer · %lld steps"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Needs your answer · %lld step"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Needs your answer · %lld steps"
+                }
+              }
+            }
           }
         }
       }
