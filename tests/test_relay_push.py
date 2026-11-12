@@ -1061,6 +1061,16 @@ class IslandTests(RelayTests):
             await asyncio.sleep(.05)
         self.assertEqual(self.asked[0][0], relay_push.SINCE)
 
+    async def test_a_phone_that_only_takes_island_starts_has_its_computers_read(self):
+        # 11-12: 遥应通知 off and islands on left the computer unread between islands, so none was started from afar
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM push_phones').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM push_activities').fetchone()[0], 0)
+        await self.post('start-token', {'token': 'ef' * 32, 'environment': 'production'})
+        self.service.push.look()
+        self.assertIn(self.devices[0], self.service.push.watchers)
+        self.assertNotIn(self.devices[1], self.service.push.watchers)
+
     async def test_a_silent_stream_turns_the_island_grey_though_the_tunnel_is_up(self):
         clock = 1761630000.0
         self.service.push.clock = lambda: clock

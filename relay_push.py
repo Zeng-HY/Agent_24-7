@@ -562,10 +562,12 @@ class Push:
 
     def look(self):
         """Listen to each connected computer that matters: one with a phone on its account, or with an island (11-01:
-        an island needs the event stream too, and it is what kept showing old work when this depended on phones only)."""
+        an island needs the event stream too, and it is what kept showing old work when this depended on phones only).
+        A phone that takes island starts but not notices counts (11-12: with 遥应通知 off, the computer went unread
+        between islands, so a long turn never got one from afar)."""
         self.seen |= set(self.hub.connections)
         with self.store.connect() as db:
-            owners = {r[0] for r in db.execute('SELECT DISTINCT owner FROM push_phones')}
+            owners = {r[0] for r in db.execute('SELECT owner FROM push_phones UNION SELECT owner FROM push_start')}
             islanded = {r[0] for r in db.execute('SELECT DISTINCT device FROM push_activities')}
             owned = {r['id']: r['owner'] for r in db.execute('SELECT id,owner FROM devices WHERE revoked=0')}
         wanted = {device for device in self.hub.connections
