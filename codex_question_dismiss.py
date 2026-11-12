@@ -16,6 +16,15 @@ from pathlib import Path
 VERIFIED_VERSION = "26.1007.2314.0"
 TIMEOUT = 5.0
 
+# The dismissed-question cards live in the same delivery.sqlite as the send ledger. 11-12: that file was wiped under
+# the running service; the table came back only at the next start, so every status() read raised no such table.
+SCHEMA = "CREATE TABLE IF NOT EXISTS desktop_dismiss (request_id TEXT PRIMARY KEY, thread TEXT, turn_id TEXT, question_id TEXT, answer_hash TEXT, created REAL, status TEXT, reason TEXT, windows TEXT)"
+
+
+def ensure_schema(db):
+    """Make the dismissal table on an opened delivery.sqlite; cheap enough for every open."""
+    db.execute(SCHEMA)
+
 
 def answer_hash(answer):
     return hashlib.sha256(answer.encode("utf-8")).hexdigest()
@@ -88,7 +97,7 @@ class DismissManager:
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="codex-dismiss")
         self.lock = threading.Lock()
         with bridge._db() as db:
-            db.execute("CREATE TABLE IF NOT EXISTS desktop_dismiss (request_id TEXT PRIMARY KEY, thread TEXT, turn_id TEXT, question_id TEXT, answer_hash TEXT, created REAL, status TEXT, reason TEXT, windows TEXT)")
+            # The table is made by bridge._db() (this file's ensure_schema); the restart bookkeeping is this class's.
             db.execute("UPDATE desktop_dismiss SET status=CASE WHEN status='invoking' THEN 'unconfirmed' ELSE 'retained' END,reason='service_restarted' WHERE status IN ('pending','invoking')")
 
     def arm(self, rid, tid, card, answers):

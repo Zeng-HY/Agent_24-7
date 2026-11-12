@@ -147,9 +147,16 @@ STATIC_FILES = {
 
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
-    if CONFIG_FILE.exists():
-        cfg.update(json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig")))
     changed = not CONFIG_FILE.exists()
+    if CONFIG_FILE.exists():
+        try:
+            loaded = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+            if isinstance(loaded, dict):
+                cfg.update(loaded)
+            else:
+                changed = True
+        except ValueError:
+            changed = True  # an empty or half-written file counts as no file; 11-12 the folder was wiped under us
     for key in RETIRED_KEYS:
         changed = cfg.pop(key, None) is not None or changed
     if not cfg.get("token"):
@@ -164,6 +171,7 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)  # the data folder may be gone (11-12)
     CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -376,6 +384,59 @@ class Handler(BaseHTTPRequestHandler):
     # -- GET
 
     def do_GET(self) -> None:
+        self._guarded("GET", self._get)
+
+    def do_POST(self) -> None:
+        self._guarded("POST", self._post)
+
+    def _guarded(self, method: str, action) -> None:
+        """Every request comes through here. An error nothing else caught used to leave the phone with no answer at
+        all: BaseHTTPRequestHandler just dropped the connection and relay_agent.py called that 502 (11-12). Now it is
+        written into the day's log and answered with 500 (or, once output has started, the connection is closed)."""
+        self._responded = False  # the handler is reused for the next request on a kept-alive connection
+        try:
+            action()
+        except ConnectionError:
+            self.close_connection = True  # the phone hung up; there is nobody to answer
+        except Exception as exc:
+            self._unexpected(method, exc)
+
+    def _unexpected(self, method: str, exc: BaseException) -> None:
+        """Write down what was not caught and answer if no byte has gone out yet."""
+        try:
+            text = traceback.format_exc()
+            # Never the query (?t= is the token), the request body or any message text: only method and path.
+            token = str(self.cfg.get("token") or "")
+            if token:
+                text = text.replace(token, "***")
+            self.log.write(f"{method} {urlsplit(self.path).path} 出错：\n{text}")
+        except Exception:
+            pass  # a log that cannot be written must not hide the answer below
+        if self._answer_started():
+            self.close_connection = True  # a live stream or a download: it cannot become a 500 any more
+            return
+        try:
+            self._json({"error": f"电脑端出错（{type(exc).__name__}），已记入日志"}, 500)
+        except Exception:
+            self.close_connection = True
+
+    def end_headers(self) -> None:
+        """Remember that this request's answer has started: the send_header buffer is empty again after a response,
+        so it cannot tell the next request on the same kept-alive connection apart from a stream already under way."""
+        self._responded = True
+        super().end_headers()
+
+    def _answer_started(self) -> bool:
+        """Whether any part of this request's response has gone out. Headers built but not flushed are dropped, so a
+        500 still fits; headers already flushed (a stream, a file) mean only the connection can be closed."""
+        if getattr(self, "_responded", False):
+            return True
+        buffer = getattr(self, "_headers_buffer", None)
+        if isinstance(buffer, list) and buffer:
+            buffer.clear()
+        return False
+
+    def _get(self) -> None:
         path = urlsplit(self.path).path
         if path in STATIC_FILES:  # icons and the manifest carry no secrets; the phone fetches them without the cookie
             name, ctype = STATIC_FILES[path]
@@ -549,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- POST
 
-    def do_POST(self) -> None:
+    def _post(self) -> None:
         path = urlsplit(self.path).path
         if path.startswith(claude_hooks.PATH):  # Claude Code itself, with the hook key instead of the token
             self._claude_hook(path)
@@ -1098,6 +1159,7 @@ def main(argv: list[str] | None = None) -> int:
     input_lock = threading.Lock()  # one stream of keys and clicks into the desktop apps at a time
     server.desktop = chats.Desktop(log, input_lock) if chats else None  # type: ignore[attr-defined]
     server.codex = codex_control.Bridge()  # shares the existing desktop owner's IPC connection
+    server.codex.log = log.write  # a status read that cannot look up a dismissed card says so instead of failing
     server.deepseek = deepseek_control.bridge()
     server.deepseek.log = log  # "回答：…" lines in the day's file, beside "通知：…"
     server.deepseek.uploads = server.codex

@@ -16,6 +16,7 @@ import sqlite3
 import struct
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 from app_paths import DATA
@@ -28,6 +29,7 @@ import win32event
 import win32file
 
 import chats
+import codex_question_dismiss
 import composer_commands
 
 HERE = Path(__file__).resolve().parent
@@ -472,6 +474,18 @@ class Bridge:
         self.data_root = DATA / "attachments"
         self.references = None
         self.dismiss_manager = None
+        self.log = None  # remote.Log's write, for failures that must not escape an interface (set by remote.py)
+        self._dismiss_logged = {}  # tid -> when its last dismissal-read failure was written down
+
+    def _log(self, text):
+        """One line in the service log, when remote.py has given this bridge one. Never raise from logging."""
+        log = self.log
+        if not callable(log):
+            return
+        try:
+            log(text)
+        except Exception:
+            pass
 
     def _pipe(self):
         if self.pipe is None or self.pipe.closed:
@@ -644,7 +658,16 @@ class Bridge:
                 q["answer_revision"] = hashlib.sha256(json.dumps(q.get("answers", {}), sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
                 q["editable"] = q["kind"] == "async" and q["turn_id"] == active_turn
                 if self.dismiss_manager:
-                    q["desktop_dismiss"] = self.dismiss_manager.latest(tid, q["id"])
+                    # 11-12: this is only the extra note "did the PC close the card itself"; a ledger that cannot be
+                    # read must not make the whole status unreadable (the phone showed 连接中断 / 502 for it).
+                    try:
+                        q["desktop_dismiss"] = self.dismiss_manager.latest(tid, q["id"])
+                    except Exception:
+                        q["desktop_dismiss"] = None
+                        now = time.monotonic()
+                        if now - self._dismiss_logged.get(tid, 0) >= 60:
+                            self._dismiss_logged[tid] = now
+                            self._log(f"读取 Codex 提问卡的自动关闭记录失败（{tid}）：\n" + traceback.format_exc())
             try:
                 queued = [{"id": v["id"], "text": v.get("text", ""), "status": (v.get("submission") or {}).get("status", "queued")}
                           for v in self._local_queue(tid)]
@@ -677,23 +700,31 @@ class Bridge:
         path=self.data_root/'delivery.sqlite'
         if not path.is_file():return {}
         out={}
-        con=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+        try:
+            con=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+        except sqlite3.Error:
+            return {}
         try:
             for rid in request_ids:
                 row=con.execute('SELECT state,result FROM deliveries WHERE thread=? AND id=?',(tid,rid)).fetchone()
                 if row:
                     result=json.loads(row[1] or '{}')
                     out[rid]={'state':row[0],'client_id':result.get('client_id'),'message_id':(result.get('evidence') or {}).get('message_id')}
+        except sqlite3.Error:
+            return {}  # 11-12: a wiped file with no deliveries table means "no records", not an error
         finally:con.close()
         return out
 
     @contextmanager
     def _db(self):
-        self.data_root.mkdir(exist_ok=True)
+        self.data_root.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(self.data_root / "delivery.sqlite", timeout=15)
         try:
             with con:
                 con.execute("CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, thread TEXT, fingerprint TEXT, state TEXT, result TEXT, data TEXT, created REAL)")
+                # 11-12: the wiped file came back with only deliveries; the dismissed-question table must come back
+                # with every open, or status()/the live stream fail on any conversation that ever showed a question card.
+                codex_question_dismiss.ensure_schema(con)
                 yield con
         finally:
             con.close()

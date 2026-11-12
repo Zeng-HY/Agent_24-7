@@ -347,13 +347,16 @@ class Bridge:
         self.log=None  # remote.Log for the day's file: "回答：…" beside the "通知：…" lines
         self.events=Interactions(self.client,note=self._note_answer,answered=self.answered_in_records)
         self.transcripts={}
-        with self._db() as db:
-            db.execute('CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, session TEXT, digest TEXT, state TEXT, result TEXT)')
+        with self._db():pass  # the file is made now; every open below also makes its table
     @contextmanager
     def _db(self):
+        # 11-12: the data folder was wiped; the table must come back with the file, or the first send after a wipe
+        # raises no such table: requests.
         connection=sqlite3.connect(self.db,timeout=10)
         try:
-            with connection:yield connection
+            with connection:
+                connection.execute('CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, session TEXT, digest TEXT, state TEXT, result TEXT)')
+                yield connection
         finally:connection.close()
 
     def listing(self, fresh=False):

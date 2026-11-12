@@ -1,8 +1,26 @@
 """One authenticated SSE stream; only existing public message and control fields leave the host."""
-import copy,json,time,select
+import copy,json,time,select,threading
 from datetime import datetime,timezone
 import chats
 from codex_control import ordered_turns
+
+# 11-12: a stream that died on an unexpected error ended silently (the log had no line at all). One line per
+# conversation a minute: the phone reconnects every few seconds and would otherwise fill the day's file.
+_stream_error_at={}
+_stream_error_lock=threading.Lock()
+
+
+def log_stream_error(handler,app,tid,exc):
+    """Write down why a live stream ended, without the conversation's text or the request's query."""
+    now=time.monotonic();key=(app,tid)
+    with _stream_error_lock:
+        if now-_stream_error_at.get(key,0)<60:return
+        _stream_error_at[key]=now
+        if len(_stream_error_at)>64:_stream_error_at.pop(next(iter(_stream_error_at)))
+    log=getattr(handler,'log',None)
+    if not callable(log):return
+    try:log(f"实时流出错（{app} {tid}）：{type(exc).__name__}: {str(exc)[:200]}")
+    except Exception:pass
 
 def merge_live_messages(page,entry,state,previous=None):
     """Only uncommitted public items from the log's current turn may extend its tail.
@@ -125,7 +143,8 @@ def stream(handler,history,bridge,tasks,app,tid):
             elif time.monotonic()-last_write>8:
                 handler.wfile.write(b': heartbeat\n\n');handler.wfile.flush();last_write=time.monotonic()
             time.sleep(1)
-    except Exception:pass
+    except ConnectionError:pass  # the phone hung up: not a fault of the computer's
+    except Exception as exc:log_stream_error(handler,app,tid,exc)
     finally:
         if watcher is not None:watcher.unwatch(tid)
         handler.close_connection=True
@@ -154,7 +173,7 @@ def deepseek_stream(handler,tid):
         presentation=Presentation(tid,item);presentation.accept(first['value'])
         projections=first['value'].get('projections') or {};values=projections.get('values',projections)
         try:presentation.set_subagent_status(bridge._subagents(tid,values))
-        except Exception:pass
+        except Exception as exc:log_stream_error(handler,'deepseek',tid,exc)  # its card is optional; the stream is not
     except Exception:
         if socket:socket.close()
         raise HistoryError('DeepSeek 实时连接暂不可用，请稍后重试',503) from None
@@ -186,7 +205,7 @@ def deepseek_stream(handler,tid):
                 last_subs=now
                 try:
                     if presentation.set_subagent_status(bridge._subagents(tid,values)):dirty=True
-                except Exception:pass
+                except Exception as exc:log_stream_error(handler,'deepseek',tid,exc)
             try:raw=socket.recv()
             except websocket.WebSocketTimeoutException:continue
             if not raw:break

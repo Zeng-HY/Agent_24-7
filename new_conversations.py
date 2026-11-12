@@ -87,15 +87,18 @@ class NewConversations:
         self.root=Path(root or DATA/'attachments');self.root.mkdir(exist_ok=True,parents=True)
         self.db=self.root/'new-conversations.sqlite';self.lock=threading.RLock();self.active=set();self.traces={}
         self.scanned={}  # request id -> the Codex record (path, size, mtime) last searched for it in vain
-        with self._db() as con:
-            con.execute('CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, state TEXT, data TEXT, result TEXT, created REAL)')
-            con.execute('CREATE TABLE IF NOT EXISTS client_timings(request_id TEXT PRIMARY KEY, data TEXT, recorded REAL)')
+        with self._db():pass  # the file is made now; every open below also makes its tables
 
     @contextmanager
     def _db(self):
+        # 11-12: the data folder was wiped and the file came back empty on the next connect; the tables live here, so a
+        # deleted file is usable again at the next request instead of raising no such table: requests.
         con=sqlite3.connect(self.db,timeout=10)
         try:
-            with con:yield con
+            with con:
+                con.execute('CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, state TEXT, data TEXT, result TEXT, created REAL)')
+                con.execute('CREATE TABLE IF NOT EXISTS client_timings(request_id TEXT PRIMARY KEY, data TEXT, recorded REAL)')
+                yield con
         finally:con.close()
 
     def folders(self,app=''):
