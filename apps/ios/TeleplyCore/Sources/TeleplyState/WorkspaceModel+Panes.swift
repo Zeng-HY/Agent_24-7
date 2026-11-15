@@ -276,6 +276,8 @@ extension WorkspaceModel {
         let name = safeFileName(file["name"].string())
         let size = file["meta"]["size"].int64()
         let preview = preview
+        // 11-15: a file the page already knows is too big is refused here; it used to come all the way down first
+        guard preview != nil || size <= RelayClient.downloadLimit else { throw ReadFailure(RelayClient.tooLargeToDownload) }
         let g = paneGeneration
         transferring = true
         transfer = preview == nil ? "正在下载…" : ""

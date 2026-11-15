@@ -3703,12 +3703,12 @@
         }
       }
     },
-    "文件超过100MB，请在电脑上打开": {
+    "文件超过500MB，请在电脑上打开": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The file is over 100 MB. Open it on your computer."
+            "value": "The file is over 500 MB. Open it on your computer."
           }
         }
       }

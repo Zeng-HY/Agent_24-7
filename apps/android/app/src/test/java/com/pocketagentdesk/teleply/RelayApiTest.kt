@@ -33,6 +33,18 @@ class RelayApiTest {
         server.takeRequest()
         assertThrows(IllegalArgumentException::class.java) { serviceOrigin("https://example.invalid/private") }
     }
+    /** 11-15: a file goes down to the phone up to 500 MB (was 100 MB); one said to be bigger is refused before it comes. */
+    @Test fun aFileOverTheDownloadLimitIsRefusedBeforeItComes()=runTest {
+        assertEquals(500L*1024*1024,DownloadLimit)
+        server.enqueue(MockResponse().setBody("small").setHeader("Content-Length",DownloadLimit+1))
+        try { api.downloadTo(device,"chat","file",java.io.ByteArrayOutputStream());fail() } catch(e:IllegalArgumentException) { assertEquals("文件超过500MB，请在电脑上打开",e.message) }
+        server.takeRequest()
+    }
+    /** 11-15: saving a file had the 40 s of every call in all, so a big one on a slow line never finished: an hour now. */
+    @Test fun aFileDownloadHasAnHourAndAMinuteOfSilence() {
+        assertEquals(3_600_000,api.fileClient.callTimeoutMillis)
+        assertEquals(60_000,api.fileClient.readTimeoutMillis)
+    }
     /** 10-27: Word, Excel and PowerPoint as PDF: the device-bound route, the computer's own words when it cannot, 20 MB at most. */
     @Test fun officeFilesComeAsPdfWithTheComputersWords()=runTest {
         val claude=api.forSource("claude")

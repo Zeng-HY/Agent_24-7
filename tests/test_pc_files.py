@@ -44,6 +44,14 @@ class DownloadTests(FilesTestCase):
         self.assertEqual(h.wfile.getvalue(),p.read_bytes());self.assertIn('attachment',headers['Content-Disposition'])
         p.write_bytes(b'changed-length');h.wfile=io.BytesIO();Handler._serve_result_file(h,meta,True)
         self.assertEqual(h.wfile.getvalue(),b'');self.assertEqual(errors[0][1],409)
+    def test_a_file_up_to_500_mb_goes_to_the_phone_and_a_bigger_one_is_refused(self):
+        # 11-15: 100 MB -> 500 MB (user); the line itself is tried with a small stand-in for the limit
+        self.assertEqual(pc_files.MAX_DOWNLOAD,500<<20)
+        ticket=self.files.entry(self.write('大.zip',b'x'*10))['download_id']
+        with patch.object(pc_files,'MAX_DOWNLOAD',10):self.assertEqual(self.files.download_meta(ticket)['size'],10)
+        with patch.object(pc_files,'MAX_DOWNLOAD',9):
+            with self.assertRaises(pc_files.FileError) as caught:self.files.download_meta(ticket)
+        self.assertEqual(caught.exception.status,413)
 
 class ListingTests(FilesTestCase):
     def test_folders_first_natural_order_and_hidden_left_out(self):

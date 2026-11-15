@@ -25,6 +25,8 @@ class MemoryCookieVault : CookieVault {
 }
 /** A preview past what the phone draws ([limit], 20 MB): the file itself can still be saved and opened elsewhere. */
 class PreviewTooLarge(val limit: Long) : Exception("转成的 PDF 超过${limit / (1024 * 1024)}MB预览上限，可保存后使用系统应用打开。")
+/** A file saved or shared from the computer, at most (11-15: was 100 MB, user). A preview is read into memory: 100 MB still. */
+const val DownloadLimit = 500L * 1024 * 1024
 fun serviceOrigin(value: String): HttpUrl {
     val url = value.trim().toHttpUrl()
     require(url.scheme == "https" && url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null && url.encodedPath == "/") { "请输入 HTTPS 服务根地址，不含账号、路径或参数。" }
@@ -82,6 +84,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     private val client = baseClient.newBuilder().cookieJar(CookieJar.NO_COOKIES)
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
+    /** Saving or sharing a file: an hour in all, a minute of silence (11-15: the 40 s of every call cut big files off). */
+    internal val fileClient = client.newBuilder().callTimeout(3600, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
     override fun close() { client.dispatcher.cancelAll() }
     private fun devicePath(device: String, route: String): String {
         require(Regex("[0-9a-f]{32}").matches(device)) { "电脑标识无效" }
@@ -212,19 +216,19 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
             }
         })
     }
-    /** A file from the computer into [output], at most 100 MB, whole or with an error. */
+    /** A file from the computer into [output], at most [DownloadLimit], whole or with an error. */
     private suspend fun streamTo(url:HttpUrl,output:java.io.OutputStream):Unit = suspendCancellableCoroutine { continuation ->
         val builder=Request.Builder().url(url)
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> builder.header("Cookie","${c.name}=${c.value}") } }
-        val call=client.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
+        val call=fileClient.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object:Callback {
             override fun onFailure(call:Call,e:IOException) { if(continuation.isActive) continuation.resumeWithException(e) }
             override fun onResponse(call:Call,response:Response) {
                 try { response.use { r ->
                     if(!r.isSuccessful) throw ServiceFailure(r.code)
-                    require((r.body?.contentLength() ?: 0)<=100L*1024*1024) { "文件超过100MB，请在电脑上打开" }
+                    require((r.body?.contentLength() ?: 0)<=DownloadLimit) { "文件超过500MB，请在电脑上打开" }
                     val input=r.body?.byteStream() ?: throw IOException("文件为空");val buffer=ByteArray(65536);var count=0L
-                    while(true) { if(!continuation.isActive) return;val n=input.read(buffer);if(n<0) break;count+=n;require(count<=100L*1024*1024) { "文件超过100MB" };output.write(buffer,0,n) }
+                    while(true) { if(!continuation.isActive) return;val n=input.read(buffer);if(n<0) break;count+=n;require(count<=DownloadLimit) { "文件超过500MB，请在电脑上打开" };output.write(buffer,0,n) }
                     val expected=r.body?.contentLength() ?: -1L
                     require(expected<0 || count==expected) { "文件接收不完整，请重试" }
                     output.flush();if(continuation.isActive) continuation.resume(Unit)

@@ -1,5 +1,14 @@
 # 遥应 Teleply 安卓版（1.0.0 正式版：新包名、新签名，名字只叫遥应；含 0.9.1 的修正）
 
+## 保存、分享文件：上限 500MB，下载给一小时（2026-11-15，还没发版）
+
+用户 11-15 在 iPhone 上存一个 143MB 的压缩包，进度走到 100% 才说「文件超过100MB」。用户定「提到 500MB」，三端一起改。
+
+- **上限**：保存和用其他应用打开（`streamTo`）从 100MB 提到 500MB（`RelayApi.kt` 的 `DownloadLimit`）。回答的长度超过就当场拒绝，不先下载；没写长度的，读到超过就停。预览仍读进内存，`download()` 还是 100MB。
+- **下载时长**：保存文件原来用每个请求共用的那个连接，总共只给 40 秒，大一点的文件在慢网上根本存不完。现在单独用 `fileClient`：总共一小时，60 秒没有数据才算断。
+- **检查**：新测试 `RelayApiTest.aFileOverTheDownloadLimitIsRefusedBeforeItComes`、`aFileDownloadHasAnHourAndAMinuteOfSilence`。旧代码里没有这两个名字，测试过不了。全部单元测试 212 项通过（`gradlew testDebugUnitTest`；`scripts/build.ps1` 这次没用：11-12 用户目录被误删，`debug.keystore` 没了，脚本会停下）。
+- **还没做的**：发版要用正式版签名钥匙 `teleply-signing`，它 11-12 也被删了，没有备份，所以下一版得换新钥匙，手机上要先卸载再装。
+
 ## 1.0.6 发布（2026-11-04）
 
 - **版本**：`1.0.6`（17），提交 `1f97102`。带上下面这节的列表筛选修复（`bfb742a`、`753e1ee`）。

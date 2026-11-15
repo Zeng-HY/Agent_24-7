@@ -276,6 +276,20 @@ struct AttachmentTests {
         #expect(!workspace.transferring && workspace.transfer.isEmpty)
     }
 
+    /// 11-15: up to 500 MB (was 100 MB, user); a file the page knows is bigger is refused at once, nothing downloaded.
+    /// It used to come all the way down first and then be thrown away.
+    @Test func aFileTooBigForThePhoneIsRefusedBeforeItComes() async throws {
+        #expect(RelayClient.downloadLimit == 500 * 1024 * 1024)
+        let model = await demoConversation("原生阅读示例")
+        let workspace = model.workspace
+        workspace.file(["id": "fixture-md", "name": "说明.md"])
+        await workspace.settle()
+        #expect(workspace.preview == nil)
+        workspace.data = ["id": "fixture-md", "name": "说明.md", "meta": ["size": 524_288_001]]
+        await #expect(throws: ReadFailure(RelayClient.tooLargeToDownload)) { try await workspace.fileCopy() }
+        #expect(!workspace.transferring && workspace.transfer.isEmpty)
+    }
+
     @Test func aFileLinkInAnAnswerOpensThePageOfTheListedFileOnly() async {
         let model = await demoConversation("原生阅读示例")
         let workspace = model.workspace

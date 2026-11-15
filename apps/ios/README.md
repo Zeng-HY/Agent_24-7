@@ -2,6 +2,15 @@
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
+## 保存、用其他应用打开：上限 500MB，先看大小再下（11-15，没编译、没打包）
+
+用户 11-15 在 iPhone（0.7.3）上点「用其他应用打开」一个 143MB 的压缩包：进度走到 100%，才弹「文件超过100MB，请在电脑上打开」，下好的文件被删掉。原因：`URLSessionTransport.download` 等整个文件下完才量大小。用户定「提到 500MB」，三端一起改。
+
+- **上限**：`RelayClient.downloadLimit` 从 100MB 提到 500MB，超过时说 `RelayClient.tooLargeToDownload`（「文件超过500MB，请在电脑上打开」，`Localizable.xcstrings` 的英文跟着改）。
+- **先看大小**：文件页已经知道大小，`WorkspaceModel.fileCopy` 超了就当场说，不发请求。下载中途，回答的长度或者已经收到的字节一超，就停下（`RunningDownload.refuse`），不再等它全部下完。
+- **下载时长**：文件用的连接总时长从 15 分钟放宽到一小时，60 秒没有数据才算断。
+- **检查**：新测试 `AttachmentTests.aFileTooBigForThePhoneIsRefusedBeforeItComes`。**本机没编译，也没跑测试**：11-12 用户目录被误删，本机的 Swift 工具和 Codemagic 令牌（`%USERPROFILE%\.codemagic\token.txt`）都没了，要等令牌补回来，在云端 `ios-native-check` 编译和跑测试。
+
 ## 0.7.3：筛选列表的「加载更多」不再被收回（11-02，构建 28 已传 TestFlight）
 
 0.7.2 只看某个状态时把第一页以外的行全去掉，结果点「加载更多对话」读到的行最多 10 秒就被收回，「已结束」翻不过第一页。用户说「修，三端一起」，安卓、网页在同一次提交里。

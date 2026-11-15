@@ -347,7 +347,9 @@ public struct RelayClient: Sendable {
     /// (relay_transport.py), so a bigger one is refused here with why instead of failing halfway.
     public static let imageLimit: Int64 = 20 * 1024 * 1024
     public static let fileLimit: Int64 = 64 * 1024 * 1024
-    public static let downloadLimit: Int64 = 100 * 1024 * 1024
+    /// A file saved or opened elsewhere from the computer, at most (11-15: was 100 MB, user); what a bigger one says.
+    public static let downloadLimit: Int64 = 500 * 1024 * 1024
+    public static let tooLargeToDownload = "文件超过500MB，请在电脑上打开"
     /// A picture, a PDF or another file a file's page shows itself is shown up to 20 MB (web artifact-preview).
     public static let previewLimit: Int64 = 20 * 1024 * 1024
 
@@ -366,7 +368,7 @@ public struct RelayClient: Sendable {
     }
 
     /// One of a conversation's files (GET /api/file), or a computer file by its ticket (pc.…), to a file on this
-    /// phone, at most 100 MB; the caller owns it. [progress] hears the bytes so far and the whole.
+    /// phone, at most [downloadLimit]; the caller owns it. [progress] hears the bytes so far and the whole.
     public func download(device: String, app: String, chat: String, file: String,
                          progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> URL {
         guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }

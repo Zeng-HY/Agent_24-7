@@ -4,8 +4,9 @@ import TeleplyModel
 /// URLSession set up like the Android OkHttp client (RelayApi.kt): no cookie jar, no cache, no stored
 /// credentials, redirects handed back instead of followed, nothing retried. The sign-in is added by RelayClient
 /// from the keychain. The live stream has its own session: 25 s without a byte counts as dropped (the computer
-/// sends a heartbeat every 8 s), and it may stay open for a day. Files go up and down on a third: up to 15
-/// minutes in all, a minute of silence. An upload goes from its file with its length, never in chunks.
+/// sends a heartbeat every 8 s), and it may stay open for a day. Files go up and down on a third: up to an hour
+/// in all (11-15: was 15 minutes, too short for 500 MB on a slow line), a minute of silence. An upload goes from its
+/// file with its length, never in chunks.
 nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileTransport {
     private let session: URLSession
     private let streamSession: URLSession
@@ -14,7 +15,7 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
     init() {
         session = URLSession(configuration: Self.configuration(idle: 30, total: 130), delegate: RedirectRefusal(), delegateQueue: nil)
         streamSession = URLSession(configuration: Self.configuration(idle: 25, total: 86_400), delegate: RedirectRefusal(), delegateQueue: nil)
-        fileSession = URLSession(configuration: Self.configuration(idle: 60, total: 900), delegate: RedirectRefusal(), delegateQueue: nil)
+        fileSession = URLSession(configuration: Self.configuration(idle: 60, total: 3_600), delegate: RedirectRefusal(), delegateQueue: nil)
     }
 
     static func configuration(idle: TimeInterval, total: TimeInterval) -> URLSessionConfiguration {
@@ -64,15 +65,19 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let kept = folder.appendingPathComponent("download")
         let running = RunningDownload()
-        let reporter = progress.map { report in
-            Task {
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(250))
-                    if let counts = running.counts, counts.got > 0 { report(counts.got, counts.total) }
+        let monitor = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let counts = running.counts else { continue }
+                // 11-15: over [limit] by its length or by what came so far, it stops now, not once it all came down
+                if counts.total > limit || counts.got > limit {
+                    running.refuse()
+                    return
                 }
+                if counts.got > 0 { progress?(counts.got, counts.total) }
             }
         }
-        defer { reporter?.cancel() }
+        defer { monitor.cancel() }
         let answer: (status: Int, expected: Int64)
         do {
             let urlRequest = Self.urlRequest(request)
@@ -97,6 +102,7 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
             }
         } catch {
             try? FileManager.default.removeItem(at: folder)
+            if running.refused { throw ReadFailure(RelayClient.tooLargeToDownload) }
             throw error
         }
         let status = answer.status
@@ -108,7 +114,7 @@ nonisolated final class URLSessionTransport: RelayStreamingTransport, RelayFileT
         let size = ((try? FileManager.default.attributesOfItem(atPath: kept.path))?[.size] as? NSNumber)?.int64Value ?? 0
         guard size <= limit else {
             try? FileManager.default.removeItem(at: folder)
-            throw ReadFailure("文件超过100MB，请在电脑上打开")
+            throw ReadFailure(RelayClient.tooLargeToDownload)
         }
         guard answer.expected < 0 || answer.expected == size else {
             try? FileManager.default.removeItem(at: folder)
@@ -171,6 +177,7 @@ nonisolated final class RunningDownload: @unchecked Sendable {
     private let lock = NSLock()
     private var task: URLSessionDownloadTask?
     private var cancelled = false
+    private var tooLarge = false
 
     func start(_ task: URLSessionDownloadTask) {
         let cancelled = lock.withLock {
@@ -188,6 +195,17 @@ nonisolated final class RunningDownload: @unchecked Sendable {
         }
         task?.cancel()
     }
+
+    /// Over the limit: stopped like a cancel, and said as too large rather than as cancelled.
+    func refuse() {
+        let task = lock.withLock {
+            tooLarge = true
+            return self.task
+        }
+        task?.cancel()
+    }
+
+    var refused: Bool { lock.withLock { tooLarge } }
 
     /// The bytes received so far and the whole (-1 when the answer does not say).
     var counts: (got: Int64, total: Int64)? {

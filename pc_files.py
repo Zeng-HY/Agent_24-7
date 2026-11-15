@@ -33,6 +33,7 @@ import chats
 
 HERE = Path(__file__).resolve().parent
 MAX_UPLOAD = 100 << 20          # one file sent up from the phone
+MAX_DOWNLOAD = 500 << 20        # one file of this computer taken down to the phone (11-15: was 100 MB, user)
 MAX_PICTURE = 20 << 20          # a picture on this computer read in as a photo (codex_control.Bridge.upload takes 20 MB)
 MAX_FILES = 20                  # files and folders attached to one message
 KEEP_UNSENT = 7 * 86400         # a file sent up and never sent with a message is deleted after this
@@ -256,7 +257,7 @@ class Files:
             st=p.stat()
             if not stat.S_ISREG(st.st_mode):raise FileError('只能下载普通文件',400)
             if (size,mtime)!=(st.st_size,st.st_mtime_ns):raise FileError('文件已变化，请重新选择后下载',409)
-            if size>100*1024*1024:raise FileError('文件超过100MB，请在电脑上打开',413)
+            if size>MAX_DOWNLOAD:raise FileError('文件超过500MB，请在电脑上打开',413)
             return {'path':p,'size':size,'mtime':mtime,'kind':'download','mime':mimetypes.guess_type(p.name)[0] or 'application/octet-stream'}
         except FileError:raise
         except (ValueError,TypeError,OSError):raise FileError('文件不可用或下载引用无效，请重新选择',403) from None
