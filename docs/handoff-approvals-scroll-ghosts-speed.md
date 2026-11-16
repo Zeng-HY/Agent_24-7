@@ -413,3 +413,12 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 收尾：紧接本次的一个只改本文件的提交，把阶段四编号补进来（就是上一次提交 `3a50d89`；这次提交本身只改本节）。
 
 工作区 `F:\Android-Dev\work\20261101-island-duplicates\20261116-approvals-scroll\` 里留了：两次旧代码基线日志、四个阶段的全量测试日志、安卓构建日志、`probe_*.py` 和 `probe-*-results.jsonl`（测速原始数据）、`old-tree\`（旧代码副本，用于基线）。仓库里除了这些提交没有留下临时文件。
+
+### 9.8 Claude 复核和云端编译（11-16 下午）
+
+- 四个阶段 Claude 逐个复核过：阶段一的兼容字段核对了 iOS 0.7.3、安卓 1.0.6 的旧代码（`questions` 里 pending 的卡片都会画、答案按选项文字回传）；阶段三用改前改后两份代码解析同样六份真实记录（Claude 7–125 MB、Codex 94–407 MB），全部消息和最新一页逐字节相同，解析快 26%–33%；全部 Python 794 项、22 个老错误，没有新失败。
+- 推送到 GitHub 后在 Codemagic 跑 `ios-native-check`（compile）三次：
+  - `6afa8d5b`：编译失败，`OutboxTests.swift` 新测试里 `send()` 的参数顺序错（`created` 要在 `app` 前）。同时读代码发现 `CodexApprovalCard.submit` 把 `String` 直接放进 `JSONValue` 数组，应用编译到那里也会错。两处在 `95bccec` 修好。
+  - `6afa8ef7`：跑满 45 分钟超时。`ChatModelTests.aSendCountsOnceSoThePageFollows` 发送后没开假电脑 `CommandComputer` 的闸门就 `settleSends()`，一直等。日志在被杀时截断，其余「没结束」的测试多半只是结果没写出来；这一轮里其它新测试（批准卡片、outbox 三条、ReadingFollow、500MB）都已通过。`b91fb76` 补上 `computer.gate.open()`。
+  - `6afa9aac`：**通过**，3 分钟。`TeleplyCore` 272 项测试（36 组）全过，应用 Debug 构建成功（`ConversationView.swift`、`QuestionCards.swift` 都编到了；有 3 个 `onChange(of:perform:)` 已弃用的警告，不影响）。
+- 还没做：iOS 0.7.4 版本号和 TestFlight 上传（等用户同意）；5.1 真实 Codex 批准；7.2 真机验证。
