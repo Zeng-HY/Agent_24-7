@@ -276,7 +276,7 @@
 - 安卓 `ChatUiLogicTest.codexApprovalsAreTheirOwnCard`、`PlatformPolicyTest.aPendingCodexApprovalCountsAsWaitingForTheWatch`、`WorkspaceControllerTest.aCodexApprovalSendsTheOneDecision`。
 
 旧代码上的结果（`stage1-new-tests-on-old-code.log`）：14 项里 1 项本来就成立（过期的请求会被拒绝），其余 13 项失败（3 failures、10 errors），失败的正是「旧代码没有批准通道/卡片」。
-新代码上的结果：14 项全过（`stage1-new-tests-on-new-code.log` 是最后一次单跑前的记录，之后又补了两处断言，最终结果见全量运行）。
+新代码上的结果：14 项全过（`stage1-new-tests-on-new-code.log`）。
 安卓：`build.ps1 -Tasks compileDebugKotlin testDebugUnitTest` 通过，单元测试 **216 项全过**（基线 213 + 本次 3）。
 iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没编译**，等 Claude 在 Codemagic 跑。
 全部 Python：`782 项，6 跳过，22 出错`；22 项与基线同类（21 项 Playwright 浏览器缺失、1 项 `test_mobile_polish` 找旧按钮名），没有新增失败。782 里含本次 14 项。
@@ -409,7 +409,7 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 阶段一（Codex 批准）：`3cc2392`。
 - 阶段二（滚动）：`9116cf0`。
 - 阶段三（打开速度）：`3e92106`。
-- 阶段四（淡色重影）：本次提交。
-- 收尾：紧接本次的一个只改本文件的提交，把阶段四编号补进来。
+- 阶段四（淡色重影）：`3a50d89`。
+- 收尾：紧接本次的一个只改本文件的提交，把阶段四编号补进来（就是上一次提交 `3a50d89`；这次提交本身只改本节）。
 
 工作区 `F:\Android-Dev\work\20261101-island-duplicates\20261116-approvals-scroll\` 里留了：两次旧代码基线日志、四个阶段的全量测试日志、安卓构建日志、`probe_*.py` 和 `probe-*-results.jsonl`（测速原始数据）、`old-tree\`（旧代码副本，用于基线）。仓库里除了这些提交没有留下临时文件。
