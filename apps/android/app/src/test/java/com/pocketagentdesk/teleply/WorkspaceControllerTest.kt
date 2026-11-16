@@ -1,5 +1,6 @@
 package com.pocketagentdesk.teleply
 
+import java.nio.charset.Charset
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import org.json.JSONObject
@@ -172,7 +173,70 @@ class WorkspaceControllerTest {
     @Test fun wordAndExcelAreTheFilesThePhoneDraws() {
         assertEquals("word",phoneOffice("报告.docx"));assertEquals("word",phoneOffice("模板.DOTX"))
         assertEquals("sheet",phoneOffice("预算.xls"));assertEquals("sheet",phoneOffice("数据.csv"));assertEquals("sheet",phoneOffice("宏.xlsm"))
+        assertEquals("sheet",phoneOffice("数据.tsv"));assertEquals("sheet",phoneOffice("数据.TSV"));assertEquals("sheet",phoneOffice("数据.CSV"))
         listOf("汇报.pptx","旧.doc","旧.ppt","说明.pdf","没有扩展名","点.").forEach { assertNull(it,phoneOffice(it)) }
+    }
+    /**
+     * 11-16: a CSV or TSV is a table on the phone from the file itself, whether the computer calls it text or a
+     * download. The phone reads its bytes and its encoding and does not ask for the computer's text, which cannot read
+     * a GBK file.
+     */
+    @Test fun csvShowsAsATableFromTheFileItselfWhicheverKindTheComputerGives()=runTest {
+        val text="编号,问题\r\n01,\"第一段\n- **依据**：a,b\"\r\n02,第二行"
+        val bytes=text.toByteArray(Charsets.UTF_8)
+        val routes=mutableListOf<String>();val fetched=mutableListOf<String>()
+        val api=object:ReadApi by FixtureApi() {
+            var kind="text"
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                routes+=route
+                return if(route=="file/meta") JSONObject().put("kind",kind).put("size",bytes.size) else JSONObject().put("text","电脑的原文")
+            }
+            override suspend fun download(device:String,chat:String,file:String):ByteArray { fetched+=file;return bytes }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        for((id,kind) in listOf("csv" to "text","csv-download" to "download")) {
+            api.kind=kind
+            c.file(JSONObject().put("id",id).put("name","去重问题清单.csv"));runCurrent()
+            val data=JSONObject(c.state.value.data)
+            assertEquals("phone",data.string("preview"));assertEquals("csv",data.string("sheet"))
+            assertEquals(text,c.state.value.result);assertArrayEquals(bytes,c.state.value.preview)
+            assertFalse(c.state.value.busy);assertNull(c.state.value.error)
+        }
+        // The computer's text is never asked for: it only knows UTF-8 and UTF-16.
+        assertEquals(listOf("file/meta","file/meta"),routes);assertEquals(listOf("csv","csv-download"),fetched)
+    }
+    /** 11-16: a CSV saved by Chinese Excel is GBK; the phone reads it as GB18030, as the computer cannot. */
+    @Test fun aGbkCsvIsReadOnThePhone()=runTest {
+        val text="编号,问题\n01,中文格子\n02,第二行"
+        val bytes=text.toByteArray(Charset.forName("GB18030"))
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
+                JSONObject().put("kind","text").put("size",bytes.size)
+            override suspend fun download(device:String,chat:String,file:String)=bytes
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.file(JSONObject().put("id","gbk").put("name","问题清单.csv"));runCurrent()
+        assertEquals(text,c.state.value.result);assertEquals("phone",JSONObject(c.state.value.data).string("preview"))
+        assertArrayEquals(text.toByteArray(),c.state.value.preview)
+    }
+    /** 11-16: a CSV whose table cannot be drawn shows its source, and never asks the computer for a PDF it has not got. */
+    @Test fun aCsvTheTableCannotDrawFallsBackToTheSourceNotToTheComputersPdf()=runTest {
+        val text="编号,问题\n01,中文"
+        val bytes=text.toByteArray(Charsets.UTF_8)
+        val asked=mutableListOf<String>()
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
+                JSONObject().put("kind","download").put("size",bytes.size).put("preview","pdf")
+            override suspend fun download(device:String,chat:String,file:String)=bytes
+            override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray { asked+=file;return "%PDF".toByteArray() }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.file(JSONObject().put("id","csv").put("name","去重问题清单.csv"));runCurrent()
+        c.officeFailed();runCurrent()
+        assertEquals(emptyList<String>(),asked)
+        assertEquals("failed",JSONObject(c.state.value.data).string("preview"));assertNull(c.state.value.preview)
+        assertEquals(text,c.state.value.result);assertEquals("表格显示不了，下面是原文",c.state.value.previewNote)
+        assertFalse(c.state.value.converting)
     }
     /** 核对上次操作 with nothing open left the page busy for good: every later action and state poll waited on it. */
     @Test fun checkingTheLastActionLeavesThePageFree()=runTest {

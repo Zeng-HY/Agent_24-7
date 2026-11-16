@@ -3,6 +3,7 @@ package com.pocketagentdesk.teleply
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import java.nio.charset.CharacterCodingException
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -667,10 +668,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     /**
      * A file's page: its words, its picture or PDF drawn here. A Word or Excel file is drawn here from the file itself
-     * (user 10-28: "Word 和 Excel 在手机上直接显示"; [phoneOffice], "preview": "phone"). PowerPoint, the old .doc and .ppt,
-     * and a Word or Excel file over 20 MB show as the PDF the computer's Office makes when it offers one ("preview":
-     * "pdf" in the list or meta, 10-27; kept as "pdf": true). 保存到手机, 系统分享 and 用其他应用打开 take the file
-     * itself, and work while the PDF is being made.
+     * (user 10-28: "Word 和 Excel 在手机上直接显示"; [phoneOffice], "preview": "phone"). A CSV or TSV is drawn as a table
+     * from the file itself too, whatever kind the computer gives it (11-16), its bytes read here as UTF-8 or GB18030
+     * ([decodeCsvText]) because the computer's text preview knows only UTF-8 and UTF-16. PowerPoint, the old .doc and
+     * .ppt, and a Word or Excel file over 20 MB show as the PDF the computer's Office makes when it offers one
+     * ("preview": "pdf" in the list or meta, 10-27; kept as "pdf": true). 保存到手机, 系统分享 and 用其他应用打开 take
+     * the file itself, and work while the PDF is being made.
      */
     fun file(file:JSONObject) {
         val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
@@ -679,25 +682,39 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             val q=mapOf("app" to k.app,"id" to k.chat,"file" to file.getString("id"))
             val meta=service.detail(k.device,"file/meta",q)
             val kind=meta.string("kind")
-            val pdf=kind=="download" && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
-            val phone=kind=="download" && phoneOffice(file.string("name").ifBlank { meta.string("name") })!=null && meta.optLong("size")<=PreviewLimit
-            val data=JSONObject(file.toString()).put("kind",kind).put("meta",meta).apply {
+            val name=file.string("name").ifBlank { meta.string("name") }
+            val size=meta.optLong("size")
+            // A CSV or TSV is read here as text, whatever the computer calls it; it never goes through a PDF.
+            val sheet=sheetKind(name)
+            val pdf=kind=="download" && sheet==null && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
+            val phone=phoneOffice(name)!=null && size<=PreviewLimit && (kind=="download" || sheet!=null)
+            val data=JSONObject(file.toString()).put("kind",kind).put("name",name).put("meta",meta).apply {
                 remove("preview");remove("pdf")
                 if(pdf) put("pdf",true)
                 if(phone) put("preview","phone") else if(pdf) put("preview","pdf")
-            }.toString()
+            }
             if(pdf && !phone) {
                 // The page and its buttons at once; the PDF when Office on the computer has made it (5-30 s the first time).
-                if(g==generation) update(k) { it.copy(data=data,busy=false,converting=true) }
+                if(g==generation) update(k) { it.copy(data=data.toString(),busy=false,converting=true) }
                 convert(k,service,file.getString("id"),g)
                 return@launchSafe
             }
-            var text="";var bytes:ByteArray?=null;var note=""
+            var text="";var bytes:ByteArray?=null;var note="";var unshown=""
             try {
-                if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
-                if((phone || kind in listOf("image","pdf")) && meta.optLong("size")<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                if(sheet!=null) {
+                    if(size<=PreviewLimit) try {
+                        text=decodeCsvText(service.download(k.device,k.chat,file.getString("id")))
+                        // The table page reads UTF-8, as the phone's own text (3.3); the page is told the separator.
+                        if(text.isNotBlank()) { bytes=text.toByteArray(Charsets.UTF_8);data.put("sheet",sheet) }
+                    } catch(e:CharacterCodingException) { unshown="手机上显示不了这个文件，可保存后使用系统应用打开。" }
+                } else {
+                    if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
+                    if((phone || kind in listOf("image","pdf")) && size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                }
             } catch(e:CancellationException) { throw e } catch(_:Exception) { note="预览未能加载，仍可尝试保存原文件。" }
-            if(g==generation) update(k) { it.copy(data=data,result=text,preview=bytes,busy=false,transfer=note) }
+            // A CSV that could not be read, or is empty, says why instead of showing an empty table.
+            if(sheet!=null && bytes==null) data.put("preview","failed")
+            if(g==generation) update(k) { it.copy(data=data.toString(),result=text,preview=bytes,busy=false,transfer=note,previewNote=unshown) }
         } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false,converting=false) } } }
     }
     /** The computer's PDF of a file for the page of generation [g]; the computer's words when it gives none. */
@@ -708,13 +725,19 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         if(pdf!=null && g==generation) update(k) { it.copy(converting=false,preview=pdf) }
     }
     /**
-     * The phone could not draw the open Word or Excel file (a damaged or protected one): the computer's PDF when it offers
-     * one, as before 10-28; otherwise a line saying so. Once per page; the buttons keep taking the file itself.
+     * The phone could not draw the open Word or Excel file (a damaged or protected one), or the table of a CSV or TSV:
+     * the computer's PDF when it offers one, as before 10-28; a CSV has none, so its source is shown instead (11-16).
+     * Once per page; the buttons keep taking the file itself.
      */
     fun officeFailed() {
         val k=key ?: return;val service=api ?: return;val s=state.value;val g=generation
         val data=JSONObject(s.data)
         if(s.pane!="file" || data.string("preview")!="phone") return
+        // A CSV or TSV is read here and the computer has no PDF of it: show the source that is already here.
+        if(data.string("sheet").isNotBlank() || sheetKind(data.string("name"))!=null) {
+            update(k) { it.copy(preview=null,data=data.put("preview","failed").toString(),previewNote="表格显示不了，下面是原文") }
+            return
+        }
         if(!data.optBoolean("pdf")) { update(k) { it.copy(preview=null,data=data.put("preview","failed").toString(),previewNote="手机上显示不了这个文件，可保存后使用系统应用打开。") };return }
         update(k) { it.copy(preview=null,data=data.put("preview","pdf").toString(),converting=true,previewNote="") }
         read=launchSafe { convert(k,service,data.getString("id"),g) }

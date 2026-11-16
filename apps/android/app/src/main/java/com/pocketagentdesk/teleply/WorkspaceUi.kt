@@ -418,19 +418,24 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     val lower=name.lowercase()
     val html=lower.endsWith(".html") || lower.endsWith(".htm")
     val markdown=lower.endsWith(".md") || lower.endsWith(".markdown")
+    val sheet=sheetKind(name)
     var rendered by remember(data.string("id")) { mutableStateOf(true) }
-    // How the file shows: "phone", Word or Excel drawn here from the file itself (10-28); "pdf", the PDF the computer's
-    // Office makes (PowerPoint, the old .doc and .ppt; 10-27); "failed", neither.
+    // A CSV or TSV shows as a table first; 查看原文 keeps the text it was read from (11-16).
+    var asSource by remember(data.string("id")) { mutableStateOf(false) }
+    // How the file shows: "phone", Word or Excel drawn here from the file itself (10-28), a CSV or TSV as a table
+    // (11-16); "pdf", the PDF the computer's Office makes (PowerPoint, the old .doc and .ppt; 10-27); "failed", neither.
     val shown=data.string("preview");val kind=data.string("kind");val bytes=s.preview
     val meta=data.optJSONObject("meta") ?: JSONObject()
     val ready=!s.busy && s.error==null
-    val fill=s.converting || (bytes!=null && (shown=="phone" || shown=="pdf" || kind=="pdf" || kind=="image")) || (html && rendered && s.result.isNotBlank())
+    val table=sheet!=null && shown=="phone" && bytes!=null && !asSource
+    val fill=s.converting || table || (sheet==null && bytes!=null && (shown=="phone" || shown=="pdf" || kind=="pdf" || kind=="image")) || (html && rendered && s.result.isNotBlank())
     val menus=LocalMenuHost.current;val more=remember { MenuAnchor() }
     PageFrame(name,null,fileBack(data,c),fill=fill,actions={
         CapsuleToolbar(Modifier.menuAnchor(more)) {
             TeleplyIconButton(TeleplyIcons.More,"文件菜单",{
                 menus?.show(MenuRequest(more.bounds,MenuPlacement.BelowEnd,"文件菜单") {
                     if((html || markdown) && s.result.isNotBlank()) MenuRow(if(rendered) "查看源码" else if(html) "查看页面" else "阅读视图",{ rendered=!rendered },icon=TeleplyIcons.Text)
+                    if(sheet!=null && shown=="phone" && bytes!=null && s.result.isNotBlank()) MenuRow(if(asSource) "表格视图" else "查看原文",{ asSource=!asSource },icon=TeleplyIcons.Text)
                     MenuRow("保存到手机",{ pickerKey=k;saving=JSONObject(s.data);save.launch(name) },icon=TeleplyIcons.Save,enabled=ready && !s.savingFile)
                     MenuRow("系统分享",{ c.shareFile(context,JSONObject(s.data),false) },icon=TeleplyIcons.Share,enabled=ready && !s.savingFile)
                     MenuRow("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },icon=TeleplyIcons.Open,enabled=ready && !s.savingFile)
@@ -461,6 +466,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
             ProgressLine(s.busy,p.line)
             s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
             if(s.result.isNotBlank()) {
+                if(sheet!=null && shown=="failed") Text(s.previewNote.ifBlank { "表格显示不了，下面是原文" },style=MaterialTheme.typography.note,color=p.muted)
                 if(markdown && rendered) Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
                 else CodePanel(name,s.result,"复制文件内容")
             } else if(ready) UnshownFile(data,s,c,context)

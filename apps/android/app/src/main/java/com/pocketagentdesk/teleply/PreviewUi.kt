@@ -131,12 +131,16 @@ private val OfficeTypes = mapOf("html" to "text/html", "js" to "text/javascript"
 /**
  * The page that draws a file the computer lists as a download on this phone, by its name: Word or Excel (user 10-28:
  * "Word 和 Excel 在手机上直接显示"). Null for the rest; PowerPoint and the old .doc and .ppt stay the computer's PDF.
+ * CSV and TSV are tables too since 11-16: the phone reads their text itself, whatever kind the computer gives.
  */
 fun phoneOffice(name: String): String? = when (name.substringAfterLast('.', "").lowercase()) {
     "docx", "docm", "dotx" -> "word"
-    "xlsx", "xlsm", "xls", "xlsb", "csv" -> "sheet"
+    "xlsx", "xlsm", "xls", "xlsb", "csv", "tsv" -> "sheet"
     else -> null
 }
+
+/** "csv" or "tsv" for a file whose text is shown as a table (11-16), by its ending; null for the rest. */
+fun sheetKind(name: String): String? = name.substringAfterLast('.', "").lowercase().let { if (it == "csv" || it == "tsv") it else null }
 
 /**
  * A Word or Excel file drawn on this phone from the file itself (10-28): docx-preview or SheetJS in a web view, from this
@@ -148,6 +152,8 @@ fun phoneOffice(name: String): String? = when (name.substringAfterLast('.', "").
 @Composable
 fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit, modifier: Modifier = Modifier) {
     val page = phoneOffice(file.string("name")) ?: return
+    // A CSV or TSV is drawn from the UTF-8 text the phone read (11-16); the page is told which separator to use.
+    val sheet = sheetKind(file.string("name")) ?: ""
     val dark = LocalTeleply.current.dark
     val onFailed by rememberUpdatedState(failed)
     key(bytes) {
@@ -192,7 +198,8 @@ fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit, modifi
                             return WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
                         }
                     }
-                    loadUrl("https://$OfficeHost/$page.html" + if (dark) "?dark=1" else "")
+                    val query = listOfNotNull("dark=1".takeIf { dark }, "sheet=$sheet".takeIf { sheet.isNotBlank() })
+                    loadUrl("https://$OfficeHost/$page.html" + if (query.isEmpty()) "" else "?" + query.joinToString("&"))
                 }
             },
             modifier = modifier,

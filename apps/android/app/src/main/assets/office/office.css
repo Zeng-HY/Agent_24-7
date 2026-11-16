@@ -31,3 +31,13 @@ body.dark #grid td { border-color: #3f3f46; }
 #grid td[data-t="n"] { text-align: right; }
 #grid a { color: #2563eb; }
 body.dark #grid a { color: #8ab4ff; }
+
+/* CSV and TSV (11-16): the first row stays at the top, and a long cell wraps at about 19 characters instead of
+   stretching its column. Short cells keep their width; the table still scrolls sideways and zooms as before. */
+body.csv #grid { padding: 0 8px 8px; }
+body.csv #grid thead th { position: sticky; top: 0; z-index: 2; text-align: left; font-weight: 600; background: #f4f4f5; }
+body.csv.dark #grid thead th { background: #2c2c2e; }
+body.csv #grid td, body.csv #grid th { border: 1px solid #d4d4d8; padding: 3px 8px; vertical-align: top; white-space: normal; }
+body.csv.dark #grid td, body.csv.dark #grid th { border-color: #3f3f46; }
+/* The box caps a long cell's width; a short cell has none and the table leaves it narrow. */
+body.csv #grid .cell { max-width: 19em; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
