@@ -101,6 +101,12 @@ python -m venv .toolchain\release-venv
 2. 把 `deploy/updates/publish.py` 里的 `ANDROID_FROM_ALIYUN` 改成 `True`，提交。
 3. 用当前最新的 APK 再运行一次上面的安卓发版命令。脚本会把 APK 和清单传上去，并从 `dl.pocketagentdesk.com` 取回 APK 核对。装着 1.0.3 及以后版本的手机，从这时起就从阿里云下载更新，不用再装什么。
 
+**2026-11-16 已做完**：域名绑好（CNAME 指向 `teleply-updates.cn-guangzhou.taihangztn.cn`），HTTPS 证书是数字证书管理服务里的个人测试证书（免费，DigiCert 签发，有效到 2027-02-14），`ANDROID_FROM_ALIYUN` 已改成 True，安卓 1.0.7 已传。免费证书不会自己续：到期前在「数字证书管理服务 → SSL 证书管理 → 个人测试证书」再申请一张（域名 `dl.pocketagentdesk.com`，CSR 选系统生成），签发后在那一行点「云产品部署」，选对象存储 OSS 里的 `dl.pocketagentdesk.com`。部署后要几分钟才生效；用下面的命令看证书上的名字是不是这个域名、到期日对不对：
+
+```bash
+openssl s_client -connect dl.pocketagentdesk.com:443 -servername dl.pocketagentdesk.com < /dev/null 2>/dev/null | openssl x509 -noout -subject -enddate
+```
+
 ## 阿里云返回 UserDisable 时
 
 10-28 发 dev.26 时，阿里云对所有请求都回 `403 UserDisable`（错误号 `0003-00000801`），连公开下载也一样：账号被停用，原因是欠费，充值后恢复。阿里云的说明里另外两种原因是安全原因停用、没开通 OSS。

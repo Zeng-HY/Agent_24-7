@@ -16,7 +16,7 @@
 - 备案：粤ICP备2026170106号（2026-10-30 通过，个人备案，曾环宇）。网站内容要保持个人、非商业。
 - 0.27 隧道转给电脑的请求只带 `REQUEST_HEADERS`，不带 Host/Origin，所以手机换地址不影响还没更新的电脑。
 - 写死 IP 的地方：`relay_desktop.py`（已改）、iOS `ServiceOrigin.swift`、安卓 `ReaderViewModel.kt`（这两个在改）、旧 iOS 套壳 `mobile/src/settings.mjs`（不改，用户说旧套壳不动）、旧 FRP 绑定工具 `relay_bind_gui.py` 和旧部署文件（不改，旧 FRP 一直走 IP）。
-- 更新下载：Windows 和安卓已经是阿里云 OSS 优先；`dl.pocketagentdesk.com` 已经写进 `relay_updates.py`、`Updates.kt`、`publish.py`，安卓等绑好域名后把 `ANDROID_FROM_ALIYUN` 改成 True。
+- 更新下载：Windows 和安卓已经是阿里云 OSS 优先；`dl.pocketagentdesk.com` 已经写进 `relay_updates.py`、`Updates.kt`、`publish.py`，安卓等绑好域名后把 `ANDROID_FROM_ALIYUN` 改成 True。（11-16 已绑好、已改成 True，安卓 1.0.7 已传阿里云。）
 - iPhone 推送（中转 → 苹果）不依赖地址。
 
 ## 已经做了（代码，还没提交、没部署）
@@ -54,7 +54,7 @@
 4. **切换**：`sudo python3 /home/admin/agent-relay-027-new/switch-domain.py`
 5. **核对**：浏览器打开 `https://pocketagentdesk.com` 和 `https://app.pocketagentdesk.com/account`；用旧 App 和旧电脑端确认 IP 照常能用。
 6. **公安联网备案（用户）**：网站开通 30 天内到 beian.mps.gov.cn 办，拿到号后加到页脚。
-7. **下载域名（用户）**：OSS `teleply-updates` 绑定 `dl.pocketagentdesk.com`（照 `deploy/updates/README.md`），阿里云免费证书 3 个月一换、不会自己续，要定提醒；然后 `ANDROID_FROM_ALIYUN = True`，网站下载按钮改成 `dl.` 的链接。
+7. **下载域名（用户）**：OSS `teleply-updates` 绑定 `dl.pocketagentdesk.com`（照 `deploy/updates/README.md`），阿里云免费证书 3 个月一换、不会自己续，要定提醒；然后 `ANDROID_FROM_ALIYUN = True`，网站下载按钮改成 `dl.` 的链接。**11-16 做完**：绑定、证书（有效到 2027-02-14，续法见 `deploy/updates/README.md`）、`ANDROID_FROM_ALIYUN = True` 都好了。网站下载页（`deploy/site/download.html`，还没提交）仍指向 GitHub 发布页，没动。
 8. **各端发新版**（服务器切完以后才发）：电脑端 0.27.0-dev.31、安卓 1.0.5、iPhone（先 TestFlight，再提交 App Store）。
 
 ## 回退

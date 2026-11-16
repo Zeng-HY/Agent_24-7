@@ -35,9 +35,10 @@ KOTLIN=ROOT/'apps/android/app/src/main/java/com/pocketagentdesk/teleply/Updates.
 # The certificate of the app's own release key (apps/android/scripts/release.ps1); phones refuse an APK with another.
 APK_CERT='8230f6b1c4edefb70f6056ff9e74394b607cf44cda50600ea1aa56edfdfd74cf'
 MAX_APK=128*1024*1024
-# Alibaba Cloud refuses APK downloads over the bucket's own address. Once dl.pocketagentdesk.com (ICP-filed) is bound
-# to the bucket with HTTPS, set this to True: new manifests then offer the APK from Alibaba Cloud first.
-ANDROID_FROM_ALIYUN=False
+# Alibaba Cloud refuses APK downloads over the bucket's own address, so APKs come from dl.pocketagentdesk.com (ICP-filed),
+# bound to the bucket with HTTPS since 2026-11-16. Its free certificate runs to 2027-02-14: renew and redeploy it before.
+# True: new manifests offer the APK from Alibaba Cloud first; False would send Android to GitHub only.
+ANDROID_FROM_ALIYUN=True
 ANDROID_MIRROR='https://dl.pocketagentdesk.com/android/'
 KEY_FILE='update-signing-key.pem';PUBLIC_FILE='update-signing-key.pub.txt';ACCESS_FILE='oss-upload-key.json'
 IMMUTABLE='public, max-age=31536000, immutable'

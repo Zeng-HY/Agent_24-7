@@ -1,6 +1,6 @@
 # 遥应 Teleply 安卓版（1.0.0 正式版：新包名、新签名，名字只叫遥应；含 0.9.1 的修正）
 
-## 1.0.7：换新钥匙（2026-11-16，已发布到 GitHub）
+## 1.0.7：换新钥匙（2026-11-16，已发布到 GitHub 和阿里云）
 
 11-12 用户目录被误删，安卓正式版的签名钥匙 `teleply-signing` 和给更新清单签名的钥匙 `.teleply-updates` 都没了，没有备份。用户 11-16 同意换新钥匙。
 
@@ -11,6 +11,7 @@
 - **文件**（11-16 12:47 重新打包，提交 `84fdeb0`）：`build/Teleply-1.0.7-18.apk`（2,672,575 字节，和上午那次碰巧一样大，内容不同；SHA-256 `10816a07aa69abc28d1ae807f991d0fa874adcd38281168703678c917040d4a7`，证书 `8230f6b1…fdfd74cf`），加上新钥匙签的 `android-update.json` 和 `android-update.json.sig`；更新说明在 `build/Teleply-1.0.7-notes.txt`。`dl.pocketagentdesk.com` 的 HTTPS 证书还没配（11-16 核对过），所以只签名、只准备 GitHub 的文件。
 - **检查**：218 项单元测试通过（阶段三之后安卓代码没再改，`release.ps1` 沿用了 12:26 那次的结果）；release 重新编译和 R8 都跑了，包里有批准卡片的文字；签名证书核对通过。
 - **发布**：用户 11-16 说「发布」。GitHub 正式版 `android-v1.0.7`（指向 `84fdeb0`），三个文件都附上，GitHub 记下的 SHA-256 和本地一致（APK `10816a07…`）。先上传成草稿、核对完再公开。仍只在 GitHub：阿里云的上传 AccessKey 11-12 丢了，`dl.pocketagentdesk.com` 的 HTTPS 证书也还没配。
+- **补传阿里云**（11-16 晚上，用户说「都传」）：用户给 `dl.pocketagentdesk.com` 配好了 HTTPS 证书（阿里云免费的个人测试证书，DigiCert 签发，有效到 2027-02-14），在 RAM 禁用了丢掉的上传 AccessKey、换了新的。`publish.py` 的 `ANDROID_FROM_ALIYUN` 改成 True 后重新签名、上传：APK 和 `android-update.json` 现在也在阿里云，清单里第一个下载地址是 `https://dl.pocketagentdesk.com/android/Teleply-1.0.7-18.apk`，第二个是 GitHub。像应用那样取回核对过：签名对得上，从 `dl.` 下载到的 APK 和本地 SHA-256 一致。本地 `build/android-update.json` 和 `.sig` 现在是阿里云这一份；GitHub 上那份只列 GitHub 地址，没动，两份都是新钥匙签的。从 1.0.8 起，装着 1.0.7 的手机从阿里云下载更新。
 - **没有做的**：没在真手机上卸载 1.0.6、装 1.0.7 试过；1.0.6 自己不会提示这一版（新清单的签名它认不出）。
 
 ## 保存、分享文件：上限 500MB，下载给一小时（2026-11-15，随 1.0.7）

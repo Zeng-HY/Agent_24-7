@@ -251,7 +251,7 @@
 ### 9.6 没做
 
 - 5.3（Claude hook、`remote_config.json`、`device-v2.bin` 的自动补回）：等用户决定。
-- Windows dev.37 打包、安装、发布：等用户决定。（11-16 已打包，见 9.8；安装、发布仍等用户。）
+- Windows dev.37 打包、安装、发布：等用户决定。（11-16 已打包、已发布到 GitHub 和阿里云，见 9.8；安装仍等用户。）
 - 没 push；没动中转服务器、苹果后台、Codemagic、TestFlight、Obsidian。
 - 7.2 真机验证：要等新版装上后由用户照做。
 - 2.2 节提到的 Codex 26.1106 换版后核对通道：不在这次范围。
@@ -270,3 +270,4 @@
 - **11-16 已发布**：用户说「发布」。GitHub 预发布 `windows-v0.27.0-dev.37`（指向 `84fdeb0`），安装包、`windows-update.json`、`.sig` 三个文件，GitHub 记下的 SHA-256 和本地一致。用仓库里的 `relay_updates.check_github` 对着真实的发布列表核对过：信新钥匙的代码能找到 dev.37 并验过签名，旧钥匙签的旧发布被跳过、不报错。阿里云没传（AccessKey 没补）。dev.36 及以前要手动装。
 - `windows-update.json` 用新钥匙签名（`publish.py windows --sign-only`）：上传阿里云要的 AccessKey 11-12 一起丢了，还没补；`windows-release-notes.md` 一并放在同一个文件夹。
 - 没装、没发布。dev.36 只认旧钥匙，自动更新看不到 dev.37，要手动装；装时电脑端重启，要重新登录、绑定原来那台电脑（8 节）。
+- **11-16 晚上补传阿里云**（用户说「都传」）：用户在 RAM 禁用了丢掉的上传 AccessKey、建了新的，自己填进 `oss-upload-key.json`。阿里云上原来的 `windows/dev/windows-update.json` 是 dev.36、旧钥匙签的，`publish.py` 核对不过，所以加了 `--force`：`publish.py windows --dist dist/0.27.0-dev.37 --force`。取回核对：清单和 `.sig` 与本地逐字节一致，从阿里云下载的安装包 SHA-256 一致；`relay_updates.check_aliyun` 当成 build 36 时给出 dev.37，当成 build 37 时说没有更新。本地 `.sig` 是这次重签的（ECDSA 每次签出来都不一样），和 GitHub 上那份不同，两份都有效。副作用：dev.36 及以前现在检查更新会报「更新签名不正确」（阿里云的新清单它们认不出，转去 GitHub 又碰到新钥匙签的 dev.37），手动装 dev.37 就好。国内下载：`https://teleply-updates.oss-cn-guangzhou.aliyuncs.com/windows/AgentRemote-0.27.0-dev.37-Setup.exe`。

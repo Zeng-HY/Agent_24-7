@@ -75,9 +75,11 @@ class Publish(unittest.TestCase):
             self.assertEqual(tag,'android-v1.0.3');self.assertEqual(json.loads(raw),info)
             self.assertEqual((info['product'],info['package'],info['version'],info['code'],info['size'],info['notes']),('android','com.pocketagentdesk.teleply','1.0.3',14,3,'说明'))
             self.assertEqual(info['sha256'],hashlib.sha256(b'apk').hexdigest())
-            self.assertEqual(info['urls'],[relay_updates.REPO+'android-v1.0.3/Teleply-1.0.3-14.apk'])
+            github=relay_updates.REPO+'android-v1.0.3/Teleply-1.0.3-14.apk'
+            with patch.object(publish,'ANDROID_FROM_ALIYUN',False):
+                self.assertEqual(publish.android_files(apk,notes)[1]['urls'],[github])
             with patch.object(publish,'ANDROID_FROM_ALIYUN',True):
-                self.assertEqual(publish.android_files(apk,notes)[1]['urls'][0],publish.ANDROID_MIRROR+apk.name)
+                self.assertEqual(publish.android_files(apk,notes)[1]['urls'],[publish.ANDROID_MIRROR+apk.name,github])
             for name in ('TeleplyNative-1.0.3-14.apk','Teleply-1.0.3.apk'):
                 other=Path(temp)/name;other.write_bytes(b'apk')
                 with self.assertRaises(SystemExit):publish.android_files(other,notes)
@@ -134,13 +136,32 @@ class Publish(unittest.TestCase):
     def test_android_goes_to_github_only_until_the_domain_is_bound(self):
         with tempfile.TemporaryDirectory() as temp:
             apk=Path(temp)/'Teleply-1.0.3-14.apk';apk.write_bytes(b'apk');notes=Path(temp)/'notes.txt';notes.write_text('说明',encoding='utf-8')
-            with patch.object(publish,'signing_key',return_value=None),patch.object(publish,'sign',return_value=b'good\n'),\
-                 patch.object(publish,'check_apk_certificate'),patch.object(publish,'credentials',side_effect=AssertionError('AccessKey asked')),\
+            with patch.object(publish,'ANDROID_FROM_ALIYUN',False),patch.object(publish,'signing_key',return_value=None),\
+                 patch.object(publish,'sign',return_value=b'good\n'),patch.object(publish,'check_apk_certificate'),\
+                 patch.object(publish,'credentials',side_effect=AssertionError('AccessKey asked')),\
                  patch.object(publish,'upload',side_effect=AssertionError('uploaded')),patch('sys.stdout',io.StringIO()) as out:
                 publish.main(['android',str(apk),'--notes-file',str(notes)])
             self.assertEqual((Path(temp)/'android-update.json.sig').read_bytes(),b'good\n')
             self.assertEqual(json.loads((Path(temp)/'android-update.json').read_bytes())['code'],14)
             self.assertIn('只发 GitHub',out.getvalue())
+
+    def test_android_goes_to_alibaba_cloud_once_the_domain_is_bound(self):
+        with tempfile.TemporaryDirectory() as temp:
+            apk=Path(temp)/'Teleply-1.0.3-14.apk';apk.write_bytes(b'apk');notes=Path(temp)/'notes.txt';notes.write_text('说明',encoding='utf-8')
+            uploads=[];fetched=[]
+            def upload(oss,file_key,path,content_type,manifests,number,force,check_file=True):
+                uploads.append((file_key,[key for key,_,_ in manifests],number,check_file))
+            def public(url,method='GET'):
+                fetched.append((url,method));return 3
+            with patch.object(publish,'ANDROID_FROM_ALIYUN',True),patch.object(publish,'signing_key',return_value=None),\
+                 patch.object(publish,'sign',return_value=b'good\n'),patch.object(publish,'check_apk_certificate'),\
+                 patch.object(publish,'credentials',return_value=('id','secret')),patch.object(publish,'upload',side_effect=upload),\
+                 patch.object(publish,'public',side_effect=public),patch('sys.stdout',io.StringIO()):
+                publish.main(['android',str(apk),'--notes-file',str(notes)])
+            # The bucket's own address refuses APKs, so the APK is checked once, through the bound domain.
+            self.assertEqual(uploads,[('android/'+apk.name,['android/android-update.json'],14,False)])
+            self.assertEqual(fetched,[(publish.ANDROID_MIRROR+apk.name,'HEAD')])
+            self.assertEqual(json.loads((Path(temp)/'android-update.json').read_bytes())['urls'][0],publish.ANDROID_MIRROR+apk.name)
 
     def test_access_key_comes_only_from_the_private_file(self):
         with tempfile.TemporaryDirectory() as temp:
