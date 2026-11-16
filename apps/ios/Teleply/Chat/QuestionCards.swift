@@ -365,7 +365,7 @@ private struct CodexApprovalCard: View {
     private func submit(_ decision: String) {
         model.workspace.action("codex/answer",
                                ["question_id": card["id"], "answer_revision": card["answer_revision"],
-                                "answers": ["decision": [decision]]])
+                                "answers": ["decision": [.string(decision)]]])
     }
 }
 

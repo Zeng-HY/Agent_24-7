@@ -180,12 +180,12 @@ struct OutboxTests {
     // -- 11-16: the light old sends under Claude's newest answer (the page was a snapshot, or the words differed)
 
     @Test func aDeliveredSendAgedOverAMinuteIsLeftToTheRecord() {
-        let recent = send("刚发的", label: "已送达", app: "claude", created: now - 30_000)
+        let recent = send("刚发的", label: "已送达", created: now - 30_000, app: "claude")
         #expect(outboxSends([recent], messages: [], now: now).map(\.request) == ["req-1"])
-        let old = send("一分钟前", label: "已送达", app: "claude", created: now - 61_000)
+        let old = send("一分钟前", label: "已送达", created: now - 61_000, app: "claude")
         #expect(outboxSends([old], messages: [], now: now).isEmpty)
         // Only 已送达: 已接收 still waits, because the record may not have it yet.
-        let received = send("已接收的", label: "已接收", app: "claude", created: now - 61_000)
+        let received = send("已接收的", label: "已接收", created: now - 61_000, app: "claude")
         #expect(outboxSends([received], messages: [], now: now).map(\.request) == ["req-1"])
     }
 
