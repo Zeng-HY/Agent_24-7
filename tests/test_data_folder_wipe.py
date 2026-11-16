@@ -177,7 +177,7 @@ class LiveStreamErrorLog(TemporaryData):
                                wfile=io.BytesIO(),log=logged.append)
 
     def stream_once(self,logged):
-        history=SimpleNamespace(transcript=lambda *a:({},SimpleNamespace()),conversation=lambda *a:{'id':'thread','messages':[]})
+        history=SimpleNamespace(transcript=lambda *a:({},SimpleNamespace()),conversation=lambda *a,**k:{'id':'thread','messages':[]})
         bridge=SimpleNamespace(watch=lambda *a:None,status=Mock(side_effect=RuntimeError('no such table: desktop_dismiss')))
         with patch('live_events.select.select',return_value=([],[],[])):
             live_events.stream(self.handler(logged),history,bridge,None,'codex','thread')

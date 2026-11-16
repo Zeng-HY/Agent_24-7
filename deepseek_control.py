@@ -297,8 +297,11 @@ class Client:
     def __init__(self, home=HOME):
         self.home=Path(home);self.lock=threading.RLock();self.connection=None;self.checked=0
     def connection_info(self):
+        # 11-16: finding the port starts PowerShell and netstat (~1.7 s). Do it when there is no connection, not
+        # every 30 s while every call is fine; a failed call drops the connection so the next one finds it again
+        # (DeepSeek restarted, or a cookie that ran out).
         with self.lock:
-            if self.connection and time.monotonic()-self.checked<30:return self.connection
+            if self.connection:return self.connection
             port=discover();cookie=credential_cookie(self.home,port)
             self.connection=(port,cookie);self.checked=time.monotonic()
             return self.connection
@@ -320,7 +323,8 @@ class Client:
                 raise refused
             return result.get('value')
         except (OSError,ValueError,http.client.HTTPException):
-            self.checked=0
+            # The port or the cookie may be stale: drop them so the next call finds the service again (11-16).
+            self.connection=None;self.checked=0
             raise DeepSeekError('DeepSeek 连接中断，操作结果尚未确认；请核对后再操作',503) from None
         finally:conn.close()
 

@@ -26,12 +26,16 @@ def change(path, patch, kind='modify', scope='file'):
             'removed': sum(s.startswith('-') and not s.startswith('---') for s in lines)}
 
 
-def enrich(app, raw, messages, context):
-    """Called once per complete source line, alongside the existing transcript parser."""
-    try:
-        record = json.loads(raw)
-    except (ValueError, TypeError):
-        return messages
+def enrich(app, raw, messages, context, record=None):
+    """Called once per complete source line, alongside the existing transcript parser.
+
+    [record] is that line already parsed by the transcript parser, so a big file is not read twice (11-16).
+    """
+    if record is None:
+        try:
+            record = json.loads(raw)
+        except (ValueError, TypeError):
+            return messages
     ts = record.get('timestamp') or ''
     if app == 'codex':
         p = record.get('payload') or {}

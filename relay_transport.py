@@ -14,7 +14,7 @@ from relay_pages import scoped_page
 
 CHUNK=65536
 MAX_BODY=64*1024*1024
-REQUEST_HEADERS=('Content-Type','Accept','Range','If-Range','Last-Event-ID','User-Agent')
+REQUEST_HEADERS=('Content-Type','Accept','Accept-Encoding','Range','If-Range','Last-Event-ID','User-Agent')
 RESPONSE_HEADERS={'content-type','content-length','content-range','accept-ranges',
                   'content-disposition','etag','last-modified','content-encoding'}
 

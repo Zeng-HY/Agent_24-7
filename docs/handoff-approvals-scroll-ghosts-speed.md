@@ -316,3 +316,47 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 网页的手指按着不改钉住没有自动化测试（浏览器缺失）。
 
 提交编号：见 9.7。
+
+### 9.3 阶段三：打开速度（慢-1 到 慢-4）
+
+改动（电脑端）：
+- `chat_history.py`：`conversation(..., lite=False)` 和 `public_message(..., lite=True)`，lite 页去掉每条消息的 `detail`、`result`；每行只解析一次（`chats._parse` 把解析好的记录交给 `activity_records.enrich`，不再 `json.loads`）；Codex 最终回答按轮次建索引（`final_answers`），不再每条扫全部消息；缓存从「最多 8 个」改为「最多 24 个、源文件合计 600 MB」，并且先 `refresh()` 再按大小淘汰（新加入的那个也算进总量）。
+- `chats.py`：`parse_codex`、`parse_claude`、`_parse` 加可选 `parsed` 字典，填入最后解析的记录。
+- `activity_records.py`：`enrich(..., record=None)`，给了就不再解析。
+- `live_events.py`：`stream(..., lite=False)`、`merge_live_messages(..., lite=False)`，快照和补进来的实时消息都按 lite 去字段。
+- `remote.py`：`/api/chat` 和 `/api/events` 认 `lite=1`；`_send` 对 JSON、超过 1 KB、客户端 `Accept-Encoding` 含 gzip、无 Range、未自带 `Content-Encoding` 的响应 gzip，带 `Content-Encoding: gzip` 和 `Vary: Accept-Encoding`；实时流、文件、HTML 不动。
+- `relay_transport.py`：`REQUEST_HEADERS` 加 `Accept-Encoding`（`Content-Encoding` 本来就在回传名单里；`relay_agent.py` 早就 `auto_decompress=False`，中转不会误解压）。
+- `deepseek_control.py`：`connection_info()` 只在没有连接时调用 `discover()`（不再每 30 秒起 PowerShell+netstat）；`call()` 失败时把连接清掉，下一次重新找。
+
+改动（手机）：
+- iOS `Relay.swift`：`history` 和 `events` 都带 `lite=1`；安卓 `RelayApi.kt` 同样。旧手机不带这个参数，电脑端照旧返回全量；网页也不带。
+
+新测试：
+- `tests/test_open_speed.py`（6 项）：大于 1 KB 的 JSON 会 gzip 且能解回原样；小 JSON、HTML、Range、没要 gzip、只要 deflate 都发原样；已带 `Content-Encoding` 不二次压缩；连续成功取连接只 discover 一次（时钟推进 40/80/120 秒也不再找）；成功的调用不会去找端口；调用失败清连接、下一次重新找。
+- `tests/test_history_projection.py` 加 5 项：lite 页去掉 `detail`/`result` 而全量页保留、`/api/chat/message` 仍完整；`enrich` 收到的是已解析的记录；两轮的最终回答只在各自轮次里配对；缓存按总大小淘汰；`/api/chat` 与 `/api/events` 的 `lite` 真的传到 `conversation`/`stream`。
+- `tests/test_live_history.py`、`tests/test_data_folder_wipe.py` 的假 `conversation` 改成接受关键字参数（新加了可选参数，假对象太严会报 TypeError；不是行为变化）。
+
+旧代码上的结果：
+- `stage3-new-tests-on-old-code.log`：`test_open_speed.py` 6 项里 4 项失败（gzip 三项 + 30 秒后重新找端口）。
+- `stage3-history-tests-on-old-code.log`：`test_history_projection.py` 12 项里 1 失败、3 错误（lite 参数不存在、`enrich` 不接记录、`MAX_TRANSCRIPTS` 不存在；「最终回答按轮次配对」旧代码本来就对，作为回归测试保留）。
+新代码上的结果：两个文件 18 项全过；相关的 129 项（`test_live_history`、`test_deepseek_control`、`test_new_deepseek`、`test_deepseek_stream`、`test_activity_records`、`test_relay_controller` 等）全过。
+安卓：`build.ps1` 默认全跑通过，单元测试 **218 项全过**。
+全部 Python：`793 项，6 跳过，22 出错`（就是基线那 22 项，逐行相同，没有新增失败）。
+
+实测（同一台电脑、文件已在系统缓存里，两次相差不大；脚本和原始输出在 `20261116-approvals-scroll\probe_*.py`、`probe-*-results.jsonl`）：
+
+| 对话 | 第一次打开（改前） | 第一次打开（改后） | 已读过（改后） | 一页大小 | lite 一页 | lite + gzip |
+|---|---|---|---|---|---|---|
+| Claude 114.4 MB（3915 条消息） | 1310 ms | **974 ms** | 2.1 ms | 68.5 KB | 33.6 KB | 8.2 KB |
+| Codex 388.1 MB（2033 条消息） | 2181 ms | **1400 ms** | 2.2 ms | 138.1 KB | 39.8 KB | 9.1 KB |
+
+- 页里最大的字段确实是 `result`、`detail`（Claude 一页 19.4 + 14.9 KB，Codex 70.5 + 27.2 KB），lite 去掉后正是手机不存的那部分。
+- 每行只解析一次后，`projection_full_ms`：Claude 1201→898 ms，Codex 1966→1376 ms；Codex 的最终回答比对原来随数量平方增长，388 MB 那个从 0.21 秒降到测不出来。
+- 内存峰值（整个探针进程）Claude 284 MB、Codex 837 MB，与改前相同。
+
+没做（文档 4.3.5 列的，留给你以后定）：
+- 从文件尾部先出第一页（id 依赖全量解析）；实时流第一帧不再重复整页；电脑和中转之间保持几条连接；手机先显示本机缓存再刷新；中转权限检查缓存；iOS Markdown 结果缓存。
+- 中转服务器要用户自己在 Workbench 更新后，`Accept-Encoding` 转发才生效；电脑端先改好不影响现在的中转。
+- iOS 只写了 `Relay.swift` 的两处查询参数，**没编译**。
+
+提交编号：见 9.7。

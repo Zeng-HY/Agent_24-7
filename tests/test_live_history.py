@@ -53,7 +53,7 @@ class LiveHistoryTests(unittest.TestCase):
     def test_stream_marks_unsettled_public_text_without_retiring_it(self):
         self.turn['items'].append({'id':'live','type':'agentMessage','text':'new progress'})
         watcher=SimpleNamespace(closed=False,condition=threading.RLock(),snapshots={'thread':(0,'owner',self.state)},unwatch=Mock())
-        history=SimpleNamespace(transcript=lambda *a:({},self.entry),conversation=lambda *a:copy.deepcopy(self.page))
+        history=SimpleNamespace(transcript=lambda *a:({},self.entry),conversation=lambda *a,**k:copy.deepcopy(self.page))
         bridge=SimpleNamespace(watch=lambda *a:watcher,status=lambda *a:{'observed_at':0})
         handler=SimpleNamespace(send_response=Mock(),send_header=Mock(),end_headers=Mock(),connection=Mock(),wfile=io.BytesIO())
         calls=[]

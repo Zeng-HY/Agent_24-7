@@ -233,7 +233,7 @@ public struct RelayClient: Sendable {
     /// A page of one conversation; title, folder, cwd, status and runtime (the context ring) travel as meta.
     public func history(device: String, app: String, chat: String, before: String? = nil, around: String? = nil) async throws -> Page<Message> {
         let page = try await json(get(Self.devicePath(device, "/api/chat"),
-                                      query: [("app", app), ("id", chat), ("n", "60"), ("before", before), ("around", around)]))
+                                      query: [("app", app), ("id", chat), ("n", "60"), ("before", before), ("around", around), ("lite", "1")]))
         guard page["id"].string() == chat, page["app"].string() == app else { throw ReadFailure("对话身份不匹配") }
         var meta: [String: JSONValue] = [:]
         for key in ["title", "folder", "cwd", "status", "runtime", "turn_started", "turn_ended", "turn_status", "step"]
@@ -415,7 +415,7 @@ public struct RelayClient: Sendable {
     /// closes, so the caller reconnects for a new snapshot.
     public func events(device: String, app: String, chat: String) throws -> AsyncThrowingStream<LiveFrame, any Error> {
         guard let streaming = transport as? any RelayStreamingTransport else { throw ReadFailure("当前服务不支持实时连接") }
-        var request = try get(Self.devicePath(device, "/api/events"), query: [("app", app), ("id", chat)])
+        var request = try get(Self.devicePath(device, "/api/events"), query: [("app", app), ("id", chat), ("lite", "1")])
         request.headers["Accept"] = "text/event-stream"
         let opening = request, vault = vault, key = origin.key
         return AsyncThrowingStream { continuation in

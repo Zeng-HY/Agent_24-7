@@ -22,7 +22,7 @@ def log_stream_error(handler,app,tid,exc):
     try:log(f"实时流出错（{app} {tid}）：{type(exc).__name__}: {str(exc)[:200]}")
     except Exception:pass
 
-def merge_live_messages(page,entry,state,previous=None):
+def merge_live_messages(page,entry,state,previous=None,lite=False):
     """Only uncommitted public items from the log's current turn may extend its tail.
 
     The last page is a reading window, not the set of all committed message IDs.
@@ -43,6 +43,7 @@ def merge_live_messages(page,entry,state,previous=None):
             from activity_records import public_message
             result=public_message(m)
             result.pop('legacy',None)
+            if lite:result.pop('detail',None);result.pop('result',None)  # 11-16: a phone keeps neither
             result.update(length=len(m['text']),truncated=len(m['text'])>6000,text=m['text'][:6000])
             return result
         # Promote live rows already shown by this connection even if their committed
@@ -99,7 +100,7 @@ def merge_live_messages(page,entry,state,previous=None):
                 ids.add(ident)
     return messages,live_ids
 
-def stream(handler,history,bridge,tasks,app,tid):
+def stream(handler,history,bridge,tasks,app,tid,lite=False):
     if app=='deepseek':return deepseek_stream(handler,tid)
     watcher=None
     # Validate before switching the HTTP response into streaming mode.
@@ -118,7 +119,7 @@ def stream(handler,history,bridge,tasks,app,tid):
             if app=='codex' and (watcher is None or watcher.closed):
                 try:watcher=bridge.watch(tid)
                 except Exception:watcher=None
-            page=history.conversation(app,tid,60)
+            page=history.conversation(app,tid,60,lite=lite)
             control=bridge.status(tid) if app=='codex' else None
             if control is not None and tasks is not None:tasks.observe(tid,control)
             messages=page['messages'];live_ids=[];state=None
@@ -126,7 +127,7 @@ def stream(handler,history,bridge,tasks,app,tid):
                 with watcher.condition:record=watcher.snapshots.get(tid);state=copy.deepcopy(record[2]) if record else None
             if app=='codex':
                 _,entry=history.transcript(app,tid)
-                messages,live_ids=merge_live_messages(page,entry,state,previous)
+                messages,live_ids=merge_live_messages(page,entry,state,previous,lite)
                 page={**page,'messages':messages}
             meta={k:page.get(k) for k in ('status','runtime','title','folder','activity_turns','activity_current')}
             clean_control={k:v for k,v in (control or {}).items() if k!='observed_at'}

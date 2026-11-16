@@ -14,6 +14,10 @@ class HistoryError(Exception):
 
 UNGROUPED='ungrouped'  # the list row standing for DeepSeek's Ungrouped bucket (10-20)
 CHILDREN_SHOWN=30      # children sent with a row; the rest on request (/api/chats/children)
+# 11-16: parsed transcripts kept in memory, bounded by how much source they hold. A ninth conversation used to throw
+# the oldest away, so opening it again parsed a 114 MB file from its first line.
+MAX_TRANSCRIPTS=24
+MAX_TRANSCRIPT_BYTES=600<<20
 
 def encode(value):return base64.urlsafe_b64encode(json.dumps(value,separators=(',',':')).encode()).decode().rstrip('=')
 def decode(value):
@@ -24,11 +28,13 @@ class Transcript:
     def __init__(self,path,app,cwd=''):
         self.path=path;self.app=app;self.cwd=cwd;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
         self.context={}  # what a line needs to know of earlier ones (Claude's next-step boxes, 10-16)
+        # 11-16: Codex writes each answer twice; the final answers by turn, so a big file is not scanned for each.
+        self.final_answers={}
     def refresh(self):
         with self.lock:
             st=self.path.stat()
             if self.inode is not None and (st.st_ino!=self.inode or st.st_size<self.offset or (st.st_size==self.offset and st.st_mtime_ns!=self.mtime)):
-                self.offset=0;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.context={}
+                self.offset=0;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.context={};self.final_answers={}
             self.inode=st.st_ino
             if st.st_size==self.offset:self.size=st.st_size;self.mtime=st.st_mtime_ns;return self
             with self.path.open('rb') as f:
@@ -46,14 +52,16 @@ class Transcript:
                             seen=self.context.setdefault('uuids',set())
                             if uuid in seen:continue
                             seen.add(uuid)
-                    msgs,state=chats._parse(self.app,[raw],self.context)
-                    msgs=activity_records.enrich(self.app,raw,msgs,self.context)
+                    parsed={}
+                    msgs,state=chats._parse(self.app,[raw],self.context,parsed)
+                    msgs=activity_records.enrich(self.app,raw,msgs,self.context,record=parsed or None)
                     for k,v in state.items():
                         self.state[k]=v
                     for m in msgs:
                         if self.app=='codex' and m.get('role')=='assistant' and m.get('phase')=='final_answer':
                             plan_text=lambda value:re.sub(r'</?proposed_plan>','',value).strip()
-                            peers=[v for v in self.messages if v.get('turn_id')==self.state.get('current_turn_id') and v.get('role')=='assistant' and v.get('phase')=='final_answer' and bool(v.get('native_plan'))!=bool(m.get('native_plan')) and plan_text(v['text'])==plan_text(m['text'])]
+                            turn_id=self.state.get('current_turn_id')
+                            peers=[v for v in self.final_answers.get(turn_id,[]) if v.get('role')=='assistant' and v.get('phase')=='final_answer' and bool(v.get('native_plan'))!=bool(m.get('native_plan')) and plan_text(v['text'])==plan_text(m['text'])]
                             if len(peers)==1:
                                 peer=peers[0]
                                 if m.get('native_plan'):peer.update(native_plan=True,source_id=m.get('source_id'))
@@ -78,6 +86,11 @@ class Transcript:
                         if m['id'] in self.by_id:
                             m['order']=self.by_id[m['id']]['order'];self.by_id[m['id']].update(m)
                         else:self.messages.append(m);self.by_id[m['id']]=m
+                        if self.app=='codex' and m.get('role')=='assistant' and m.get('phase')=='final_answer':
+                            row=self.by_id.get(m['id'])
+                            if row is not None:
+                                rows=self.final_answers.setdefault(self.state.get('current_turn_id'),[])
+                                if not any(v is row for v in rows):rows.append(row)
             # Read a line at a time, a box looked open on its own line for good, even after the user had answered (10-16)
             if self.app=='claude':chats.mark_open_next(self.messages)
             self.size=st.st_size;self.mtime=st.st_mtime_ns
@@ -99,8 +112,11 @@ class History:
             entry=self.entries.get(key)
             if entry is None:entry=Transcript(path,app,item.get('cwd') or '');self.entries[key]=entry
             self.entries.move_to_end(key)
-            while len(self.entries)>8:self.entries.popitem(last=False)
-        return item,entry.refresh()
+            entry.refresh()  # its size decides how much of the cache it takes
+            while len(self.entries)>MAX_TRANSCRIPTS or sum(v.size for v in self.entries.values())>MAX_TRANSCRIPT_BYTES:
+                if len(self.entries)<=1:break
+                self.entries.popitem(last=False)
+        return item,entry
     def _load(self):
         """(conversations of every app, DeepSeek sessions in no workspace that no conversation claims), 10 s."""
         # The home list and sidebar arrive together. Only one request scans a cold catalog.
@@ -190,8 +206,10 @@ class History:
         offset=max(0,int(offset));limit=max(1,min(100,int(limit)))
         return {'items':[self.child_row(c) for c in kids[offset:offset+limit]],'total':len(kids),'offset':offset}
     @staticmethod
-    def public_message(m,full=False):
+    def public_message(m,full=False,lite=False):
         result=activity_records.public_message(m)
+        # 11-16: a phone stores no tool output; lite pages (lite=1) leave detail and result out before they are sent.
+        if lite:result.pop('detail',None);result.pop('result',None)
         result.pop('legacy',None)
         result['length']=len(m['text']);result['truncated']=not full and len(m['text'])>6000
         if result['truncated']:result['text']=m['text'][:6000]
@@ -217,7 +235,7 @@ class History:
                 elif ledger:result['delivery_state']=ledger.get('state')
                 out.append(result)
         return {'items':out}
-    def conversation(self,app,tid,limit=60,before='',around=''):
+    def conversation(self,app,tid,limit=60,before='',around='',lite=False):
         if app=='deepseek':
             import deepseek_control
             try:return deepseek_control.bridge().conversation(tid,limit,before,around)
@@ -243,7 +261,7 @@ class History:
             for m in page:
                 tr=turns.get(m.get('activity_turn')) or {}
                 timed={**m,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
-                items.append(self.public_message(timed))
+                items.append(self.public_message(timed,lite=lite))
             return chats.public(item)|{'messages':items, 'status':chats._status(entry.state,entry.mtime/1e9),
                 'size':entry.size,'runtime':chats.runtime_info(app,entry.path),'modified':entry.mtime//1000000,
                 # 0.6.4: the turn's own times, Unix seconds; each message of that turn carries them too.

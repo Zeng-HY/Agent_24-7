@@ -569,8 +569,10 @@ def _step_of(app: str, name: str, argument: str = '') -> str:
     return action or ''
 
 
-def parse_codex(lines: list[bytes], context: dict | None = None) -> tuple[list[dict], dict]:
-    """context: as parse_claude's; with one, the state returned is only what these lines set (empty values too)."""
+def parse_codex(lines: list[bytes], context: dict | None = None,
+                parsed: dict | None = None) -> tuple[list[dict], dict]:
+    """context: as parse_claude's; with one, the state returned is only what these lines set (empty values too).
+    parsed: filled with the last record parsed here, so a caller need not read the same line again (11-16)."""
     msgs: list[dict] = []
     state = _LineState({"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}) \
         if context is not None else {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
@@ -582,6 +584,8 @@ def parse_codex(lines: list[bytes], context: dict | None = None) -> tuple[list[d
             rec = json.loads(raw)
         except ValueError:
             continue
+        if parsed is not None:
+            parsed.clear(); parsed.update(rec)
         payload = rec.get("payload") or {}
         kind = payload.get("type")
         ts = rec.get("timestamp") or ""
@@ -873,9 +877,11 @@ def _queue_resync(queue: list[dict], text: str) -> None:
             return
 
 
-def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[dict], dict]:
+def parse_claude(lines: list[bytes], context: dict | None = None,
+                 parsed: dict | None = None) -> tuple[list[dict], dict]:
     """context: kept by a caller that reads a record a line at a time (chat_history.Transcript), for what one line needs
-    to know of earlier ones. With a context, the state returned is only what this line set (empty values too)."""
+    to know of earlier ones. With a context, the state returned is only what this line set (empty values too).
+    parsed: filled with the last record parsed here, so a caller need not read the same line again (11-16)."""
     msgs: list[dict] = []
     state = _LineState({"running": None, "title": "", "turn_started": "", "turn_ended": "", "step": ""}) \
         if context is not None else {"running": None, "title": "", "turn_started": "", "turn_ended": "", "step": ""}
@@ -891,6 +897,8 @@ def parse_claude(lines: list[bytes], context: dict | None = None) -> tuple[list[
             rec = json.loads(raw)
         except ValueError:
             continue
+        if parsed is not None:
+            parsed.clear(); parsed.update(rec)
         uuid = rec.get("uuid")
         if isinstance(uuid, str) and uuid:
             if uuid in seen:
@@ -1053,8 +1061,8 @@ def claude_last_sent(lines: list[bytes]) -> list[str]:
     return [s for s in found if s.strip()]
 
 
-def _parse(app: str, lines: list[bytes], context: dict | None = None) -> tuple[list[dict], dict]:
-    return parse_codex(lines, context) if app == "codex" else parse_claude(lines, context)
+def _parse(app: str, lines: list[bytes], context: dict | None = None, parsed: dict | None = None) -> tuple[list[dict], dict]:
+    return parse_codex(lines, context, parsed) if app == "codex" else parse_claude(lines, context, parsed)
 
 
 def _status(state: dict, mtime: float) -> str:

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import gzip
 import ipaddress
 import json
 import os
@@ -329,11 +330,21 @@ class Handler(BaseHTTPRequestHandler):
             deepseek.events.start()  # its live events, if DeepSeek came after the service; started once, later calls do nothing
 
     def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+        headers = dict(extra or {})
+        # 11-16: JSON pages compress on the way out (a page of machine output was 17-46 KB, 8-10 KB for the phones).
+        # Never the live stream (its own headers), a file (its own sender), a range, or the HTML the relay rewrites;
+        # a phone that does not ask for gzip gets the plain body, as before.
+        if (ctype.startswith("application/json") and len(body) > 1024
+                and "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+                and self.headers.get("Range") is None and "Content-Encoding" not in headers):
+            body = gzip.compress(body, 6)
+            headers["Content-Encoding"] = "gzip"
+            headers["Vary"] = "Accept-Encoding"
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
+        for k, v in headers.items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
@@ -582,7 +593,9 @@ class Handler(BaseHTTPRequestHandler):
             except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chat":
             q = self._query()
-            try:self._json(self.history.conversation(q.get("app", ""),q.get("id", ""),int(q.get("n", "60") or 60),q.get("before", ""),q.get("around", "")))
+            # 11-16: lite=1 is the phones' page: no tool detail or result, which neither phone keeps.
+            lite = q.get("lite", "") in ("1", "true")
+            try:self._json(self.history.conversation(q.get("app", ""),q.get("id", ""),int(q.get("n", "60") or 60),q.get("before", ""),q.get("around", ""),lite=lite))
             except (chat_history.HistoryError,chats.ChatError,ValueError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chat/projects":  # the sidebar's tree; with key=…: more conversations of that project
             q = self._query()
@@ -828,7 +841,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path=='/api/events':
                 with self.server.notifier.watching(app,tid):  # the phone has it open: its turns are not notified
-                    live_events.stream(self,self.history,self.server.codex,getattr(self.server,'tasks',None),app,tid)
+                    live_events.stream(self,self.history,self.server.codex,getattr(self.server,'tasks',None),app,tid,
+                                       lite=q.get('lite','') in ('1','true'))
             elif path=='/api/chat/search':self._json(self.history.search(app,tid,q.get('query',''),q.get('cursor','')))
             elif path=='/api/chat/message':self._json(self.history.message(app,tid,q.get('message','')))
             elif path=='/api/chat/files':self._json(self.history.list_files(app,tid,q.get('message')))

@@ -2,7 +2,7 @@ import sys,json,tempfile,threading,sqlite3,hashlib,copy
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from chat_history import History,HistoryError
 from chat_history import Transcript
@@ -80,4 +80,81 @@ class ProjectionTests(unittest.TestCase):
         entry.by_id['live']={k:v for k,v in fresh[0].items() if k not in ('streaming','sync_pending')}
         settled,_=merge_live_messages(page,entry,None,{'live':fresh[0]});self.assertNotIn('streaming',settled[0])
 
+    def test_lite_page_leaves_out_tool_output_and_the_full_page_keeps_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'log.jsonl';path.write_text('')
+            row={'id':'tool','role':'tool','text':'运行命令','detail':'要跑的命令','result':'输出','order':1,'turn_id':'t'}
+            entry=SimpleNamespace(lock=threading.RLock(),messages=[row],by_id={'tool':row},offset=1,state={},size=1,
+                                  mtime=0,path=path,context={})
+            history=History();history.transcript=lambda app,tid:({'id':'one','app':'codex','title':'t'},entry)
+            full=history.conversation('codex','one',60)
+            lite=history.conversation('codex','one',60,lite=True)
+            self.assertEqual((full['messages'][0]['detail'],full['messages'][0]['result']),('要跑的命令','输出'))
+            self.assertNotIn('detail',lite['messages'][0]);self.assertNotIn('result',lite['messages'][0])
+            # The phones still get the words, the position and the length.
+            self.assertEqual((lite['messages'][0]['text'],lite['messages'][0]['order'],lite['messages'][0]['length']),('运行命令',1,4))
+            # A single message read whole (展开全文) is unchanged.
+            self.assertIn('detail',history.message('codex','one','tool'))
+
+    def test_each_line_reaches_enrich_already_parsed(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'log.jsonl'
+            line=json.dumps({'type':'event_msg','timestamp':'2026-10-24T00:00:00Z','payload':{'type':'task_started','turn_id':'t'}})+'\n'
+            path.write_text(line,encoding='utf-8')
+            import chat_history as ch
+            seen=[];real=ch.activity_records.enrich
+            def enrich(app,raw,messages,context,record=None):
+                seen.append(record);return real(app,raw,messages,context,record)
+            with patch.object(ch.activity_records,'enrich',enrich):
+                Transcript(path,'codex').refresh()
+            self.assertTrue(seen and seen[0] and seen[0].get('payload',{}).get('type')=='task_started')
+
+    def test_final_answer_twins_are_matched_inside_their_own_turn(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'log.jsonl'
+            def rec(payload):return json.dumps({'type':'event_msg','timestamp':'2026-10-24T00:00:00Z','payload':payload})+'\n'
+            def answer(text):return rec({'type':'item_completed','item':{'type':'AgentMessage','id':'a-'+text,'phase':'final_answer','content':[{'text':text}]}})
+            def plan(text):return rec({'type':'item_completed','item':{'type':'Plan','id':'p-'+text,'text':text}})
+            path.write_text(rec({'type':'task_started','turn_id':'t1'})+answer('Plan one')+plan('Plan one')+
+                            rec({'type':'task_started','turn_id':'t2'})+answer('Plan two')+plan('Plan two'),encoding='utf-8')
+            entry=Transcript(path,'codex').refresh()
+            self.assertEqual([m['text'] for m in entry.messages],['Plan one','Plan two'])
+            self.assertIs(entry.by_id['p-Plan two'],entry.messages[1])
+
+    def test_the_transcript_cache_is_bounded_by_how_much_it_holds(self):
+        with tempfile.TemporaryDirectory() as td:
+            history=History()
+            makes=[]
+            def find(app,tid):
+                path=Path(td)/(tid+'.jsonl');path.write_text('x'*10);makes.append(path)
+                return {'id':tid,'app':app,'path':str(path)}
+            with patch('chat_history.chats.find',find), \
+                 patch('chat_history.chats.conv_path',lambda item:Path(item['path'])), \
+                 patch('chat_history.MAX_TRANSCRIPTS',10), \
+                 patch('chat_history.MAX_TRANSCRIPT_BYTES',25):
+                for tid in ('a','b','c'):history.transcript('codex',tid)
+            self.assertEqual([k[1] for k in history.entries],[ 'b','c'])
+
+    def test_the_phones_lite_flag_reaches_the_page_and_the_stream(self):
+        import contextlib
+        import remote
+        handler=object.__new__(remote.Handler)
+        handler.path='/api/chat'
+        handler._authorized=lambda:True
+        handler._query=lambda:{'app':'codex','id':'one','n':'60','lite':'1'}
+        handler._json=Mock()
+        handler.server=SimpleNamespace(history=SimpleNamespace(conversation=Mock(return_value={'messages':[]})))
+        handler._get()
+        handler.server.history.conversation.assert_called_once_with('codex','one',60,'','',lite=True)
+
+        handler=object.__new__(remote.Handler)
+        handler.path='/api/events'
+        handler._query=lambda:{'app':'codex','id':'one','lite':'1'}
+        handler.server=SimpleNamespace(history=Mock(),codex=Mock(),tasks=None,
+                                       notifier=SimpleNamespace(watching=lambda app,tid:contextlib.nullcontext()))
+        with patch('remote.live_events.stream') as stream:
+            handler._reading_get('/api/events')
+        self.assertTrue(stream.call_args.kwargs['lite'])
+
 if __name__=='__main__':unittest.main()
+

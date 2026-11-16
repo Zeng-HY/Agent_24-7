@@ -270,7 +270,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
             Page(j.rows("items") { val c=parseChat(it); require(c.app in setOf("codex","claude","deepseek") && (app=="all" || c.app==app)) { "来源应用不匹配" }; c }, j.string("next_cursor").ifBlank { null }, j.optBoolean("has_more"))
         }
     }
-    override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int) = request(devicePath(device,"/api/chat"), mapOf("app" to app, "id" to chat, "n" to "$count", "before" to before, "around" to around)).let { j ->
+    override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int) = request(devicePath(device,"/api/chat"), mapOf("app" to app, "id" to chat, "n" to "$count", "before" to before, "around" to around, "lite" to "1")).let { j ->
         require(j.string("id") == chat && j.string("app") == app) { "对话身份不匹配" }
         // Title, folder, status and runtime (context ring, 会话状态) travel with the page, not with each message.
         val meta=JSONObject().apply { listOf("title","folder","cwd","status","runtime").forEach { k -> if(j.has(k) && !j.isNull(k)) put(k,j.get(k)) } }
@@ -321,7 +321,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     override fun events(device: String, chat: String) = kotlinx.coroutines.flow.callbackFlow {
         val reducer=StreamReducer(chat,app)
-        val url=root.newBuilder().encodedPath(devicePath(device,"/api/events")).addQueryParameter("app",app).addQueryParameter("id",chat).build()
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/events")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("lite","1").build()
         val request=Request.Builder().url(url).header("Accept","text/event-stream")
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> request.header("Cookie","${c.name}=${c.value}") } }
         val streamClient=client.newBuilder().callTimeout(0,TimeUnit.SECONDS).readTimeout(25,TimeUnit.SECONDS).build()
