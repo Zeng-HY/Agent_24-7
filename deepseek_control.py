@@ -301,7 +301,7 @@ class Client:
         # every 30 s while every call is fine; a failed call drops the connection so the next one finds it again
         # (DeepSeek restarted, or a cookie that ran out).
         with self.lock:
-            if self.connection:return self.connection
+            if self.connection and time.monotonic()-self.checked < 540:return self.connection
             port=discover();cookie=credential_cookie(self.home,port)
             self.connection=(port,cookie);self.checked=time.monotonic()
             return self.connection
@@ -312,7 +312,10 @@ class Client:
         try:
             conn.request('POST','/api/'+method,body,{'Content-Type':'application/json','Cookie':cookie})
             response=conn.getresponse()
-            if response.status!=200:raise DeepSeekError(f'DeepSeek 接口不可用（HTTP {response.status}），请刷新连接',503)
+            if response.status!=200:
+                if response.status in (401,403):
+                    self.connection=None;self.checked=0
+                raise DeepSeekError(f'DeepSeek 接口不可用（HTTP {response.status}），请刷新连接',503)
             data=json.loads(response.read())
             if data.get('rpcId')!=rid or not isinstance(data.get('result'),dict):raise DeepSeekError('DeepSeek 接口格式已变化',503)
             result=data['result']
