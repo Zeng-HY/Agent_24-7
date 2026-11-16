@@ -862,6 +862,12 @@ def _queue_remove(queue: list[dict], text: str) -> bool:
         if _queue_norm(entry["text"])[:60] == head:
             del queue[i]
             return True
+    # 11-16: a Claude message sent with a picture queued an empty part before the words; the words Claude takes back
+    # never match it, and the empty part stayed until the next /compact. One unmatched removal takes the oldest one.
+    for i, entry in enumerate(queue):
+        if not _queue_norm(entry.get("text") or ""):
+            del queue[i]
+            return True
     return False
 
 

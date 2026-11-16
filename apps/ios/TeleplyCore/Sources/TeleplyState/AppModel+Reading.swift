@@ -181,8 +181,6 @@ extension AppModel {
     /// message writes nothing (as ChatModel.take).
     func apply(_ frame: LiveFrame, for key: ChatKey) {
         guard screen == .reading, app == key.app, scope == key.scope, device?.id == key.device, chat?.id == key.chat else { return }
-        let merged = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
-        if merged != messages { messages = merged }
         // 0.6.6: the model and the context as the computer has them now, so the ring follows a compaction while the
         // page is open (it used to keep the number the page opened with). DeepSeek's live pages carry no context (its
         // ring comes with the state), so a runtime without one leaves the page's alone.
@@ -191,5 +189,21 @@ extension AppModel {
             next["runtime"] = meta["runtime"]
             pageMeta = .object(next)
         }
+        // 11-16: 查找消息 stops at a historical page; the newest rows of a live frame do not belong under it.
+        if anchor != nil { return }
+        // A snapshot that shares no row with the list is the page now — the first read failed or was cancelled, and
+        // the live stream's snapshot filled in. Its own pagination comes with it, so the outbox can tell that older
+        // rows are unread (a snapshot used to look like the whole record, and old sent bubbles stayed under it).
+        if frame.snapshot, !frame.messages.isEmpty {
+            let known = Set(messages.map(\.id))
+            if !frame.messages.contains(where: { known.contains($0.id) }) {
+                messages = keepWhole(frame.messages, wholeMessages)
+                olderAvailable = frame.hasMore
+                cursor = frame.nextCursor
+                newerAvailable = false
+            }
+        }
+        let merged = keepWhole(mergeLive(messages, frame.messages), wholeMessages)
+        if merged != messages { messages = merged }
     }
 }

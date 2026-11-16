@@ -169,6 +169,63 @@ struct AppModelTests {
         #expect(place.device == a && place.chat == "demo" && place.scope == "scope-1")
     }
 
+    /// 11-16: the first page failed and the live stream's snapshot filled in. The snapshot replaces the list and
+    /// brings its own pagination, so the outbox knows older rows are unread instead of taking it for the whole record.
+    @Test func aSnapshotWithNoSharedRowBecomesThePageWithItsPaging() async {
+        let model = makeApp()
+        await signedInOnA(model)
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        model.messages = [Message(id: "stale", role: "assistant", text: "没读成的旧列表")]
+        var snap = Message(id: "snap-1", role: "assistant", text: "快照")
+        snap.order = 2000
+        snap.details = ["time": .string("2027-01-15T08:00:00Z")]
+        var frame = LiveFrame(seq: 2, snapshot: true, messages: [snap], control: nil)
+        frame.hasMore = true
+        frame.nextCursor = "snap-1"
+        model.apply(frame, for: ChatKey(scope: "scope-1", device: a, app: "codex", chat: "demo"))
+        #expect(model.messages.map(\.id) == ["snap-1"])
+        #expect(model.olderAvailable && model.cursor == "snap-1")
+        let record = Submission(request: "r1", key: ChatKey(scope: "scope-1", device: a, app: "claude", chat: "demo"),
+                                text: "更早发的", action: "send", turn: "t", body: #"{"_claude_offset":1000}"#,
+                                label: "已接收", created: 1_800_000_000_000 - 86_400_000)
+        let now: Int64 = 1_800_000_000_000
+        #expect(outboxSends([record], messages: model.messages, now: now, olderUnread: model.olderAvailable).isEmpty)
+        #expect(!outboxSends([record], messages: model.messages, now: now).isEmpty)
+    }
+
+    /// 11-16: a snapshot sharing a row with the list is the same page read again: it merges and leaves the paging.
+    @Test func aSnapshotThatSharesARowMergesAndLeavesPagingAlone() async {
+        let model = makeApp()
+        await signedInOnA(model)
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        model.olderAvailable = false
+        model.cursor = nil
+        let known = model.messages[0].id
+        var frame = LiveFrame(seq: 2, snapshot: true,
+                              messages: [Message(id: known, role: "assistant", text: "同一条"), Message(id: "new", role: "assistant", text: "新的一条")],
+                              control: nil)
+        frame.hasMore = true
+        frame.nextCursor = "new"
+        model.apply(frame, for: ChatKey(scope: "scope-1", device: a, app: "codex", chat: "demo"))
+        #expect(model.messages.contains { $0.id == "new" })
+        #expect(!model.olderAvailable && model.cursor == nil)
+    }
+
+    /// 11-16: 查找消息 leaves the page at a historical row; the live stream's newest rows are not put under it.
+    @Test func aLiveFrameDoesNotGlueTheNewestRowsUnderAHistoryPage() async {
+        let model = makeApp()
+        await signedInOnA(model)
+        model.open(model.chats.first { $0.id == "demo" }!)
+        await model.settle()
+        let shown = model.messages.map(\.id)
+        model.anchor = ChatRecord.Position(message: model.messages[1].id, offset: 0)
+        model.apply(LiveFrame(seq: 2, snapshot: true, messages: [Message(id: "newest", role: "assistant", text: "最新")], control: nil),
+                    for: ChatKey(scope: "scope-1", device: a, app: "codex", chat: "demo"))
+        #expect(model.messages.map(\.id) == shown)
+    }
+
     @Test func relaunchingReturnsToTheSameConversation() async {
         let store = LocalStore(folder: temporaryFolder())
         let vault = MemoryCookieVault()

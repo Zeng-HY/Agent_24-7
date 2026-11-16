@@ -99,6 +99,21 @@ public struct LiveFrame: Sendable, Equatable {
     /// 0.6.6: an update's page fields (status, runtime, title…), nil when it brought none. Dropped before, so the
     /// context ring kept the number the page opened with, through a compaction too (user 10-31).
     public var meta: JSONValue? = nil
+    /// 11-16: a snapshot's own pagination, so the phone knows older rows are not read when the first page failed
+    /// (the outbox used to take every snapshot for the whole record; older phones get them from /api/chat).
+    public var hasMore: Bool = false
+    public var nextCursor: String? = nil
+
+    public init(seq: Int64, snapshot: Bool, messages: [Message], control: Control?, meta: JSONValue? = nil,
+                hasMore: Bool = false, nextCursor: String? = nil) {
+        self.seq = seq
+        self.snapshot = snapshot
+        self.messages = messages
+        self.control = control
+        self.meta = meta
+        self.hasMore = hasMore
+        self.nextCursor = nextCursor
+    }
 }
 
 /// Checks the live stream (live_events.py protocol 1): the first frame is the snapshot, then consecutive updates;
@@ -128,6 +143,11 @@ public struct StreamReducer: Sendable {
         if snapshot, page["id"].string() != chat || page["app"].string() != app { throw ReadFailure("实时协议或会话身份不匹配") }
         let control: Control? = app == "codex" && json.object["control"] != nil ? (json["control"].isObject ? parseControl(json["control"]) : Control()) : nil
         var frame = LiveFrame(seq: number, snapshot: snapshot, messages: try page["messages"].array.map(parseMessage), control: control)
+        if snapshot {
+            // 11-16: the snapshot's page says whether more is on the computer, as /api/chat does.
+            frame.hasMore = page["has_more"].bool()
+            frame.nextCursor = page["next_cursor"].string().isEmpty ? nil : page["next_cursor"].string()
+        }
         if !snapshot, json["meta"].isObject { frame.meta = json["meta"] }
         seq = number
         return frame

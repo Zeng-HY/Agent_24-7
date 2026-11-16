@@ -136,8 +136,9 @@ struct OutboxTests {
                           notes: [claudeOffsetNote: .number(1000)])
         let newest = answer(at: "2027-01-15T08:00:00Z", order: 5000)
         #expect(outboxSends([record], messages: [newest], now: now, olderUnread: true).isEmpty)
-        // No older rows left: the page is the whole record, and the record does not have it.
-        #expect(outboxSends([record], messages: [newest], now: now).map(\.request) == ["req-1"])
+        // 11-16: a delivered send a minute old is left to the record whether or not this page is said to be whole;
+        // the page's completeness is no longer what keeps an old light bubble (the 11-15 ghost).
+        #expect(outboxSends([record], messages: [newest], now: now).isEmpty)
     }
 
     @Test func aSendJustAfterThePagesFirstRowWaitsForItsOwnRow() {
@@ -174,5 +175,38 @@ struct OutboxTests {
         let record = send("跑完了吗", label: "已送达", app: "claude", notes: [claudeOffsetNote: .number(1000)])
         let own = user("跑完了吗", at: "2027-01-15T07:59:00Z", order: 1200)
         #expect(outboxSends([record], messages: [own], now: now, olderUnread: true).isEmpty)
+    }
+
+    // -- 11-16: the light old sends under Claude's newest answer (the page was a snapshot, or the words differed)
+
+    @Test func aDeliveredSendAgedOverAMinuteIsLeftToTheRecord() {
+        let recent = send("刚发的", label: "已送达", app: "claude", created: now - 30_000)
+        #expect(outboxSends([recent], messages: [], now: now).map(\.request) == ["req-1"])
+        let old = send("一分钟前", label: "已送达", app: "claude", created: now - 61_000)
+        #expect(outboxSends([old], messages: [], now: now).isEmpty)
+        // Only 已送达: 已接收 still waits, because the record may not have it yet.
+        let received = send("已接收的", label: "已接收", app: "claude", created: now - 61_000)
+        #expect(outboxSends([received], messages: [], now: now).map(\.request) == ["req-1"])
+    }
+
+    @Test func aRemovedSendIsNeverDrawn() {
+        let record = send("删掉的", label: "已移除", app: "claude")
+        #expect(outboxSends([record], messages: [], now: now).isEmpty)
+        #expect(outboxSends([record], messages: [], now: now, olderUnread: true).isEmpty)
+    }
+
+    @Test func theWordsTheComputerWroteAreWhatMatches() {
+        // A quoted message: the record holds the words with the quote, the phone only its own.
+        let quoted = send("看一下", app: "claude", notes: [claudeCheckTextNote: .string("看一下\n\n> 引用的一段")])
+        let withQuote = user("看一下\n\n> 引用的一段", at: "2027-01-15T07:59:50Z")
+        #expect(outboxSends([quoted], messages: [withQuote], now: now).isEmpty)
+        // Pictures alone: the computer wrote 请查看这些图片。into the record.
+        let pictures = send("", app: "claude", notes: [claudeCheckTextNote: .string("请查看这些图片。")])
+        #expect(outboxSends([pictures], messages: [user("请查看这些图片。", at: "2027-01-15T07:59:50Z")], now: now).isEmpty)
+        // A cut at 6000 characters: the record's copy is the short one the computer sent.
+        let cut = send(String(repeating: "字", count: 7_000), app: "claude",
+                       notes: [claudeCheckTextNote: .string(String(repeating: "字", count: 6_000))])
+        #expect(outboxSends([cut], messages: [user(String(repeating: "字", count: 6_000), at: "2027-01-15T07:59:50Z")],
+                            now: now).isEmpty)
     }
 }

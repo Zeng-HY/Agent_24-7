@@ -360,3 +360,56 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - iOS 只写了 `Relay.swift` 的两处查询参数，**没编译**。
 
 提交编号：见 9.7。
+
+### 9.4 阶段四：Claude 淡色旧消息（影-1、影-2）
+
+改动（iOS）：
+- `ChatCore.swift`：`LiveFrame` 加 `hasMore`、`nextCursor`（快照的 `has_more`/`next_cursor`）和公开构造器；`StreamReducer` 在快照帧里读出这两个字段。
+- `AppModel+Reading.swift` 的 `apply`：快照和现有列表一个 id 都对不上时，用快照替换列表并按快照设 `olderAvailable`、`cursor`、`newerAvailable`；`anchor != nil`（查找消息停在历史页）时不再把实时/快照的最新几行接在下面；页面字段（上下文环）的更新移到这之前，历史页也能更新。
+- `Outbox.swift`：加 `claudeCheckTextNote`（`_claude_check_text`）；`已移除` 加进不画的名单；Claude 的 `已送达` 超过 60 秒不再画（画不画以记录为准）；按文字对照时优先用电脑写进记录的原话（引用、只发图片、6000 字截断都能对上），没有才用手机自己的文字。
+
+改动（电脑端）：`chats.py` 的 `_queue_remove`：都匹配不上时去掉最老的一个空排队项（运行中发带图片的消息会先留一个空项，之前一直留到下一个 /compact）。
+
+新测试：
+- `OutboxTests`：`已送达` 一分钟内还画、超过一分钟不画（`已接收` 仍等）；`已移除` 不画；带引用、只发图片、6000 字截断三种都按 `_claude_check_text` 对上；原来 139-140 行「列表是整份记录就画出来」的假设改成「已送达超过一分钟以记录为准」。
+- `AppModelTests`：第一页没读成、随后快照一个 id 都对不上时，列表换成快照、`olderAvailable`/`cursor` 跟着快照，outbox 因此为空；快照有共同 id 时只合并、不动分页；`anchor != nil` 时实时帧不把最新几行接在历史页下面。
+- `test_claude_send.py` 的 `QueueShadowTests.test_an_unmatched_removal_takes_the_oldest_empty_part_away`。
+
+结果：
+- Python：`test_claude_send` 60 项全过；全部套件 `794 项，6 跳过，22 出错`（与基线相同的 22 项，没有新增失败）。
+- iOS：只写代码和 TeleplyCore 测试，**没编译**（本机没有 Swift 工具链）。
+- 安卓：这一阶段没改，沿用阶段三的 218 项全过。
+
+没做：
+- iOS 真机上「第一页请求失败」的复现要等新版本装好后照 7.2 做；手机没日志，没法在本机坐实是哪一次请求失败（文档 3.4 已说明）。
+- 电脑端排队清单的另一个小毛病（Claude 运行中发带图片的消息会先写一条空排队项）只按文档改了 `_queue_remove`，没有改写入端。
+
+### 9.5 和代码对不上的地方（只记，没改原文）
+
+- 文档 4.1 批-3 的两个版本号（`thread-follower-set-queued-follow-ups-state`、`thread-queued-followups-changed`）仍按「只核实」处理：`TESTED_APP_VERSION` 还是 `26.1007.2314.0`，等 5.1 实测 26.1106 后再改。
+- 文档 4.3 慢-3 说「先核对 `call()` 现在是不是已经这样」。实际情况：`call()` 失败时只是把 `checked` 置 0，连接还留着；旧 `connection_info()` 的 30 秒有效期会让下一次调用重新找，所以失败路径本来就大致能用。这次把它改成显式清空连接。
+- 文档 4.4 说 `OutboxTests.swift:139-140` 的假设要改：那条断言在 11-16 的代码里是 134–141 行（行号有漂移），已按说明改掉。
+- 文档 4.2 说 iOS 要在演示数据里加一个「会持续出字的对话」并加 `TeleplyUITests` 场景：`DemoTransport` 目前没有实时流接口，加它要改演示传输和 UI 测试，本机又没法编译，所以没加（见 9.6）。
+- `apps/android/README.md` 说 Codex 批准显示「请在电脑上处理」，现在电脑端对还不能答的请求会回 `answerable:false` 的卡片，手机显示「请在电脑上处理」；能答的两种显示「允许一次 / 拒绝」。文档 3.1 提到的这段 README 描述已过时。
+
+### 9.6 没做
+
+- 没 push、没打包、没改版本号、没发版；没动中转服务器、苹果后台、Codemagic、TestFlight、Obsidian。
+- 5.1 真实 Codex 批准的抓取、从手机点「允许一次」、批-3 的版本核实：要用户和 Claude 一起做，本会话没有触发 Codex。
+- 5.2 真机验证：等新版本装上后由用户照 7.2 做。
+- 阶段二 iOS 的演示流和 UI 测试（原因见 9.5）。
+- 阶段三文档 4.3.5 列的：尾部分页、实时首帧去重、常驻连接、手机先显示缓存、中转权限缓存、iOS Markdown 缓存。
+- 阶段一网页的正式批准卡片（可选项；兼容 `questions` 已能让网页画出提问）。
+- Playwright 的 22 项仍缺浏览器（与基线相同），没有为了跑它们去装浏览器。
+
+### 9.7 提交
+
+`main` 上本地提交，一个文件一个文件 `git add`，都没有 push：
+
+- 阶段一（Codex 批准）：`3cc2392`。
+- 阶段二（滚动）：`9116cf0`。
+- 阶段三（打开速度）：`3e92106`。
+- 阶段四（淡色重影）：本次提交。
+- 收尾：紧接本次的一个只改本文件的提交，把阶段四编号补进来。
+
+工作区 `F:\Android-Dev\work\20261101-island-duplicates\20261116-approvals-scroll\` 里留了：两次旧代码基线日志、四个阶段的全量测试日志、安卓构建日志、`probe_*.py` 和 `probe-*-results.jsonl`（测速原始数据）、`old-tree\`（旧代码副本，用于基线）。仓库里除了这些提交没有留下临时文件。

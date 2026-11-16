@@ -621,6 +621,16 @@ class QueueShadowTests(unittest.TestCase):
         msgs,_=chats.parse_claude(lines)
         self.assertEqual([m['text'] for m in msgs if m['role']=='user'],['再整理','/compact'])
 
+    def test_an_unmatched_removal_takes_the_oldest_empty_part_away(self):
+        # 11-16: a Claude message sent with a picture queued an empty part first; the words Claude took back never
+        # matched it, and the empty part stayed until the next /compact, which it then broke.
+        lines=[self.line('enqueue','','2026-11-01T07:59:00Z'),
+               self.line('remove','看一下这个','2026-11-01T07:59:02Z'),
+               self.line('enqueue','/compact','2026-11-01T08:02:00Z'),
+               self.line('dequeue',None,'2026-11-01T08:02:00.002Z')]
+        msgs,_=chats.parse_claude(lines)
+        self.assertEqual([m['text'] for m in msgs if m['role']=='user'],['/compact'])
+
 
 class LineStateTests(unittest.TestCase):
     """11-01: read a line at a time, an empty value was skipped, so '正在压缩上下文' (step=compact) stayed until the

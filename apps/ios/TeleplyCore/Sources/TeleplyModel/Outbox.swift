@@ -10,6 +10,9 @@ public let commandNote = "_command"
 /// computer, and its clock was 13 s behind the phone's: comparing them with the phone's clock kept the send waiting.
 public let claudeOffsetNote = "_claude_offset"
 public let acceptedAtNote = "_accepted_at"
+/// 11-16: the words the computer actually wrote into Claude's record (a quote added, "请查看这些图片。" for pictures
+/// alone, a 6000-character cut). Matching on the phone's own words never found those.
+public let claudeCheckTextNote = "_claude_check_text"
 
 /// Sends that are on this phone but not in the conversation's record yet (0.6.5). A send stays in the timeline, in the
 /// light "not yet in the record" style, until the record has the same message; then the record's row replaces it.
@@ -29,9 +32,12 @@ public func outboxSends(_ submissions: [Submission], messages: [Message], now: I
     var kept: [Submission] = []
     for record in submissions.sorted(by: { $0.created < $1.created }) {
         guard record.action == "send", !record.request.isEmpty else { continue }
-        guard !["未接收", "已取消排队"].contains(record.label) else { continue }
+        guard !["未接收", "已取消排队", "已移除"].contains(record.label) else { continue }
         if record.body.contains(commandNote), let notes = try? JSONValue.parse(Data(record.body.utf8)),
            !notes[commandNote].string().isEmpty { continue }
+        // 11-16: 已送达 is the computer's word that the record has it. A minute later the record is the truth, so
+        // the light bubble goes even when this page cannot see that row (the page may be only the newest 60 rows).
+        if record.label == "已送达", now - sendBase(record) >= 60_000 { continue }
         if let found = users.first(where: { !used.contains($0.id) && $0.request == record.request }) {
             used.insert(found.id)
             continue
@@ -83,9 +89,12 @@ private func pageBegins(_ messages: [Message], after record: Submission) -> Bool
 private func matches(_ message: Message, _ record: Submission) -> Bool {
     // DeepSeek appends "\n[1 张图片]" to the record; the phone's send has only the words. Without this, the send
     // never matches and stays under the record's own row as a second, faded copy (10-30).
-    let words = squeezed(wordsIgnoringPictureMarks(message.text))
-    guard !words.isEmpty, words == squeezed(record.text) else { return false }
+    // 11-16: Claude's record may hold other words than the phone's (a quote, 请查看这些图片。, a cut at 6000
+    // characters). The computer said what it wrote when it took the send; that is what to look for.
     let notes = notesOf(record)
+    let written = notes[claudeCheckTextNote].string()
+    let words = squeezed(wordsIgnoringPictureMarks(message.text))
+    guard !words.isEmpty, words == squeezed(written.isEmpty ? record.text : written) else { return false }
     if record.app == "claude", notes[claudeOffsetNote].double() > 0, let order = message.order {
         return order > notes[claudeOffsetNote].double()
     }
