@@ -266,5 +266,6 @@
 - 用户 11-16 同意换新钥匙并打包。dev.37 = 提交 `946e6a4`：带上本修复、500MB（`cc2ee67`）和新的更新钥匙（`ee3b86c`；新版检查 GitHub 时跳过旧钥匙签的发布）。
 - 在仓库目录里打的包，没用 8 节说的临时工作树。核对过：`deploy/windows/AgentRemote.spec` 只收 `relay_desktop.py` 引到的模块和列出的几个文件；仓库里没提交的 `deploy/site/`、`tests/test_activity_records.py`、`apps/android/` 都不在包里，引到的文件也都没有未提交的改动。
 - `dist/0.27.0-dev.37/AgentRemote-0.27.0-dev.37-Setup.exe`：32,538,770 字节，SHA-256 `f5e21457cd06f114d195bf45596a165231f0b29510300aaa9d615107efd044d1`。`--self-test`（空数据目录）通过。
+- **11-16 12:47 重新打包**（上面那个没发布，已替换）：带上 `docs/handoff-approvals-scroll-ghosts-speed.md` 的四个阶段（Codex 批准转给手机、打开速度、网页滚动、Claude 排队），提交 `84fdeb0`，发布说明同步改了。安装包 32,547,458 字节，SHA-256 `bdccc30225a5c0d1e801997061a060aa001912db0b93646f42cd81ba97443dc3`；`--self-test` 通过；`windows-update.json` 重新用新钥匙签名（`--sign-only`）。
 - `windows-update.json` 用新钥匙签名（`publish.py windows --sign-only`）：上传阿里云要的 AccessKey 11-12 一起丢了，还没补；`windows-release-notes.md` 一并放在同一个文件夹。
 - 没装、没发布。dev.36 只认旧钥匙，自动更新看不到 dev.37，要手动装；装时电脑端重启，要重新登录、绑定原来那台电脑（8 节）。

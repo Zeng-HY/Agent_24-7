@@ -7,9 +7,9 @@
 - **新钥匙**：正式版钥匙在 `%USERPROFILE%\.android\teleply-signing\`（RSA 4096，10000 天，证书名照旧 `CN=Teleply, O=Teleply`），证书 SHA-256 `8230f6b1c4edefb70f6056ff9e74394b607cf44cda50600ea1aa56edfdfd74cf`，`scripts/release.ps1` 和 `deploy/updates/publish.py` 核对的都换成了它。更新清单的新公钥写进了 `Updates.kt` 的 `Key`（和电脑端 `relay_updates.py` 的 `KEY` 一样）。调试钥匙 `debug.keystore` 也重新生成了，只影响开发版和性能版。
 - **手机上要做的**：手机只接受同一把钥匙签的更新，1.0.6 及以前装不上 1.0.7，也不会提示它（新清单的签名它认不出，手动「检查更新」会说「无法检查更新」）。要先卸载遥应，再装 1.0.7，重新登录。开发版（遥应 开发版）同样要卸载重装。
 - **检查更新跳过旧钥匙的发布**：GitHub 上 1.0.6 及以前的清单是旧钥匙签的。原来 `newestOnGithub` 碰到签名不对的清单就整个报错，1.0.7 会因为它们再也查不到 1.0.8。现在签名对不上的发布直接跳过，不读内容。新测试 `UpdatePolicyTest.githubSkipsReleasesSignedWithAnotherKey`。
-- **带上**：上一节的 500MB 和一小时下载。
-- **文件**：`build/Teleply-1.0.7-18.apk`（2,672,575 字节，SHA-256 `13554a2e4affc45455143cbb9f147b86b6fc1f47f3351b67165f6effe5d51c8b`，证书 `8230f6b1…fdfd74cf`），加上新钥匙签的 `android-update.json` 和 `android-update.json.sig`；更新说明在 `build/Teleply-1.0.7-notes.txt`。`dl.pocketagentdesk.com` 的 HTTPS 证书还没配（11-16 核对过），所以只签名、只准备 GitHub 的文件。
-- **检查**：213 项单元测试通过（`scripts/release.ps1`），release 签名证书核对通过。
+- **带上**：上一节的 500MB 和一小时下载；11-16 的 Codex 批准卡片（`3cc2392`）、往上翻不再被拉回底部（`9116cf0`）、打开对话只拿精简页 `lite=1`（`3e92106`），见 `docs/handoff-approvals-scroll-ghosts-speed.md`。第一次打包（11-16 上午）只有换钥匙和 500MB，没发布，已被下面这次重新打包替换。
+- **文件**（11-16 12:47 重新打包，提交 `84fdeb0`）：`build/Teleply-1.0.7-18.apk`（2,672,575 字节，和上午那次碰巧一样大，内容不同；SHA-256 `10816a07aa69abc28d1ae807f991d0fa874adcd38281168703678c917040d4a7`，证书 `8230f6b1…fdfd74cf`），加上新钥匙签的 `android-update.json` 和 `android-update.json.sig`；更新说明在 `build/Teleply-1.0.7-notes.txt`。`dl.pocketagentdesk.com` 的 HTTPS 证书还没配（11-16 核对过），所以只签名、只准备 GitHub 的文件。
+- **检查**：218 项单元测试通过（阶段三之后安卓代码没再改，`release.ps1` 沿用了 12:26 那次的结果）；release 重新编译和 R8 都跑了，包里有批准卡片的文字；签名证书核对通过。
 - **没有做的**：没发布到 GitHub；没在真手机上卸载 1.0.6、装 1.0.7 试过。
 
 ## 保存、分享文件：上限 500MB，下载给一小时（2026-11-15，随 1.0.7）
