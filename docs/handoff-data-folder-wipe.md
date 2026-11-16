@@ -251,7 +251,7 @@
 ### 9.6 没做
 
 - 5.3（Claude hook、`remote_config.json`、`device-v2.bin` 的自动补回）：等用户决定。
-- Windows dev.37 打包、安装、发布：等用户决定。（11-16 已打包、已发布到 GitHub 和阿里云，见 9.8；安装仍等用户。）
+- Windows dev.37 打包、安装、发布：等用户决定。（11-16 已打包、已发布到 GitHub 和阿里云，21:51 已装到这台电脑，见 9.8。）
 - 没 push；没动中转服务器、苹果后台、Codemagic、TestFlight、Obsidian。
 - 7.2 真机验证：要等新版装上后由用户照做。
 - 2.2 节提到的 Codex 26.1106 换版后核对通道：不在这次范围。
@@ -271,3 +271,5 @@
 - `windows-update.json` 用新钥匙签名（`publish.py windows --sign-only`）：上传阿里云要的 AccessKey 11-12 一起丢了，还没补；`windows-release-notes.md` 一并放在同一个文件夹。
 - 没装、没发布。dev.36 只认旧钥匙，自动更新看不到 dev.37，要手动装；装时电脑端重启，要重新登录、绑定原来那台电脑（8 节）。
 - **11-16 晚上补传阿里云**（用户说「都传」）：用户在 RAM 禁用了丢掉的上传 AccessKey、建了新的，自己填进 `oss-upload-key.json`。阿里云上原来的 `windows/dev/windows-update.json` 是 dev.36、旧钥匙签的，`publish.py` 核对不过，所以加了 `--force`：`publish.py windows --dist dist/0.27.0-dev.37 --force`。取回核对：清单和 `.sig` 与本地逐字节一致，从阿里云下载的安装包 SHA-256 一致；`relay_updates.check_aliyun` 当成 build 36 时给出 dev.37，当成 build 37 时说没有更新。本地 `.sig` 是这次重签的（ECDSA 每次签出来都不一样），和 GitHub 上那份不同，两份都有效。副作用：dev.36 及以前现在检查更新会报「更新签名不正确」（阿里云的新清单它们认不出，转去 GitHub 又碰到新钥匙签的 dev.37），手动装 dev.37 就好。国内下载：`https://teleply-updates.oss-cn-guangzhou.aliyuncs.com/windows/AgentRemote-0.27.0-dev.37-Setup.exe`。
+- **11-16 21:51 装到这台电脑**（用户说「现在装」）：安装包 SHA-256 和发布的一致，装在原来的 `G:\AgentRemote`（dev.35 → dev.37），退出码 0。电脑端 11-15 23:08 重启过，`device-v2.bin`、`remote_config.json` 已经重新有了，所以这次没要求重新登录：新版 21:51:40 启动，21:51:52 连上中转并一直连着；Claude 的 hook 在 `~/.claude/settings.json` 里。用户在手机上看到这台电脑在线。7.2 的其余几条（新建对话、Codex 不再连接中断、DeepSeek 发消息、Claude 提问卡）还没逐条试。
+- **装之前的断线**：dev.35 的日志里，11-13 到 11-15 大部分时间都是「中转现在没连着」（11-15 23:08 重启后才好），11-16 19:30 起又断了，到 21:51 换版都没连回来。19:30 那次的原因日志里看不出：中转那一段的出错不写日志。再出现时先查 `relay_agent.py` 的重连。
