@@ -70,6 +70,8 @@ public final class ChatModel {
     public internal(set) var hint = ""
     /// Goes up when a send is first taken by the computer (已接收, 已送达 or 已排队): a light tap (spec 3).
     public internal(set) var acknowledged = 0
+    /// 11-16: one more send from this page, so the page follows the bottom again (Android ComposerState.sent).
+    public internal(set) var sent = 0
 
     /// True while a tap waits on the computer (web claude-ui.js `choosing`): no state poll then.
     @ObservationIgnored public var pollPaused: () -> Bool = { false }
@@ -448,6 +450,7 @@ public final class ChatModel {
             return
         }
         inFlight.insert(key)
+        if action == "send" { self.sent += 1 }  // 11-16: the page follows the bottom again
         let rid = newID()
         var body: [String: JSONValue] = ["id": .string(key.chat)]
         switch action {

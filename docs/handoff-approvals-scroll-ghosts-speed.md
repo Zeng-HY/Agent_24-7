@@ -286,3 +286,33 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 网页的正式批准卡片没做（可选）：兼容 `questions` 字段已经让网页画出提问并藏起自由输入。
 - 5.1 抓一次真实批准、从手机点「允许一次」：要用户和 Claude 一起做，本会话没有触发 Codex。
 - 提交编号：见 9.7（各阶段提交完成后一并补）。
+
+### 9.2 阶段二：滚动（滚-1、滚-2）
+
+改动（iOS）：
+- `ConversationView.swift`：`atBottom` 换成 `reading: ReadingFollow`（11-16 新类型）；`nearBottom` 阈值 24→48；加 `.onScrollPhaseChange`（`.tracking`/`.interacting` 停止跟随，`.idle` 且离底 48 点内重新跟随并补滚到底，`.animating` 不动跟随）；`follow()` 只在跟随且阶段 `.idle` 时滚，否则置 unseen；`defaultScrollAnchor`、胶囊条件改用 `reading`；`restore()` 按「打开在最新处/查找命中」设跟随，`keepPlace()` 设不跟随；发送时 `onChange(of: conversation.sent)` 回到跟随并滚到底；卡片 id 变化也调一次 `follow()`。没有改成懒加载（README 记过键盘弹出白屏）。
+- `ChatModel.swift`：加 `sent` 计数，`submit` 里每发一条加一（`self.sent`，避免和函数里的局部 `sent` 重名）。
+- 新 `TeleplyModel/ReadingFollow.swift`：拖动、停住、打开、发送、新画面五条规则，纯类型。
+
+改动（安卓）：
+- `ChatUi.kt`：直接收 `list.interactionSource.interactions` 的 `DragInteraction.Start` 停止跟随（不再等一次重组）；`snapshotFlow { isScrollInProgress }` 变 false 且摸过、离底 ≤48dp 时重新跟随并补滚；新增 `ReadingFollow` 纯类型，跟随/未读都由它算；内容变长变短、程序滚动不改跟随；发送（`chat.sent`）重新跟随并等发气泡出现后滚到底；待发气泡、提问卡出现时若在跟随就滚到底；恢复位置按 `ReadingPlace.follow`，加载更早消息设不跟随；新增 `distanceFromEnd`。
+- `ChatController.kt`：`ComposerState` 加 `sent`，`submit` 里 `action=="send"` 时加一。
+- `ReaderViewModel.kt`：`ReadingPlace` 加 `follow`（默认 false，旧测试仍编译）；新增 `fixtureApi` 钩子，本地示例默认还是 `FixtureApi()`。
+- 测试脚手架：`ReaderUiScenarios.launch` 可传 `api`，并把同一个工厂给本地示例。
+
+改动（网页，可选）：`static/scroll-anchor.js` 手指按着（`pointerdown`…`pointerup/cancel`）时 `restore()` 直接返回，不再重新钉住。没有浏览器测试（Playwright 浏览器缺失）。
+
+新测试：
+- iOS `ReadingFollowTests` 4 项（拖动/停住/打开与发送/内容变长变短不改跟随）、`ChatModelTests.aSendCountsOnceSoThePageFollows`。
+- 安卓 `ChatUiLogicTest.readingFollowChangesOnlyWithTheReader`；`ReaderRobolectricTest.readingAboveHoldsItsPlaceWhileFramesArrive`（打开 200 条的示例对话，往上划，连续送来 3 帧：滚动位置不变、出现「有新消息」胶囊；点胶囊回到最新；再往上划后发送，重新跟随到底）。
+
+结果：
+- 安卓：`build.ps1` 默认全跑（assembleDebug、testDebugUnitTest、lintDebug、assembleDebugAndroidTest）**通过**，单元测试 **218 项全过**（阶段一 216 + 本次 2）。
+- 全部 Python：`782 项，6 跳过，22 出错`，与阶段一逐行相同的 22 项（21 项 Playwright 浏览器缺失、1 项 `test_mobile_polish` 找旧按钮名）。
+- iOS：只写代码和 TeleplyCore 测试，**没编译**（本机没有 Swift 工具链）。`ScrollPhase` 用 `==` 比较、没有用 `switch`（它是 struct）。
+
+没做：
+- iOS 演示数据里「会持续出字的对话」和 `TeleplyUITests` 的同场景**没加**：`DemoTransport` 目前没有实时流接口，硬加要改演示传输和 UI 测试，本机没法编译验证，留给 Claude 在云端补。
+- 网页的手指按着不改钉住没有自动化测试（浏览器缺失）。
+
+提交编号：见 9.7。

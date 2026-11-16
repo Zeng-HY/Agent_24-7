@@ -7,8 +7,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
-/** [focus] counts requests for the input to take the keyboard (继续修改 a Codex plan); [hint] then shows in the empty box. */
-data class ComposerState(val key:ChatKey?=null,val draft:String="",val ready:Boolean=false,val submitting:Boolean=false,val control:Control=Control(),val connection:String="实时连接未启动",val submissions:List<Submission> = emptyList(),val error:String?=null,val revision:Int=0,val draftReset:Int=0,val focus:Int=0,val hint:String="")
+/** [focus] counts requests for the input to take the keyboard (继续修改 a Codex plan); [hint] then shows in the empty box.
+ * [sent] counts sends from this page, so the page follows the bottom again (11-16). */
+data class ComposerState(val key:ChatKey?=null,val draft:String="",val ready:Boolean=false,val submitting:Boolean=false,val control:Control=Control(),val connection:String="实时连接未启动",val submissions:List<Submission> = emptyList(),val error:String?=null,val revision:Int=0,val draftReset:Int=0,val focus:Int=0,val hint:String="",val sent:Int=0)
 
 /**
  * Kept in a send's local copy (its body), never sent: where Claude's record stood when the computer pressed Enter and
@@ -226,6 +227,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         val reachable=s.control.available || action=="send" && !planned && !promote && sendsWhileAway(k.app)
         if(!foreground || !s.ready || !reachable || !inFlight.add(k)) return
         if(action=="send" && !planned && ((s.draft.isBlank() && !hasExtras) || s.draft.trim().length>20000 || queue && !s.control.queueAvailable) || action=="stop" && !s.control.running || promote && !s.control.running || planned && (k.app!="codex" || s.control.running)) { inFlight.remove(k);return }
+        // 11-16: the page follows the bottom again as soon as you send (the bubble comes once its copy is written).
+        if(action=="send") update(k) { it.copy(sent=it.sent+1) }
         val rid=UUID.randomUUID().toString()
         val body=JSONObject().put("id",k.chat)
         when(action) {

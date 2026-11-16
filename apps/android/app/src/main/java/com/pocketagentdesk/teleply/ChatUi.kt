@@ -10,7 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -102,6 +102,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -124,8 +125,9 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val workspaceState = vm.workspace.state.collectAsStateWithLifecycle()
     val workspace by workspaceState
     val key = Triple(s.app, s.device?.id, s.chat?.id)
-    var follow by remember(key) { mutableStateOf(true) }
-    var unseen by remember(key) { mutableStateOf(false) }
+    var reading by remember(key) { mutableStateOf(ReadingFollow()) }
+    // 11-16: the reader touched the page, so its stopping point decides whether following starts again.
+    var touched by remember(key) { mutableStateOf(false) }
     var restored by remember(key) { mutableStateOf(false) }
     // 加载更早消息 pressed: the message then at the top, to keep in place once the older ones are in.
     var hold by remember(key) { mutableStateOf<OlderHold?>(null) }
@@ -136,11 +138,14 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val sheets = remember(key) { ChatSheets().apply { whole = vm::whole } }
     val folds = remember(key) { mutableStateMapOf<String, Boolean>() }
     val currentMessages by rememberUpdatedState(s.messages)
-    val dragged by list.interactionSource.collectIsDraggedAsState()
-    val currentDragged by rememberUpdatedState(dragged)
     val raw = remember(chat.control.raw) { runCatching { JSONObject(chat.control.raw) }.getOrDefault(JSONObject()) }
     val saved = remember(workspace.saved) { runCatching { JSONObject(workspace.saved) }.getOrDefault(JSONObject()) }
     val cards = remember(raw, s.app) { pendingCards(s.app, raw) }
+    // 11-16: sends whose bubble the record does not show yet (the page's own 提交中 copy).
+    val outbox = remember(chat.submissions, s.messages) {
+        chat.submissions.filter { it.action == "send" && it.label == "提交中" && s.messages.none { m -> m.request == it.request } }
+    }
+    val currentOutbox by rememberUpdatedState(outbox)
     // Pictures sent with messages, as the computer kept them (state `images`; web message-projection.js decorate).
     val pictures = remember(s.messages, raw) { sentPictures(s.messages, raw.rows("images") { it }) }
     // A new conversation's page before it exists, and its first message after, until the record shows it (0.8).
@@ -155,17 +160,49 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val currentLead by rememberUpdatedState(lead)
     val currentRevision by rememberUpdatedState(s.scrollRevision)
 
-    // Reading position (B09): follow the bottom only when the reader is at the bottom.
+    // Reading position (B09, 11-16): following changes only with the reader's own actions, never with content height.
+    // The drag says so at once; waiting for a re-composition missed the first frames of a quick flick.
     LaunchedEffect(list) {
-        snapshotFlow { currentDragged to list.canScrollForward }.collect { (dragging, forward) ->
-            if (dragging) follow = false
-            if (!forward && !dragging) { follow = true; unseen = false }
+        list.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) { touched = true; reading = reading.dragged() }
         }
+    }
+    // The finger lifted (or the fling stopped): at the bottom it follows again and finishes the scroll there.
+    LaunchedEffect(list) {
+        snapshotFlow { list.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling && touched) {
+                touched = false
+                val next = reading.stoppedAt(distanceFromEnd(list), with(density) { 48.dp.roundToPx() })
+                reading = next
+                if (next.following) scrollToEnd(list)
+            }
+        }
+    }
+    // 11-16: things that grow below with no new message still leave a following reader at the bottom: the bubble
+    // of a send being written, and a waiting card appearing. (Content height itself changes nothing; a page moved
+    // by a search, 加载更早消息 or the list's own scroll is not followed.)
+    var atEnd by remember(key) { mutableStateOf(true) }
+    LaunchedEffect(list) { snapshotFlow { !list.canScrollForward }.collect { atEnd = it } }
+    LaunchedEffect(outbox.size) {
+        if (restored && reading.following && outbox.isNotEmpty() && !list.isScrollInProgress) scrollToEnd(list)
+    }
+    LaunchedEffect(cards.size, cards.firstOrNull()?.summary) {
+        if (restored && reading.following && cards.isNotEmpty() && !list.isScrollInProgress) scrollToEnd(list)
     }
     LaunchedEffect(chat.revision) {
         if (restored && chat.revision > 0 && s.messages.isNotEmpty()) {
-            if (follow && !s.newer) scrollToEnd(list) else unseen = true
+            // Never while a finger or a fling is on the page; the pill says there is more below.
+            reading = reading.arrived(newer = s.newer, scrolling = list.isScrollInProgress)
+            if (reading.following && !s.newer && !list.isScrollInProgress) scrollToEnd(list)
         }
+    }
+    // 11-16: a send follows the bottom again, once the bubble of that send is on the page.
+    LaunchedEffect(chat.sent) {
+        if (chat.sent == 0) return@LaunchedEffect
+        reading = reading.sent()
+        var waited = 0
+        while (waited < 1500 && currentOutbox.isEmpty()) { delay(50); waited += 50 }
+        scrollToEnd(list)
     }
     // Where the page opens (user 10-27): every opening at the latest messages, at the bottom; a search hit where it is.
     // The same read drawn anew (the phone turned, the window resized, back from 设置) goes back where it stood.
@@ -175,8 +212,11 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
             val kept = openKey?.let { vm.placeFor(it, s.scrollRevision) }
             val target = if (kept != null) kept.message else s.anchor?.message
             val index = target?.let { id -> s.messages.indexOfFirst { it.id == id }.takeIf { it >= 0 } }?.plus(lead) ?: kept?.item
-            follow = index == null && !s.newer
-            if (index != null) list.scrollToItem(index, kept?.offset ?: 0) else scrollToEnd(list)
+            // A real redraw (turned, resized, back from 设置) goes back where it stood, following or not (11-16);
+            // a search hit, or opening a conversation already past its newest, does not follow.
+            reading = reading.opened(if (kept != null) kept.follow else index == null && !s.newer)
+            if (reading.following) scrollToEnd(list) else if (index != null) list.scrollToItem(index, kept?.offset ?: 0)
+            touched = false
             restored = true
         }
     }
@@ -193,7 +233,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
         list.scrollBy(-held.offset.toFloat())
     }
     // The input area grows (queue, prompt bar, multi-line draft) or the keyboard opens: stay at the bottom if there.
-    LaunchedEffect(inputHeight) { if (restored && follow && !s.newer) scrollToEnd(list) }
+    LaunchedEffect(inputHeight) { if (restored && reading.following && !s.newer) scrollToEnd(list) }
     // Taken down with the conversation still open: where the page stood, in memory for this read only (not on the phone).
     DisposableEffect(openKey) {
         val opened = openKey
@@ -201,11 +241,18 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
             val messages = currentMessages
             if (opened != null && currentKey == opened && restored && messages.isNotEmpty()) {
                 val item = list.firstVisibleItemIndex
-                vm.keepPlace(ReadingPlace(opened, currentRevision, item, messages.getOrNull(item - currentLead)?.id, list.firstVisibleItemScrollOffset))
+                val shown = messages.getOrNull(item - currentLead)?.id
+                // Following only when it really is at the bottom now (the list says so, or the last message is the
+                // first one on screen); a page moved elsewhere keeps its place (11-16).
+                vm.keepPlace(ReadingPlace(opened, currentRevision, item, shown, list.firstVisibleItemScrollOffset,
+                    reading.following && (atEnd || shown == messages.lastOrNull()?.id)))
             }
         }
     }
     val loadOlder: () -> Unit = {
+        // 11-16: loading earlier messages is reading above, so it stops following.
+        reading = reading.dragged()
+        touched = false
         val top = list.layoutInfo.visibleItemsInfo.firstOrNull { item -> (item.key as? String)?.startsWith("msg:") == true && item.offset + item.size > 0 }
         hold = top?.let { OlderHold(s.messages.firstOrNull()?.id, (it.key as String).removePrefix("msg:"), it.offset, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
         vm.older()
@@ -267,9 +314,8 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                     }
                 }
                 if (s.newer) item(key = "latest") {
-                    Box(Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.Center) { PillButton("回到最新", { follow = true; unseen = false; vm.latest() }, enabled = !s.busy) }
+                    Box(Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.Center) { PillButton("回到最新", { reading = reading.opened(true); vm.latest() }, enabled = !s.busy) }
                 }
-                val outbox = chat.submissions.filter { it.action == "send" && it.label == "提交中" && s.messages.none { m -> m.request == it.request } }
                 if (outbox.isNotEmpty()) item(key = "outbox") {
                     Reading { Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { outbox.forEach { UserBubble(it.text, receipt = it.label, sending = true) } } }
                 }
@@ -288,8 +334,8 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                     .onSizeChanged { inputHeight = with(density) { it.height.toDp() } },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (unseen && !follow) {
-                    GlassPill("有新消息", { follow = true; unseen = false; if (s.newer) vm.latest() else scope.launch { scrollToEnd(list) } }, Modifier.padding(bottom = 8.dp), leading = TeleplyIcons.Down, description = "有新消息，回到底部")
+                if (reading.unseen && !reading.following) {
+                    GlassPill("有新消息", { reading = reading.opened(true); if (s.newer) vm.latest() else scope.launch { scrollToEnd(list) } }, Modifier.padding(bottom = 8.dp), leading = TeleplyIcons.Down, description = "有新消息，回到底部")
                 }
                 InputArea(s, vm, chat, workspace, raw, cards) {
                     scope.launch { list.animateScrollToItem(s.messages.size + lead) }
@@ -306,11 +352,37 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
  */
 private class OlderHold(val first: String?, val message: String, val offset: Int, val item: Int, val scroll: Int)
 
+/**
+ * 11-16: whether the page follows new output ([following]) and whether it has more below ([unseen]). It changes only
+ * with what the reader does — a drag, stopping near the bottom, opening, sending, 回到最新 — never with the content
+ * growing or shrinking (iOS ConversationView; the same rules both phones).
+ */
+data class ReadingFollow(val following: Boolean = true, val unseen: Boolean = false) {
+    /** A finger is on the page: reading above, wherever it stops. */
+    fun dragged(): ReadingFollow = copy(following = false)
+    /** The finger (or fling) stopped: within [threshold] px of the bottom follows again. */
+    fun stoppedAt(distanceFromEnd: Int, threshold: Int): ReadingFollow =
+        if (distanceFromEnd <= threshold) copy(following = true, unseen = false) else this
+    /** Opening the conversation, 回到最新 or the pill: [following] says whether it opens at the newest. */
+    fun opened(following: Boolean): ReadingFollow = copy(following = following, unseen = false)
+    /** A send of yours: the page follows the bottom again. */
+    fun sent(): ReadingFollow = copy(following = true, unseen = false)
+    /** A new frame arrived: followed while following and nothing is moving, else marked unseen. */
+    fun arrived(newer: Boolean, scrolling: Boolean): ReadingFollow =
+        if (following && !newer && !scrolling) this else copy(unseen = true)
+}
+
 private suspend fun scrollToEnd(list: androidx.compose.foundation.lazy.LazyListState) {
     val count = list.layoutInfo.totalItemsCount
     if (count == 0) return
     list.scrollToItem(count - 1)
     list.layoutInfo.visibleItemsInfo.lastOrNull()?.let { last -> list.scrollBy((last.offset + last.size - list.layoutInfo.viewportEndOffset + list.layoutInfo.afterContentPadding).coerceAtLeast(0).toFloat()) }
+}
+
+/** How far the last row's bottom is below the reading area (px), as scrollToEnd measures it (11-16). */
+private fun distanceFromEnd(list: androidx.compose.foundation.lazy.LazyListState): Int {
+    val last = list.layoutInfo.visibleItemsInfo.lastOrNull() ?: return Int.MAX_VALUE
+    return (last.offset + last.size - list.layoutInfo.viewportEndOffset + list.layoutInfo.afterContentPadding).coerceAtLeast(0)
 }
 
 /** Centres reading content at 820dp at most (web). */

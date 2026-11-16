@@ -23,6 +23,23 @@ class ChatUiLogicTest {
         val raw=JSONObject("""{"questions":[{"id":"approval:t:r","kind":"approval","status":"pending","approval_type":"command","answerable":true,"questions":[{"id":"decision","question":"装依赖？"}]},{"id":"approval:t:r2","kind":"approval","status":"pending","approval_type":"file","answerable":false}]}""")
         assertEquals(listOf(PendingCard("approval","Codex 想运行命令"),PendingCard("approval","Codex 在电脑上等你处理")),pendingCards("codex",raw))
     }
+    /** 11-16: following changes only with the reader's actions, never with content height (iOS ReadingFollow). */
+    @Test fun readingFollowChangesOnlyWithTheReader() {
+        val following=ReadingFollow()
+        val dragged=following.dragged();assertFalse(dragged.following)
+        // Reading above: new frames only mark unseen; stopping far from the bottom keeps it that way.
+        assertTrue(dragged.arrived(newer=false,scrolling=false).unseen)
+        assertEquals(dragged,dragged.stoppedAt(1_000,48))
+        // Within 48 px of the bottom it follows again; opening and sending follow; a page with newer output does not.
+        assertEquals(ReadingFollow(following=true,unseen=false),dragged.stoppedAt(48,48))
+        assertEquals(ReadingFollow(following=true,unseen=false),dragged.sent())
+        assertEquals(ReadingFollow(following=true,unseen=false),dragged.opened(true))
+        assertTrue(ReadingFollow().arrived(newer=true,scrolling=false).unseen)
+        assertTrue(ReadingFollow().arrived(newer=false,scrolling=true).unseen)
+        // Content growth and shrink leave the habit alone: a redraw goes back to what it was.
+        assertEquals(dragged,dragged.opened(dragged.following))
+        assertFalse(dragged.opened(false).unseen)
+    }
     /**
      * Claude's plan options are its question's own buttons, so they show only without a question (web askParts; user
      * 10-27): before Windows dev.23 the computer sent both, and a second card of raw button names showed.

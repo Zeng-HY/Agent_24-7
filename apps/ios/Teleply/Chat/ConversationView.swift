@@ -10,8 +10,10 @@ import TeleplyState
 struct ConversationView: View {
     let model: AppModel
     @State private var position = ScrollPosition(idType: String.self)
-    @State private var atBottom = true
-    @State private var unseen = false
+    /// 11-16: following new output, and whether it is unseen while reading above (Android ReadingFollow).
+    @State private var reading = ReadingFollow()
+    @State private var nearBottom = true
+    @State private var phase: ScrollPhase = .idle
     @State private var restored = false
     @State private var folds: [String: Bool] = [:]
     @State private var selecting: Message?
@@ -76,7 +78,7 @@ struct ConversationView: View {
                 }
                 if model.newerAvailable {
                     Button("回到最新") {
-                        unseen = false
+                        reading = reading.opened(following: true)
                         model.latest()
                     }
                     .buttonStyle(PillStyle())
@@ -105,13 +107,23 @@ struct ConversationView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollPosition($position, anchor: .top)
-        .defaultScrollAnchor(atBottom ? .bottom : .top, for: .sizeChanges)
+        .defaultScrollAnchor(reading.following ? .bottom : .top, for: .sizeChanges)
         .scrollDismissesKeyboard(.interactively)
         .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom >= geometry.contentSize.height - 24
+            geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom >= geometry.contentSize.height - 48
         } action: { _, bottom in
-            atBottom = bottom
-            if bottom { unseen = false }
+            nearBottom = bottom
+        }
+        // The fingers themselves decide: starting to drag stops following at once (a programmatic scroll into
+        // .animating does not). At rest near the bottom it follows again and finishes the scroll there.
+        .onScrollPhaseChange { _, next in
+            phase = next
+            if next == .tracking || next == .interacting {
+                reading = reading.dragged()
+            } else if next == .idle, nearBottom {
+                reading = reading.opened(following: true)
+                position.scrollTo(edge: .bottom)
+            }
         }
         .background(Palette.page)
         .safeAreaBar(edge: .top) { notes(control: control) }
@@ -131,6 +143,13 @@ struct ConversationView: View {
         .onChange(of: model.scrollRevision, initial: true) { restore() }
         .onChange(of: model.conversation.revision) { follow() }
         .onChange(of: control.running) { if $0 { follow() } }
+        .onChange(of: timeline.cards.first?.id) { _ in follow() }
+        // 11-16: a send follows the bottom again; its bubble then arrives under the same following.
+        .onChange(of: model.conversation.sent) {
+            guard $0 > 0 else { return }
+            reading = reading.sent()
+            withAnimation(.easeOut(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+        }
         .onChange(of: model.messages.first?.id) { keepPlace() }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
         .sheet(isPresented: Binding(get: { sharing != nil }, set: { if !$0 { sharing = nil } })) {
@@ -280,9 +299,9 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var newMessagesPill: some View {
-        if unseen && !atBottom {
+        if reading.unseen && !reading.following {
             Button {
-                unseen = false
+                reading = reading.opened(following: true)
                 if model.newerAvailable {
                     model.latest()
                 } else {
@@ -310,29 +329,31 @@ struct ConversationView: View {
         guard !model.messages.isEmpty else { return }
         if let anchor = model.anchor, model.messages.contains(where: { $0.id == anchor.message }) {
             position.scrollTo(id: anchor.message, anchor: .top)
-            atBottom = false
+            reading = reading.opened(following: false)
         } else {
             position.scrollTo(edge: .bottom)
-            atBottom = !model.newerAvailable
+            reading = reading.opened(following: !model.newerAvailable)
         }
-        unseen = false
+        nearBottom = reading.following
         restored = true
     }
 
-    /// New output: follow it at the bottom; otherwise say there is more below.
+    /// New output: follow it at the bottom; reading above only says there is more below.
     private func follow() {
-        guard restored, model.conversation.revision > 0, !model.messages.isEmpty else { return }
-        if atBottom && !model.newerAvailable {
+        guard restored, !model.messages.isEmpty else { return }
+        if reading.following && !model.newerAvailable && phase == .idle {
             position.scrollTo(edge: .bottom)
         } else {
-            withAnimation(.easeOut(duration: 0.2)) { unseen = true }
+            reading = reading.arrived(newer: model.newerAvailable, scrolling: phase != .idle)
         }
     }
 
-    /// Older messages came in above: the message that was first stays where the reader saw it.
+    /// Older messages came in above: the message that was first stays where the reader saw it, and the page reads
+    /// above from then on (11-16).
     private func keepPlace() {
         guard let keep = keepTop, model.messages.first?.id != keep else { return }
         keepTop = nil
+        reading = reading.dragged()
         position.scrollTo(id: keep, anchor: .top)
     }
 }

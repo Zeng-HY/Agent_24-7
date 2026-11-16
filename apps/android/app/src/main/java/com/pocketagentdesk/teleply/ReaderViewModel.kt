@@ -116,9 +116,10 @@ fun treeApps(tree: org.json.JSONObject): List<String> = tree.rows("apps") { it.s
 data class NewHandoff(val app: String, val id: String, val text: String)
 /**
  * Where a conversation's page stood (B09): its first item on screen ([item]; [message] when that is a message) and how
- * far it was scrolled past ([offset]), in the read numbered [revision] ([ReaderState.scrollRevision]).
+ * far it was scrolled past ([offset]), in the read numbered [revision] ([ReaderState.scrollRevision]). [follow] is
+ * whether the page was following new output then, so a redraw goes back to the same habit (11-16).
  */
-data class ReadingPlace(val key: ChatKey, val revision: Int, val item: Int, val message: String?, val offset: Int)
+data class ReadingPlace(val key: ChatKey, val revision: Int, val item: Int, val message: String?, val offset: Int, val follow: Boolean = false)
 /** A new conversation's page before it exists (web preview id new:…). */
 fun isNewPage(chat: Chat?) = chat?.id?.startsWith("new:") == true
 data class ArchiveUndo(val chat: Chat, val index: Int, val waiting: Boolean, val serial: Long)
@@ -202,6 +203,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             }
         }
     }
+    /** The local demo's API ([fixture]); tests may hand in one that also streams live frames (11-16). */
+    internal var fixtureApi:() -> ReadApi = { FixtureApi() }
     private var work: Job? = null
     private var generation = 0
     private var pendingRestore: Preferences? = null
@@ -816,7 +819,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     fun retry() { when(state.value.screen) { Screen.Devices -> computers(); Screen.Chats -> searchChats(state.value.query); Screen.Reading -> state.value.chat?.let(::open); Screen.Login -> if(state.value.account==null && !state.value.fixture) relaunch(); else -> Unit } }
     fun fixture() {
         api?.close(); work?.cancel(); generation++
-        api=FixtureApi()
+        // 11-16: a test may hand in a demo that also streams frames; the app's own is the fixed one.
+        api=fixtureApi()
         mutable.value=ReaderState(screen=Screen.Login,origin="fixture://local",scope="fixture",theme=state.value.theme,dynamic=state.value.dynamic,fixture=true)
     }
     override fun onCleared() { api?.close() }

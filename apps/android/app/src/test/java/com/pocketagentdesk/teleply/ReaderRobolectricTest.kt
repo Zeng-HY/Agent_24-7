@@ -41,6 +41,60 @@ class ReaderRobolectricTest:ReaderUiScenarios() {
         compose.onNodeWithTag("composer").performTextInput("大字草稿")
         compose.onNodeWithContentDescription("发送").assertIsDisplayed()
     }
+    /**
+     * 11-16: a frame every 200 ms must not pull a reader who scrolled up; the pill goes back to the newest, and a send
+     * after reading above follows the bottom again (iOS ConversationView has the same rules).
+     */
+    @Test fun readingAboveHoldsItsPlaceWhileFramesArrive() {
+        var seq = 0L
+        var made = 0
+        var streams = 0
+        // The frames are handed in from the test, as the live stream would, so nothing waits on a clock.
+        val frames = kotlinx.coroutines.flow.MutableSharedFlow<LiveFrame>(extraBufferCapacity = 16)
+        val streaming = object : ReadApi by FixtureApi() {
+            override fun forSource(app: String): ReadApi = this
+            override fun events(device: String, chat: String): kotlinx.coroutines.flow.Flow<LiveFrame> {
+                streams += 1
+                return frames
+            }
+        }
+        launch(api = { streaming });fixtureList()
+        compose.onNodeWithTag("chat-search").performTextInput("performance")
+        compose.onNodeWithTag("chat-search").performImeAction()
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.singleOrNull()?.id=="performance" }
+        openChat("长会话性能示例","performance")
+        compose.waitUntil(10000) { streams > 0 }
+        compose.waitUntil(10000) { vm.state.value.messages.size >= 200 && !vm.state.value.busy }
+        fun frame() {
+            made += 1;seq += 1
+            compose.runOnIdle { frames.tryEmit(LiveFrame(seq, false, listOf(Message("stream-$made", "assistant", "新输出第 $made 条")), null)) }
+        }
+        val before = vm.state.value.messages.size
+        // Reading above: the frames that keep arriving leave the page where it is.
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        org.junit.Assert.assertFalse(atBottom())
+        val held = scrollValue()
+        repeat(3) { frame() }
+        compose.waitUntil(10000) { vm.state.value.messages.size > before }
+        compose.waitForIdle()
+        org.junit.Assert.assertFalse(atBottom())
+        org.junit.Assert.assertEquals(held, scrollValue(), 2f)
+        // The pill says there is more below; it goes back to the newest.
+        compose.onNodeWithContentDescription("有新消息，回到底部").assertExists().performClick()
+        compose.waitUntil(10000) { atBottom() }
+        // A send after reading above follows the bottom again.
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        org.junit.Assert.assertFalse(atBottom())
+        compose.onNodeWithTag("composer").performTextInput("边看边发")
+        compose.onNodeWithContentDescription("发送").performClick()
+        compose.waitUntil(10000) { atBottom() }
+    }
+    private fun scrollValue():Float {
+        val range=compose.onNodeWithTag("messages").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange]
+        return range.value()
+    }
     private fun capture(name:String) {
         compose.waitForIdle()
         compose.runOnIdle {

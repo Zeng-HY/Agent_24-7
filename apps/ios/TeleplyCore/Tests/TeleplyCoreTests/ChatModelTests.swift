@@ -160,6 +160,21 @@ struct ChatModelTests {
         #expect(model.submissions.map(\.label) == ["已接收"])
     }
 
+    /// 11-16: every send raises `sent` once, so the page follows the bottom again (Android ComposerState.sent).
+    @Test func aSendCountsOnceSoThePageFollows() async {
+        let store = LocalStore(folder: temporaryFolder())
+        let computer = CommandComputer()
+        let model = chat(computer, store: store)
+        bind(model, computer, key)
+        await until { model.ready && model.control.available }
+        #expect(model.sent == 0)
+        model.edit("follow me")
+        model.send()
+        #expect(model.sent == 1)
+        await model.settleSends()
+        #expect(model.sent == 1)  // its receipt does not count again
+    }
+
     @Test func aTimedOutSendIsOnlyCheckedAfterARestartAndKeepsItsCopy() async {
         let store = LocalStore(folder: temporaryFolder())
         let computer = CommandComputer(unknown: true)

@@ -635,12 +635,12 @@ abstract class ReaderUiScenarios {
     @get:Rule val compose=createComposeRule()
     protected lateinit var vm:ReaderViewModel
     protected lateinit var androidView:android.view.View
-    protected fun launch(theme:String="light",fontScale:Float=1f,windowWidth:State<androidx.compose.ui.unit.Dp>?=null) {
+    protected fun launch(theme:String="light",fontScale:Float=1f,windowWidth:State<androidx.compose.ui.unit.Dp>?=null,api:(String)->ReadApi={ FixtureApi() }) {
         Diagnostics.setForTest(false)
         compose.setContent {
             androidView=androidx.compose.ui.platform.LocalView.current
             vm=viewModel(factory=object:ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T=ReaderViewModel(UiMemoryStore()) { FixtureApi() } as T
+                @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T=ReaderViewModel(UiMemoryStore(),apiFactory=api) as T
             })
             val s by vm.state.collectAsState()
             val density=androidx.compose.ui.platform.LocalDensity.current
@@ -649,6 +649,8 @@ abstract class ReaderUiScenarios {
             }
         }
         compose.waitForIdle()
+        // The local demo uses [api] too, so a scenario can hand in one that streams frames (11-16).
+        vm.fixtureApi={ api("fixture://local") }
         // New conversations are looked at again at once here: the JVM run's main clock does not move by itself.
         vm.jobs.pause={}
     }
