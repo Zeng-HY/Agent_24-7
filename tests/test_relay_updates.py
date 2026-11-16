@@ -179,6 +179,21 @@ class Updates(unittest.TestCase):
             with patch.object(u,'read_json',return_value=[dict(with_assets('windows-update.json','windows-update.json.sig'),draft=True)]):
                 self.assertIsNone(u.check_github({'version':'0.27.0-dev.1','build':1}))
 
+    def test_github_skips_releases_signed_with_another_key(self):
+        # Releases up to dev.36 carry the key lost on 2026-11-12: never offered, and never in the way of the newer ones.
+        files={};releases=[]
+        for build,signature in ((3,b'good'),(2,b'forged')):
+            _,info,r=self.fixture(build,'0.27.0-dev.'+str(build));base=u.REPO+r['tag_name']+'/'
+            files[base+'windows-update.json']=json.dumps(info).encode();files[base+'windows-update.json.sig']=signature
+            releases.append(dict(r,assets=r['assets']+[dict(name=n,browser_download_url=base+n) for n in ('windows-update.json','windows-update.json.sig')]))
+        read,_=self.serve(files)
+        with patch.object(u,'verify_signature',good_only),patch.object(u,'read_bytes',read):
+            with patch.object(u,'read_json',return_value=releases):
+                self.assertEqual(u.check_github({'version':'0.27.0-dev.1','build':1})['build'],3)
+                self.assertIsNone(u.check_github({'version':'0.27.0-dev.3','build':3}))
+            with patch.object(u,'read_json',return_value=releases[1:]):
+                self.assertIsNone(u.check_github({'version':'0.27.0-dev.1','build':1}))
+
     def test_only_https_repository_official_hosts_and_the_windows_folder(self):
         self.assertTrue(u.allowed_url(u.API))
         for value in [u.ALIYUN+'dev/windows-update.json',u.ALIYUN+'AgentRemote-0.27.0-dev.24-Setup.exe',u.MIRROR+'AgentRemote-0.27.0-dev.24-Setup.exe']:

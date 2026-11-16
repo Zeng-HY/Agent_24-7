@@ -3,7 +3,7 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 # The certificate of ~/.android/teleply-signing/release.p12. Phones take an update only with this very key.
-$expected = "1df09ab72fd7e3e1c9f57569d2050ae1db933148d1d5fbb7517a28edb2e22946"
+$expected = "8230f6b1c4edefb70f6056ff9e74394b607cf44cda50600ea1aa56edfdfd74cf"
 & (Join-Path $PSScriptRoot "build.ps1") -Tasks @("testDebugUnitTest", "assembleRelease")
 $meta = Get-Content (Join-Path $root "app/build/outputs/apk/release/output-metadata.json") -Raw | ConvertFrom-Json
 $element = $meta.elements[0]

@@ -22,7 +22,7 @@ ALIYUN='https://teleply-updates.oss-cn-guangzhou.aliyuncs.com/windows/'
 # The same bucket under the ICP-filed domain, once it is bound; a signed manifest may name it.
 MIRROR='https://dl.pocketagentdesk.com/windows/'
 # Public half of the manifest signing key: ECDSA P-256, X.509 SubjectPublicKeyInfo. The Android app carries the same.
-KEY='MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjHQ+zWxB7EZkKiwzv6Xgkyu0RjbzWW0qtW1L4qNgVHAx4/r/Hk29tMlDlWUjer+q+L91XkMnOWhVwDgVCmlSew=='
+KEY='MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGQXbCb+PFAo2XvdaqpJZASVfo+YutyAFJ5yylPh6DCGGFrNx9AQPslqykjzXrGO/y4K79GsQhV/FfqPYiwEPKA=='
 # DER prefix of a P-256 SubjectPublicKeyInfo, up to the uncompressed point's 0x04.
 P256=bytes.fromhex('3059301306072a8648ce3d020106082a8648ce3d03010703420004')
 MAX_SIZE=200*1024*1024
@@ -177,7 +177,12 @@ def check_github(current):
         url=REPO+release['tag_name']+'/windows-update.json'
         # Releases before dev.25 carry no signature; this build is newer than all of them anyway.
         if url not in urls or url+'.sig' not in urls:continue
-        data=validate_manifest(signed_manifest(read_bytes(url,16384),read_bytes(url+'.sig',1024)),release,current)
+        raw,signature=read_bytes(url,16384),read_bytes(url+'.sig',1024)
+        # Releases up to dev.36 carry the key lost on 2026-11-12 (replaced on 11-16). A manifest this build's key does not
+        # vouch for is skipped unread: it can offer nothing, and it must not hide the newer releases either.
+        try:verify_signature(raw,signature.decode('ascii','replace'))
+        except ValueError:continue
+        data=validate_manifest(json.loads(raw),release,current)
         if data and (best is None or data['build']>best['build']):best=data
     return best
 

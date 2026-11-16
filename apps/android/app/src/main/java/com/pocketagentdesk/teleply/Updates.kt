@@ -63,7 +63,7 @@ object UpdatePolicy {
     const val Mirror = "https://dl.pocketagentdesk.com/android/"
     const val Manifest = "android-update.json"
     /** Public half of the manifest signing key: ECDSA P-256, X.509 SubjectPublicKeyInfo; relay_updates.KEY is the same. */
-    const val Key = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjHQ+zWxB7EZkKiwzv6Xgkyu0RjbzWW0qtW1L4qNgVHAx4/r/Hk29tMlDlWUjer+q+L91XkMnOWhVwDgVCmlSew=="
+    const val Key = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGQXbCb+PFAo2XvdaqpJZASVfo+YutyAFJ5yylPh6DCGGFrNx9AQPslqykjzXrGO/y4K79GsQhV/FfqPYiwEPKA=="
     const val MaxApk = 128L * 1024 * 1024
     const val MaxManifest = 16L * 1024
     const val Package = "com.pocketagentdesk.teleply"
@@ -116,7 +116,9 @@ object UpdatePolicy {
 
     /**
      * The second source: the newest signed release in GitHub's list. Releases before 1.0.3 carry no signed manifest and
-     * are older than this app anyway. Pre-releases count, as before. [fetch] reads an address's bytes.
+     * are older than this app anyway. Pre-releases count, as before. [fetch] reads an address's bytes. Releases signed
+     * with another key (1.0.6 and earlier: that key was lost on 2026-11-12 and replaced on 11-16) are skipped unread:
+     * they can offer nothing, and they must not hide the newer releases either.
      */
     fun newestOnGithub(json: String, installed: Long, fetch: (String) -> ByteArray, key: String = Key): Release? {
         val releases = JSONArray(json)
@@ -128,7 +130,10 @@ object UpdatePolicy {
             val urls = (0 until assets.length()).map { assets.getJSONObject(it).optString("browser_download_url") }
             val manifest = Prefix + release.optString("tag_name") + "/" + Manifest
             if (manifest !in urls || "$manifest.sig" !in urls) continue
-            val found = read(fetch(manifest), String(fetch("$manifest.sig"), Charsets.US_ASCII), installed, release, key) ?: continue
+            val bytes = fetch(manifest)
+            val signature = String(fetch("$manifest.sig"), Charsets.US_ASCII)
+            if (!verify(bytes, signature, key)) continue
+            val found = read(bytes, signature, installed, release, key) ?: continue
             if (best == null || found.code > best.code) best = found
         }
         return best

@@ -101,6 +101,30 @@ class UpdatePolicyTest {
         assertThrows(IOException::class.java) { newest(release(asset("android-update.json"), asset("android-update.json.sig"))) }
     }
 
+    @Test fun githubSkipsReleasesSignedWithAnotherKey() {
+        // 1.0.6 and earlier carry the key lost on 2026-11-12: never offered, and never in the way of the newer releases.
+        val retired = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+        fun signRetired(bytes: ByteArray) =
+            Base64.getEncoder().encodeToString(Signature.getInstance("SHA256withECDSA").run { initSign(retired.private); update(bytes); sign() }) + "\n"
+        val newer = manifest(code = 15, version = "1.0.4")
+        val older = manifest()
+        fun asset(name: String, at: String) =
+            JSONObject().put("name", name).put("size", 2213247).put("digest", "sha256:$sha").put("browser_download_url", UpdatePolicy.Prefix + "$at/$name")
+        fun release(at: String, apkName: String) = JSONObject().put("tag_name", at).put("draft", false).put("prerelease", false)
+            .put("assets", JSONArray(listOf(asset(apkName, at), asset("android-update.json", at), asset("android-update.json.sig", at))))
+        val files = mapOf(
+            UpdatePolicy.Prefix + "android-v1.0.4/android-update.json" to newer,
+            UpdatePolicy.Prefix + "android-v1.0.4/android-update.json.sig" to sign(newer).toByteArray(),
+            UpdatePolicy.Prefix + "android-v1.0.3/android-update.json" to older,
+            UpdatePolicy.Prefix + "android-v1.0.3/android-update.json.sig" to signRetired(older).toByteArray(),
+        )
+        val fetch = { url: String -> files[url] ?: throw IOException("No $url") }
+        val both = JSONArray(listOf(release("android-v1.0.4", "Teleply-1.0.4-15.apk"), release("android-v1.0.3", apk))).toString()
+        assertEquals(15L, UpdatePolicy.newestOnGithub(both, 13, fetch, key)!!.code)
+        assertNull(UpdatePolicy.newestOnGithub(both, 15, fetch, key))
+        assertNull(UpdatePolicy.newestOnGithub(JSONArray(listOf(release("android-v1.0.3", apk))).toString(), 13, fetch, key))
+    }
+
     @Test fun downloadsOnlyFromTheRepositoryGithubAndTheAppsFolderOnAlibabaCloud() {
         assertTrue(UpdatePolicy.allowedUrl(UpdatePolicy.Api))
         assertTrue(UpdatePolicy.allowedUrl(UpdatePolicy.Prefix + "android-v1.0.3/$apk"))

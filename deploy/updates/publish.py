@@ -33,7 +33,7 @@ ENDPOINT='https://'+BUCKET+'.oss-'+REGION+'.aliyuncs.com/'
 PACKAGE='com.pocketagentdesk.teleply'
 KOTLIN=ROOT/'apps/android/app/src/main/java/com/pocketagentdesk/teleply/Updates.kt'
 # The certificate of the app's own release key (apps/android/scripts/release.ps1); phones refuse an APK with another.
-APK_CERT='1df09ab72fd7e3e1c9f57569d2050ae1db933148d1d5fbb7517a28edb2e22946'
+APK_CERT='8230f6b1c4edefb70f6056ff9e74394b607cf44cda50600ea1aa56edfdfd74cf'
 MAX_APK=128*1024*1024
 # Alibaba Cloud refuses APK downloads over the bucket's own address. Once dl.pocketagentdesk.com (ICP-filed) is bound
 # to the bucket with HTTPS, set this to True: new manifests then offer the APK from Alibaba Cloud first.
