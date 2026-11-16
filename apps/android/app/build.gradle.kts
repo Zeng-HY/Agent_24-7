@@ -8,7 +8,9 @@ plugins {
 }
 // Signing (1.0, user decision 2026-10-25): the app has its own release key, kept outside the project with its password
 // in ~/.android/teleply-signing (or TELEPLY_SIGNING_DIR). Every later update must carry it, so that folder is backed up.
-// The development and measuring copies keep this computer's Android debug key, which signed 0.8-0.9 and the old app.
+// The first key was deleted on 2026-11-12 with no backup; 1.0.7 carries its replacement (made 2026-11-16), so phones
+// with 1.0.6 or earlier uninstall once and install 1.0.7. The development and measuring copies use this computer's
+// Android debug key (also made again on 2026-11-16).
 val debugKey = file((System.getenv("ANDROID_USER_HOME") ?: (System.getProperty("user.home") + "/.android")) + "/debug.keystore")
 val releaseDir = file(System.getenv("TELEPLY_SIGNING_DIR") ?: (System.getProperty("user.home") + "/.android/teleply-signing"))
 val releaseKey = File(releaseDir, "release.properties").takeIf { it.isFile }?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
@@ -21,8 +23,8 @@ android {
         applicationId = "com.pocketagentdesk.teleply"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.0.6"
+        versionCode = 18
+        versionName = "1.0.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         manifestPlaceholders["appLabel"] = "遥应"
