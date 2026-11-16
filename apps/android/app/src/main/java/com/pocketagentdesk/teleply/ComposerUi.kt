@@ -173,6 +173,7 @@ private fun AskBar(app: String, cards: List<PendingCard>, saved: JSONObject, cha
         codexSent -> Triple("答案已提交，等 Codex 接着做", "刷新 ›", { vm.composer.refreshControl() })
         app == "deepseek" -> Triple(first.summary + if (first.count > 1) "（共 ${first.count} 项）" else "", "去处理 ›", onAsk)
         app == "claude" -> Triple(first.summary + if (first.progress.isNotBlank()) "（${first.progress}）" else "", "去选择 ›", onAsk)
+        first.kind == "approval" -> Triple(first.summary, "去处理 ›", onAsk)
         else -> Triple(first.summary, "去选择 ›", onAsk)
     }
     Row(

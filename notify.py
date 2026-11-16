@@ -39,6 +39,7 @@ from urllib.parse import quote, urlsplit
 import chats
 import machines
 import ntfy_feed
+from codex_control import native_approvals
 
 POLL_SECONDS = 5   # between looks while nothing runs (user 10-28: pushes felt slow at 10 s)
 POLL_FAST = 2      # between looks while any turn is running
@@ -46,6 +47,7 @@ HISTORY_BYTES = 64 << 20  # the first look reads back this far for the last star
 SNAPSHOT_EVERY = 60       # a running conversation's record reaches the relay this often (0.6.4)
 SNAPSHOT_AGAIN = 60       # an empty snapshot, sent again once this later, for a relay that missed the first (11-01)
 STEP_GAP = 15             # seconds between two progress events of one conversation (0.6.4)
+APPROVAL_EVERY = 12       # seconds between desktop reads of a running Codex conversation's approvals (11-16)
 LIMIT = 30              # conversations of each app looked at, newest first (and any still under way: _followed)
 DEFAULT_SERVER = "https://api.day.app"
 # The Codex threads a person talks in: the desktop's and the command line's, started by the user, by this service's
@@ -359,8 +361,12 @@ def _scan_claude(scan: dict, rec: dict) -> None:
 
 
 class Notifier:
-    def __init__(self, cfg: dict, name: str, log, save, clock=time.time, sender=send, page_url=None, feed=None) -> None:
+    def __init__(self, cfg: dict, name: str, log, save, clock=time.time, sender=send, page_url=None, feed=None,
+                 bridge=None) -> None:
         self.cfg, self.name, self.log, self.save = cfg, name, log, save
+        self.bridge = bridge  # codex_control.Bridge, for approval requests the record does not hold (11-16)
+        self.approval_checks: dict[tuple, tuple] = {}  # (app, id) -> (when read, cards)
+        self.reported_approvals: dict[tuple, str] = {}  # (app, id) -> the pending key last told
         self.clock, self.sender = clock, sender
         self.feed = feed or ntfy_feed.Feed(clock=clock)  # what the ntfy app on an Android phone listens to
         self.relay = ntfy_feed.Feed(topic="teleply-push", clock=clock)  # what the relay reads for 遥应's own
@@ -533,6 +539,10 @@ class Notifier:
                 continue
             conv = (item["app"], item["id"])
             title = chats.one_line(item.get("title") or "", 60)
+            # A turn waiting on an approval writes nothing more to the record, so its start record still reads
+            # running; only such a turn is worth the desktop read (11-16).
+            if item["app"] == "codex" and scan["state"] == "running" and self._codex_approvals(item, conv, title, found):
+                continue
             latest = _unix(scan.get("latest"))
             if scan["state"] == "running" and latest and self.clock() - latest > chats.STALE_SECONDS:
                 # a record left "running" by a crash or a killed app: not a turn doing work now (same 20 min as lists)
@@ -546,6 +556,7 @@ class Notifier:
                 continue
             previous = self.running.pop(conv, None) or {}
             self.waiting.pop(conv, None)
+            self.reported_approvals.pop(conv, None)
             self.reported_running.discard(conv)
             key = scan.get("key") or scan.get("ended") or ""
             if self.ended.get(conv) == key:
@@ -562,6 +573,53 @@ class Notifier:
                                      "ended": int(ended or self.clock()), "started_source": source})
         self.running_quiet = False
         self._snapshot()
+
+    def _codex_approvals(self, item: dict, conv: tuple, title: str, found: dict | None) -> bool:
+        """11-16: Codex's approval requests are only in the desktop's live state, never in the record, so a turn
+        waiting on one looked like a turn doing work forever. Read them (at most every ~12 s, without blocking on
+        the bridge), tell the relay and the banner 在等你 once, and keep the conversation in `waiting` while the
+        request is there. The 20-minute record rule must not drop it: the record does not change while it waits.
+        A request that is gone puts the turn back to running, reported once more."""
+        found_bridge = getattr(self, "bridge", None)
+        if found_bridge is None:
+            return False
+        now = self.clock()
+        checked = self.approval_checks.get(conv)
+        cards = checked[1] if checked and now - checked[0] < APPROVAL_EVERY else None
+        if cards is None:
+            try:
+                if found_bridge.lock.acquire(blocking=False):
+                    try:
+                        _, _, state = found_bridge.snapshot(item["id"], timeout=2)
+                        cards = native_approvals(state)
+                    finally:
+                        found_bridge.lock.release()
+            except Exception:
+                cards = None  # cannot tell: leave whatever was already said alone
+            if cards is not None:
+                self.approval_checks[conv] = (now, cards)
+        if cards is None:
+            return self.reported_approvals.get(conv) is not None
+        if cards:
+            key = "pending:" + ",".join(sorted(str(v["request_id"]) for v in cards))
+            previous = self.running.get(conv) or {}
+            since = int(previous.get("since") or self.clock())
+            self.running.pop(conv, None)
+            self.waiting[conv] = {"since": since, "title": title, "item": item}
+            if self.reported_approvals.get(conv) != key:
+                self.reported_approvals[conv] = key
+                source = "记录" if previous.get("source") == "记录" else "电脑注意到"
+                self._tell(found, item, {"state": "done", "key": key, "time": "", "asks": True,
+                                         "text": "Codex 在等你批准，请打开对话处理。",
+                                         "started": since, "ended": int(self.clock()),
+                                         "started_source": source})
+            return True
+        if self.reported_approvals.pop(conv, None) is not None:
+            # Handled on the phone or the PC: the turn is working again, so say running once more.
+            self.waiting.pop(conv, None)
+            self.running.pop(conv, None)
+            self.reported_running.discard(conv)
+        return False
 
     def _scan_file(self, item: dict) -> dict | None:
         """The conversation's newest turn, read from where the file was last read to (0.6.4). The first look goes back

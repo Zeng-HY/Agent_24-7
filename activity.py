@@ -2,7 +2,7 @@
 from __future__ import annotations
 import copy,threading,time
 import chats
-from codex_control import native_questions,latest_plan,ordered_turns,is_running,async_questions
+from codex_control import native_questions,native_approvals,latest_plan,ordered_turns,is_running,async_questions
 from pathlib import Path
 
 class TaskCenter:
@@ -31,7 +31,7 @@ class TaskCenter:
                     if not self.bridge.lock.acquire(blocking=False):continue
                     try:
                         item,_,state=self.bridge.snapshot(tid,timeout=2)
-                        turns=ordered_turns(state);questions=native_questions(state)
+                        turns=ordered_turns(state);questions=native_questions(state)+native_approvals(state)
                         questions+=async_questions(Path(item['path']),turns[-1].get('turnId') if turns and is_running(state) else None)
                         pending=sum(q['status']=='pending' for q in questions);plan=latest_plan(state);pending+=int(bool(plan and plan['ready']))
                         self.live[tid]={'running':is_running(state),'pending':pending,'observed_at':int(now*1000),'source':'desktop','last_turn_id':turns[-1].get('turnId') if turns else None,'outcome':turns[-1].get('status') if turns else None}

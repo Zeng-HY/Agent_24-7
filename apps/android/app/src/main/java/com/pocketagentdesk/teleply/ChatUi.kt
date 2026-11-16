@@ -253,9 +253,11 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                     val receipt = receipts[message.request]
                     val working = running && row.lastGroup
                     val waiting = asking && row.lastGroup
+                    // 11-16: what waits is Codex's approval, not a question.
+                    val approving = waiting && cards.firstOrNull()?.kind == "approval"
                     val itsPlan = plan?.takeIf { message.id == planRow }
                     val sent = pictures[message.id].orEmpty()
-                    Reading { TimelineItem(message, row, busy, receipt, working, waiting, itsPlan, sent, vm, folds, sheets, live) }
+                    Reading { TimelineItem(message, row, busy, receipt, working, waiting, approving, itsPlan, sent, vm, folds, sheets, live) }
                 }
                 item(key = "interactions") {
                     Reading {
@@ -466,7 +468,7 @@ private class TimelineLive(val chat: State<ComposerState>, val workspace: State<
  * with a message of yours, as the computer kept them.
  */
 @Composable
-private fun TimelineItem(message: Message, row: TimelineRow, busy: Boolean, receipt: String?, working: Boolean, waiting: Boolean, plan: JSONObject?, pictures: List<SentPicture>,
+private fun TimelineItem(message: Message, row: TimelineRow, busy: Boolean, receipt: String?, working: Boolean, waiting: Boolean, approving: Boolean, plan: JSONObject?, pictures: List<SentPicture>,
                          vm: ReaderViewModel, folds: MutableMap<String, Boolean>, sheets: ChatSheets, live: TimelineLive) {
     val p = LocalTeleply.current
     when {
@@ -499,7 +501,7 @@ private fun TimelineItem(message: Message, row: TimelineRow, busy: Boolean, rece
                     ) {
                         Icon(if (open) TeleplyIcons.ChevronDown else TeleplyIcons.ChevronRight, contentDescription = null, tint = p.muted, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text((if (waiting) "需要你回答" else if (working) "正在处理" else "处理过程") + " · ${row.steps} 步", style = MaterialTheme.typography.process, color = if (waiting) p.askGo else p.muted)
+                        Text((if (approving) "需要你批准" else if (waiting) "需要你回答" else if (working) "正在处理" else "处理过程") + " · ${row.steps} 步", style = MaterialTheme.typography.process, color = if (waiting) p.askGo else p.muted)
                     }
                 }
                 if (open) {
@@ -779,7 +781,14 @@ fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
             else -> listOf(PendingCard("question", questions.first().rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "有问题要回答" }, count = total))
         }
     }
-    else -> raw.rows("questions") { it }.filter { it.string("status") == "pending" }.map { card -> PendingCard("question", card.rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "Codex 有问题要问你" }) }
+    else -> raw.rows("questions") { it }.filter { it.string("status") == "pending" }.map { card ->
+        // 11-16: Codex's approval requests come as their own card, with 允许一次 and 拒绝.
+        if (card.string("kind") == "approval") {
+            PendingCard("approval", if (!card.optBoolean("answerable")) "Codex 在电脑上等你处理" else if (card.string("approval_type") == "file") "Codex 想改文件" else "Codex 想运行命令")
+        } else {
+            PendingCard("question", card.rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "Codex 有问题要问你" })
+        }
+    }
 }
 
 @Composable
@@ -834,6 +843,11 @@ private fun CodexCards(raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, 
     val p = LocalTeleply.current
     val c = vm.workspace
     raw.rows("questions") { it }.forEach { card ->
+        // 11-16: Codex's approval requests are cards of their own, not questions with a free-text box.
+        if (card.string("kind") == "approval") {
+            CodexApprovalCard(card, saved, vm, ws)
+            return@forEach
+        }
         val pending = card.string("status") == "pending"
         val editable = card.optBoolean("editable")
         if (!pending && !editable) return@forEach
@@ -889,6 +903,47 @@ private fun CodexCards(raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, 
                 enabled = !ws.busy && questions.isNotEmpty() && questions.all { answers.strings(it.string("id")).isNotEmpty() },
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+/**
+ * 11-16: Codex's approval request (web codex-ui.js): 允许一次 or 拒绝, with the command or the files it would touch.
+ * The same two choices the computer's own card gives; 允许类似命令 and 允许全部修改 stay on the computer this round.
+ */
+@Composable
+private fun CodexApprovalCard(card: JSONObject, saved: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
+    val p = LocalTeleply.current
+    val c = vm.workspace
+    val file = card.string("approval_type") == "file"
+    val answerable = card.optBoolean("answerable")
+    val cardID = card.string("id")
+    val sent = pendingRoute(saved, "codex/answer")?.let { it.optJSONObject("body")?.string("question_id") == cardID && it.string("status") == "done" } == true
+    val send: (String) -> Unit = { decision ->
+        c.action("codex/answer", JSONObject().put("question_id", cardID).put("answer_revision", card.string("answer_revision"))
+            .put("answers", JSONObject().put("decision", JSONArray(listOf(decision)))), card)
+    }
+    QuestionCard {
+        CardTitle(if (file) "Codex 想改文件" else "Codex 想运行命令", if (file) "文件" else "终端")
+        if (!answerable) {
+            Text(card.string("question"), style = MaterialTheme.typography.card, color = p.text)
+            Text("请在电脑上处理这次请求。", style = MaterialTheme.typography.note, color = p.muted)
+        } else {
+            val reason = card.string("reason")
+            val command = card.string("command")
+            val files = card.strings("files")
+            val cwd = card.string("cwd")
+            if (reason.isNotBlank() && reason != command) Text(reason, style = MaterialTheme.typography.card, color = p.text)
+            if (command.isNotBlank()) CodePanel("要运行的命令", command, "复制命令")
+            if (files.isNotEmpty()) CodePanel("要改的文件", files.joinToString("\n"), "复制文件路径")
+            if (cwd.isNotBlank()) Text("工作文件夹：$cwd", style = MaterialTheme.typography.note, color = p.muted)
+            if (sent) CardStatus("已交给 Codex")
+            ws.error?.let { Text(it, style = MaterialTheme.typography.note, color = p.error) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton("拒绝", { send("decline") }, enabled = !ws.busy, modifier = Modifier.weight(1f))
+                PillButton("允许一次", { send("accept") }, style = PillStyle.Primary, enabled = !ws.busy, modifier = Modifier.weight(1f))
+            }
+            Text("只放行这一次；以后同样的操作还会再问。", style = MaterialTheme.typography.bodySmall, color = p.muted)
         }
     }
 }

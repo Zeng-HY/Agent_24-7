@@ -82,6 +82,12 @@ struct ChatCoreTests {
         #expect(control.questions)
     }
 
+    /// 11-16: a pending approval card counts as waiting, so the fold says 需要你批准 and the watch check rings.
+    @Test func aPendingCodexApprovalIsWaiting() throws {
+        let state = try JSONValue.parse(Data(#"{"available":true,"running":true,"questions":[{"id":"approval:t1:r1","kind":"approval","status":"pending","approval_type":"command","answerable":true}]}"#.utf8))
+        #expect(parseControl(state).questions)
+    }
+
     /// 0.6.6: a conversation whose question was answered earlier is not waiting for the user in its next turn.
     @Test func answeredCodexCardsDoNotWaitForTheUser() throws {
         let answered = try JSONValue.parse(Data("""

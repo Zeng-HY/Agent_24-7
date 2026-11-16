@@ -295,6 +295,15 @@ class WorkspaceControllerTest {
         c.action("codex/answer",body,card);runCurrent();c.action("codex/answer",body,card);runCurrent()
         assertEquals(1,api.answers);assertEquals("unknown",JSONObject(store.values[key to "workspace"]!!).getJSONObject("pending_action").string("status"))
     }
+    /** 11-16: a Codex approval answers through codex/answer with its one decision and the card's revision. */
+    @Test fun aCodexApprovalSendsTheOneDecision()=runTest {
+        val api=WorkspaceApi();val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        val card=JSONObject("""{"id":"approval:t:r","answer_revision":"v1"}""")
+        c.action("codex/answer",JSONObject().put("question_id","approval:t:r").put("answer_revision","v1")
+            .put("answers",JSONObject().put("decision",org.json.JSONArray().put("accept"))),card);runCurrent()
+        assertEquals(1,api.answers);assertEquals(0,api.stateReads)
+        assertEquals("accept",api.body!!.getJSONObject("answers").getJSONArray("decision").getString(0))
+    }
     @Test fun filesOnlySnapshotKeepsUploadIdentityAndClearsOnlySubmitted()=runTest {
         val store=WorkspaceStore();store.values[key to "workspace"]="""{"uploads":[{"local":"u","status":"ready","image":false,"meta":{"kind":"file","id":"signed-file","upload":"upload-id"}}]}"""
         val c=WorkspaceController(backgroundScope,store);c.bind(key,WorkspaceApi(),false);runCurrent();val snapshot=c.sendExtras()

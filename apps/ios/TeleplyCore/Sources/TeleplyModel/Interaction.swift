@@ -38,6 +38,15 @@ public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
         return [PendingCard(kind: "question", summary: question.isEmpty ? (Labels.english ? "Question to Answer" : "有问题要回答") : question, count: total)]
     default:
         return raw["questions"].array.filter { $0["status"].string() == "pending" }.map { card in
+            // 11-16: Codex's approval requests come as a card of their own (command or file), with two choices.
+            if card["kind"].string() == "approval" {
+                let file = card["approval_type"].string() == "file"
+                let summary: String
+                if !card["answerable"].bool() { summary = "Codex 在电脑上等你处理" }
+                else if file { summary = "Codex 想改文件" }
+                else { summary = "Codex 想运行命令" }
+                return PendingCard(kind: "approval", summary: summary)
+            }
             let question = card["questions"].array.first?["question"].string() ?? ""
             return PendingCard(kind: "question", summary: question.isEmpty ? "Codex 有问题要问你" : question)
         }

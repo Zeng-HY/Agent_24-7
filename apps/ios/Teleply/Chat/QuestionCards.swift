@@ -12,6 +12,7 @@ import TeleplyState
 /// One card the timeline shows for what waits on an answer.
 enum InlineCard: Identifiable {
     case codex(JSONValue)
+    case codexApproval(JSONValue)
     case claudePrompt(JSONValue)
     case claudeActions([JSONValue])
     case deepseekApproval(JSONValue)
@@ -20,6 +21,7 @@ enum InlineCard: Identifiable {
     var id: String {
         switch self {
         case .codex(let card): return "codex:" + card["id"].string() + ":" + card["answer_revision"].string()
+        case .codexApproval(let card): return "codex-approval:" + card["id"].string() + ":" + card["answer_revision"].string()
         case .claudePrompt: return "claude-prompt"
         case .claudeActions: return "claude-actions"
         case .deepseekApproval(let event): return "approval:" + event["eventId"].string()
@@ -38,7 +40,9 @@ func inlineCards(app: String, raw: JSONValue) -> [InlineCard] {
     case "deepseek":
         return deepseekApprovals(raw).map(InlineCard.deepseekApproval) + deepseekQuestionCards(raw).map(InlineCard.deepseekQuestion)
     default:
-        return raw["questions"].array.filter { $0["status"].string() == "pending" || $0["editable"].bool() }.map(InlineCard.codex)
+        return raw["questions"].array.filter { $0["status"].string() == "pending" || $0["editable"].bool() }.map {
+            $0["kind"].string() == "approval" ? InlineCard.codexApproval($0) : InlineCard.codex($0)
+        }
     }
 }
 
@@ -50,6 +54,7 @@ struct InlineCardView: View {
     var body: some View {
         switch card {
         case .codex(let question): CodexQuestionCard(model: model, card: question)
+        case .codexApproval(let approval): CodexApprovalCard(model: model, card: approval)
         case .claudePrompt(let prompt): ClaudePromptCard(model: model, prompt: prompt)
         case .claudeActions(let actions): ClaudeActionsCard(model: model, actions: actions)
         case .deepseekApproval(let event): DeepSeekApprovalCard(model: model, event: event)
@@ -290,6 +295,80 @@ private struct ChoiceQuestion: View {
     }
 }
 
+// MARK: Codex approvals
+
+/// An approval Codex asks for (11-16, web codex-ui.js): 允许一次 or 拒绝, with the command or the files it would touch.
+/// The same two choices the desktop's own card gives; 允许类似命令 and 允许全部修改 stay on the computer this round.
+private struct CodexApprovalCard: View {
+    let model: AppModel
+    let card: JSONValue
+
+    var body: some View {
+        let workspace = model.workspace
+        let answerable = card["answerable"].bool()
+        let file = card["approval_type"].string() == "file"
+        let cardID = card["id"].string()
+        let reason = card["reason"].string()
+        let command = card["command"].string()
+        let files = card["files"].array.map { $0.string() }
+        let cwd = card["cwd"].string()
+        let sent = pendingAction(workspace.saved, "codex/answer")
+        QuestionCard {
+            CardTitle(text: file ? "Codex 想改文件" : "Codex 想运行命令", tag: file ? "文件" : "终端")
+            if !answerable {
+                Text(card["question"].string())
+                    .scaledFont(15, relativeTo: .callout, lineHeight: 1.6)
+                    .foregroundStyle(Palette.ink)
+                Text("请在电脑上处理这次请求。")
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+            } else {
+                if !reason.isEmpty && reason != command {
+                    Text(reason)
+                        .scaledFont(15, relativeTo: .callout, lineHeight: 1.6)
+                        .foregroundStyle(Palette.ink)
+                }
+                if !command.isEmpty {
+                    CodePanel(label: "要运行的命令", code: command, copyLabel: "复制命令")
+                }
+                if !files.isEmpty {
+                    CodePanel(label: "要改的文件", code: files.joined(separator: "\n"), copyLabel: "复制文件路径")
+                }
+                if !cwd.isEmpty {
+                    Text("工作文件夹：" + cwd)
+                        .captionFont()
+                        .foregroundStyle(Palette.muted)
+                }
+                if let sent, sent["body"]["question_id"].string() == cardID, sent["status"].string() == "done" {
+                    CardStatus(text: "已交给 Codex")
+                }
+                if let error = workspace.error {
+                    Text(error)
+                        .noteFont()
+                        .foregroundStyle(Palette.danger)
+                }
+                HStack(spacing: 8) {
+                    Button("拒绝") { submit("decline") }
+                        .buttonStyle(PillStyle(wide: true))
+                    Button("允许一次") { submit("accept") }
+                        .buttonStyle(PillStyle(kind: .primary, wide: true))
+                }
+                .disabled(workspace.busy)
+                Text("只放行这一次；以后同样的操作还会再问。")
+                    .captionFont()
+                    .foregroundStyle(Palette.muted)
+            }
+        }
+    }
+
+    /// The card's own two answers; accepted, Codex goes on, declined it takes another way.
+    private func submit(_ decision: String) {
+        model.workspace.action("codex/answer",
+                               ["question_id": card["id"], "answer_revision": card["answer_revision"],
+                                "answers": ["decision": [decision]]])
+    }
+}
+
 // MARK: Claude
 
 /// Claude's question as its desktop shows it (web claude-ui.js): a tap on an option taps it on the computer; with
@@ -494,6 +573,7 @@ struct AskBar: View {
             let line: (summary: String, go: String) = codexSent ? ("答案已提交，等 Codex 接着做", "刷新 ›")
                 : app == "deepseek" ? (first.summary + (first.count > 1 ? "（共 \(first.count) 项）" : ""), "去处理 ›")
                 : app == "claude" ? (first.summary + (first.progress.isEmpty ? "" : "（\(first.progress)）"), "去选择 ›")
+                : first.kind == "approval" ? (first.summary, "去处理 ›")
                 : (first.summary, "去选择 ›")
             Button {
                 if codexSent { model.conversation.refreshControl() } else { onAsk() }

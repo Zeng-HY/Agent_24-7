@@ -14,6 +14,8 @@ nonisolated struct ProcessGroup: Equatable, Sendable {
     let live: Bool
     /// The run ends in a question or approval waiting for an answer.
     let waiting: Bool
+    /// 11-16: what waits is Codex's approval, so the header says 需要你批准.
+    let approval: Bool
     /// 0.6.4: the turn's own start and end, Unix seconds; 0 when the computer did not say.
     let turnStarted: Int
     let turnEnded: Int
@@ -81,6 +83,9 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
         start = end + 1
     }
     let lastUser = messages.lastIndex { $0.role == "user" } ?? -1
+    let approvalWaits = raw["questions"].array.contains {
+        $0["status"].string() == "pending" && $0["kind"].string() == "approval"
+    }
     return messages.enumerated().map { index, message in
         switch message.role {
         case "user": return .user
@@ -95,6 +100,7 @@ func timelineRoles(_ messages: [Message], app: String, raw: JSONValue, running: 
             let last = run.start > lastUser && messages[(run.end + 1)...].allSatisfy { isProcess($0) || $0.role == "event" }
             let first = messages[run.start], finish = messages[run.end]
             let group = ProcessGroup(key: first.id, steps: run.end - run.start + 1, live: running && last, waiting: asking && last,
+                                     approval: approvalWaits && asking && last,
                                      turnStarted: Int(first.turnStarted), turnEnded: Int(finish.turnEnded))
             return .process(group, first: index == run.start)
         }
@@ -257,6 +263,7 @@ private struct ProcessHeader: View {
 
     /// 0.6.4: a finished turn says how long it thought, from the record's own start and end.
     private var title: Text {
+        if group.approval { return Text("需要你批准 · \(group.steps) 步") }
         if group.waiting { return Text("需要你回答 · \(group.steps) 步") }
         if group.live { return Text("正在处理 · \(group.steps) 步") }
         if group.turnStarted > 0, group.turnEnded >= group.turnStarted {

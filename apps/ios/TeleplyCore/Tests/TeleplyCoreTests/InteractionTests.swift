@@ -11,6 +11,15 @@ struct PendingCardTests {
         #expect(pendingCards(app: "codex", raw: raw) == [PendingCard(kind: "question", summary: "选哪个？")])
     }
 
+    /// 11-16: Codex's approval request arrives as a card of its own (`kind: approval`) with the two choices; one this
+    /// round cannot answer asks for the computer instead.
+    @Test func codexApprovalsAreTheirOwnPendingCard() {
+        let raw = DemoData.parse(#"{"questions":[{"id":"approval:t1:r1","kind":"approval","status":"pending","approval_type":"command","answerable":true,"questions":[{"id":"decision","question":"装依赖？"}]},{"id":"approval:t1:r2","kind":"approval","status":"pending","approval_type":"file","answerable":true},{"id":"approval:t1:r3","kind":"approval","status":"pending","approval_type":"other","answerable":false}]}"#)
+        #expect(pendingCards(app: "codex", raw: raw) == [PendingCard(kind: "approval", summary: "Codex 想运行命令"),
+                                                         PendingCard(kind: "approval", summary: "Codex 想改文件"),
+                                                         PendingCard(kind: "approval", summary: "Codex 在电脑上等你处理")])
+    }
+
     /// The plan options are the question's own buttons, so they show only without a question (web askParts); before
     /// Windows dev.23 the PC sent both, and both apps drew a second card of raw button names.
     @Test func claudeHasItsPromptWithProgressOrElseItsPlanOptions() {

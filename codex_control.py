@@ -40,6 +40,10 @@ VERSIONS = {"initialize": 0, "thread-owner-discovery": 1,
 VERSIONS["thread-follower-interrupt-turn"] = 4
 VERSIONS.update({"thread-follower-set-queued-follow-ups-state": 1,
                  "thread-follower-remove-queued-message": 1})
+# 11-16: Codex's approval cards reach the phone. The owner answers over the same follower pipe as its questions
+# (app.asar 26.1106: replyWithCommandExecutionApprovalDecision / replyWithFileChangeApprovalDecision).
+VERSIONS["thread-follower-command-approval-decision"] = 1
+VERSIONS["thread-follower-file-approval-decision"] = 1
 # 0.6.6: the desktop's own /compact; its owner window runs thread/compact/start (app.asar 26.1021).
 VERSIONS["thread-follower-compact-thread"] = 1
 
@@ -317,13 +321,84 @@ def catalog():
         return {"models": [], "updated_at": None, "source": "unavailable"}
 
 
+APPROVAL_COMMAND = "item/commandExecution/requestApproval"
+APPROVAL_FILE = "item/fileChange/requestApproval"
+# 11-16: these ask too, but not with a choice this round can answer; the phone only says to use the computer.
+APPROVAL_OTHER = ("item/permissions/requestApproval", "mcpServer/elicitation/request",
+                  "item/tool/requestOptionPicker")
+APPROVAL_METHODS = {APPROVAL_COMMAND: "command", APPROVAL_FILE: "file",
+                    **{method: "other" for method in APPROVAL_OTHER}}
+KNOWN_REQUESTS = {"item/tool/requestUserInput", *APPROVAL_METHODS}
+
+
+def _command_line(command):
+    """One line for the card: Codex sends a command as the words it will run, sometimes as a list of them."""
+    if isinstance(command, (list, tuple)):
+        return " ".join(str(v) for v in command if isinstance(v, (str, int, float)))
+    return str(command or "").strip()
+
+
+def _file_change_paths(state, turn_id, item_id):
+    """The paths a file approval would change, from this turn's fileChange item (11-16)."""
+    for turn in ordered_turns(state):
+        if turn.get("turnId") != turn_id:
+            continue
+        for item in turn.get("items") or []:
+            if item.get("type") == "fileChange" and str(item.get("id")) == str(item_id):
+                return [str(change["path"]) for change in item.get("changes") or []
+                        if isinstance(change, dict) and change.get("path")]
+    return []
+
+
+def native_approvals(state):
+    """Approval requests waiting in the desktop's state, as cards the phone can answer (11-16).
+
+    Each card also carries the `questions` field item/tool/requestUserInput uses, so a phone that has not been
+    updated yet draws it with its existing Codex question card and answers it through the same codex/answer path.
+    """
+    cards = []
+    for req in state.get("requests") or []:
+        method = req.get("method")
+        kind = APPROVAL_METHODS.get(method)
+        if kind is None:
+            continue
+        params = req.get("params") or {}
+        if params.get("threadId") != state.get("id") or not is_running(state):
+            continue
+        rid, turn_id = req.get("id"), params.get("turnId")
+        reason = str(params.get("reason") or "").strip()
+        command, files = "", []
+        if kind == "command":
+            command = _command_line(params.get("command"))
+            prompt = "\n\n".join(v for v in (reason, command) if v)
+        elif kind == "file":
+            files = _file_change_paths(state, turn_id, params.get("itemId"))
+            prompt = "\n\n".join([reason or "Codex 想修改这些文件", *files])
+        else:
+            prompt = "Codex 在电脑上等你处理，这种请求手机上还不能答。"
+        card = {"id": "approval:" + str(turn_id) + ":" + str(rid), "request_id": rid, "kind": "approval",
+                "turn_id": turn_id, "status": "pending", "approval_type": kind,
+                "reason": reason, "command": command, "cwd": str(params.get("cwd") or ""), "files": files,
+                "answerable": kind != "other", "question": prompt,
+                "choices": ([{"id": "accept", "label": "允许一次"}, {"id": "decline", "label": "拒绝"}]
+                            if kind != "other" else [])}
+        if kind != "other":
+            card["questions"] = [{"id": "decision",
+                                  "header": "Codex 想运行命令" if kind == "command" else "Codex 想改文件",
+                                  "question": prompt,
+                                  "options": [{"label": "允许一次"}, {"label": "拒绝"}],
+                                  "isOther": False}]
+        cards.append(card)
+    return cards
+
+
 def native_questions(state):
     cards = []
     for req in state.get("requests", []):
         if req.get("method") != "item/tool/requestUserInput":
             continue
         params = req.get("params") or {}
-        # Approval tools use different request methods and are never offered here.
+        # Approval requests come through native_approvals() (11-16), not here.
         questions = params.get("questions") or []
         if not questions or len(questions) > 3:
             continue
@@ -476,6 +551,7 @@ class Bridge:
         self.dismiss_manager = None
         self.log = None  # remote.Log's write, for failures that must not escape an interface (set by remote.py)
         self._dismiss_logged = {}  # tid -> when its last dismissal-read failure was written down
+        self._unknown_requests = {}  # request id -> method, so a new Codex protocol writes one line, not every poll
 
     def _log(self, text):
         """One line in the service log, when remote.py has given this bridge one. Never raise from logging."""
@@ -484,6 +560,26 @@ class Bridge:
             return
         try:
             log(text)
+        except Exception:
+            pass
+
+    def _log_unknown_requests(self, state):
+        """11-16: one line per request this bridge does not know, so a Codex protocol change shows up at once.
+        The method and the keys of its params only, never the values (a command or a path may be anyone's)."""
+        try:
+            for req in state.get("requests") or []:
+                method = req.get("method")
+                if method in KNOWN_REQUESTS:
+                    continue
+                rid = str(req.get("id"))
+                if self._unknown_requests.get(rid) == method:
+                    continue
+                self._unknown_requests[rid] = method
+                params = req.get("params")
+                keys = ",".join(sorted(params.keys())) if isinstance(params, dict) else ""
+                self._log(f"Codex 发来不认识的请求：method={method} keys={keys}")
+                while len(self._unknown_requests) > 64:
+                    self._unknown_requests.pop(next(iter(self._unknown_requests)))
         except Exception:
             pass
 
@@ -651,7 +747,8 @@ class Bridge:
         try:
             item, owner, state = self.snapshot(tid, fresh)
             turns = ordered_turns(state)
-            qs = native_questions(state)
+            self._log_unknown_requests(state)
+            qs = native_questions(state) + native_approvals(state)
             qs += async_questions(Path(item["path"]), turns[-1].get("turnId") if is_running(state) and turns else None)
             active_turn = turns[-1].get("turnId") if is_running(state) and turns else None
             for q in qs:
@@ -782,7 +879,23 @@ class Bridge:
         body = json.loads(row[2])
         result = json.loads(row[1])
         status = row[0]
-        if status == "dispatching" and str(body.get("question_id", "")).startswith("native:"):
+        question_id = str(body.get("question_id", ""))
+        if status == "dispatching" and question_id.startswith("approval:"):
+            # 11-16: the desktop's owner answers ok even for a request it no longer has, so absence means
+            # "sent, probably handled" rather than proof; the wording says so.
+            request_id = question_id.rsplit(":", 1)[-1]
+            try:
+                _, _, snapshot = self.snapshot(tid)
+                gone = not any(str(v.get("id")) == request_id for v in snapshot.get("requests") or [])
+            except (ControlError, chats.ChatError, OSError):
+                gone = False
+            if gone:
+                result = {"ok": True, "accepted": True, "request_id": rid, "delivery_state": "accepted",
+                          "text": "Codex 已收到；如果你已在电脑上处理过，以电脑为准",
+                          "evidence": {"source": "desktop_approval_request_gone"}}
+                self._finish(rid, result)
+                status = "accepted"
+        if status == "dispatching" and question_id.startswith("native:"):
             try:
                 _, _, snapshot = self.snapshot(tid)
                 done = next((q for q in native_questions(snapshot) if q["id"] == body["question_id"] and q["status"] == "answered"), None)
@@ -1017,7 +1130,7 @@ class Bridge:
             if self.receipt(tid,rid)["state"] != "unknown":
                 return self._begin(rid,tid,body)
             item, owner, state = self.snapshot(tid,True)
-            cards = native_questions(state)
+            cards = native_questions(state) + native_approvals(state)
             turns = ordered_turns(state)
             if is_running(state) and turns:
                 cards += async_questions(Path(item["path"]),turns[-1].get("turnId"))
@@ -1029,6 +1142,10 @@ class Bridge:
             if body.get("answer_revision", revision) != revision:
                 raise ControlError("答案已在其他设备更新，请刷新核对后再修改")
             answers = body.get("answers") or {}
+            if card["kind"] == "approval":
+                decision = self._approval_decision(card, answers)
+                self._begin(rid,tid,body)
+                return self._answer_approval(tid, rid, owner, card, decision)
             if set(answers) != {str(q["id"]) for q in card["questions"]}:
                 raise ControlError("请回答所有问题",400)
             for q in card["questions"]:
@@ -1053,6 +1170,48 @@ class Bridge:
             self._finish(rid,response)
             self.cache.pop(tid,None)
             return response
+
+    def _approval_decision(self, card, answers):
+        """The two choices the phone is given, as the decision the desktop's card sends (11-16)."""
+        if set(answers) != {"decision"}:
+            raise ControlError("请选择「允许一次」或「拒绝」", 400)
+        values = answers.get("decision")
+        if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str):
+            raise ControlError("请选择「允许一次」或「拒绝」", 400)
+        value = values[0].strip()
+        if value in ("允许一次", "accept"):
+            return "accept"
+        if value in ("拒绝", "decline"):
+            return "decline"
+        raise ControlError("只能选择「允许一次」或「拒绝」", 400)
+
+    def _answer_approval(self, tid, rid, owner, card, decision):
+        """Send the decision over the owner's follower pipe, then re-read to see the request is gone (11-16).
+        The owner answers a request that is already gone with ok too, so the reply is worded neutrally."""
+        method = ("thread-follower-command-approval-decision" if card["approval_type"] == "command"
+                  else "thread-follower-file-approval-decision")
+        try:
+            self._pipe().call(method, {"conversationId": tid, "requestId": card["request_id"],
+                                       "decision": decision}, owner)
+        except ControlError as exc:
+            text = str(exc)
+            if "request-version-mismatch" in text or "no-handler-for-request" in text:
+                result = {"ok": False, "delivery_state": "rejected", "request_id": rid,
+                          "text": "这个版本的 Codex 还不能从手机回答批准，请在电脑上处理"}
+                self._finish(rid, result)
+                return result
+            raise
+        try:
+            _, _, after = self.snapshot(tid, True)
+            gone = not any(str(v.get("id")) == str(card["request_id"]) for v in after.get("requests") or [])
+        except (ControlError, chats.ChatError, OSError):
+            gone = False
+        response = {"ok": True, "accepted": True, "delivery_state": "accepted", "request_id": rid,
+                    "text": "Codex 已收到；如果你已在电脑上处理过，以电脑为准" if gone else "已发给 Codex；如果还在等，请在电脑上处理",
+                    "evidence": {"source": "desktop_approval_decision"}}
+        self._finish(rid, response)
+        self.cache.pop(tid, None)
+        return response
 
     def attachment(self, ident, tid=None):
         if not isinstance(ident,str) or not re.fullmatch(r"[a-f0-9]{32}",ident):

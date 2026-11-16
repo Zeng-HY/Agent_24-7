@@ -256,3 +256,33 @@
 ## 9. 结果记录（接手的会话填）
 
 （每个阶段做完写：改了哪些文件；新测试的名字，旧代码上的结果和新代码上的结果；全部测试的结果；没做的和原因；提交编号。）
+
+### 9.1 阶段一：Codex 批准（批-1、批-2；批-3 只核实，没改）
+
+改动（电脑端）：
+- `codex_control.py`：`VERSIONS` 加 `thread-follower-command-approval-decision`、`thread-follower-file-approval-decision`；新增 `native_approvals(state)`（命令/文件批准卡片、`questions` 兼容字段、`answerable:false` 的其他请求、每行日志只写 method 和 params 键名）；`status()` 把批准卡片并进 `questions`；`answer()` 认批准卡片，先校验两个选择再 `_begin`，调对应方法并重读快照；`receipt()` 对 `approval:` 的 dispatching 按「请求已不在」记 accepted；新增 `_log_unknown_requests`。
+- `activity.py`：待处理数把批准算进去（`TaskCenter` 的列表/锁屏岛）。
+- `notify.py`：`Notifier` 接 `bridge`；`look()` 对记录里读作 running 的 Codex 对话最多约 12 秒读一次桌面批准，有待批准时 `waiting`、`pending:<ids>`、`_tell(asks=True)`，20 分钟过期规则不再丢掉它；请求消失后清 `reported_running`，让「运行中」重新报一次。
+- `remote.py`：创建 `Notifier` 时传 `bridge=server.codex`。
+
+改动（手机）：
+- iOS：`Interaction.swift` 的 `pendingCards` 认 `kind: approval`；`QuestionCards.swift` 加 `codexApproval` 卡片（标题、终端/文件标签、命令/文件 CodePanel、工作文件夹、拒绝/允许一次，`answerable:false` 写「请在电脑上处理」），提问条批准走「去处理 ›」；`Timeline.swift` 折叠标题按批准说「需要你批准」。
+- 安卓：`ChatUi.kt` 的 `pendingCards` 认批准、`CodexCards` 分流到新的 `CodexApprovalCard`、折叠标题说「需要你批准」；`ComposerUi.kt` 提问条批准走「去处理 ›」。
+- 手表提醒不用改：`WatchNotifications.kt` 读的就是 `questions` 里的 pending 卡片，批准卡片会一起响（补了测试）。
+
+新测试：
+- `tests/test_codex_approvals.py`（14 项）：卡片字段与两种批准类型、别的对话/不在运行/旧方法不算、未知请求只记一行且不写值、允许/拒绝对应的 pipe 方法与 `decision`、自由文字 400 且不留账本、过期请求拒绝、版本不匹配记 rejected、回执按请求消失算 accepted、`status()` 列出批准、`TaskCenter` 计数、notify 的「在等你」只发一次/20 分钟规则不丢/请求消失后回到运行中。
+- iOS `InteractionTests.codexApprovalsAreTheirOwnPendingCard`、`ChatCoreTests.aPendingCodexApprovalIsWaiting`。
+- 安卓 `ChatUiLogicTest.codexApprovalsAreTheirOwnCard`、`PlatformPolicyTest.aPendingCodexApprovalCountsAsWaitingForTheWatch`、`WorkspaceControllerTest.aCodexApprovalSendsTheOneDecision`。
+
+旧代码上的结果（`stage1-new-tests-on-old-code.log`）：14 项里 1 项本来就成立（过期的请求会被拒绝），其余 13 项失败（3 failures、10 errors），失败的正是「旧代码没有批准通道/卡片」。
+新代码上的结果：14 项全过（`stage1-new-tests-on-new-code.log` 是最后一次单跑前的记录，之后又补了两处断言，最终结果见全量运行）。
+安卓：`build.ps1 -Tasks compileDebugKotlin testDebugUnitTest` 通过，单元测试 **216 项全过**（基线 213 + 本次 3）。
+iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没编译**，等 Claude 在 Codemagic 跑。
+全部 Python：`782 项，6 跳过，22 出错`；22 项与基线同类（21 项 Playwright 浏览器缺失、1 项 `test_mobile_polish` 找旧按钮名），没有新增失败。782 里含本次 14 项。
+
+没做/待定：
+- 批-3 按文档**只核实不改**：`thread-follower-set-queued-follow-ups-state` 的版本号、`TESTED_APP_VERSION` 都没动，等 5.1 用真实 Codex 运行中从手机发一条消息看日志，确认后再改。
+- 网页的正式批准卡片没做（可选）：兼容 `questions` 字段已经让网页画出提问并藏起自由输入。
+- 5.1 抓一次真实批准、从手机点「允许一次」：要用户和 Claude 一起做，本会话没有触发 Codex。
+- 提交编号：见 9.7（各阶段提交完成后一并补）。

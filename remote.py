@@ -1184,7 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
     server.owner = machines.Owner()  # type: ignore[attr-defined]  (this computer's Tailscale account, let in without the token)
     server.computers = machines.Computers(server.machine["name"], DATA / "attachments" / "computers.json")  # type: ignore[attr-defined]
     server.computers.spawn(server.computers.look)  # the first tap on the computer's name need not wait for it
-    server.notifier = notify.Notifier(cfg, server.machine["name"], log, lambda: save_config(cfg))  # type: ignore[attr-defined]
+    server.notifier = notify.Notifier(cfg, server.machine["name"], log, lambda: save_config(cfg), bridge=server.codex)  # type: ignore[attr-defined]
     server.notifier.start()
     server.claude_hooks = claude_hooks.Bridge(log.write, notify=server.notifier.asking,  # type: ignore[attr-defined]
                                               changed=lambda tid: server.claude.cache.pop(tid, None))

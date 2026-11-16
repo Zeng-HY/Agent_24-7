@@ -30,6 +30,11 @@ class PlatformPolicyTest {
         val control=parseControl(org.json.JSONObject("""{"available":true,"questions":[{"id":"old","status":"answered"},{"id":"new","status":"pending"}]}"""))
         assertEquals("new",WatchSignal.from(control).questions)
     }
+    /** 11-16: a Codex approval is a pending card, so the watch check rings for it too. */
+    @Test fun aPendingCodexApprovalCountsAsWaitingForTheWatch() {
+        val control=parseControl(org.json.JSONObject("""{"available":true,"running":true,"questions":[{"id":"approval:t:r","kind":"approval","status":"pending","approval_type":"command","answerable":true}]}"""))
+        assertEquals("approval:t:r",WatchSignal.from(control).questions)
+    }
     @Test fun watchScopeRequiresSameOriginAndAccountScope() {
         val target=WatchTarget("https://example.invalid/",ChatKey("owner","d","c"),"random")
         val p=Preferences(origin=target.origin,scope="owner")

@@ -16,6 +16,14 @@ class ChatUiLogicTest {
         assertTrue(pendingCards("deepseek",JSONObject("""{"interactions":[]}""")).isEmpty())
     }
     /**
+     * 11-16: Codex's approval request is a card of its own (`kind: approval`), not a question with a free-text box;
+     * the bar says 去处理 and a request this round cannot answer says so.
+     */
+    @Test fun codexApprovalsAreTheirOwnCard() {
+        val raw=JSONObject("""{"questions":[{"id":"approval:t:r","kind":"approval","status":"pending","approval_type":"command","answerable":true,"questions":[{"id":"decision","question":"装依赖？"}]},{"id":"approval:t:r2","kind":"approval","status":"pending","approval_type":"file","answerable":false}]}""")
+        assertEquals(listOf(PendingCard("approval","Codex 想运行命令"),PendingCard("approval","Codex 在电脑上等你处理")),pendingCards("codex",raw))
+    }
+    /**
      * Claude's plan options are its question's own buttons, so they show only without a question (web askParts; user
      * 10-27): before Windows dev.23 the computer sent both, and a second card of raw button names showed.
      */
