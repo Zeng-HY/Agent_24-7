@@ -251,7 +251,7 @@
 ### 9.6 没做
 
 - 5.3（Claude hook、`remote_config.json`、`device-v2.bin` 的自动补回）：等用户决定。
-- Windows dev.37 打包、安装、发布：等用户决定。
+- Windows dev.37 打包、安装、发布：等用户决定。（11-16 已打包，见 9.8；安装、发布仍等用户。）
 - 没 push；没动中转服务器、苹果后台、Codemagic、TestFlight、Obsidian。
 - 7.2 真机验证：要等新版装上后由用户照做。
 - 2.2 节提到的 Codex 26.1106 换版后核对通道：不在这次范围。
@@ -260,3 +260,11 @@
 
 - `main` 上本地提交 `eb97d73`：上面 6 个源码文件、`tests/test_data_folder_wipe.py` 和本文件。没有 push。
 - 这个提交编号由紧接着的第二次提交（只改本文件）补进来；两次都没有 push。
+
+### 9.8 Windows dev.37 打包（11-16，Claude）
+
+- 用户 11-16 同意换新钥匙并打包。dev.37 = 提交 `946e6a4`：带上本修复、500MB（`cc2ee67`）和新的更新钥匙（`ee3b86c`；新版检查 GitHub 时跳过旧钥匙签的发布）。
+- 在仓库目录里打的包，没用 8 节说的临时工作树。核对过：`deploy/windows/AgentRemote.spec` 只收 `relay_desktop.py` 引到的模块和列出的几个文件；仓库里没提交的 `deploy/site/`、`tests/test_activity_records.py`、`apps/android/` 都不在包里，引到的文件也都没有未提交的改动。
+- `dist/0.27.0-dev.37/AgentRemote-0.27.0-dev.37-Setup.exe`：32,538,770 字节，SHA-256 `f5e21457cd06f114d195bf45596a165231f0b29510300aaa9d615107efd044d1`。`--self-test`（空数据目录）通过。
+- `windows-update.json` 用新钥匙签名（`publish.py windows --sign-only`）：上传阿里云要的 AccessKey 11-12 一起丢了，还没补；`windows-release-notes.md` 一并放在同一个文件夹。
+- 没装、没发布。dev.36 只认旧钥匙，自动更新看不到 dev.37，要手动装；装时电脑端重启，要重新登录、绑定原来那台电脑（8 节）。
