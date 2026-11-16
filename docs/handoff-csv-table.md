@@ -137,14 +137,70 @@
 
 ### 9.1 改了哪些文件
 
+- 新增 `apps/android/app/src/main/java/com/pocketagentdesk/teleply/CsvText.kt`：`decodeCsvText(bytes)`，按 BOM 认 UTF-8 / UTF-16 LE / UTF-16 BE，整段合法 UTF-8 就是 UTF-8，否则按 GB18030（含 GBK）解；GB18030 也解不了时抛出，交给页面显示「手机上显示不了这个文件…」。
+- `WorkspaceController.kt`：`file()` 先按文件名认出 `.csv` / `.tsv`（不分大小写），这类文件不管 `file/meta` 说 `text` 还是 `download`，都直接 `service.download` 文件本身，在手机上解码成文字放进 `result`，再把同一段文字按 UTF-8 放进 `preview`，`data` 里写 `"preview": "phone"` 和 `"sheet": "csv" / "tsv"`；不再为它们调 `file/text`，也不会去要电脑的 PDF。超过 `PreviewLimit` 的不下载、不显示。`officeFailed()` 对这类文件改成回到原文，并写「表格显示不了，下面是原文」，不再走 PDF。
+- `WorkspaceUi.kt`：文件页认出 CSV / TSV，默认显示表格；「…」菜单多一行「查看原文 / 表格视图」；表格画不出来时在原文上方显示那行小字。原文仍是原来的 `CodePanel`，复制照旧。
+- `PreviewUi.kt`：`phoneOffice()` 增加 `tsv`；新增 `sheetKind()`；`OfficePreview()` 的网址带上 `sheet=csv|tsv`，让表格页知道分隔符和新样式。
+- `assets/office/sheet.js`：CSV / TSV 当 UTF-8 文字读（`TextDecoder`），用 `XLSX.read(text, { type: "string", raw: true, FS })`；第一行转成 `<thead><th>`，长格子包一层限宽盒子；Excel 的读法不变。
+- `assets/office/office.css`：只对 `body.csv` 加表头吸顶、长格子限宽换行、浅色 / 深色表头底色。
+- `WorkspaceControllerTest.kt`：扩展 `phoneOffice` 的断言，新增 3 项 CSV 测试；新增 `CsvTextTest.kt`（5 项）。
+
+`sheet.html` 没改：网址参数和 `body` class 已经够用，不必再加标记。`assets/office/lib/` 没动。
+
 ### 9.2 新测试的名字，和在旧代码上的结果
+
+新增 / 扩展的测试：
+
+- `CsvTextTest`：`aUtf8FileWithoutAMarkIsReadAsUtf8`、`aUtf8FileWithAMarkIsReadAsUtf8WithoutTheMark`、`aUtf16FileWithAMarkIsReadAsUtf16`、`aGbkFileIsReadAsGb18030`、`anEmptyFileIsEmptyText`。
+- `WorkspaceControllerTest`：`csvShowsAsATableFromTheFileItselfWhicheverKindTheComputerGives`、`aGbkCsvIsReadOnThePhone`、`aCsvTheTableCannotDrawFallsBackToTheSourceNotToTheComputersPdf`；并把 `wordAndExcelAreTheFilesThePhoneDraws` 补上 `数据.tsv`、`数据.TSV`、`数据.CSV`。
+
+旧代码上的结果（原始输出在 `F:\Android-Dev\work\20261101-island-duplicates\20261116-csv-table\`）：
+
+- `old-code-workspace-tests.log`：`WorkspaceControllerTest` 29 项，**4 项失败**（`wordAndExcelAreTheFilesThePhoneDraws` 的 TSV 断言、CSV 表格测试、GBK 测试、`officeFailed` 不回 PDF 的测试）。正是旧代码只把 CSV 当 `download`、把 TSV 当普通文件、不认 GBK、失败时要 PDF 的地方。
+- `old-code-encoding-tests.log`：`CsvTextTest` 在旧代码上**编译失败**，5 处 `Unresolved reference 'decodeCsvText'`。旧代码没有这个函数，这是预期的失败形式。
+
+新代码上：`WorkspaceControllerTest` 29 项、`CsvTextTest` 5 项全部通过。
 
 ### 9.3 全部测试（`build.ps1` 的结果）
 
+在 `apps/android` 跑 `.\scripts\build.ps1`（默认 `assembleDebug`、`testDebugUnitTest`、`lintDebug`、`assembleDebugAndroidTest`）**全部通过**：
+
+- JVM 测试 **226 项，0 失败、0 跳过**（从 `app/build/test-results/testDebugUnitTest/*.xml` 统计；原来 218 项，本次加 8 项）。
+- lint 通过；开发版 APK 和设备测试 APK 都编译通过（没有安装、没有在设备上跑）。
+- 日志：`build-full-2.log`；测试结果在 `app/build/test-results/testDebugUnitTest/`。
+
 ### 9.4 样例读出来的样子（5.2）
+
+工作区里有照第 1 节结构造的 `sample-utf8.csv`、`sample-gbk.csv`、`sample-utf8.tsv`；Node（v24.14.0）用仓库里的 `lib/xlsx.full.min.js`（版本 0.20.3）按页面同样的读法解析，原始输出在 `sample-check.log`，每格内容在 `sample-*.cells.json`。核对结果：
+
+- 编号仍是 `"01"`、`"02"`，没有变成数字 `1`、`2`。
+- 长格子仍是三段，里面的 `- **位置/依据**：…`、中文逗号和多段换行都留在同一格，没有被逗号拆开。
+- 引号后的 `高` / `已确认` / `中` / `待确认` 没有错位；中文表头没有乱码。
+- GBK 文件按 GB18030 读出来和 UTF-8 文件逐字相同。
+- TSV 表头 3 列、第一行 4 列、第二行 5 列，Tab 分列正确，长格子没被 Tab 拆开。
+
+`node --check sheet.js` 也通过。表头吸顶、限宽换行、深色、左右滑动和缩放属于画面效果，本机没有浏览器 / DOM，没在真机或 WebView 里看过，留给 Claude 和用户按 5.4 验。
 
 ### 9.5 选了哪种读法（3.3），为什么
 
+选了第 2 种：**网址上告诉页面这是 CSV / TSV，页面按 UTF-8 解成文字再 `XLSX.read(text, { type: "string", raw: true, FS })`**。
+
+- 手机反正要解一次编码才能把文字放进 `result` 给「查看原文」，所以直接把解好的文字再按 UTF-8 交给页面，页面不必猜字符集；GBK 的字节不会再被 SheetJS 当别的编码读。
+- 网址上的 `sheet=csv|tsv` 同时决定分隔符（逗号 / Tab）和 `body.csv` 样式；`sheet.html` 不用改。
+- `raw: true` 是这一版 SheetJS（0.20.3）保留原文的选项：样例里 `01` 仍是字符串，像日期的字也不会变成日期；`FS` 指定分隔符。已用样例核对（见 9.4）。
+- 没有选「交 UTF-8 加 BOM 的字节」：页面仍要判断这是 CSV 还是 TSV，BOM 只解决编码、不解决分隔符；而且 `type: "array"` 让 SheetJS 自己认格式，不如明确 `type: "string"` 可控。
+
 ### 9.6 没做的
 
+- 没在真手机 / WebView 里看表头吸顶、长格子换行、左右滑动、双指缩放、深色；本机没有浏览器和 DOM，只核对了 SheetJS 解析和 `sheet.js` 语法。按 5.4 由 Claude 和用户验。
+- 没测试真正超过 20MB 的 CSV；代码沿用原来的 `PreviewLimit` 判断，超过就不下载、不显示，但没有造 20MB 样例跑一遍。
+- 没改 `sheet.html`、Excel 的读法、`assets/office/lib/`、2000 行 / 100 列的上限。
+- 没去电脑上找用户的 `去重问题清单.csv`，样例是自己造的。
+- 没打包 release、没改版本号、没 push、没发版；没动电脑端、iOS、网页、发版脚本、`deploy/site/`、`pocketagentdesk.com.png`、`tests/test_activity_records.py`。
+
 ### 9.7 提交
+
+本地提交，没有 push。代码和测试的提交：
+
+- `安卓：CSV 和 TSV 在手机上显示成表格（手机认编码，表格页换长文字样式，可切回原文）`：`5c5fbba`（8 个文件：新增 `CsvText.kt`、`CsvTextTest.kt`，改 `WorkspaceController.kt`、`WorkspaceUi.kt`、`PreviewUi.kt`、`sheet.js`、`office.css`、`WorkspaceControllerTest.kt`）。
+- 本节随后单独提交，只改本文件。
