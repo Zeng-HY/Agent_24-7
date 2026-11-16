@@ -8,9 +8,18 @@ source "$(dirname "$0")/ci-common.sh"
 BUNDLE_ID=com.pocketagentdesk.teleply
 APPLE_APP_ID=6826968427  # App Store Connect → 遥应 → App 信息 → Apple ID
 
-# The integration in codemagic.yaml gives app-store-connect its credentials. No build yet reads as 0.
+# The integration in codemagic.yaml gives app-store-connect its credentials.
+# 11-16: a failed read used to count as "no build yet" (0), so the archive was numbered 1 and only the upload failed,
+# with no word of why. Now it stops here and shows what App Store Connect said (a key without access to the app,
+# an agreement waiting in App Store Connect…). The app has had builds since 10-26, so 0 is never right.
 latest_build_number() {
-  app-store-connect get-latest-testflight-build-number "$APPLE_APP_ID" 2>/dev/null | tail -n 1 || echo 0
+  local out
+  if ! out=$(app-store-connect get-latest-testflight-build-number "$APPLE_APP_ID" 2>&1); then
+    echo "$out" | tail -n 20 >&2
+    echo "Could not read the latest TestFlight build number of app $APPLE_APP_ID: see App Store Connect's answer above." >&2
+    exit 1
+  fi
+  echo "$out" | tail -n 1
 }
 
 fail() { echo "IPA check failed: $1" >&2; exit 1; }
@@ -56,7 +65,7 @@ check_ipa() {
 
 cd "$IOS_DIR"
 LATEST=$(latest_build_number)
-case "$LATEST" in ''|*[!0-9]*) LATEST=0 ;; esac
+case "$LATEST" in ''|*[!0-9]*) echo "Unexpected latest TestFlight build number: '$LATEST'" >&2; exit 1 ;; esac
 BUILD=$((LATEST + 1))
 echo "Next TestFlight build number: $BUILD"
 sed -i '' -E "s/^( *CURRENT_PROJECT_VERSION: ).*/\1\"$BUILD\"/" project.yml
