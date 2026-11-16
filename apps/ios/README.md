@@ -1,10 +1,10 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.7.4：Codex 批准、往上翻不被拉回、淡色旧消息、打开更快、500MB（11-16，等用户在 App Store Connect 接受新协议后上传）
+## 0.7.4：Codex 批准、往上翻不被拉回、淡色旧消息、打开更快、500MB（11-16，构建 29 已传 TestFlight）
 
-11-16 第一次上传（Codemagic `6afa9bd6`）：归档、签名、包检查都过了，上传时 App Store Connect 找不到应用；读最新构建号也失败，脚本当成 0，构建号成了 1。改了 `ci-testflight.sh`（`43192eb`）让它读不到就停下并显示原话，再跑（`6afa9da9`）看到的是：`403: A required agreement is missing or has expired`。苹果有一份新协议等账户持有人接受；接受以后重跑 `ios-native-testflight` 就行，构建号会是 29。
+11-16 第一次上传（Codemagic `6afa9bd6`）：归档、签名、包检查都过了，上传时 App Store Connect 找不到应用；读最新构建号也失败，脚本当成 0，构建号成了 1。改了 `ci-testflight.sh`（`43192eb`）让它读不到就停下并显示原话，再跑（`6afa9da9`）看到的是：`403: A required agreement is missing or has expired`。苹果有一份新协议等账户持有人接受。用户在 App Store Connect 接受后，马上重跑仍是 403（`6afa9f13`），约 10 分钟后再跑（`6afaa1cd`）就过了：构建 29，包检查全过，`UPLOAD SUCCEEDED with no errors`，进内部测试，没有提交审核。
 
 - **Codex 批准**（`3cc2392`）：Codex 在电脑上弹「允许一次 / 拒绝」时，手机上有卡片（标题「Codex 想运行命令 / 想改文件」，命令或文件、工作文件夹），点了就交给 Codex；还不能答的几种写「请在电脑上处理」。折叠标题说「需要你批准」，提问条「去处理 ›」。电脑端要 dev.37 或更新。
 - **滚动**（`9116cf0`）：新类型 `ReadingFollow`，跟随只随用户的动作变：手指一碰就不跟，停在离底 48 点内、点「有新消息 ↓」、发送才重新跟；内容变长变短不改。DeepSeek 刷得快时往上翻不再被拉回。
