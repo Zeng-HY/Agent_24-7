@@ -171,6 +171,10 @@ struct ChatModelTests {
         model.edit("follow me")
         model.send()
         #expect(model.sent == 1)
+        // CommandComputer holds every send at its gate; settleSends() waits for it, so open it first (as the
+        // double-tap test does). Without this the test waited forever and Codemagic timed out (11-16, 6afa8ef7).
+        await until { await computer.counts.sends == 1 }
+        await computer.gate.open()
         await model.settleSends()
         #expect(model.sent == 1)  // its receipt does not count again
     }
