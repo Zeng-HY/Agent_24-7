@@ -543,4 +543,27 @@ Claude 审完，结论是照交接文档做对了，让再改四处；四处都�
 
 **这次没做的**：没对真 Codex 调 `consume`，也没再对真 Codex 读；没动允许清单以外的文件；提交是新提交，没有 amend、没有 push。
 
+### 9.7 Claude 审查（11-17，审到 `3f1630d`）
+
+**结论**：照交接文档做对了；审出的四处（9.6）也改对了。可以进入发版的步骤，每一步先问用户。
+
+**核对了什么**
+
+- 提交只含允许的文件。`DemoWorld.swift` 不在清单里，是 iPhone 示例数据要用的，可以。别的会话没提交的文件没被带进来。
+- 电脑端逐行读过：用量只从 Codex 自己的后台程序、Codex 的对话记录、Claude 的窗口来；不读登录文件，不把 `accountId` 给手机；读 Claude 窗口不点、不恢复；用重置必须带 `confirmed: true`，请求编号就是 `idempotencyKey`；任何情况不回 503。
+- 两个手机逐行读过：每次用重置都先弹确认框；拿不到确定结果时用同一个编号重试（9.6 之后只有五种确定没用掉的 code 才换编号）。iPhone 用到的现成写法都在代码里找到了：`JSONValue` 的 `object`、`isObject`、`has`（空值算没有），`PillStyle(minHeight:)`，`Palette.ink`、`accent`，`.topBarTrailing`，`Hints.text`，`AppModel.app`；`ServiceFailure.code` 是 `String`；`UsageReport.parse` 在 `public extension` 里，是公开的；测试文件引入了 Foundation（`URLError`）。
+- 没用掉重置：DeepSeek 的 5.4 脚本 `check-usage-read-only.py` 只调 `read`；`attachments/codex-resets.jsonl` 不存在；`~/.codex/auth.json` 的修改时间仍是 11-12 15:19:19。
+- Claude 重跑的测试：`test_usage_limits` 51 条（9.6 之前）、55 条（之后）全过。Python 全量：9.6 之前 931 条，只有原来那 22 条浏览器出错；9.6 之后 941 条，还是那 22 条浏览器出错，另外 4 条（`test_codex_open_check.StreamVersionTests`，3 失败 1 出错）是另一个会话正在做的「Codex 26.1111 状态消息版本 13」先写的测试，只在工作树里、没提交，和这次无关（HEAD 里没有这组测试）。安卓 `build.ps1`：243 条、之后 244 条 JVM 测试，0 失败，lint 过。
+- **Codex 中途自动升级到 26.1111.2228.0**（后台程序 `codex-cli 0.169.0-alpha.11.1`，在 `bin\c38161ad8494f88c`）。用新版生成协议说明：`account/rateLimits/read` 和 `account/rateLimitResetCredit/consume` 的四个格式文件和 0.167 一字不差；`new_conversations.codex_cli()` 自动用了新版。
+- 这台电脑上用最终代码只读一次（11-17 12:19 前后）：Codex `live`、Pro、每周已用 85%、2026-11-18 20:54 重置、重置 1 次「Full reset」12-13 到期；Claude 5 小时已用 73%、12:20 重置；`auth.json` 前后不变；没有重置记录文件。
+
+**以后再说的**
+
+- iPhone 没编译过：要推送以后在 Codemagic 跑 `ios-native-check`（推送要用户同意）。
+- iPhone 英文界面里，窗口名字和几句拼出来的话（「每周」、重置时间那一行、确认框）还是中文（9.5 第 3 条）。
+- Claude 只认英文界面的 `Usage: ` 按钮；Claude 以后出中文界面要再看。
+- 对话里「Codex 用量用完了」那一行、网页、灵动岛方案七：这次都没做。
+
+**发版**（每一步先问用户）：推送 GitHub → Codemagic `ios-native-check` → Windows 新测试版（电脑端加了新模块和接口，手机要看用量，电脑得先装新版）→ 安卓新版 → iPhone TestFlight。
+
 
