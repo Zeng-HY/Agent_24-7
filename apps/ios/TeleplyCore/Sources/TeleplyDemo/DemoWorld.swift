@@ -55,6 +55,8 @@ public final class DemoWorld: Sendable {
         /// Claude's model lists the computer keeps, by conversation, oldest first.
         var claudeCatalogs: [(chat: String, catalog: JSONValue)] = []
         var desktopMenuReads = 0
+        /// 11-17: the demo computer's one Codex reset credit has been used.
+        var codexResetUsed = false
         var deepseekModel = "deepseek-v4"
         var deepseekEffort = "high"
         var deepseekPermission = "workspace"
@@ -403,6 +405,57 @@ public final class DemoWorld: Sendable {
     func unarchive(app: String, id: String) -> JSONValue {
         state.withLock { $0.archived.removeAll { $0 == app + ":" + id } }
         return ["ok": true, "app": .string(app), "id": .string(id), "archived": false]
+    }
+
+    // MARK: 用量 (11-17; Android FixtureWorld.usage)
+
+    /// Codex read live with one reset credit, and Claude's one limit from its window.
+    func usage() -> JSONValue {
+        let used = state.withLock { $0.codexResetUsed }
+        return [
+            "codex": codexUsage(used: used),
+            "claude": [
+                "available": true, "source": "window", "as_of": .number(Double(DemoData.now)),
+                "text": "Usage: 35% of 5-hour limit, Resets at 12:20 PM",
+                "windows": .array([[
+                    "kind": "5h", "label": "5-hour limit", "name": "5 小时",
+                    "used_percent": .number(35), "resets_at": .null, "resets_text": "12:20",
+                ]]),
+                "minimized": false,
+            ],
+            "now": .number(Double(DemoData.now)),
+        ]
+    }
+
+    private func codexUsage(used: Bool) -> JSONValue {
+        let nowSeconds = DemoData.now / 1000
+        let items: JSONValue = used ? .array([]) : .array([[
+            "id": "fixture-credit",
+            "title": "Full reset",
+            "description": "Thanks for using Codex! You've been granted one free rate limit reset.",
+            "granted_at": .number(Double(nowSeconds - 86400)),
+            "expires_at": .number(Double(nowSeconds + 30 * 86400)),
+        ]])
+        return [
+            "available": true, "source": "live", "as_of": .number(Double(DemoData.now)), "plan": "pro",
+            "windows": .array([[
+                "kind": "weekly", "minutes": .number(10080), "name": "每周",
+                "used_percent": .number(Double(used ? 0 : 84)),
+                "resets_at": .number(Double(nowSeconds + 34 * 3600)),
+            ]]),
+            "reached": .null,
+            "resets": ["available": .number(Double(used ? 0 : 1)), "items": items],
+            "ordinary_usage_allowed": true,
+        ]
+    }
+
+    /// One reset credit, only after the phone's confirmation; the demo has exactly one.
+    func usageReset(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        guard body["confirmed"].bool() else {
+            return (400, ["ok": false, "error": "要先在手机上确认", "text": "要先在手机上确认", "code": "not_confirmed"])
+        }
+        state.withLock { $0.codexResetUsed = true }
+        return (200, ["ok": true, "outcome": "reset", "text": "已用掉 1 次重置，Codex 用量恢复了", "usage": codexUsage(used: true)])
     }
 
     func archivedList() -> JSONValue {

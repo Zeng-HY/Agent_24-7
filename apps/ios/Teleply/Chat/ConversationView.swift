@@ -434,6 +434,7 @@ private struct ConversationMenu: View {
     @State private var searchShown = false
     @State private var pendingShown = false
     @State private var promptsShown = false
+    @State private var usageShown = false
 
     var body: some View {
         let control = model.conversation.control
@@ -453,6 +454,10 @@ private struct ConversationMenu: View {
                     }
                 }
                 Button("查找消息", systemImage: "magnifyingglass") { searchShown = true }
+                // 11-17: DeepSeek has no plan limits, so no 用量 for its conversations.
+                if model.app != "deepseek" {
+                    Button("用量", systemImage: "clock") { usageShown = true }
+                }
                 Button("对话文件", systemImage: "doc.on.doc") { model.workspace.panel("files") }
                 Button("常用提示语", systemImage: "text.quote") { promptsShown = true }
                 let unconfirmed = model.conversation.submissions.filter { ["提交中", "送达状态待确认"].contains($0.label) }.count
@@ -483,6 +488,7 @@ private struct ConversationMenu: View {
         .sheet(isPresented: $searchShown) { SearchSheet(model: model) }
         .sheet(isPresented: $pendingShown) { PendingSheet(model: model) }
         .sheet(isPresented: $promptsShown) { PromptLibrarySheet(model: model) }
+        .sheet(isPresented: $usageShown) { NavigationStack { UsageView(model: model) } }
     }
 
     /// The folder the conversation runs in, grey at the menu's bottom (the web has it after the first two rows).

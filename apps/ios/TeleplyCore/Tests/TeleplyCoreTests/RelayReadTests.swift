@@ -149,4 +149,30 @@ struct RelayReadTests {
         let tree = try JSONValue.parse(Data(#"{"apps":[{"app":"deepseek"},{"app":"codex"},{"app":"other"}]}"#.utf8))
         #expect(treeApps(tree) == ["codex", "deepseek"])
     }
+
+    /// 用量 (11-17): the read is a GET with live=1, the reset a POST carrying the request id and the confirmation.
+    @Test func theUsageRouteReadsLiveAndResetsOnceConfirmed() async throws {
+        let transport = RecordingTransport { request in
+            if request.method == .get { return .json(#"{"codex":{"available":true},"claude":{"available":false},"now":1}"#) }
+            return .json(#"{"ok":true,"outcome":"reset","text":"已用掉 1 次重置，Codex 用量恢复了","usage":null}"#)
+        }
+        let client = RelayClient(origin: .default, transport: transport)
+        let read = try await client.detail(device: device, route: "usage", query: [("live", "1")])
+        #expect(read["codex"]["available"].bool())
+        let answer = try await client.detail(device: device, route: "usage/codex-reset",
+                                             body: ["request_id": .string("reset-request-0001"),
+                                                    "credit_id": "credit-available", "confirmed": true])
+        #expect(answer["text"].string() == "已用掉 1 次重置，Codex 用量恢复了")
+        let sent = await transport.log.items
+        #expect(sent[0].method == .get)
+        #expect(sent[0].url.path == "/d/\(device)/api/usage")
+        #expect(queryValue(sent[0], "live") == "1" && sent[0].deadline == 45)
+        #expect(sent[1].method == .post)
+        #expect(sent[1].url.path == "/d/\(device)/api/usage/codex-reset")
+        #expect(sent[1].deadline == 75)
+        let body = try JSONValue.parse(sent[1].body ?? Data())
+        #expect(body["request_id"].string() == "reset-request-0001")
+        #expect(body["credit_id"].string() == "credit-available")
+        #expect(body["confirmed"].bool())
+    }
 }

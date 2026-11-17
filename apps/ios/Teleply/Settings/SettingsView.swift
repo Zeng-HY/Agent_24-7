@@ -23,6 +23,11 @@ struct SettingsView: View {
                         NavigationLink("已归档对话") { ArchivedView(model: model) }
                     }
                     .listRowBackground(Palette.controlFill)
+                    // 11-17: Codex's and Claude's limits and when each resets, and one Codex reset from the phone.
+                    Section("用量") {
+                        NavigationLink("Codex 和 Claude 的用量") { UsageView(model: model) }
+                    }
+                    .listRowBackground(Palette.controlFill)
                 }
                 Section("外观") {
                     AppearanceChoice(selection: model.theme) { model.setAppearance($0) }

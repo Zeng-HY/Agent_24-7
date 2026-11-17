@@ -95,6 +95,8 @@ public struct RelayClient: Sendable {
     public static let slowRoutes: [String: TimeInterval] = [
         "claude/next": 65, "claude/task": 65, "chat/archive": 65, "chat/unarchive": 95, "chat/delete": 125,
         "chat/archived": 25, "notify": 35, "notify/ntfy": 35, "notify/test": 35, "voice/tidy": 65, "status": 10,
+        // 用量 (11-17): Codex's live read starts its own app-server, and one reset asks it twice.
+        "usage": 45, "usage/codex-reset": 75,
     ]
 
     public let origin: ServiceOrigin
@@ -280,7 +282,7 @@ public struct RelayClient: Sendable {
         "deepseek/answer", "deepseek/approval", "claude/catalog", "claude/setting", "claude/choose", "claude/menu", "claude/close-menu",
         "chat/projects", "chat/open", "chat/resolve", "claude/next", "claude/task", "chat/check", "chat/archive", "chat/unarchive",
         "chat/delete", "chat/archived", "chats/children", "notify", "notify/ntfy", "notify/test", "voice/status", "voice/terms",
-        "voice/tidy", "status",
+        "voice/tidy", "status", "usage", "usage/codex-reset",
     ]
 
     /// A computer route outside the read set (Android detail): a GET with [query] when there is no [body], a POST

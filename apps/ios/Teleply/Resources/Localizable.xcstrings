@@ -301,6 +301,16 @@
         }
       }
     },
+    "Claude": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude"
+          }
+        }
+      }
+    },
     "Claude · 我的电脑": {
       "localizations": {
         "en": {
@@ -371,6 +381,26 @@
         }
       }
     },
+    "Codex": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex"
+          }
+        }
+      }
+    },
+    "Codex 和 Claude 的用量": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex and Claude usage"
+          }
+        }
+      }
+    },
     "Codex 想问你": {
       "localizations": {
         "en": {
@@ -397,6 +427,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Codex conversations can be restored or selected for deletion; once deleted, they can't be recovered from your computer either."
+          }
+        }
+      }
+    },
+    "Codex 的用量用完了": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex’s limit is used up"
           }
         }
       }
@@ -991,6 +1031,16 @@
         }
       }
     },
+    "先不用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not now"
+          }
+        }
+      }
+    },
     "先出计划，你确认后再执行": {
       "localizations": {
         "en": {
@@ -1147,6 +1197,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Show %lld more (of %lld)"
+          }
+        }
+      }
+    },
+    "再试一次（不会多用）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try Again (no second credit)"
           }
         }
       }
@@ -2649,6 +2709,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "There are new attachments or references. Handle them before restoring the submission snapshot."
+          }
+        }
+      }
+    },
+    "已用 %lld%%": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld%% used"
           }
         }
       }
@@ -4975,6 +5045,16 @@
         }
       }
     },
+    "正在用…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Using it…"
+          }
+        }
+      }
+    },
     "正在电脑上点选…": {
       "localizations": {
         "en": {
@@ -5271,6 +5351,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "No matching project folders"
+          }
+        }
+      }
+    },
+    "没有可用的重置次数": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No reset credits available"
           }
         }
       }
@@ -5651,6 +5741,66 @@
           "stringUnit": {
             "state": "translated",
             "value": "Open in Quick Look"
+          }
+        }
+      }
+    },
+    "用掉 1 次": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use it"
+          }
+        }
+      }
+    },
+    "用掉 1 次 Codex 重置？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use 1 Codex reset?"
+          }
+        }
+      }
+    },
+    "用掉一次": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use one"
+          }
+        }
+      }
+    },
+    "用掉这一次": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use this one"
+          }
+        }
+      }
+    },
+    "用量": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usage"
+          }
+        }
+      }
+    },
+    "用量重置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usage reset"
           }
         }
       }
@@ -7641,6 +7791,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Reset Password"
+          }
+        }
+      }
+    },
+    "重置次数要实时读到才显示，下拉刷新试试": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset credits come from a live read. Pull down to refresh."
           }
         }
       }

@@ -37,6 +37,27 @@ public enum Hints {
         "邮箱服务暂未启用": "Email isn’t available on this service yet.",
         "当前密码错误": "The current password is wrong.",
         "密码已变化，请重新登录": "The password has changed. Sign in again.",
+        // Codex's and Claude's usage (usage_limits.py, 11-17): the fixed sentences the computer sends.
+        "已用掉 1 次重置，Codex 用量恢复了": "Used 1 reset. Codex’s limits are back.",
+        "现在没有能重置的限额，这次没用掉": "There’s nothing to reset right now, so nothing was used.",
+        "没有可用的重置次数，这次没用掉": "There are no reset credits, so nothing was used.",
+        "这次之前已经用成了，没有再用掉一次": "This reset had already gone through, so nothing more was used.",
+        "没确认这次用成了没有。再点一次会用同一个编号重试，不会多用掉一次。":
+            "Couldn’t confirm whether this went through. Trying again uses the same request, so no second credit is used.",
+        "没确认这次用成了没有。": "Couldn’t confirm whether this went through.",
+        "要先在手机上确认": "Confirm it on the phone first.",
+        "请求编号不对": "That request id isn’t valid.",
+        "重置编号不对": "That reset id isn’t valid.",
+        "这台电脑没装 Codex": "Codex isn’t installed on this computer.",
+        "这台电脑没装 Claude": "Claude isn’t installed on this computer.",
+        "电脑上 Claude 没开": "Claude isn’t open on this computer.",
+        "Claude 窗口上没有用量（要开着一个 Code 对话）": "Claude’s window shows no usage. Open a Code conversation there.",
+        "这会儿读不到 Claude 窗口，请稍后再试": "Can’t read Claude’s window right now. Try again in a moment.",
+        "电脑上还没有 Codex 的用量记录（用一次 Codex 就会有）": "No Codex usage on this computer yet. One Codex reply will bring it.",
+        "读不到 Codex 的实时用量：": "Couldn’t read Codex’s live usage: ",
+        "Codex 没给用量：": "Codex didn’t give its usage: ",
+        "Codex 没让用：": "Codex wouldn’t let it be used: ",
+        "没用掉：连不上电脑上的 Codex（": "Not used: couldn’t reach Codex on this computer (",
     ]
 
     public static func text(_ raw: String) -> String {

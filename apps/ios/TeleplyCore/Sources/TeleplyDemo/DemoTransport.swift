@@ -217,6 +217,8 @@ public struct DemoTransport: RelayFileTransport {
                                          "detail": "把较早的对话压成摘要，腾出上下文", "input": "", "scope": "内置命令"]]])
         case "/api/chat/archived":
             return Self.json(world.archivedList())
+        case "/api/usage":  // 11-17: Codex live with one reset credit, Claude's one limit from its window
+            return Self.json(world.usage())
         case "/api/notify":
             return Self.json(world.notifyState())
         case "/api/voice/status":
@@ -278,6 +280,8 @@ public struct DemoTransport: RelayFileTransport {
             reply = world.command(app: "deepseek", route: "queue-action", body: fields)
         case "/api/chat/check":
             reply = (200, world.claudeCheck(offset: body["offset"].int64()))
+        case "/api/usage/codex-reset":  // one reset credit, after the phone said yes
+            reply = world.usageReset(body)
         case "/api/claude/choose":
             reply = (200, world.claudeChoose(token: body["token"].string()))
         case "/api/claude/catalog":
