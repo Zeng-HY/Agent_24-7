@@ -229,3 +229,28 @@
 - `f7ef29e` `电脑端：记下和中转的断开、连回（带原因），本机服务连续 3 次没回应时自动重启并重连`：4 个文件，新增 `tests/test_relay_link_log.py`，改 `relay_agent.py`、`relay_controller.py`、`relay_desktop.py`。
 - 本节随后单独提交，只改本文件。
 
+### 9.7 复审后的两处补充
+
+Claude 复审后补了两处，只改 `relay_agent.py`、`relay_controller.py`、`tests/test_relay_link_log.py`。
+
+1. 控制器自己停连接后，再连上时补「重新连上了」。`LinkLog` 新增 `stopped()`：只开始计断开时长、不写行；已经有断开在计时就不重置。`connect_agent()` 在「连续 3 次没回应」停连接时、重新绑定时（`cancel` 已置、`quit` 未置）调它。这样自动恢复或重新绑定后再连上，会写 `中转：重新连上了（断了 X，重连 N 次）`。`quit()` 不调，退出仍只写第 7 行。
+2. 只有心跳超时才叫心跳超时。`exception_reason()` 改成 `type(exc) is ServerTimeoutError`；`SocketTimeoutError` 等子类（握手读超时）走「连中转超时（类型名）」。
+
+新测试（本文件 19 → 22 项）：
+
+- `test_stopped_starts_the_outage_without_writing_a_line`
+- `test_stopped_does_not_reset_an_outage_already_running`
+- `test_rebind_counts_the_outage_for_the_next_connection`
+- 改 `test_three_health_failures_restart_the_local_service_and_reconnect`：假 `Agent.run()` 开头调 `link.attempt()` / `link.connected()`，断言自动恢复后有一行 `中转：重新连上了（断了 … 秒，重连 1 次）`。
+- 改 `test_handshake_status_and_connection_timeout`：加 `SocketTimeoutError` → `连中转超时（SocketTimeoutError）`。
+
+改动前（`f7ef29e` 的代码）跑当时新增的 21 项：2 个 error（没有 `stopped()`）、2 个 failure（自动恢复没有「重新连上了」、`SocketTimeoutError` 被写成心跳超时）；输出 `new-tests-before-fix.log`。改后 22 项全过：`new-tests-after-fix.log`。
+
+全量：833 项，1 失败、22 错误、6 跳过（335.679s）。这轮期间别的会话又提交了新测试，所以总数比 9.3 的 814 多；`ERROR:`/`FAIL:` 清单和 9.3 逐行比对没有差异（`after-fix-failures.txt`）。Playwright 的 22 个错误和 `test_open_speed` 的 1 个失败照旧。
+
+提交：
+
+- `650290b` `电脑端：控制器自己停连接时也开始计断开时长；只有心跳超时才写成心跳超时`：3 个文件（`relay_agent.py`、`relay_controller.py`、`tests/test_relay_link_log.py`）。
+- 本节随后单独提交，只改本文件。
+
+
