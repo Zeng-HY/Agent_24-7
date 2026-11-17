@@ -3,6 +3,7 @@ import argparse
 from contextlib import closing
 import asyncio
 import ctypes
+from datetime import datetime
 import json
 import os
 import re
@@ -248,6 +249,16 @@ def healthy(cfg):
         with build_opener(ProxyHandler({})).open(request,timeout=3) as response:
             return json.load(response).get('ok') is True and response.headers.get('Server','').startswith('AgentRemote/')
     except Exception:return False
+
+
+def day_log(text):
+    """Append one line to logs/YYYYMMDD.log, the same file remote.py's service log writes."""
+    now=datetime.now()
+    try:
+        folder=DATA/'logs';folder.mkdir(parents=True,exist_ok=True)
+        with (folder/f'{now:%Y%m%d}.log').open('a',encoding='utf-8',newline='\n') as file:
+            file.write(f'{now:%H:%M:%S} {text}\n')
+    except Exception:pass  # the connection must survive a log folder that cannot be written
 
 
 def backend(cfg,cancel=None):

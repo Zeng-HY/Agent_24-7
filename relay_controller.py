@@ -1,6 +1,7 @@
 """User-session UI/controller. Only the bundled local page can request fixed actions."""
 import asyncio
 import base64
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,13 @@ from app_paths import DATA,ASSETS
 
 ACTIONS={'bind','retry','account','check-update','startup','download','install','cancel-download','back','rebind','quit'}
 
+HEALTH_INTERVAL=1          # seconds between local-service checks while the relay link is up
+HEALTH_FAILURES=3          # consecutive misses before the local service is restarted
+RECOVERY_WAIT=5            # first wait before a restart round; doubles up to RECOVERY_WAIT_MAX
+RECOVERY_WAIT_MAX=60
+LONG_CONNECTION=600        # a round that stayed connected this long resets the wait to RECOVERY_WAIT
+REASON_REPORT_INTERVAL=600 # the same backend failure is written again only this often
+
 
 def local_action(uri):
     p=urlsplit(uri)
@@ -42,6 +50,9 @@ class DesktopController:
         self.startup_busy=False
         self.auth_active=False
         self.state='未绑定';self.detail='';self.online=False;self.worker=None;self.icon=None;self.window=None
+        from relay_agent import LinkLog
+        self.link=LinkLog(desktop.day_log)  # shared by every Agent of this run, so an outage survives a recovery round
+        self._backend_reports={}
         self.update=None;self.update_title='';self.update_notes='';self.downloading=False;self.checking=False;self.percent=0;self.installer=None
         self.version=updates.metadata()['version'];self.shell=None;self.settings_open=False;self.nav_history=[]
         self.migration='';self.migration_flash_until=0;self.ui_ready=threading.Event();self.ui_actions=threading.Event();self.exiting=False
@@ -181,6 +192,7 @@ class DesktopController:
     def rebind(self):
         self.show()
         if not self.window.create_confirmation_dialog('重新绑定','停止当前电脑连接并重新选择账号？'):return
+        self._log('中转：重新绑定，断开连接')
         if self.shell:self.shell.clear_account()
         self.auth_stop.set();self.auth_active=False;self.agent_stop.set()
         if self.worker:self.worker.join(timeout=25)
@@ -214,29 +226,89 @@ class DesktopController:
                 (DATA/'remote_config.json').write_text(json.dumps(self.cfg,ensure_ascii=False),encoding='utf-8')
                 if (DATA/'migration-result.json').exists():self.migration='配置和附件已迁移；旧目录仍保留。实机验证后再处理旧版。'
                 desktop.set_startup(self.startup)
-                asyncio.run(self.connect_agent(cancel))
+                asyncio.run(self.run_agent(cancel))
             except Exception as exc:
                 self.online=False;self.state='连接失败';self.detail=str(exc) if isinstance(exc,ValueError) else '本机服务未启动，请重试。'
             finally:pythoncom.CoUninitialize()
         self.worker=threading.Thread(target=worker,daemon=True);self.worker.start()
 
-    async def connect_agent(self,cancel):
-        from aiohttp import ClientResponseError
+    def _log(self,text):
+        link=getattr(self,'link',None)
+        if link:link.write(text)
+
+    def _backend_failed(self,message,wait):
+        now=time.monotonic()
+        reports=getattr(self,'_backend_reports',None)
+        if reports is None:reports=self._backend_reports={}
+        next_at=reports.get(message)
+        if next_at is None or now>=next_at:
+            self._log(f'本机服务：没启动起来（{message}），{wait:g} 秒后再试')
+            reports[message]=now+REASON_REPORT_INTERVAL
+
+    async def run_agent(self,cancel):
+        wait=RECOVERY_WAIT
+        while not self.stop.is_set() and not cancel.is_set():
+            self.state='连接中';self.detail='';self.online=False  # 231's state() cannot leave "连接失败" by itself
+            try:outcome,next_wait=await self.connect_agent(cancel,wait)
+            except asyncio.CancelledError:raise
+            except Exception as exc:
+                self.online=False;self.state='连接失败'
+                self.detail=str(exc) if isinstance(exc,ValueError) else '本机服务未启动，请重试。'
+                return
+            if outcome in ('stopped','unauthorized','ended'):return
+            if cancel.wait(next_wait) or self.stop.is_set():return
+            wait=min(next_wait*2,RECOVERY_WAIT_MAX)
+
+    async def connect_agent(self,cancel,wait=None):
+        if wait is None:wait=RECOVERY_WAIT
         from relay_agent import Agent
-        owned=None
+        owned=None;outcome='stopped';next_wait=wait;long_online=False;online_since=None
         try:
-            owned=await asyncio.to_thread(desktop.backend,self.cfg,cancel)
+            try:
+                owned=await asyncio.to_thread(desktop.backend,self.cfg,cancel)
+            except asyncio.CancelledError:raise
+            except ValueError as exc:
+                if self.stop.is_set() or cancel.is_set():return 'stopped',wait
+                self.online=False;self.state='连接失败';self.detail=str(exc)
+                self._backend_failed(str(exc),wait)
+                return 'backend',wait
             def state(value):
+                nonlocal online_since
                 self.online=value=='online'
+                if self.online:
+                    if online_since is None:online_since=time.monotonic()
+                else:online_since=None
                 if self.state!='连接失败':self.state='需要重新绑定' if value=='unauthorized' else '已连接' if self.online else '断线重连'
                 if value=='unauthorized':self.detail='设备凭据已失效，请从托盘选择重新绑定。'
-            agent=Agent(self.binding['origin'],self.binding['key'],self.cfg['port'],self.cfg['token'],state=state)
+            agent=Agent(self.binding['origin'],self.binding['key'],self.cfg['port'],self.cfg['token'],state=state,
+                        link=getattr(self,'link',None))
             task=asyncio.create_task(agent.run())
+            failures=0
             while not self.stop.is_set() and not cancel.is_set() and not task.done():
-                await asyncio.sleep(1)
-                if self.online and not await asyncio.to_thread(desktop.healthy,self.cfg):
-                    self.online=False;self.state='连接失败';self.detail='本机服务不可用，请重新连接。';break
+                await asyncio.sleep(HEALTH_INTERVAL)
+                if not self.online:
+                    failures=0;online_since=None
+                    continue
+                if not await asyncio.to_thread(desktop.healthy,self.cfg):
+                    failures+=1
+                    if failures>=HEALTH_FAILURES:
+                        if self.stop.is_set() or cancel.is_set():break
+                        next_wait=RECOVERY_WAIT if long_online else wait
+                        self._log(f'本机服务：连续 3 次没回应（每次等 3 秒），先断开中转，{next_wait:g} 秒后重启本机服务再连')
+                        self.online=False;self.state='断线重连';self.detail='本机服务没回应，正在重启'
+                        outcome='local'
+                        break
+                else:
+                    failures=0
+                    if online_since is not None and time.monotonic()-online_since>=LONG_CONNECTION:long_online=True
+            if outcome!='local':
+                if self.stop.is_set() or cancel.is_set():outcome='stopped'
+                elif task.done():outcome='unauthorized' if self.state=='需要重新绑定' else 'ended'
+                else:outcome='stopped'
             task.cancel();await asyncio.gather(task,return_exceptions=True)
+            if not task.cancelled():
+                with contextlib.suppress(Exception):task.exception()
+            return outcome,next_wait
         finally:
             if owned is not None and owned.poll() is None:
                 owned.terminate()
@@ -278,7 +350,9 @@ class DesktopController:
 
     def quit(self):
         if self.exiting:return
-        self.exiting=True;self.stop.set();self.auth_stop.set();self.agent_stop.set();self.cancel_download.set()
+        self.exiting=True
+        self._log('中转：电脑端退出，断开连接')
+        self.stop.set();self.auth_stop.set();self.agent_stop.set();self.cancel_download.set()
         if self.shell:self.shell.clear_account()
         if self.worker:self.worker.join(timeout=25)
         if self.icon:self.icon.stop()
