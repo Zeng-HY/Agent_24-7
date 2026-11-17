@@ -124,8 +124,65 @@
 
 ### 9.1 改了哪些文件、各改了什么
 
+**`claude_control.py`**
+
+- 新增 `Controller._own(ctrl)`：`desktop._claude_where(ctrl)` 回 `None`（说不清）或者在侧边对话里 → 不是主对话的；否则是。**不要求在 dock 里**（任务卡片、下一步框都在对话里，不在 dock 里）。`_claude_where` 出任何错也当「不是」。
+- 新增 `Controller._candidate(ctrl)`：名字是 `Stop`、`Model: …`、`Effort: …`、`Usage: …`、`Permissions: …` 或模式按钮之一（`MODE_BUTTONS`）的按钮才是候选。只有候选才调 `_own`：整页几十个按钮，每 5 秒读一次，每个都往上走要多花一秒多。
+- `_read_once`：`names` 只取候选里主对话自己的按钮，所以 `running`（`Stop`）、Model、Effort、Usage、模式都只来自主对话；`result['tasks']` 传 `self._own`。`running` 仍然是「主对话自己的 `Stop`」或者「对话记录说在跑」，`stop_token` 的条件（`running` 而且有 `anchor`）没变。
+- `_queued`：`Send now` 先看名字、再看是不是主对话的，不是就跳过（不往上找 `Message <n>`，所以说不清的那个也不会抛 COMError）。`send_steer` 和 `choose` 的排队消息都走它。
+- `_dismiss_popup`：按 `Model: ` / `Effort: ` 找的触发按钮只认主对话的。
+- `_menu`：按钮列表只留候选里主对话的；`Model` / `Effort` 合成一个按钮的判断、以及 6 秒重试时重新取按钮，也用它、也过滤。
+- `choose` 的停止：只取主对话的、可用的 `Stop`，正好一个才按，否则照旧抛 `选项已变化或不唯一，没有执行`。
+- `_waiting_tasks`：加了可选的 `own` 参数（默认 `None`，直接调用的老测试照旧），只算主对话的 `Dismiss suggestion …`；`_read_once` 传 `self._own`。
+- `_task_buttons`：标题按钮、以及卡片上的 Start / Do it here / 关掉，都只认主对话的。
+- `_next_box`：`Suggested next actions` 组、问题文字、以及「有没有别的框」的判断（`('other',[])` 还是 `None`）都只数主对话的；只有侧边对话有这种组时返回 `None`。
+- 没碰：`chats.py`、`claude_archive.py`、`remote.py`、`relay_*.py`、新建页那几处、`_context`、提问区和选项；手机上的文字一个字没改。
+
+**`tests/test_claude_side_chat_controls.py`（新建，18 个测试）**：假的页面照 `uia-side-chat-open.txt` 搭（composer → dock，或者 composer → 两层 "Side chat" → 网页，按钮和卡片挂在这些层下面）；假的 `Desktop` 把 `_claude_where` 接到真的 `chats.Desktop._claude_where` 上走假页面，还记下每个被往上走的控件。
+
+**`tests/test_claude_control.py`**：文件开头的假 `Desktop` 补一个 `_claude_where`（默认回「不在侧边对话、没有 dock」）。断言没改。
+
+**`tests/test_claude_next_step.py`**：里面那个假 `Desktop` 同样补 `_claude_where`。断言没改（`Controller._waiting_tasks([…])` 还是可以只传一个参数）。
+
 ### 9.2 新测试的名字，和在旧代码上的结果
+
+18 个，全在 `tests/test_claude_side_chat_controls.py`。旧代码按 HEAD（`1de1180`，代码同 `a01a529`）取出来的 `claude_control.py` 当模块跑，原样输出在工作区 `new-tests-on-old-code.log`：**16 个失败或出错，2 个本来就能过**（防回退用的）。
+
+| 测试 | 旧代码 | 对应 |
+|---|---|---|
+| `test_a_side_chat_that_runs_does_not_make_the_session_look_busy` | `running` 为 True，还给了 `stop_token` | 控-1 |
+| `test_the_records_running_state_is_unchanged` | 通过（记录说在跑还是算在跑） | 3.2.1 |
+| `test_two_stops_press_the_sessions_own` | 两个 Stop，拒绝 | 控-2 |
+| `test_a_stop_only_in_the_side_chat_is_not_pressed` | 按了侧边对话的 Stop | 控-2 |
+| `test_a_stop_whose_place_cannot_be_told_is_not_pressed` | 当成主对话在跑 | 3.1 |
+| `test_a_side_chats_queued_message_is_not_the_sessions` | 算成主对话排队的 | 控-3 |
+| `test_a_queued_message_whose_place_cannot_be_told_is_not_the_sessions` | 读它的父元素时抛 COMError | 3.1 |
+| `test_the_sessions_model_is_read_from_its_own_button` | 取了侧边对话的模型 | 控-4 |
+| `test_the_sessions_mode_comes_from_its_own_button` | 取了侧边对话的模式 | 控-4 |
+| `test_the_menus_trigger_is_the_sessions_own` | 两个触发按钮，拒绝 | 控-4 |
+| `test_the_popups_trigger_is_the_sessions_own` | 两个触发按钮，没收起主对话那个 | 控-4 |
+| `test_a_side_chats_task_card_is_not_offered` | 两张同名卡片，拒绝 | 控-5 |
+| `test_only_the_side_chat_has_the_card` | 通过（没有卡片，拒绝） | 控-5 |
+| `test_the_sessions_own_next_step_box_is_used` | 先取到侧边对话那个框 | 控-6 |
+| `test_a_box_in_the_side_chat_is_never_taken_for_the_sessions` | 把侧边对话的框当成主对话的 | 控-6 |
+| `test_only_the_side_chat_has_a_next_step_box` | 返回侧边对话的框 | 控-6 |
+| `test_a_plain_list_in_the_side_chat_is_not_the_sessions` | 把侧边对话的列表当主对话的 | 控-6 |
+| `test_only_candidates_are_walked_up` | 一次都没调 `_claude_where`（新代码正好走 4 个候选） | 性能 |
 
 ### 9.3 全部测试（和基线比）
 
+- 基线：交接文档里的 `2131839` 基线日志不在工作区，所以在一个临时 worktree 里按 HEAD（`1de1180`）跑了一遍，跑完把 worktree 删掉了。`Ran 834 tests`，`FAILED (failures=1, errors=22, skipped=6)`，原样输出在工作区 `baseline-1de1180.log`。
+  - 工作区里的 `tests/test_activity_records.py` 是用户没提交的改动（少一个测试），所以工作区跑出来是 833 项，和文档说的 Claude 那次 833 一致；834 是 HEAD 上没这个改动的数。
+- 改后：`Ran 851 tests`，`FAILED (failures=1, errors=22, skipped=6)`，原样输出在工作区 `after-deepseek-change.log`。
+- 逐行比对失败/出错清单（各 23 条）：**完全一样**，没有新的失败或出错。多的 18 项就是新测试，全部通过；`tests/test_claude_control.py`、`tests/test_claude_next_step.py` 里改过和没改过的也都通过。
+- 旧坏项照旧、和这次无关：Playwright 浏览器缺（那些 webkit/chromium 的 ERROR）、`test_open_speed` 那 1 条 FAIL。
+
 ### 9.4 没做的、拿不准的
+
+- 没在真窗口上验证：没点、没切 Claude 窗口、没开侧边对话。侧边对话「在跑时的 `Stop`」是照它输入区的结构推的（11-17 那天它是空闲的，没见到）；Claude 审的时候可以开着侧边对话只读核对一次。
+- 没打包、没安装、没启动或重启遥应，没 push、没 rebase、没 amend，没动版本号。
+- 手机上的文字一个字没改；`claude_archive.py` 没动（它只会多拒绝，不会做错）。
+- 每 5 秒读一次状态会多走几次（每次往上 0.015–0.018 秒）：一般 2–6 个候选（`Stop`、`Model: `、`Effort: `、`Usage: `、模式、`Dismiss suggestion …`、`Send now`），按这个数算最多一百毫秒上下；`test_only_candidates_are_walked_up` 卡住了「只走候选」这件事。真窗口上这笔开销没有实测。
+- 拿不准：以后侧边对话如果也有了 Model / Effort 按钮，`_menu` 里「Model 和 Effort 合成一个按钮」的判断现在只看过滤后（主对话）的按钮列表，按逻辑不会把侧边对话的算进来；但没有那样的窗口可以实测。
+- 基线是用临时 worktree 跑的（跑完删了），因为交接文档说的工作区基线日志没有出现；如果 Claude 那边有 `2131839` 的原始日志，可以拿来再对一次。
+
