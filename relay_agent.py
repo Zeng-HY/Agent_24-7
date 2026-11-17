@@ -25,7 +25,7 @@ def format_duration(seconds):
 def exception_reason(exc):
     """What to write for an exception. Never str(exc): aiohttp's text carries the URL, and a URL can carry a key."""
     if isinstance(exc,ConnectionTimeoutError):return f'连中转超时（{type(exc).__name__}）'
-    if isinstance(exc,ServerTimeoutError):return '中转没回应心跳（心跳超时）'
+    if type(exc) is ServerTimeoutError:return '中转没回应心跳（心跳超时）'
     if isinstance(exc,asyncio.TimeoutError):return f'连中转超时（{type(exc).__name__}）'
     if isinstance(exc,ClientSSLError):return f'和中转的加密连接出错（{type(exc).__name__}）'
     if isinstance(exc,WSServerHandshakeError):return f'中转没接受连接（HTTP {exc.status}）'
@@ -77,6 +77,14 @@ class LinkLog:
         self.write(f'中转：断开了（{reason}），这次连了 {format_duration(now-connected_at)}')
         self._connected_at=None;self._since=now;self._attempts=0
         self._last_reason=reason;self._next_report=now+REPORT_INTERVAL
+
+    def stopped(self):
+        """The controller itself ended a live connection (local-service restart or rebind): start the outage clock,
+        write no line (line 9/7/8 already says why). An outage that is already running keeps its start."""
+        if self._since is not None:return
+        now=self._clock()
+        self._connected_at=None;self._since=now;self._attempts=0
+        self._next_report=now+REPORT_INTERVAL
 
     def failed(self,reason):
         now=self._clock()

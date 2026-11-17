@@ -305,6 +305,9 @@ class DesktopController:
                 if self.stop.is_set() or cancel.is_set():outcome='stopped'
                 elif task.done():outcome='unauthorized' if self.state=='需要重新绑定' else 'ended'
                 else:outcome='stopped'
+            if not self.stop.is_set() and (outcome=='local' or cancel.is_set()):
+                link=getattr(self,'link',None)
+                if link:link.stopped()  # reconnecting later must say how long it was gone
             task.cancel();await asyncio.gather(task,return_exceptions=True)
             if not task.cancelled():
                 with contextlib.suppress(Exception):task.exception()

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from aiohttp import (ClientSession, ClientTimeout, ClientSSLError, ConnectionTimeoutError,
-                     ServerTimeoutError, WSServerHandshakeError, web)
+                     ServerTimeoutError, SocketTimeoutError, WSServerHandshakeError, web)
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import relay_agent
@@ -97,6 +97,25 @@ class LinkLogTests(unittest.TestCase):
         reports=[line for line in lines if line.startswith(REPORT)]
         self.assertEqual(len(reports),2)
 
+    def test_stopped_starts_the_outage_without_writing_a_line(self):
+        now=[0.0];lines=[];log=link_log(lines,now)
+        log.connected()
+        now[0]+=30
+        log.stopped()
+        self.assertEqual(lines,['中转：连上了'])  # the controller's own stop is line 9/7/8, not a relay line
+        now[0]+=10
+        log.attempt();log.connected()
+        self.assertEqual(lines[-1],'中转：重新连上了（断了 10 秒，重连 1 次）')
+
+    def test_stopped_does_not_reset_an_outage_already_running(self):
+        now=[0.0];lines=[];log=link_log(lines,now)
+        log.connected();now[0]+=120;log.lost('原因')
+        now[0]+=20
+        log.stopped()  # e.g. the local service restarts while the relay is already down
+        now[0]+=20
+        log.attempt();log.connected()
+        self.assertEqual(lines[-1],'中转：重新连上了（断了 40 秒，重连 1 次）')
+
 
 class ReasonTests(unittest.TestCase):
     def test_heartbeat_timeout_is_recognized_from_the_socket_exception(self):
@@ -117,6 +136,9 @@ class ReasonTests(unittest.TestCase):
             '中转没接受连接（HTTP 502）')
         self.assertEqual(relay_agent.exception_reason(ConnectionTimeoutError('fixture')),
             '连中转超时（ConnectionTimeoutError）')
+        # A handshake read timeout is a SocketTimeoutError, a subclass: only ServerTimeoutError itself is the heartbeat.
+        self.assertEqual(relay_agent.exception_reason(SocketTimeoutError('read timeout')),
+            '连中转超时（SocketTimeoutError）')
 
     def test_tls_error_is_not_reported_as_a_plain_connection_error(self):
         reason=relay_agent.exception_reason(ClientSSLError(None,OSError(1,'fixture')))
@@ -168,6 +190,9 @@ def fake_agent(instances):
         def __init__(self,origin,key,port,token,*,state=None,link=None):
             self.state=state;self.link=link;self.stopped=False;instances.append(self)
         async def run(self):
+            if self.link:
+                self.link.attempt()  # the real Agent.run() counts the attempt before once()
+                self.link.connected()
             self.state('online')
             try:
                 await asyncio.sleep(3600)
@@ -231,8 +256,13 @@ class ControllerRecoveryTests(unittest.TestCase):
             c.worker=worker;worker.start()
             try:
                 self.assertTrue(wait_until(lambda:any('本机服务：连续 3 次没回应' in line for line in lines),5))
-                self.assertRegex(lines[0],r'^本机服务：连续 3 次没回应（每次等 3 秒），先断开中转，[\d.]+ 秒后重启本机服务再连$')
+                stopped=[line for line in lines if line.startswith('本机服务：连续 3 次没回应')]
+                self.assertEqual(len(stopped),1)
+                self.assertRegex(stopped[0],r'^本机服务：连续 3 次没回应（每次等 3 秒），先断开中转，[\d.]+ 秒后重启本机服务再连$')
                 self.assertTrue(wait_until(lambda:c.state=='已连接' and len(instances)>=2,5))
+                reconnected=[line for line in lines if line.startswith('中转：重新连上了')]
+                self.assertEqual(len(reconnected),1)
+                self.assertRegex(reconnected[0],r'^中转：重新连上了（断了 \d+ 秒，重连 1 次）$')
                 self.assertTrue(instances[0].stopped)
                 self.assertTrue(processes[0].terminated)
                 self.assertGreaterEqual(len(processes),2)
@@ -290,6 +320,35 @@ class ControllerRecoveryTests(unittest.TestCase):
             c.rebind()
         self.assertEqual(lines,['中转：重新绑定，断开连接'])
         c.begin_auth.assert_called_once()
+
+    def test_rebind_counts_the_outage_for_the_next_connection(self):
+        lines=[];c=self.make_controller(lines);instances=[]
+        c.window=Mock();c.begin_auth=Mock()
+        c.window.create_confirmation_dialog.return_value=True
+        def backend(cfg,cancel=None):
+            return FakeProcess()
+        with patch.object(relay_controller,'HEALTH_INTERVAL',0.01), \
+             patch.object(desktop,'healthy',lambda cfg:True),patch.object(desktop,'backend',backend), \
+             patch('relay_agent.Agent',fake_agent(instances)),patch.object(relay_controller,'save'):
+            first=threading.Thread(target=lambda:asyncio.run(c.run_agent(c.agent_stop)),daemon=True)
+            c.worker=first;first.start()
+            second=None
+            try:
+                self.assertTrue(wait_until(lambda:'中转：连上了' in lines,5))
+                c.rebind()
+                self.assertFalse(first.is_alive())
+                c.agent_stop=threading.Event()
+                second=threading.Thread(target=lambda:asyncio.run(c.run_agent(c.agent_stop)),daemon=True)
+                c.worker=second;second.start()
+                self.assertTrue(wait_until(lambda:any(line.startswith('中转：重新连上了') for line in lines),5))
+                reconnected=next(line for line in lines if line.startswith('中转：重新连上了'))
+                self.assertRegex(reconnected,r'^中转：重新连上了（断了 \d+ 秒，重连 1 次）$')
+            finally:
+                c.stop.set();c.agent_stop.set()
+                first.join(2)
+                if second:second.join(2)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
 
 
 class DayLogTests(unittest.TestCase):
