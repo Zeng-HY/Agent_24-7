@@ -66,13 +66,19 @@ class Service:
         self.app.router.add_get('/tunnel/stream/{stream:[0-9a-f]{32}}',self.hub.stream)
         self.app.router.add_route('*','/{tail:.*}',self.route)
         self.app.on_startup.append(self.push.start)
+        self.app.on_shutdown.append(self.stopping)
         self.app.on_cleanup.append(self.close)
 
+    async def stopping(self,app):
+        # before aiohttp waits on and cancels the open handlers: the computers' links that end now say why
+        self.hub.stopping()
+
     async def close(self,app):
+        self.hub.stopping()
         await self.push.stop()
         for task in self.availability_tasks.values():task.cancel()
         await asyncio.gather(*self.availability_tasks.values(),return_exceptions=True)
-        for ident in list(self.hub.connections): await self.hub.disconnect(ident)
+        for ident in list(self.hub.connections): await self.hub.disconnect(ident,'中转在关闭')
 
     def here(self, request):
         """The address this request came in on, when it is one of ours: Host is that address's, exactly once."""
@@ -280,13 +286,13 @@ class Service:
             else:await self.costly(request,self.store.reset_compatible,data.get('code',''),data.get('password',''))
         elif action=='delete':  # 删除账号, asked for again with the password; nothing of the account is kept
             for ident in await self.costly(request,self.store.delete_account,token,data.get('password','')):
-                await self.hub.disconnect(ident)
+                await self.hub.disconnect(ident,'账号被删除')
             session=''
         elif action=='rename': self.store.rename(token,data.get('id',''),data.get('label',''))
         elif action=='revoke':
             ident=data.get('id','')
             if not self.store.revoke(token,ident): raise web.HTTPNotFound()
-            await self.hub.disconnect(ident)
+            await self.hub.disconnect(ident,'在账号页上被移除')
         elif action=='select':
             ident=data.get('id','')
             row=self.store.device(token,ident)
@@ -324,7 +330,7 @@ class Service:
         if action=='approve' and request.method=='POST':
             data=await self.data(request)
             ident=self.store.approve(token,data.get('id',''),data.get('existing',''))
-            await self.hub.disconnect(ident)
+            await self.hub.disconnect(ident,'重新绑定')
             return web.json_response({'ok':True,'device':ident})
         raise web.HTTPNotFound()
 
