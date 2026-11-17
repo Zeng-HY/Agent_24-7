@@ -259,11 +259,11 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
 
 **Python**（仓库根目录，`python -m unittest discover -s tests`）
 
-- 改前基线（第一次，`-X utf8`，原样在 `baseline-deepseek-before.log`）：`Ran 851 tests`，`FAILED (failures=1, errors=22, skipped=6)`。
-- 先写测试、在旧代码上跑：`Ran 877 tests`，`FAILED (failures=1, errors=36, skipped=6)`——多出来的 14 个 ERROR 就是新测试。23 条已知失败/出错的清单和第一次基线逐条相同（`baseline-failures.txt`）。
+- 改前基线（旧代码，第一次跑）：`Ran 851 tests`，`FAILED (failures=1, errors=22, skipped=6)`。那次控制台输出是乱码，重跑时被覆盖了；它的 23 条失败/出错清单单独留成了 `known-failures-23.txt`。
+- 改前基线（旧代码，重跑，`-X utf8`，原样在 `baseline-deepseek-before.log`，此时新测试文件已在 `tests/` 里）：`Ran 877 tests`，`FAILED (failures=1, errors=36, skipped=6)`——36 = 已知的 22 条出错 + 新测试 14 条在旧代码上出错；失败 1 条、跳过 6 条和第一次一样。全量清单 `baseline-failures.txt`（37 条）。
 - 改后（最后一次，原样在 `after-deepseek-change-final.log`）：`Ran 878 tests`，`FAILED (failures=1, errors=22, skipped=6)`。
-- 逐行比对 23 条已知失败/出错：改前改后**完全一样**（`Compare-Object` 无差异）。新测试 14 个全过。
-- 总数 877→878 是这期间另一个会话又加了一个测试（这个仓库里同时有别的会话在干活），和这次无关；两次的 23 条已知项相同。
+- 逐行比对 23 条已知失败/出错：改前改后**完全一样**（`Compare-Object` 无差异；改后清单 `after-failures-final.txt`）。新测试 14 个全过（`new-tests-after-code.log`）。
+- 总数 877→878 是这期间另一个会话给 `tests/test_relay_tunnel_log.py` 加了一项（提交 `e3731f7`，10:46），和这次无关；两次的 23 条已知项相同。
 - 两台旧的坏项照旧，和这次无关：Playwright 浏览器缺（`C:\Users\39011\AppData\Local\ms-playwright` 不在，webkit/chromium 那些 ERROR），`test_open_speed` 那 1 条 FAIL。
 
 **安卓**（`apps\android` 里 `.\scripts\build.ps1`，四个任务都过）
