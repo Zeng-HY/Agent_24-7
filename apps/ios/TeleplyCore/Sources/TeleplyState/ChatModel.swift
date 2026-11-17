@@ -2,6 +2,13 @@ import Foundation
 import Observation
 import TeleplyModel
 
+/// 11-17 scroll probe: with the launch argument -TeleplyDemoLive the local demo's open conversation gets a frame every
+/// half second (its last answer growing, as a running turn's does), and the conversation page shows a probe line.
+/// For the simulator check of "reading above is pulled back to the bottom" (user, iPhone 0.7.4); off otherwise.
+public enum DemoLive {
+    public static let on = ProcessInfo.processInfo.arguments.contains("-TeleplyDemoLive")
+}
+
 /// Notes a send's local copy keeps in its body and never sends (Android ChatController): where Claude's record
 /// stood when the computer pressed Enter and the words to look for there (web chat/check), and, for a send the
 /// computer turned away, what was in Claude's box and why.
@@ -219,6 +226,7 @@ public final class ChatModel {
                 // The local demo has no live stream (Android: an empty flow).
                 if synthetic {
                     connection = "本地固定场景"
+                    if DemoLive.on { await demoFrames(key, t) }
                     return
                 }
                 try await withThrowingTaskGroup(of: Void.self) { group in
@@ -263,6 +271,21 @@ public final class ChatModel {
             }
             if !frame.messages.isEmpty { revision += 1 }
             retryDelay = .seconds(1)
+        }
+    }
+
+    /// -TeleplyDemoLive (DemoLive): a frame every half second, one answer at the end growing by a sentence each time,
+    /// handed on as listen() hands a computer's frames on.
+    func demoFrames(_ key: ChatKey, _ t: Int) async {
+        var seq: Int64 = 0
+        while !Task.isCancelled && t == token {
+            do { try await pacer.wait(.milliseconds(500)) } catch { return }
+            guard t == token else { return }
+            seq += 1
+            let text = "## 实时示例 \(seq)\n" + String(repeating: "正在输出的一句话。", count: Int(seq))
+            onFrame(LiveFrame(seq: seq, snapshot: false, messages: [Message(id: "demo-live", role: "assistant", text: text)],
+                              control: nil), key)
+            revision += 1
         }
     }
 

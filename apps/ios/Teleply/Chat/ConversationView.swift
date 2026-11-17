@@ -25,6 +25,8 @@ struct ConversationView: View {
     @State private var pickAfterFiles = false
     /// The messages' roles, the pictures sent with them and the waiting cards, kept between redraws.
     @State private var memo = TimelineMemo()
+    /// DemoLive (11-17 scroll probe): what last moved or flagged the page, newest last.
+    @State private var trail: [String] = []
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
 
@@ -113,19 +115,23 @@ struct ConversationView: View {
             geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom >= geometry.contentSize.height - 48
         } action: { _, bottom in
             nearBottom = bottom
+            probe(bottom ? "near" : "far")
         }
         // The fingers themselves decide: starting to drag stops following at once (a programmatic scroll into
         // .animating does not). At rest near the bottom it follows again and finishes the scroll there.
         .onScrollPhaseChange { _, next in
             phase = next
+            probe(String(describing: next))
             if next == .tracking || next == .interacting {
                 reading = reading.dragged()
             } else if next == .idle, nearBottom {
                 reading = reading.opened(following: true)
                 position.scrollTo(edge: .bottom)
+                probe("idle↓")
             }
         }
         .background(Palette.page)
+        .overlay(alignment: .top) { if DemoLive.on { probeLine } }
         .safeAreaBar(edge: .top) { notes(control: control) }
         .safeAreaBar(edge: .bottom) {
             VStack(spacing: 0) {
@@ -149,6 +155,7 @@ struct ConversationView: View {
             guard $0 > 0 else { return }
             reading = reading.sent()
             withAnimation(.easeOut(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+            probe("sent↓")
         }
         .onChange(of: model.messages.first?.id) { keepPlace() }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
@@ -330,9 +337,11 @@ struct ConversationView: View {
         if let anchor = model.anchor, model.messages.contains(where: { $0.id == anchor.message }) {
             position.scrollTo(id: anchor.message, anchor: .top)
             reading = reading.opened(following: false)
+            probe("restore@")
         } else {
             position.scrollTo(edge: .bottom)
             reading = reading.opened(following: !model.newerAvailable)
+            probe("restore↓")
         }
         nearBottom = reading.following
         restored = true
@@ -343,6 +352,7 @@ struct ConversationView: View {
         guard restored, !model.messages.isEmpty else { return }
         if reading.following && !model.newerAvailable && phase == .idle {
             position.scrollTo(edge: .bottom)
+            probe("follow↓")
         } else {
             reading = reading.arrived(newer: model.newerAvailable, scrolling: phase != .idle)
         }
@@ -355,6 +365,30 @@ struct ConversationView: View {
         keepTop = nil
         reading = reading.dragged()
         position.scrollTo(id: keep, anchor: .top)
+        probe("keep")
+    }
+
+    /// DemoLive only: notes what moved or flagged the page, the last ten (11-17 scroll probe).
+    private func probe(_ event: String) {
+        guard DemoLive.on else { return }
+        trail = Array((trail + [event]).suffix(10))
+    }
+
+    /// DemoLive only: following, near the bottom, the unseen mark, the scroll phase and the frame count, then what
+    /// last moved the page — for the simulator check and its screenshots (11-17).
+    private var probeLine: some View {
+        let flags = "follow \(reading.following ? "Y" : "N") near \(nearBottom ? "Y" : "N") unseen \(reading.unseen ? "Y" : "N")"
+        let where_ = "phase \(String(describing: phase)) rev \(model.conversation.revision)"
+        let line: String = flags + " " + where_ + "\n" + trail.joined(separator: " ")
+        return Text(verbatim: line)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(Color.black)
+            .padding(6)
+            .background(Color.yellow.opacity(0.9), in: RoundedRectangle(cornerRadius: 6))
+            .padding(.top, 140)
+            .padding(.horizontal, 12)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("scroll-probe")
     }
 }
 
