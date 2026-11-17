@@ -508,3 +508,39 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 - **没做的事**：没对真 Codex 调 `account/rateLimitResetCredit/consume`，也没经遥应的接口用掉重置（这台电脑只有 1 次，是用户的）；没读任何登录文件；没直接调 chatgpt.com、claude.ai、anthropic；没打包、没安装、没启动或重启遥应；没 push、没 rebase、没 amend、没改版本号；没动 `chats.py`、`archives.py`、`codex_control.py`、`claude_control.py`、`relay_*.py`、`live_events.py`、两个 `ComposerUi.kt`/`ComposerChips.swift` 那条线、网页（`remote.html`、`static/`、`deploy/site/`）、`windows-version.json`、发版脚本、灵动岛；没碰用户没提交的 `deploy/site/`、`pocketagentdesk.com.png`、`tests/test_activity_records.py`。
 - 安卓 `UsageUi.kt` 一开始有个错：Codex 那两个按钮直接调了 `use()`，没先进确认框；`ReaderUiScenarios` 的场景当场发现（找「用掉 1 次 Codex 重置？」找不到），已改成先弹框。现在没有任何绕过确认框就能用掉重置的路子。
 
+### 9.6 审查后的修改（Claude 11-17 审完 `de3fc3e`、`28147ec`、`0bf7104`、`a168c00` 之后）
+
+Claude 审完，结论是照交接文档做对了，让再改四处；四处都改了，另外新提交（没有 amend）。
+
+**一、请求编号丢得太早（安卓 `Usage.kt`、iPhone `Usage.swift`，两边各加一条测试）**
+
+- `ResetAttempt.keepsId` 反过来：只有 `not_confirmed`、`bad_request`、`codex_unreachable`、`codex_refused`、`no_codex` 这五种 code（确定没用掉）才丢编号；其余一切失败都留着——别的 code、没有 code、不是 `ServiceFailure`（网络断了、超时）。
+- 原因：电脑回 500「电脑端出错，没确认这次用成了没有…」、中转回 502/504、或者没有 code 时，第一次可能已经用成了；丢了编号换成新编号重试，账号里有两次以上重置时就会多用掉一次。
+- 界面不变：留编号时照旧显示「没确认这次用成了没有。」和「再试一次（不会多用）」。
+- 测试：两边各加 `onlyTheCodesThatSayNothingWasUsedDropTheId`。留编号：500 没有 code、500 带那句 detail、502、504、`device_offline`、`reset_unconfirmed`、网络异常（安卓 `IOException`，iPhone `URLError`）。丢编号：那五种 code。
+
+**二、结果的颜色（两个手机）**
+
+- 2xx 回来时不再用红色：`outcome` 是 `reset` 用正常文字颜色（安卓 `p.text`、iPhone `Palette.ink`），其余（`nothingToReset`、`noCredit`、`alreadyRedeemed`、不认识的）用灰色；红色只留给失败。
+
+**三、安卓那句话**
+
+- 「重置次数要实时读到才显示，下拉刷新试试」→「重置次数要实时读到才显示，点「刷新」再读一次」。iPhone 有下拉刷新，没改。
+
+**四、电脑端 `usage_limits.py`**
+
+1. `codex_live` 多接一层：开后台程序或和它说话时出了别的异常（`OSError`、程序起不来等）也算 `codex_unreachable`，文字是「读不到 Codex 的实时用量：<异常类型名>」。手机于是拿到记录里的数和原因，而不是 500。
+2. `LIVE_ERROR_MINUTES` 改名 `LIVE_ERROR_SECONDS`（600 秒，值不变；原来的名字单位写错了）。
+3. `Usage._codex(live=True)`：缓存只在它来自实时读时才用——`source == "live"`，或者实时读失败后的「记录 + `live_error`」；缓存里是 `live=False` 读出来的记录时，`live=True` 重新实时读。`live=False` 仍然用缓存。实时读失败也缓存 30 秒这条保留。
+4. 新加的测试（`tests/test_usage_limits.py` +4，共 55 条）：`another_failure_while_talking_to_the_server_says_codex_is_unreachable`（`call` 抛 `OSError`、`server_factory` 抛 `OSError` 各一次）、`a_live_question_does_not_take_a_records_only_answer_from_the_cache`、`a_fallback_after_a_failed_live_read_is_reused_within_the_cache`、`a_records_read_still_takes_its_cache`。
+
+**测试数字**
+
+- `tests/test_usage_limits.py`：55 条全过（`review-new-tests.txt`）。
+- Python 全量：`Ran 935 tests`，`FAILED (errors=22, skipped=6)`（`review-python-tests.txt`）。22 条全是原来那批 Playwright 浏览器缺。和 9.3 那次（930 条、1 失败 + 22 出错）比：多 4 条新测试，另外 `test_open_speed` 那条 FAIL 没了——是别的会话在改那个测试（Claude 审时说的），和这次无关。
+- 安卓：`.\scripts\build.ps1` 四个任务 `BUILD SUCCESSFUL in 42s`，21 个 XML、**244** 个 JVM 测试、0 失败 0 出错（`review-android-build.txt`）。比 9.3 的 243 多一条，就是新的那条 keepsId 测试；lint 也过。
+- iPhone：还是编不了，逐行对照现有写法。这次多的是一个 `private static let explainedNotUsed: Set<String>` 和一个 `for code in [...]` 里的 `#expect(!…)`。
+
+**这次没做的**：没对真 Codex 调 `consume`，也没再对真 Codex 读；没动允许清单以外的文件；提交是新提交，没有 amend、没有 push。
+
+
