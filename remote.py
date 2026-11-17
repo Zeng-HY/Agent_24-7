@@ -70,6 +70,7 @@ import composer_references
 import composer_commands  # what the box offers after / and how a typed command runs (0.6.6)
 import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
 import archives  # a left swipe archives a conversation; 设置 → 已归档对话 restores or deletes (10-20)
+import usage_limits  # Codex's and Claude's limits and when they reset, and one Codex reset from the phone (11-17)
 import new_conversations
 import voice  # the microphone button: recordings from the phone turned into text with VoiceAnywhere's key
 import voice_local  # the same button, recognised on this PC while the user talks (SenseVoice + Qwen3-ASR)
@@ -519,6 +520,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/notify":  # 设置 → 手机通知: whether an address is set (never the address) and the last outcomes
             self._json(self.server.notifier.public())
             return
+        if path == "/api/usage":  # 用量：Codex 和 Claude 的限额、几点重置；live=1 时 Codex 实时读（usage_limits.py）
+            try:
+                self._json(self.server.usage.read(self._query().get("live") == "1"))
+            except usage_limits.UsageError as exc:
+                self._json({"error": str(exc), "code": exc.code}, exc.status)
+            return
         if path == "/api/notify/push":  # the relay reads what happened, for 遥应's own notifications (relay_push.py)
             # 11-01: a relay that stopped reading (or never started) left nothing in this log; one line per change.
             self.log.write("通知：中转开始读通知")
@@ -693,6 +700,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.server.voice.tidy_text(str(body.get("text", "")), context))
             except voice.VoiceError as exc:
                 self._json({"error": str(exc)}, exc.status if 400 <= exc.status < 600 else 400)
+            return
+        if path == "/api/usage/codex-reset":  # 用掉一次 Codex 重置: the phone confirmed it, the request id keeps a retry free
+            try:
+                self._json(self.server.usage.redeem(body))
+            except usage_limits.UsageError as exc:
+                self._json({"ok": False, "error": str(exc), "text": str(exc), "code": exc.code}, exc.status)
+            except Exception:  # never 503: the phones read that as "this computer is offline"
+                self.log.write(traceback.format_exc())
+                self._json({"error": "电脑端出错，没确认这次用成了没有，请到电脑上的 Codex 里看用量"}, 500)
             return
         if path in ("/api/notify", "/api/notify/ntfy", "/api/notify/test"):
             # Bark's address (empty: off), ntfy on or off, one to try (on one channel, or on all)
@@ -1215,6 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
     server.references = composer_references.References(server.history, files=server.files)
     server.archives = archives.Archives(server.codex, server.history, log.write,  # type: ignore[attr-defined]
                                         apps=lambda: server.machine["apps"], claude=server.claude)
+    server.usage = usage_limits.Usage(server.desktop, log.write, apps=lambda: server.machine["apps"])  # type: ignore[attr-defined]
     server.deepseek.references = server.references
     server.codex.references = server.references
     server.new_chats = new_conversations.NewConversations(server.history,server.references,server.codex,server.desktop)
