@@ -36,9 +36,16 @@ public struct DemoTransport: RelayFileTransport {
         let network = world.network
         if network == .offline { throw Offline() }
         if network.delay > .zero { try await Task.sleep(for: network.delay) }
+        // 11-17 scroll probe (-TeleplyDemoLive): the 200-message conversation reads in 1.5 s, as a real one takes a
+        // moment, so the page is drawn before its messages arrive — the order the user's iPhone showed.
+        if Self.liveProbe, route == "/api/chat", query["id"] == "performance", query["before"] == nil {
+            try await Task.sleep(for: .milliseconds(1_500))
+        }
         if let file = request.upload { return uploaded(route, query, file) }
         return computer(device, route, query, request.method, body)
     }
+
+    static let liveProbe = ProcessInfo.processInfo.arguments.contains("-TeleplyDemoLive")
 
     /// A conversation's file as the demo computer has it: the fixed picture, the Word file, or a line of text. A picture
     /// sent with a message (/api/codex/image) is the fixed picture too.

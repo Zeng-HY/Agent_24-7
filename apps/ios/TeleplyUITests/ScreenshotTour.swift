@@ -242,6 +242,9 @@ final class ScreenshotTour: XCTestCase {
         probeShot(app, "30-scroll-1-released")
         sleep(2)
         probeShot(app, "30-scroll-2-two-seconds")
+        // The user's iPhone (11-17): at rest after a drag up, the page took itself for near the bottom and went back.
+        let afterDrag = app.staticTexts["scroll-probe"].firstMatch.label
+        XCTAssertTrue(afterDrag.hasPrefix("follow N"), "a drag up was pulled back to the bottom: \(afterDrag)")
         // Two ordinary flings further back.
         app.swipeDown()
         app.swipeDown()
@@ -249,12 +252,17 @@ final class ScreenshotTour: XCTestCase {
         probeShot(app, "30-scroll-3-flung")
         sleep(3)
         probeShot(app, "30-scroll-4-four-seconds")
-        // Back down with flings the other way, then a rest there.
+        let afterFlings = app.staticTexts["scroll-probe"].firstMatch.label
+        XCTAssertTrue(afterFlings.hasPrefix("follow N"), "flings up were pulled back to the bottom: \(afterFlings)")
+        // Back down with flings the other way, then a rest there: at the bottom it follows again.
+        app.swipeUp()
         app.swipeUp()
         app.swipeUp()
         app.swipeUp()
         sleep(2)
         probeShot(app, "30-scroll-5-back-down")
+        let atBottom = app.staticTexts["scroll-probe"].firstMatch.label
+        XCTAssertTrue(atBottom.hasPrefix("follow Y near Y"), "back at the bottom the page did not follow again: \(atBottom)")
         app.terminate()
     }
 

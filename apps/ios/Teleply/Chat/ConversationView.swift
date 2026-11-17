@@ -31,6 +31,8 @@ struct ConversationView: View {
     @AppStorage("TeleplyScrollProbe") private var probeSetting = false
     /// When this page instance was made: a new time after a jump means the page itself was made anew.
     @State private var born = Date()
+    /// Probe only: the scroll view's latest numbers (ProbeGeometry).
+    @State private var geo = ProbeGeometry()
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
 
@@ -120,6 +122,15 @@ struct ConversationView: View {
         } action: { _, bottom in
             nearBottom = bottom
             probe(bottom ? "near" : "far")
+        }
+        // Probe only: the scroll view's own numbers, to see how it measures its bottom (11-17).
+        .onScrollGeometryChange(for: ProbeGeometry.self) { geometry in
+            ProbeGeometry(offset: Int(geometry.contentOffset.y), size: Int(geometry.contentSize.height),
+                          box: Int(geometry.containerSize.height), top: Int(geometry.contentInsets.top),
+                          bottom: Int(geometry.contentInsets.bottom), seenTop: Int(geometry.visibleRect.minY),
+                          seenBottom: Int(geometry.visibleRect.maxY))
+        } action: { _, value in
+            if probing { geo = value }
         }
         // The fingers themselves decide: starting to drag stops following at once (a programmatic scroll into
         // .animating does not). At rest near the bottom it follows again and finishes the scroll there.
@@ -389,7 +400,8 @@ struct ConversationView: View {
         let flags = "follow \(reading.following ? "Y" : "N") near \(nearBottom ? "Y" : "N") unseen \(reading.unseen ? "Y" : "N")"
         let where_ = "phase \(String(describing: phase)) rev \(model.conversation.revision) sr \(model.scrollRevision)"
         let made = "page " + born.formatted(date: .omitted, time: .standard)
-        let line: String = flags + " " + where_ + " " + made + "\n" + trail.joined(separator: " ")
+        let numbers = "off \(geo.offset) size \(geo.size) box \(geo.box) in \(geo.top)/\(geo.bottom) seen \(geo.seenTop)-\(geo.seenBottom)"
+        let line: String = flags + " " + where_ + " " + made + "\n" + numbers + "\n" + trail.joined(separator: " ")
         return Text(verbatim: line)
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(Color.black)
@@ -400,6 +412,11 @@ struct ConversationView: View {
             .allowsHitTesting(false)
             .accessibilityIdentifier("scroll-probe")
     }
+}
+
+/// 11-17 scroll probe: the scroll view's offset, content height, container height, insets and visible rect, in points.
+private struct ProbeGeometry: Equatable {
+    var offset = 0, size = 0, box = 0, top = 0, bottom = 0, seenTop = 0, seenBottom = 0
 }
 
 /// The context ring and ⋯ in the title bar, with what they open: 会话状态 (from the ring), 查找消息, 常用提示语 and
