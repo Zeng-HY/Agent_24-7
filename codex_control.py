@@ -1,8 +1,9 @@
 """Local desktop follower bridge. Never starts or resumes an independent app-server.
 
-Protocol verified against Codex Windows 26.1007.2314.0. A missing owner, unknown
-snapshot version or disconnected pipe disables actions instead of falling back to
-blind keystrokes. Only the narrow methods below are exposed to the phone.
+Protocol verified against Codex Windows 26.1106.6628.0 and 26.1111.2228.0. 26.1111 only raised
+thread-stream-state-changed's version, 11 to 13; the snapshot and patch shapes were unchanged. A missing owner,
+unknown snapshot version or disconnected pipe disables actions instead of falling back to blind keystrokes. Only the
+narrow methods below are exposed to the phone.
 """
 from __future__ import annotations
 
@@ -36,9 +37,14 @@ import codex_question_dismiss
 import composer_commands
 
 HERE = Path(__file__).resolve().parent
-# 26.1106.6628.0: 11-17, on the user's own computer, asking for the owner, the v11 snapshot and sending a message all
-# worked with this version (owner-probe-20261117.txt). A Codex newer than this is not trusted to behave the same.
-TESTED_APP_VERSION = "26.1106.6628.0"
+# 26.1111.2228.0: 11-17 on this computer, asking for the owner, the v13 snapshot, reading status and confirm_open all
+# worked (v13-snapshot-shape.txt, v13-trial.txt). A Codex newer than this is not trusted to behave the same.
+TESTED_APP_VERSION = "26.1111.2228.0"
+# 11-17: 26.1106 sends thread-stream-state-changed v11, 26.1111.2228.0 sends v13. Only the number changed: the
+# snapshot {type, revision, conversationState} and patches {type, baseRevision, revision, patches} are the same, the
+# receiving code is the same, and Immer's add/replace/remove patches match apply_patches. A version not here is still
+# thrown away (a later format must not be read wrongly; confirm_open then says the state cannot be read).
+STREAM_STATE_VERSIONS = (11, 13)
 VERSIONS = {"initialize": 0, "thread-owner-discovery": 1,
             "thread-follower-read-model-settings": 1, "thread-follower-start-turn": 2,
             "thread-follower-steer-turn": 1, "thread-follower-submit-user-input": 1}
@@ -137,10 +143,10 @@ class DesktopPipe:
                     elif msg.get("type") == "broadcast" and msg.get("method") == "thread-stream-state-changed":
                         params = msg.get("params") or {}
                         change = params.get("change") or {}
-                        if params.get("hostId") == "local" and msg.get("version") != 11:
+                        if params.get("hostId") == "local" and msg.get("version") not in STREAM_STATE_VERSIONS:
                             with self.condition:
                                 tid=params.get("conversationId");self.snapshots.pop(tid,None);self.revisions.pop(tid,None);self.condition.notify_all()
-                        if params.get("hostId") == "local" and msg.get("version") == 11 and change.get("type") == "snapshot":
+                        if params.get("hostId") == "local" and msg.get("version") in STREAM_STATE_VERSIONS and change.get("type") == "snapshot":
                             state = change.get("conversationState") or {}
                             if state.get("id") == params.get("conversationId"):
                                 with self.condition:
@@ -150,7 +156,7 @@ class DesktopPipe:
                                         oldest = min(self.snapshots, key=lambda k:self.snapshots[k][0])
                                         self.snapshots.pop(oldest, None)
                                     self.condition.notify_all()
-                        elif params.get("hostId") == "local" and msg.get("version") == 11 and change.get("type") == "patches":
+                        elif params.get("hostId") == "local" and msg.get("version") in STREAM_STATE_VERSIONS and change.get("type") == "patches":
                             tid=params.get("conversationId")
                             with self.condition:
                                 record=self.snapshots.get(tid)
@@ -775,7 +781,8 @@ class Bridge:
                 break
             time.sleep(step)
         elapsed = time.monotonic() - started
-        if owner and self.status(tid, fresh=True).get("available"):
+        state = self.status(tid, fresh=True) if owner else None
+        if state and state.get("available"):
             self._forget_open_failure(tid)
             title = chats.find("codex", tid)["title"]
             return {"ok": True, "text": f"电脑上已打开「{title}」，可以发了"}
@@ -804,6 +811,9 @@ class Bridge:
         line = (f"Codex：电脑上打开 {tid[:8]} 后 {elapsed:.1f} 秒没接手（{kind}）；"
                 f"Codex {version or '未知'}，遥应测过 {TESTED_APP_VERSION}；"
                 f"这个对话的提供商 {_short(provider) or '未知'}，当前 {_short(current) or '未知'}")
+        if owner and state:
+            # 11-17: the state's own reason, so the log says more than "读不到状态".
+            line += f"；状态：{str(state.get('reason') or '')[:80]}"
         if last_error is not None and getattr(last_error, "code", ""):
             line += f"；最后见到的错误 {last_error.code}"
         self._log(line)

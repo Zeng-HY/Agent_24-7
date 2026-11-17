@@ -2,7 +2,7 @@
 thread-owner-discovery answers only from the window showing it; a window that could not resume answers no-client-found).
 The phone is told why in the computer's own words, and gets that reason through status() for ten minutes after the try.
 """
-import json,sqlite3,sys,tempfile,threading,time,unittest
+import json,sqlite3,struct,sys,tempfile,threading,time,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
@@ -84,7 +84,7 @@ class OpenCheckTests(unittest.TestCase):
         self.assertEqual(self.clock.slept,10.0)
         self.assertEqual(len(self.lines),1,self.lines)
         line=self.lines[0]
-        for part in (TID[:8],'10.0 秒','26.1106.6628.0','遥应测过 26.1106.6628.0','openai','原因不明'):
+        for part in (TID[:8],'10.0 秒','26.1106.6628.0','遥应测过 '+codex_control.TESTED_APP_VERSION,'openai','原因不明'):
             self.assertIn(part,line)
         self.assertNotIn(TITLE,line)
         self.assertNotIn('没接手这个对话。请看电脑上这个对话',line)  # the log says its own words
@@ -325,6 +325,126 @@ class OpenCheckTests(unittest.TestCase):
             for thread in threads:thread.start()
             for thread in threads:thread.join()
         self.assertEqual(len(made),1)
+
+
+class StreamVersionTests(unittest.TestCase):
+    """26.1111.2228.0 raised thread-stream-state-changed from 11 to 13 and changed nothing else (11-17:
+    stream-versions-1106-vs-1111.txt; the snapshot and patch shapes and the receiving code are the same, and a real
+    v13 snapshot read correctly in v13-snapshot-shape.txt). The fake state below has only the fields that probe saw."""
+    TID='11111111-2222-3333-4444-555555555555'
+
+    def state(self):
+        return {'id':self.TID,'hostId':'local','turnHistory':{'kind':'canonical','history':{'entitiesByKey':{}}},
+                'turns':[],'requests':[],'resumeState':'resumed','historyMode':'paginated','modelProvider':'openai',
+                'latestModel':'gpt-6-astra','latestReasoningEffort':'low',
+                'latestCollaborationMode':{'mode':'default','settings':{'model':'gpt-6-astra','reasoning_effort':'low'}},
+                'latestThreadSettings':{'model':'gpt-6-astra','effort':'low','serviceTier':None},
+                'threadRuntimeStatus':{'type':'idle'}}
+
+    def pipe(self):
+        pipe=object.__new__(codex_control.DesktopPipe)
+        pipe.closed=False;pipe.pending={};pipe.condition=threading.Condition()
+        pipe.snapshots={};pipe.revisions={};pipe.queues={};pipe.handle=object()
+        return pipe
+
+    def snapshot(self,version=13,revision=5,state=None):
+        return {'type':'broadcast','method':'thread-stream-state-changed','version':version,'sourceClientId':'owner-client',
+                'params':{'hostId':'local','conversationId':self.TID,
+                          'change':{'type':'snapshot','revision':revision,'conversationState':state or self.state()}}}
+
+    def patches(self,version=13,base=5,revision=6,patches=None):
+        return {'type':'broadcast','method':'thread-stream-state-changed','version':version,'sourceClientId':'owner-client',
+                'params':{'hostId':'local','conversationId':self.TID,
+                          'change':{'type':'patches','baseRevision':base,'revision':revision,
+                                    'patches':patches or [],'acceptedTextChanges':[]}}}
+
+    def feed(self,pipe,messages):
+        """Run the real _read over these frames, its pipe reads replaced by the frames themselves."""
+        frames=b''.join(struct.pack('<I',len(raw))+raw
+                        for raw in (json.dumps(m,ensure_ascii=False).encode('utf-8') for m in messages))
+        reads={'n':0}
+        def read_file(handle,size,overlapped):
+            reads['n']+=1
+            return (0,frames) if reads['n']==1 else (0,b'')
+        def result(handle,overlapped,wait):
+            return len(frames) if reads['n']==1 else 0
+        pipe.closed=False
+        with patch.object(codex_control.win32file,'ReadFile',read_file),\
+             patch.object(codex_control.win32file,'GetOverlappedResult',result):
+            pipe._read()
+        return pipe
+
+    def test_a_version_13_snapshot_is_stored_and_status_reads_it(self):
+        pipe=self.feed(self.pipe(),[self.snapshot(13)])
+        self.assertIn(self.TID,pipe.snapshots)
+        self.assertEqual(pipe.snapshots[self.TID][2]['latestModel'],'gpt-6-astra')
+        # The reading side: the phone's status comes out of that snapshot, as on v11.
+        pipe.closed=False;pipe.watches={self.TID:1}
+        bridge=Bridge();bridge.pipe=pipe
+        with tempfile.TemporaryDirectory() as td:
+            rollout=Path(td)/'rollout.jsonl';rollout.write_text('',encoding='utf-8')
+            with patch.object(chats,'find',return_value={'app':'codex','path':str(rollout)}):
+                status=bridge.status(self.TID)
+        self.assertTrue(status['available'])
+        self.assertEqual(status['settings']['model'],'gpt-6-astra')
+        self.assertEqual(status['settings']['effort'],'low')
+        self.assertFalse(status['running'])
+
+    def test_version_13_patches_follow_a_version_13_snapshot(self):
+        pipe=self.feed(self.pipe(),[self.snapshot(13,revision=5),
+                                    self.patches(13,base=5,revision=6,
+                                                 patches=[{'op':'replace','path':['latestModel'],'value':'gpt-7'}])])
+        self.assertEqual(pipe.revisions[self.TID],6)
+        self.assertEqual(pipe.snapshots[self.TID][2]['latestModel'],'gpt-7')
+
+    def test_version_11_still_works(self):
+        pipe=self.feed(self.pipe(),[self.snapshot(11,revision=3)])
+        self.assertIn(self.TID,pipe.snapshots)
+        self.assertEqual(pipe.revisions[self.TID],3)
+
+    def test_other_versions_are_still_thrown_away(self):
+        pipe=self.pipe()
+        # A snapshot kept from before is cleared by a version nobody tested; 12 and 14 are not in the tuple.
+        for version in (12,14):
+            pipe.snapshots[self.TID]=(time.monotonic(),'owner-client',self.state())
+            pipe.revisions[self.TID]=1
+            self.feed(pipe,[self.snapshot(version)])
+            self.assertNotIn(self.TID,pipe.snapshots,version)
+            self.assertNotIn(self.TID,pipe.revisions,version)
+        self.feed(pipe,[self.snapshot(12)])
+        self.assertEqual(pipe.snapshots,{})
+
+    def test_the_tested_version_is_26_1111(self):
+        self.assertEqual(codex_control.TESTED_APP_VERSION,'26.1111.2228.0')
+        self.assertFalse(codex_control.version_newer('26.1111.2228.0',codex_control.TESTED_APP_VERSION))
+        self.assertTrue(codex_control.version_newer('26.1112.0.0',codex_control.TESTED_APP_VERSION))
+
+    def test_an_owner_whose_state_cannot_be_read_logs_the_states_reason(self):
+        bridge=Bridge();bridge.pipe=SimpleNamespace(closed=False,handle=object())
+        lines=[];bridge.log=lines.append;clock=FakeClock()
+        bridge.owner=Mock(return_value='owner-client')
+        reason='没有取得当前会话快照，请在电脑打开该对话后重试'
+        bridge.status=Mock(return_value={'available':False,'reason':reason})
+        with patch.multiple('codex_control.time',monotonic=clock.monotonic,sleep=clock.sleep),\
+             patch('codex_control.codex_version',return_value='26.1111.2228.0'),\
+             patch('codex_control.thread_provider',return_value='openai'),\
+             patch('codex_control.current_provider',return_value='openai'):
+            with self.assertRaises(not_taken()) as caught:
+                bridge.confirm_open(self.TID)
+        # The phone's words stay what they were; the log gets the state's own reason, cut at 80 characters.
+        self.assertEqual(str(caught.exception),'Codex 已接手，但遥应还读不到它的状态，请稍后再点「电脑上打开」')
+        self.assertIn('；状态：'+reason,lines[0])
+        self.assertNotIn(reason,str(caught.exception))
+        lines.clear()
+        bridge.status=Mock(return_value={'available':False,'reason':'长'*100})
+        with patch.multiple('codex_control.time',monotonic=clock.monotonic,sleep=clock.sleep),\
+             patch('codex_control.codex_version',return_value='26.1111.2228.0'),\
+             patch('codex_control.thread_provider',return_value='openai'),\
+             patch('codex_control.current_provider',return_value='openai'):
+            with self.assertRaises(not_taken()):
+                bridge.confirm_open(self.TID)
+        self.assertIn('；状态：'+'长'*80,lines[0])
+        self.assertNotIn('长'*81,lines[0])
 
 
 if __name__=='__main__':
