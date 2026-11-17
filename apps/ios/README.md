@@ -2,6 +2,11 @@
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
+## 0.7.6：手机看用量（11-17，用户说「安卓和 iPhone 都发」）
+
+- **用量**（`0bf7104`、`96abf37`，见 `docs/handoff-usage-limits.md`）：设置里和对话右上角 ⋯ 菜单里的「用量」：Codex 每周（和可能有的 5 小时）用了多少、几点重置、还有几次重置；Claude 窗口上那一档。Codex 有重置时能用掉一次，先弹确认框，请求编号保证重试不多用。要电脑端 0.27.0-dev.40 或更新。11-17 Codemagic `ios-native-check` 编译和 287 条测试通过（`6afbdc8a`）。
+- **带上** main 上 11-17 的 Codex「电脑上打开」那行状态字（`8a29ffb`），0.7.5 里没有。
+
 ## 0.7.5：往上翻停下后不再被拉回底部（11-17，构建 31 已传 TestFlight）
 
 **原因**（构建 30 的真机诊断截图 + Codemagic 模拟器复现查明）：判断「离底近」的算式是 `contentOffset + containerSize − 底部 inset ≥ 内容高 − 48`。iOS 26.5 上量到 `containerSize` 只是两条栏之间的高度（6.9 寸机 606/956），`contentOffset` 却是整个视口的顶，所以在最底部也差两条栏的高度（350 点），永远读成「远」。`restore()` 打开时又手动把它设成「近」，而 `onScrollGeometryChange` 只在算出的值变化时才回调；算出的一直是「远」，这个「近」就一直留着。于是每次手指停下（`.idle`）都按「在底部附近」处理，重新跟随并拉回底部（黄字里的 `idle↓`）。模拟器原先没复现，是因为示例对话加载太快，先后顺序正好错开；示例长对话在探针模式下晚 1.5 秒加载后就和真机一样了（`6afbb8c9`）。
