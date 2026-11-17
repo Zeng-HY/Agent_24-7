@@ -27,6 +27,10 @@ struct ConversationView: View {
     @State private var memo = TimelineMemo()
     /// DemoLive (11-17 scroll probe): what last moved or flagged the page, newest last.
     @State private var trail: [String] = []
+    /// 开发者选项 → 显示滚动诊断: the probe line on a real phone too (11-17).
+    @AppStorage("TeleplyScrollProbe") private var probeSetting = false
+    /// When this page instance was made: a new time after a jump means the page itself was made anew.
+    @State private var born = Date()
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
 
@@ -131,7 +135,9 @@ struct ConversationView: View {
             }
         }
         .background(Palette.page)
-        .overlay(alignment: .top) { if DemoLive.on { probeLine } }
+        .overlay(alignment: .top) { if probing { probeLine } }
+        .onAppear { probe("appear") }
+        .onDisappear { probe("gone") }
         .safeAreaBar(edge: .top) { notes(control: control) }
         .safeAreaBar(edge: .bottom) {
             VStack(spacing: 0) {
@@ -368,18 +374,22 @@ struct ConversationView: View {
         probe("keep")
     }
 
-    /// DemoLive only: notes what moved or flagged the page, the last ten (11-17 scroll probe).
+    /// The probe line is on: the simulator check (DemoLive) or 开发者选项 → 显示滚动诊断.
+    private var probing: Bool { DemoLive.on || probeSetting }
+
+    /// Probe only: notes what moved or flagged the page, the last ten (11-17 scroll probe).
     private func probe(_ event: String) {
-        guard DemoLive.on else { return }
+        guard probing else { return }
         trail = Array((trail + [event]).suffix(10))
     }
 
-    /// DemoLive only: following, near the bottom, the unseen mark, the scroll phase and the frame count, then what
-    /// last moved the page — for the simulator check and its screenshots (11-17).
+    /// Probe only: following, near the bottom, the unseen mark, the scroll phase, the frame count, the open count
+    /// (scrollRevision) and when this page was made, then what last moved the page (11-17).
     private var probeLine: some View {
         let flags = "follow \(reading.following ? "Y" : "N") near \(nearBottom ? "Y" : "N") unseen \(reading.unseen ? "Y" : "N")"
-        let where_ = "phase \(String(describing: phase)) rev \(model.conversation.revision)"
-        let line: String = flags + " " + where_ + "\n" + trail.joined(separator: " ")
+        let where_ = "phase \(String(describing: phase)) rev \(model.conversation.revision) sr \(model.scrollRevision)"
+        let made = "page " + born.formatted(date: .omitted, time: .standard)
+        let line: String = flags + " " + where_ + " " + made + "\n" + trail.joined(separator: " ")
         return Text(verbatim: line)
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(Color.black)
