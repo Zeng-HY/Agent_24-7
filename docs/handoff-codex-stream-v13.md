@@ -83,10 +83,49 @@
 
 ### 9.1 改了什么
 
+**`codex_control.py`**
+
+- 模块说明改成两版都核对过（26.1106.6628.0、26.1111.2228.0），并写明 26.1111 只把 `thread-stream-state-changed` 从 11 升到 13、快照和补丁的样子没变。
+- `TESTED_APP_VERSION = "26.1111.2228.0"`，注释写 11-17 在这台电脑上核对的结果（问 owner、v13 快照、读状态、`confirm_open`；`v13-snapshot-shape.txt`、`v13-trial.txt`）。
+- 新增 `STREAM_STATE_VERSIONS = (11, 13)`，注释写两版对比和理由（11 是 26.1106 及以前，13 是 26.1111.2228.0；快照、补丁、接收端都没变，Immer 的 add/replace/remove 和 `apply_patches` 一致；不在里面的照旧扔掉——以后真换格式时扔掉比读错安全，那时 `confirm_open` 会说读不到状态）。
+- `DesktopPipe._read` 的三处版本判断改用它：**不在**里面照旧把这个对话的快照和版本记录扔掉；**在**里面照旧存快照、按 `baseRevision` 应用补丁。`thread-queued-followups-changed`（只收版本 2）、各请求的版本号、`remote.py`、手机、网页都没动。
+- `Bridge.confirm_open`：有 owner 但 `status(tid, fresh=True)` 不可用时，日志那一行后面接上 `；状态：<status() 给的 reason，最多 80 字>`；手机拿到的文字一字不变。
+
+**`tests/test_codex_open_check.py`**
+
+- 新增 `StreamVersionTests` 6 个测试。假快照只照 `v13-snapshot-shape.txt` 的字段造（`id`、`hostId`、`turnHistory`、`latestCollaborationMode`、`latestThreadSettings`、`threadRuntimeStatus` 等），没有真对话内容；用真的 `_read` 跑，读管道那两步换成假帧（`win32file.ReadFile` / `GetOverlappedResult`）。
+- 老测试 `test_no_owner_ever_says_so_and_writes_one_line` 里「遥应测过 26.1106.6628.0」这一处断言改成 `'遥应测过 '+codex_control.TESTED_APP_VERSION`：被核对的那个版本号正是这次要改的，断言跟着改；别的断言没动。
+
 ### 9.2 新测试和在旧代码上的结果
+
+6 个，全在 `tests/test_codex_open_check.py` 的 `StreamVersionTests`。旧代码按 main 的 `b90d6f9` 取，原样输出在工作区 `v13-tests-on-old-code.log`：**3 个 FAIL、1 个 ERROR、2 个通过**（通过的两个是防回退的）。改完以后再跑，21 个（15 个旧的 + 6 个新的）全过（`v13-tests-after-code.log`）。
+
+| 测试 | 旧代码 | 对应 |
+|---|---|---|
+| `test_a_version_13_snapshot_is_stored_and_status_reads_it` | FAIL：快照没存（`{}`） | 版-1、3-1（v13 快照，`Bridge.status` 读得出） |
+| `test_version_13_patches_follow_a_version_13_snapshot` | ERROR：`revisions` 里没有这个对话 | 版-1（v13 补丁接在 v13 快照后） |
+| `test_version_11_still_works` | 通过（防回退） | 3-1（11 照旧） |
+| `test_other_versions_are_still_thrown_away` | 通过（防回退） | 3-1（12、14 照旧扔掉） |
+| `test_the_tested_version_is_26_1111` | FAIL：还是 `26.1106.6628.0` | 版-2 |
+| `test_an_owner_whose_state_cannot_be_read_logs_the_states_reason` | FAIL：那行没有「状态：」，旧版本号还让它走了「版本较新」那句 | 版-3 |
 
 ### 9.3 全部测试（和基线比）
 
+- 改前基线（`b90d6f9` 加工作区里别人未提交的改动，原样在 `baseline-v13-before.log`）：`Ran 935 tests`，`FAILED (errors=22, skipped=6)`，失败 0。22 条全是 Playwright 浏览器缺（webkit/chromium 那些），`test_open_speed` 已经好了，和交接文档说的一样。
+- 改后（原样在 `after-v13-change.log`）：`Ran 941 tests`，`FAILED (errors=22, skipped=6)`。
+- 逐行比对 22 条失败/出错：改前改后**完全一样**（`Compare-Object` 无差异；清单 `baseline-v13-failures.txt`、`after-v13-failures.txt`）。941 − 935 = 6 就是新加的 6 个测试，全过。
+- 这次跑期间另一个会话还在改 Usage 相关文件（没提交），总条数以后还会变；比较以失败/出错清单为准。
+
 ### 9.4 真 Codex 只读核对
 
+- 这台电脑的 Codex 是 26.1111.2228.0。用改好的代码只读问了最近 8 个对话谁是 owner：**2 个有 owner**（Codex 现在开着两个对话），两个都核对了。
+- 两个都跑 `Bridge().status(tid, fresh=True)` 和 `Bridge().confirm_open(tid)`：都是 `available: True`、`running: False`、设置读到 `gpt-6-astra / low`；第二个还读到 1 张提问卡。`confirm_open` 两个都 `ok`，文字都以「可以发了」结尾，没有一条落到「读不到状态」。
+- 没有发消息、没有发 `codex://` 链接、没有发 `thread-follower-*` 请求、没有动 Codex 窗口；连接用完 `close()`。标题和路径没打印。脚本 `v13-real-check.py`、输出 `v13-real-codex-check.txt` 只在工作区。
+
 ### 9.5 没做的、拿不准的
+
+- 没打包、没安装、没启动或重启遥应和 Codex，没 push、没 rebase、没 amend，没动版本号和发版脚本。
+- 没在手机上验证：手机端和网页这次一行没改，读的还是原来那些状态字段。
+- **拿不准**：如果以后 Codex 改了快照格式却仍然用版本 13，遥应会按旧格式读——`apply_patches` 对不上的补丁会把快照扔掉，不会读错，`status` 会回到「读不到状态」；版本号再变（14…）会被照旧扔掉，`confirm_open` 会写原因、手机提示更新遥应。
+- `thread-queued-followups-changed` 只收版本 2（Codex 两版都发 3）按文档没动，`self.queues` 目前别处没人读。
+- 真机核对时正好有两个对话开着，两个都过了；没有第三个窗口可试，也没有在手机上看实际效果。
