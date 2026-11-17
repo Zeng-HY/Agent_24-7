@@ -256,11 +256,13 @@ final class ScreenshotTour: XCTestCase {
         probeShot(app, "30-scroll-4-four-seconds")
         let afterFlings = app.staticTexts["scroll-probe"].firstMatch.label
         XCTAssertTrue(afterFlings.hasPrefix("follow N"), "flings up were pulled back to the bottom: \(afterFlings)")
-        // Back down with flings the other way, then a rest there: at the bottom it follows again.
-        app.swipeUp()
-        app.swipeUp()
-        app.swipeUp()
-        app.swipeUp()
+        // Back down with flings the other way until the page is at its end, then a rest there: at the bottom it follows
+        // again. Four flings were not always enough to reach the end (6afbbe06 stopped 235 points short after farther
+        // flings up), so up to eight, stopping once the page follows.
+        for _ in 0..<8 where !app.staticTexts["scroll-probe"].firstMatch.label.hasPrefix("follow Y") {
+            app.swipeUp()
+            sleep(1)
+        }
         sleep(2)
         probeShot(app, "30-scroll-5-back-down")
         let atBottom = app.staticTexts["scroll-probe"].firstMatch.label
