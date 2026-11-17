@@ -235,10 +235,12 @@ final class ScreenshotTour: XCTestCase {
         XCTAssertTrue(app.staticTexts["scroll-probe"].firstMatch.waitForExistence(timeout: 10), "the probe line never showed")
         sleep(3)
         probeShot(app, "30-scroll-0-opened")
-        // A slow drag down by a third of the screen: the page moves back, and the finger lifts without a fling.
-        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.68))
-        upper.press(forDuration: 0.2, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.2)
+        // A slow drag down by most of the screen, and the finger lifts without a fling. A third of the screen moved the
+        // simulator's page only about 100 points (Codemagic 6afbb0ad), and once less than the 48 that count as the
+        // bottom (6afbbbab), where following again is right; this one has to end well above it.
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.20))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
+        upper.press(forDuration: 0.1, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
         probeShot(app, "30-scroll-1-released")
         sleep(2)
         probeShot(app, "30-scroll-2-two-seconds")
