@@ -566,4 +566,11 @@ Claude 审完，结论是照交接文档做对了，让再改四处；四处都�
 
 **发版**（每一步先问用户）：推送 GitHub → Codemagic `ios-native-check` → Windows 新测试版（电脑端加了新模块和接口，手机要看用量，电脑得先装新版）→ 安卓新版 → iPhone TestFlight。
 
+### 9.8 推送和 iPhone 编译（11-17 下午）
+
+- 用户同意后推送：`git push origin main`，`abea21a..b2e2fbe`（63 个提交，含别的会话的）。
+- Codemagic `ios-native-check`（compile）构建 `6afbdc8a9b41a64798323181`，3 分钟，五步全成功：`Usage.swift`、`UsageView.swift` 编译通过，`Build Succeeded`；`swift test` 287 条、37 组全过，`UsageTests` 也在里面（含 `onlyTheCodesThatSayNothingWasUsedDropTheId`）。日志在工作区子文件夹 `codemagic\6afbdc8a9b41a64798323181`。
+- Windows：别的会话打的 dev.40（`0fa3e04`）已经带上电脑端（`de3fc3e`、`2c79a40`），装在这台电脑上了。
+- 还没做：安卓新版、iPhone TestFlight（各要用户同意）。
+
 
