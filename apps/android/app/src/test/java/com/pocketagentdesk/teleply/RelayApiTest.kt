@@ -229,4 +229,22 @@ class RelayApiTest {
         try { api.chats("../account","",null);fail() } catch(_:IllegalArgumentException) { }
         assertEquals(0,server.requestCount)
     }
+    /** 用量 (11-17): the read is a GET with live=1, the reset a POST carrying the request id and the confirmation. */
+    @Test fun usageReadsLiveWithAGet()=runTest {
+        response("""{"codex":{"available":true,"source":"live"},"claude":{"available":false},"now":1}""")
+        assertEquals(true,api.detail(device,"usage",mapOf("live" to "1")).optJSONObject("codex")!!.getBoolean("available"))
+        val request=server.takeRequest()
+        assertEquals("GET",request.method);assertEquals("/d/$device/api/usage",request.requestUrl!!.encodedPath)
+        assertEquals("1",request.requestUrl!!.queryParameter("live"))
+    }
+    @Test fun aCodexResetPostsTheRequestIdAndTheConfirmation()=runTest {
+        response("""{"ok":true,"outcome":"reset","text":"已用掉 1 次重置，Codex 用量恢复了","usage":null}""")
+        val answer=api.detail(device,"usage/codex-reset",body=JSONObject().put("request_id","reset-request-0001").put("credit_id","credit-available").put("confirmed",true))
+        assertEquals("已用掉 1 次重置，Codex 用量恢复了",answer.string("text"))
+        val post=server.takeRequest()
+        assertEquals("POST",post.method);assertEquals("/d/$device/api/usage/codex-reset",post.requestUrl!!.encodedPath)
+        val body=JSONObject(post.body.readUtf8())
+        assertEquals("reset-request-0001",body.string("request_id"));assertEquals("credit-available",body.string("credit_id"))
+        assertEquals(true,body.getBoolean("confirmed"))
+    }
 }

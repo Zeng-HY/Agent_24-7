@@ -255,12 +255,15 @@ const val PrivacyPolicyUrl = "https://pocketagentdesk.com/privacy"
 @Composable private fun SettingsScreen(s:ReaderState,vm:ReaderViewModel) {
     val context=LocalContext.current
     var archived by remember { mutableStateOf(false) }
+    var usage by remember { mutableStateOf(false) }
     var licences by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     PageFrame("设置",null,vm::back) {
         if(s.device!=null) {
             SectionLabel("对话")
             CardSection { CardRow("已归档对话",{ archived=true },chevron=true) }
+            SectionLabel("用量")
+            CardSection { CardRow("Codex 和 Claude 的用量",{ usage=true },chevron=true) }
         }
         SectionLabel("外观")
         SegmentedChoice(listOf("system" to "跟随系统","light" to "浅色","dark" to "深色"),s.theme,{ vm.appearance(it,false) })
@@ -287,6 +290,7 @@ const val PrivacyPolicyUrl = "https://pocketagentdesk.com/privacy"
         CardSection { CardRow("开发者选项",vm::developer,chevron=true) }
     }
     if(archived) ArchivedSheet(vm) { archived=false }
+    if(usage) UsageSheet(vm) { usage=false }
     if(deleting) DeleteAccountSheet(s,vm) { deleting=false }
     if(licences) TeleplySheet("开源组件",{ licences=false }) {
         Text("液态玻璃移植自 Kyant0/AndroidLiquidGlass（Backdrop，Apache-2.0）；CommonMark Java 0.24.0（BSD-2-Clause）；AndroidX、Kotlin、OkHttp（Apache-2.0）；Word 和 Excel 文件用 docx-preview 0.4.1（Apache-2.0）、JSZip 3.10.2（MIT）、SheetJS 社区版 0.20.3（Apache-2.0）在手机上显示；Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。",style=MaterialTheme.typography.bodyMedium,color=LocalTeleply.current.text)

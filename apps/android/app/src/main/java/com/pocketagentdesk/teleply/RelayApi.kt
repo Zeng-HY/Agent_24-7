@@ -162,9 +162,9 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         /** Fields of DeepSeek's state that change on every read while it works and that the phone does not show. */
         val DeepSeekUnshown=listOf("seq","subagents","inbox")
         val DetailRoutes=setOf("chat/new/options","chat/folders","chat/new/draft","chat/new","chat/new/state","chat/new/retry","chat/new/references","composer/references","files/places","files/list","files/image","files/remove","codex/remove-attachment","codex/attachments","chat/files","chat/diff","file/text","file/meta","deepseek/models","deepseek/permissions","deepseek/model","deepseek/permission","deepseek/answer","deepseek/approval","claude/catalog","claude/setting","claude/choose","claude/menu","claude/close-menu","chat/projects","chat/open","chat/resolve",
-            "claude/next","claude/task","chat/check","chat/archive","chat/unarchive","chat/delete","chat/archived","chats/children","notify","notify/ntfy","notify/test","voice/status","voice/terms","voice/tidy","status")
+            "claude/next","claude/task","chat/check","chat/archive","chat/unarchive","chat/delete","chat/archived","chats/children","notify","notify/ntfy","notify/test","voice/status","voice/terms","voice/tidy","status","usage","usage/codex-reset")
         /** Seconds the computer may take: Claude's buttons wait for its window (web 65 s), archiving for its records. */
-        val SlowRoutes=mapOf("claude/next" to 65L,"claude/task" to 65L,"chat/archive" to 65L,"chat/unarchive" to 95L,"chat/delete" to 125L,"chat/archived" to 25L,"notify" to 35L,"notify/ntfy" to 35L,"notify/test" to 35L,"voice/tidy" to 65L,"status" to 10L)
+        val SlowRoutes=mapOf("claude/next" to 65L,"claude/task" to 65L,"chat/archive" to 65L,"chat/unarchive" to 95L,"chat/delete" to 125L,"chat/archived" to 25L,"notify" to 35L,"notify/ntfy" to 35L,"notify/test" to 35L,"voice/tidy" to 65L,"status" to 10L,"usage" to 45L,"usage/codex-reset" to 75L)
     }
     override suspend fun upload(device:String,chat:String,name:String,bytes:ByteArray,image:Boolean,draft:Boolean):JSONObject {
         require(bytes.isNotEmpty() && bytes.size <= if(image) 20*1024*1024 else 100*1024*1024) { "文件超过上传上限" }

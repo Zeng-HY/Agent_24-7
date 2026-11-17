@@ -257,6 +257,31 @@ abstract class ReaderUiScenarios {
         }
         compose.onNodeWithContentDescription("发送").assertIsNotEnabled()
     }
+    /**
+     * 11-17: 设置 → 用量 shows both apps from the computer; one Codex reset always asks first, and 先不用 sends nothing.
+     */
+    @Test fun usageShowsBothAppsAndOneResetGoesThroughAConfirmation() {
+        launch();fixtureList();compose.runOnIdle { vm.settings() }
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Settings && !vm.state.value.busy }
+        compose.onNodeWithText("Codex 和 Claude 的用量").performScrollTo().performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithText("已用 84%",substring=true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("可用重置：1 次").assertExists()
+        compose.onNodeWithText("已用 35%",substring=true).performScrollTo().assertExists()
+        compose.onNodeWithText("读自电脑上的 Claude 窗口",substring=true).assertExists()
+        // 先不用 sends nothing: the numbers stay as they were.
+        compose.onNodeWithText("用掉这一次").performScrollTo().performClick()
+        compose.onNodeWithText("用掉 1 次 Codex 重置？").assertExists()
+        compose.onNodeWithText("会马上恢复 Codex 的用量限额。用掉就没了，不能撤回。",substring=true).assertExists()
+        compose.onNodeWithText("先不用").performClick()
+        compose.onNodeWithText("用掉 1 次 Codex 重置？").assertDoesNotExist()
+        compose.onNodeWithText("已用 84%",substring=true).assertExists()
+        // Confirmed, the one credit goes and the computer's new numbers take the block's place.
+        compose.onNodeWithText("用掉这一次").performScrollTo().performClick()
+        compose.onNodeWithText("用掉 1 次").performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithText("已用掉 1 次重置，Codex 用量恢复了").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("已用 0%",substring=true).assertExists()
+        compose.onNodeWithText("没有可用的重置次数").assertExists()
+    }
     /** 10-27 (as on the iPhone): Codex's own notes are not shown; a file an answer links to opens its page, one not listed says why. */
     @Test fun answerFileLinksOpenTheirPageAndCodexNotesStayHidden() {
         launch();fixtureList();openChat("电脑上没打开的 Codex 对话",FixtureWorld.AWAY_CODEX)

@@ -397,6 +397,7 @@ class ChatSheets {
     var search by mutableStateOf(false)
     var pending by mutableStateOf(false)
     var prompts by mutableStateOf(false)
+    var usage by mutableStateOf(false)
     var select by mutableStateOf<Message?>(null)
     /** Hands a message on whole: read from the computer first when the page cut it short (复制 · 选择文字 · 分享). */
     var whole: (Message, (Message) -> Unit) -> Unit = { message, use -> use(message) }
@@ -450,6 +451,7 @@ private fun MenuScope.ChatMenu(s: ReaderState, vm: ReaderViewModel, chat: Compos
     val unconfirmed = chat.submissions.count { it.label in listOf("提交中", "送达状态待确认") }
     MenuRow("电脑上打开", { vm.workspace.openOnComputer() }, icon = TeleplyIcons.Open)
     MenuRow("会话状态", onRuntime, icon = TeleplyIcons.Info)
+    if (s.app != "deepseek") MenuRow("用量", { sheets.usage = true }, icon = TeleplyIcons.Clock)
     MenuRow("查找消息", { sheets.search = true }, icon = TeleplyIcons.Search)
     MenuRow("对话文件", { vm.workspace.panel("files") }, icon = TeleplyIcons.File)
     MenuRow("常用提示语", { sheets.prompts = true }, icon = TeleplyIcons.Text)
@@ -1127,6 +1129,7 @@ private fun ChatSheetsHost(s: ReaderState, vm: ReaderViewModel, chat: ComposerSt
     if (sheets.search) SearchSheet(s, vm) { sheets.search = false }
     if (sheets.pending) PendingSheet(chat, vm) { sheets.pending = false }
     if (sheets.prompts) PromptLibrarySheet(vm) { sheets.prompts = false }
+    if (sheets.usage) UsageSheet(vm) { sheets.usage = false }
     sheets.select?.let { message -> SelectTextSheet(message) { sheets.select = null } }
 }
 

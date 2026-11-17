@@ -50,6 +50,8 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "chat/unarchive" -> world.unarchive(body?.string("app").orEmpty(), body?.string("id").orEmpty())
         "chat/archived" -> world.archived()
         "chat/delete" -> world.delete(body ?: JSONObject())
+        "usage" -> world.usage()
+        "usage/codex-reset" -> world.usageReset(body ?: JSONObject())
         "claude/choose" -> world.claudeChoose(body?.string("token").orEmpty())
         "claude/next" -> world.claudeNext(body?.string("label").orEmpty())
         "claude/task" -> world.claudeTask(body?.string("title").orEmpty(), body?.string("button").orEmpty())
@@ -541,6 +543,41 @@ class FixtureWorld {
             else JSONObject().put("app", v.string("app")).put("id", v.string("id")).put("ok", false).put("error", "这种对话还不能删除")
         }
         return JSONObject().put("ok", results.all { it.optBoolean("ok") }).put("results", JSONArray(results)).put("deleted", results.count { it.optBoolean("ok") })
+    }
+
+    /** 用量 (11-17): Codex read live with one reset credit, Claude's one limit from its window. */
+    private var codexResetUsed = false
+
+    fun usage(): JSONObject {
+        val now = System.currentTimeMillis()
+        return JSONObject().put("codex", codexUsage(now))
+            .put("claude", JSONObject().put("available", true).put("source", "window").put("as_of", now)
+                .put("text", "Usage: 35% of 5-hour limit, Resets at 12:20 PM")
+                .put("windows", JSONArray().put(JSONObject().put("kind", "5h").put("label", "5-hour limit")
+                    .put("name", "5 小时").put("used_percent", 35).put("resets_at", JSONObject.NULL)
+                    .put("resets_text", "12:20")))
+                .put("minimized", false))
+            .put("now", now)
+    }
+
+    private fun codexUsage(now: Long = System.currentTimeMillis()): JSONObject = JSONObject()
+        .put("available", true).put("source", "live").put("as_of", now).put("plan", "pro")
+        .put("windows", JSONArray().put(JSONObject().put("kind", "weekly").put("minutes", 10080)
+            .put("name", "每周").put("used_percent", if (codexResetUsed) 0 else 84)
+            .put("resets_at", (now + 34 * 3_600_000L) / 1000)))
+        .put("reached", JSONObject.NULL)
+        .put("resets", JSONObject().put("available", if (codexResetUsed) 0 else 1)
+            .put("items", if (codexResetUsed) JSONArray() else JSONArray().put(JSONObject()
+                .put("id", "fixture-credit").put("title", "Full reset")
+                .put("description", "Thanks for using Codex! You've been granted one free rate limit reset.")
+                .put("granted_at", now / 1000 - 86400).put("expires_at", now / 1000 + 30 * 86400))))
+        .put("ordinary_usage_allowed", true)
+
+    fun usageReset(body: JSONObject): JSONObject {
+        if (!body.optBoolean("confirmed")) throw ServiceFailure(400, "not_confirmed", "要先在手机上确认")
+        codexResetUsed = true
+        return JSONObject().put("ok", true).put("outcome", "reset")
+            .put("text", "已用掉 1 次重置，Codex 用量恢复了").put("usage", codexUsage())
     }
 
     fun notifyState(): JSONObject = JSONObject().put("configured", false).put("server", "")
