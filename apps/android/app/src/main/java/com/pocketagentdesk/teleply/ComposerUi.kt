@@ -230,6 +230,25 @@ private fun QueueTray(app: String, chat: ComposerState, raw: JSONObject, vm: Rea
 }
 
 /**
+ * What the input card's status line says, in order: an error, a model switch result, a voice note, how an unknown
+ * action ended, the computer's reason, then the last receipt (spec 0.4 §4.3). 11-17: while the computer says this
+ * conversation cannot take a message, an older result of 电脑上打开 no longer hides that reason (the phone kept it until
+ * the composer was left and opened again). Pure, so the JVM tests can read it without a screen.
+ */
+internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Boolean, local: String, result: String,
+                            unknown: Boolean, away: String?, receipt: String?): String? = when {
+    chatError != null -> chatError
+    wsError != null && !paneOpen -> wsError
+    local.isNotBlank() -> local
+    result.isNotBlank() && !paneOpen && away == null -> result
+    unknown -> "上次操作的结果还没确认"
+    // The computer's words on why the next message cannot go, in place of an old receipt (10-27).
+    away != null -> away
+    receipt != null && receipt != "送达状态待确认" -> receipt
+    else -> null
+}
+
+/**
  * The status line at the top of the input card (spec 0.4 §4.3): an error, a model switch result, a voice note, why the
  * computer cannot take the next message ([away], with 电脑上打开) or the last receipt (B03). Takes no room when there is
  * nothing to say. A source action whose result is unknown offers 核对.
@@ -247,18 +266,9 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
     }
     val receipt = chat.submissions.firstOrNull { it.label != RemovedLabel }?.label?.takeIf { it != "未接收" }
     val unknown = saved.optJSONObject("pending_action")?.string("status") == "unknown"
-    val (text, color) = when {
-        chat.error != null -> chat.error to p.error
-        ws.error != null && ws.pane == null -> ws.error to p.error
-        local.isNotBlank() -> local to p.muted
-        ws.result.isNotBlank() && ws.pane == null -> ws.result to p.muted
-        unknown -> "上次操作的结果还没确认" to p.muted
-        // The computer's words on why the next message cannot go, in place of an old receipt (10-27).
-        away != null -> away to p.muted
-        receipt != null && receipt != "送达状态待确认" -> receipt to p.muted
-        else -> null to p.muted
-    }
-    if (text == null && !unknown) return
+    val text = statusLineText(chat.error, ws.error, ws.pane != null, local, ws.result, unknown, away, receipt)
+    val color = if (chat.error != null || ws.error != null && ws.pane == null) p.error else p.muted
+    if (text == null) return
     val opens = !unknown && away != null && text == away
     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(

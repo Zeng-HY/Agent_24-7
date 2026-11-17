@@ -235,6 +235,28 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("电脑端尚未打开这个对话",substring=true).assertDoesNotExist()
         compose.onNodeWithContentDescription("发送").assertIsEnabled()
     }
+    /**
+     * 11-17: 电脑上打开 that no Codex window takes shows the computer's reason in that line, with no red error and no
+     * "opened" result, and the send button stays grey.
+     */
+    @Test fun codexOpenThatIsNotTakenShowsTheReasonInsteadOfAnError() {
+        launch();fixtureList();openChat("电脑上打开也接不上的 Codex 对话",FixtureWorld.AWAY_CODEX_STUCK)
+        compose.waitUntil(10000) { org.json.JSONObject(vm.composer.state.value.control.raw).has("available") }
+        compose.onNodeWithText("电脑端尚未打开这个对话",substring=true).assertExists()
+        compose.onNodeWithTag("composer").performTextInput("先别发")
+        compose.onNodeWithContentDescription("发送").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("电脑上打开这个对话").performClick()
+        // Read again at once: the reason takes the line's place; no red error, no opening result.
+        compose.waitUntil(10000) { vm.composer.state.value.control.raw.contains(FixtureWorld.CODEX_NOT_TAKEN_REASON) }
+        compose.waitUntil(10000) { !vm.workspace.state.value.busy }
+        compose.onNodeWithText(FixtureWorld.CODEX_NOT_TAKEN_REASON).assertExists()
+        compose.onNodeWithText("本地示例：没有真的打开电脑上的窗口").assertDoesNotExist()
+        compose.runOnIdle {
+            org.junit.Assert.assertNull(vm.workspace.state.value.error)
+            org.junit.Assert.assertEquals("",vm.workspace.state.value.result)
+        }
+        compose.onNodeWithContentDescription("发送").assertIsNotEnabled()
+    }
     /** 10-27 (as on the iPhone): Codex's own notes are not shown; a file an answer links to opens its page, one not listed says why. */
     @Test fun answerFileLinksOpenTheirPageAndCodexNotesStayHidden() {
         launch();fixtureList();openChat("电脑上没打开的 Codex 对话",FixtureWorld.AWAY_CODEX)
@@ -740,7 +762,7 @@ abstract class ReaderUiScenarios {
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()
         listRow("加载更多对话").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==10 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==11 }
         listRow("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy }
         compose.onNodeWithContentDescription("返回").assertHasClickAction().performClick()
@@ -759,7 +781,7 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="running" }
         compose.onNodeWithText("没有找到对话").assertIsDisplayed()
         compose.onNodeWithText("清除筛选").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==9 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==10 }
     }
     /** 11-02: 已结束 asked for done, which the computer refuses: 状态筛选无效 instead of the rows. */
     @Test fun theEndedStateShowsTheFinishedRows() {

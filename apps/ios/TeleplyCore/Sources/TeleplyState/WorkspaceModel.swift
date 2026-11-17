@@ -628,6 +628,8 @@ public final class WorkspaceModel {
     }
 
     /// 电脑上打开: the computer shows this conversation in its desktop app. Not a message; nothing is sent.
+    /// 11-17: when Codex did not take the conversation it says why in the state that follows, shown instead of a red
+    /// error, so the state is read again at once.
     public func openOnComputer() {
         guard let key, let client, !busy else { return }
         busy = true
@@ -643,7 +645,13 @@ public final class WorkspaceModel {
                     self?.changed()
                 }
             } catch {
-                if self?.key == key { self?.error = describe(error) }
+                if self?.key == key {
+                    if let failure = error as? ServiceFailure, failure.code == "codex_not_taken" {
+                        self?.changed()
+                    } else {
+                        self?.error = describe(error)
+                    }
+                }
             }
             if self?.key == key { self?.busy = false }
         }

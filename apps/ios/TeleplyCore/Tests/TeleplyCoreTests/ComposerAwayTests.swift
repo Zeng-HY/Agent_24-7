@@ -59,6 +59,25 @@ struct ComposerAwayTests {
         #expect(!chipAway(app: "deepseek", raw: state(#"{"available":false}"#)))
     }
 
+    /// 11-17: the computer's reason replaces an older "已打开" result; errors, the local note and 待核对 keep their
+    /// places (Android statusLineText test).
+    @Test func theComputersReasonComesBeforeAnOlderResult() {
+        let reason = "电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试"
+        // An old 电脑上打开 result is still kept from before: the computer's reason wins.
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "电脑上已打开「x」，可以发了", unknown: false, away: reason, receipt: nil) == reason)
+        // No reason from the computer: the result shows as before.
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "电脑上已打开「x」", unknown: false, away: nil, receipt: nil) == "电脑上已打开「x」")
+        // Errors first; the note and 待核对 in their places; the receipt last, and not "送达状态待确认".
+        #expect(statusLineText(chatError: "出错了", workspaceError: nil, note: "", result: "", unknown: false, away: reason, receipt: nil) == "出错了")
+        #expect(statusLineText(chatError: nil, workspaceError: "工作区出错", note: "", result: "", unknown: false, away: reason, receipt: nil) == "工作区出错")
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "草稿已存", result: "", unknown: false, away: reason, receipt: nil) == "草稿已存")
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "", unknown: true, away: reason, receipt: nil) == "上次操作的结果还没确认")
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "", unknown: false, away: nil, receipt: "已送达") == "已送达")
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "", unknown: false, away: reason, receipt: "送达状态待确认") == reason)
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "", unknown: false, away: nil, receipt: "未接收") == nil)
+        #expect(statusLineText(chatError: nil, workspaceError: nil, note: "", result: "", unknown: false, away: nil, receipt: nil) == nil)
+    }
+
     func conversation(_ app: String, _ computer: CommandComputer) -> (ChatModel, ChatKey) {
         let key = ChatKey(scope: "account", device: device, app: app, chat: "chat")
         let model = ChatModel(pacer: IdlePacer(), store: LocalStore(folder: temporaryFolder()), newID: { UUID().uuidString }, now: { 1_000 })

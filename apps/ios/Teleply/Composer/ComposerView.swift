@@ -518,30 +518,27 @@ private struct StatusLine: View {
         let workspace = model.workspace
         let receipt = chat.submissions.first { $0.label != removedLabel }?.label
         let unknown = workspace.saved["pending_action"]["status"].string() == "unknown"
-        // The computer's words on why the next message cannot go, in place of an old receipt (user 10-27).
+        // The computer's words on why the next message cannot go, in place of an old receipt (user 10-27); 11-17:
+        // they also win over a kept result of 电脑上打开.
         let away = awayReason(app: chat.key?.app ?? model.app, raw: chat.control.raw)
-        let line: (text: String, error: Bool)? = {
-            if let error = chat.error { return (error, true) }
-            if let error = workspace.error { return (error, true) }
-            if !workspace.result.isEmpty { return (workspace.result, false) }
-            if unknown { return ("上次操作的结果还没确认", false) }
-            if let away { return (away, false) }
-            if let receipt, receipt != "未接收", receipt != "送达状态待确认" { return (receipt, false) }
-            return nil
-        }()
-        if let line {
+        let text = statusLineText(chatError: chat.error, workspaceError: workspace.error, note: "",
+                                  result: workspace.result, unknown: unknown, away: away, receipt: receipt)
+        let isError = chat.error != nil || workspace.error != nil
+        let opens = away != nil && text == away
+        if let text {
             HStack(spacing: 4) {
-                Text(line.text)
+                Text(text)
                     .noteFont()
-                    .foregroundStyle(line.error ? Palette.danger : Palette.muted)
-                    .lineLimit(2)
+                    .foregroundStyle(isError ? Palette.danger : Palette.muted)
+                    // The computer's reason whole: it says what to do.
+                    .lineLimit(opens ? 3 : 2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
                 if unknown {
                     Button("核对上次操作") { workspace.checkAction() }
                         .buttonStyle(PillStyle(kind: .text, minHeight: 32))
                         .disabled(workspace.busy)
-                } else if let away, line.text == away {
+                } else if opens {
                     Button("电脑上打开") { workspace.openOnComputer() }
                         .buttonStyle(PillStyle(kind: .text, minHeight: 32))
                         .disabled(workspace.busy)
@@ -551,7 +548,7 @@ private struct StatusLine: View {
             .padding(.trailing, 2)
             .padding(.top, 2)
             .accessibilityElement(children: .combine)
-            .task(id: line.text) { AccessibilityNotification.Announcement(line.text).post() }
+            .task(id: text) { AccessibilityNotification.Announcement(text).post() }
         }
     }
 }

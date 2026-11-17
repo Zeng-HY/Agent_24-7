@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import ctypes
+import ctypes.wintypes as wt
 import hashlib
 import json
 import queue
@@ -16,6 +17,7 @@ import sqlite3
 import struct
 import threading
 import time
+import tomllib
 import traceback
 import uuid
 from pathlib import Path
@@ -27,13 +29,16 @@ import pywintypes
 import win32con
 import win32event
 import win32file
+import win32pipe
 
 import chats
 import codex_question_dismiss
 import composer_commands
 
 HERE = Path(__file__).resolve().parent
-TESTED_APP_VERSION = "26.1007.2314.0"
+# 26.1106.6628.0: 11-17, on the user's own computer, asking for the owner, the v11 snapshot and sending a message all
+# worked with this version (owner-probe-20261117.txt). A Codex newer than this is not trusted to behave the same.
+TESTED_APP_VERSION = "26.1106.6628.0"
 VERSIONS = {"initialize": 0, "thread-owner-discovery": 1,
             "thread-follower-read-model-settings": 1, "thread-follower-start-turn": 2,
             "thread-follower-steer-turn": 1, "thread-follower-submit-user-input": 1}
@@ -49,9 +54,10 @@ VERSIONS["thread-follower-compact-thread"] = 1
 
 
 class ControlError(Exception):
-    def __init__(self, message: str, status: int = 409):
+    def __init__(self, message: str, status: int = 409, code: str = ""):
         super().__init__(message)
         self.status = status
+        self.code = code  # why, for the phone and the log: "no-client-found", "timeout", the desktop's own error
 
 
 class DesktopPipe:
@@ -185,13 +191,13 @@ class DesktopPipe:
             if result.get("resultType") != "success":
                 error = str(result.get("error", "未知错误"))
                 if error == "no-client-found":
-                    raise ControlError("电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试")
-                raise ControlError("Codex 未完成操作：" + error[:180])
+                    raise ControlError("电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试", code="no-client-found")
+                raise ControlError("Codex 未完成操作：" + error[:180], code=error[:80])
             if owner and result.get("handledByClientId") != owner:
                 raise ControlError("对话持有者发生变化，结果未确认")
             return result
         except queue.Empty:
-            raise ControlError("Codex 响应超时，结果未确认；不会自动重试") from None
+            raise ControlError("Codex 响应超时，结果未确认；不会自动重试", code="timeout") from None
         finally:
             self.pending.pop(rid, None)
 
@@ -319,6 +325,114 @@ def catalog():
         return {"models": models, "updated_at": data.get("fetched_at"), "source": "desktop_cache"}
     except (OSError, ValueError, KeyError):
         return {"models": [], "updated_at": None, "source": "unavailable"}
+
+
+def _short(value: str) -> str:
+    """A name inside a sentence the phone shows whole: at most 24 characters (11-17)."""
+    return (value or "")[:24]
+
+
+def version_newer(a: str, b: str) -> bool:
+    """Whether Codex version [a] is newer than [b], comparing the numbers of its parts. Unknown on either side: False."""
+    def parts(value):
+        out = []
+        for piece in str(value or "").split("."):
+            if not piece.isdigit():
+                return None
+            out.append(int(piece))
+        return out
+    left, right = parts(a), parts(b)
+    if not left or not right:
+        return False
+    width = max(len(left), len(right))
+    return left + [0] * (width - len(left)) > right + [0] * (width - len(right))
+
+
+def _codex_version_in_path(path: str) -> str:
+    """The version in a Codex package folder:
+    ...\\WindowsApps\\OpenAI.Codex_26.1106.6628.0_x64__2p2nqsd0c76g0\\app\\ChatGPT.exe -> 26.1106.6628.0 (11-17)."""
+    match = re.search(r"OpenAI\.Codex_([^_\\/]+)", path or "")
+    return match.group(1) if match else ""
+
+
+def _image_path(pid: int) -> str:
+    """The whole path of a process (winctl._process_name keeps only its name)."""
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ""
+    try:
+        size = wt.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return buf.value
+        return ""
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def codex_version(pipe) -> str:
+    """The version of the Codex at the other end of this pipe (11-17), "" when it cannot be read.
+    Asked once per pipe connection: it cannot change while that connection lives."""
+    cached = getattr(pipe, "_codex_app_version", None)
+    if cached is not None:
+        return cached
+    version = ""
+    try:
+        pid = win32pipe.GetNamedPipeServerProcessId(pipe.handle)
+        if pid:
+            version = _codex_version_in_path(_image_path(pid))
+    except Exception:
+        version = ""
+    try:
+        pipe._codex_app_version = version
+    except Exception:
+        pass
+    return version
+
+
+def thread_provider(tid: str) -> str:
+    """The model provider this Codex conversation was made with (state_*.sqlite threads.model_provider, 11-17);
+    "" when that cannot be read or the conversation is not there."""
+    try:
+        db = chats.codex_db()
+        if db is None:
+            return ""
+        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=3)
+        try:
+            row = con.execute("select model_provider from threads where id=?", (tid,)).fetchone()
+        finally:
+            con.close()
+        return str(row[0] or "") if row else ""
+    except (OSError, sqlite3.Error, ValueError):
+        return ""
+
+
+def current_provider() -> str:
+    """The provider Codex uses now: the profile's model_provider, else the top-level one, else "openai" (11-17);
+    "" when config.toml cannot be read or parsed, which means unknown and no conclusion is drawn from it."""
+    try:
+        data = tomllib.loads((chats.CODEX_HOME / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return ""
+    try:
+        profile = data.get("profile")
+        profiles = data.get("profiles")
+        if isinstance(profile, str) and profile and isinstance(profiles, dict):
+            chosen = profiles.get(profile)
+            if isinstance(chosen, dict) and chosen.get("model_provider"):
+                return str(chosen["model_provider"])
+        if data.get("model_provider"):
+            return str(data["model_provider"])
+    except (AttributeError, TypeError):
+        return ""
+    return "openai"
+
+
+class CodexNotTaken(chats.ChatError):
+    """电脑上打开 asked Codex to show the conversation, but no Codex window took it (11-17). The phone shows the
+    message as the reason and reads the state again."""
+    code = "codex_not_taken"
 
 
 APPROVAL_COMMAND = "item/commandExecution/requestApproval"
@@ -552,6 +666,11 @@ class Bridge:
         self.log = None  # remote.Log's write, for failures that must not escape an interface (set by remote.py)
         self._dismiss_logged = {}  # tid -> when its last dismissal-read failure was written down
         self._unknown_requests = {}  # request id -> method, so a new Codex protocol writes one line, not every poll
+        # 11-17: a 电脑上打开 no Codex window took says why through status() for ten minutes; and every conversation's
+        # last being-sendable answer, so a change is written once and the log is not filled by the one-second poll.
+        self._open_lock = threading.Lock()
+        self._open_failed = {}  # tid -> (when, reason)
+        self._sendable = {}  # tid -> (available, reason)
 
     def _log(self, text):
         """One line in the service log, when remote.py has given this bridge one. Never raise from logging."""
@@ -592,6 +711,120 @@ class Bridge:
             except Exception as exc:
                 raise ControlError("无法连接 Codex 桌面，请确认客户端已打开") from exc
         return self.pipe
+
+    def owner(self, tid, timeout=3):
+        """The Codex window that has this conversation (thread-owner-discovery, 11-17), or None when no window has it.
+        A window answers only after it resumed the thread and shows it (app.asar 26.1106); a version it does not know
+        also answers nothing."""
+        try:
+            result = self._pipe().call("thread-owner-discovery", {"hostId": "local", "conversationId": tid}, timeout=timeout)
+        except ControlError as exc:
+            if exc.code == "no-client-found":
+                return None
+            raise
+        return result.get("handledByClientId") or None
+
+    def _app_version(self):
+        """The running Codex's version, "" when it cannot be read."""
+        try:
+            return codex_version(self._pipe())
+        except Exception:
+            return ""
+
+    def _remember_open_failure(self, tid, reason):
+        now = time.monotonic()
+        with self._open_lock:
+            self._open_failed = {k: v for k, v in self._open_failed.items() if now - v[0] <= 600}
+            self._open_failed[tid] = (now, reason)
+            while len(self._open_failed) > 64:
+                self._open_failed.pop(next(iter(self._open_failed)))
+
+    def _forget_open_failure(self, tid):
+        with self._open_lock:
+            self._open_failed.pop(tid, None)
+
+    def _open_failure(self, tid):
+        """Why the last 电脑上打开 did not get this conversation taken, while that is less than ten minutes old."""
+        now = time.monotonic()
+        with self._open_lock:
+            record = self._open_failed.get(tid)
+            if not record:
+                return None
+            if now - record[0] > 600:
+                self._open_failed.pop(tid, None)
+                return None
+            return record[1]
+
+    def confirm_open(self, tid, seconds=10.0, step=0.5):
+        """电脑上打开 for Codex (11-17): wait for a Codex window to take the conversation, then for its state to be
+        readable, and tell the phone it can send. Otherwise say why, remember that for status() and write one line.
+        The wait does not hold self.lock: the one-second status reads need it."""
+        started = time.monotonic()
+        owner, last_error, connected = None, None, False
+        while True:
+            try:
+                owner = self.owner(tid)
+                connected = True
+            except ControlError as exc:
+                owner, last_error = None, exc
+            if owner or time.monotonic() - started >= seconds:
+                break
+            time.sleep(step)
+        elapsed = time.monotonic() - started
+        if owner and self.status(tid, fresh=True).get("available"):
+            self._forget_open_failure(tid)
+            title = chats.find("codex", tid)["title"]
+            return {"ok": True, "text": f"电脑上已打开「{title}」，可以发了"}
+        version = self._app_version()
+        provider, current = thread_provider(tid), current_provider()
+        if owner:
+            if version_newer(version, TESTED_APP_VERSION):
+                reason = f"Codex 已接手，但遥应读不到它的状态：电脑上的 Codex 是 {_short(version)}，遥应要更新"
+                kind = "版本较新"
+            else:
+                reason = "Codex 已接手，但遥应还读不到它的状态，请稍后再点「电脑上打开」"
+                kind = "读不到状态"
+        elif not connected:
+            reason = "连不上电脑上的 Codex，请确认 Codex 开着，再点「电脑上打开」"
+            kind = "连不上"
+        elif provider and current and provider != current:
+            reason = f"Codex 没接手：这个对话用 {_short(provider)}，电脑上的 Codex 现在用 {_short(current)}，请在电脑上切回 {_short(provider)}"
+            kind = "提供商不同"
+        elif version_newer(version, TESTED_APP_VERSION):
+            reason = f"Codex 没接手。电脑上的 Codex 是 {_short(version)}，比遥应测过的新，可能要更新遥应"
+            kind = "版本较新"
+        else:
+            reason = "Codex 没接手这个对话。请看电脑上这个对话有没有提示，或重启 Codex 再试"
+            kind = "原因不明"
+        self._remember_open_failure(tid, reason)
+        line = (f"Codex：电脑上打开 {tid[:8]} 后 {elapsed:.1f} 秒没接手（{kind}）；"
+                f"Codex {version or '未知'}，遥应测过 {TESTED_APP_VERSION}；"
+                f"这个对话的提供商 {_short(provider) or '未知'}，当前 {_short(current) or '未知'}")
+        if last_error is not None and getattr(last_error, "code", ""):
+            line += f"；最后见到的错误 {last_error.code}"
+        self._log(line)
+        raise CodexNotTaken(reason)
+
+    def _note_sendable(self, tid, result):
+        """One line when a conversation stops being sendable from the phone, one when it can again (11-17).
+        A conversation seen for the first time says nothing while it can send. Logging never changes the result."""
+        try:
+            available = bool(result.get("available"))
+            reason = str(result.get("reason", ""))
+            lines = []
+            with self._open_lock:
+                previous = self._sendable.get(tid)
+                self._sendable[tid] = (available, reason)
+                while len(self._sendable) > 64:
+                    self._sendable.pop(next(iter(self._sendable)))
+                if not available and (previous is None or previous[0] or previous[1] != reason):
+                    lines.append(f"Codex 对话 {tid[:8]}：手机发不了（{reason}）")
+                elif available and previous is not None and not previous[0]:
+                    lines.append(f"Codex 对话 {tid[:8]}：手机又能发了")
+            for line in lines:
+                self._log(line)
+        except Exception:
+            pass
 
     def snapshot(self, tid, fresh=False, timeout=15):
         item = chats.find("codex", tid)
@@ -780,7 +1013,7 @@ class Bridge:
                 step = chats.tail_step("codex", path, started) if path and is_running(state) else ""
             except (OSError, chats.ChatError):step = ""
             compacting = compacting_now(state)  # 0.6.6: the phone says 正在压缩上下文 with the turn's timer
-            return {"available": True, "settings": selected_settings(state), "running": is_running(state),
+            result = {"available": True, "settings": selected_settings(state), "running": is_running(state),
                     "active_turn_id": turns[-1].get("turnId") if is_running(state) and turns else None,
                     "turn_started": started, "turn_ended": ended, "step": "compact" if compacting else step,
                     "compacting": compacting, "compact_started": started if compacting else 0,
@@ -789,8 +1022,16 @@ class Bridge:
                     "queued": queued, "queue_available": queue_available,
                     "images": self.message_images(tid), "observed_at": int(time.time()*1000)}
         except (ControlError, chats.ChatError, OSError) as exc:
-            return {"available": False, "reason": str(exc), "questions": [], "plan": None,
-                    "catalog": catalog(), "images": self.message_images(tid)}
+            reason = str(exc)
+            # 11-17: a 电脑上打开 that Codex did not take says why for the next ten minutes, in the phone's own words.
+            if isinstance(exc, ControlError) and exc.code == "no-client-found":
+                reason = self._open_failure(tid) or reason
+            result = {"available": False, "reason": reason, "questions": [], "plan": None,
+                      "catalog": catalog(), "images": self.message_images(tid)}
+        else:
+            self._forget_open_failure(tid)
+        self._note_sendable(tid, result)
+        return result
 
     def delivery_locations(self,tid,request_ids):
         """Identity evidence only. Does not refresh receipts or change the ledger."""

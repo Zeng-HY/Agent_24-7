@@ -205,6 +205,8 @@ class FixtureWorld {
      * in its model menu opens them there, as the computer does.
      */
     private val away = mutableSetOf(AWAY_CODEX, AWAY_CLAUDE)
+    /** 11-17: 电脑上打开 was asked for the stuck Codex conversation and no Codex window took it. */
+    private var codexOpenNotTaken = false
     private val awaySettings = JSONObject().put("model", "claude-opus-5-5").put("effort", "high").put("mode", "auto")
     private val newRequests = mutableMapOf<String, JSONObject>()
     private var drafts = 0
@@ -239,6 +241,7 @@ class FixtureWorld {
         Chat("claude-next", "Claude 下一步示例", "测试项目", "下一步按钮和任务卡片", "idle", "claude", NOW - 9_000_000),
         Chat("plan-demo", "Codex 计划示例", "测试项目", if (planDone) "已按计划开始" else "计划待确认", if (planDone && running["codex"] == true) "running" else "idle", "codex", NOW - 10_800_000),
         Chat(AWAY_CODEX, "电脑上没打开的 Codex 对话", "测试项目", "先在电脑上打开才能发", "idle", "codex", NOW - 12_000_000),
+        Chat(AWAY_CODEX_STUCK, "电脑上打开也接不上的 Codex 对话", "测试项目", "Codex 没接手", "idle", "codex", NOW - 12_300_000),
         Chat(AWAY_CLAUDE, "电脑上没在显示的 Claude 对话", "测试项目", "照样能发，电脑会先切过去", "idle", "claude", NOW - 12_600_000),
         Chat(UNGROUPED, "未分组的会话", "", "不在 DeepSeek 工作区里，多是脚本或命令行开的一次性会话", "idle", "deepseek", NOW - 14_400_000, group = true,
             children = listOf(Chat("ds-stray-1", "整理下载目录（脚本）", "", "", "idle", "deepseek", NOW - 14_400_000, kind = "script")), childCount = 1),
@@ -354,6 +357,9 @@ class FixtureWorld {
         // Not open on the demo computer, Codex answers as codex_control does: not available, why, no settings.
         if (chat == AWAY_CODEX) return if (chat in away) Control(false, false, "", false, emptyList(), emptyMap(), false, CODEX_AWAY)
             else Control(true, run, if (run) turn else "", true, queued, turnMap, false, JSONObject(CODEX_STATE).put("questions", JSONArray()).toString())
+        // 11-17: 电脑上打开 found no Codex window taking it; the state says why and stays unavailable.
+        if (chat == AWAY_CODEX_STUCK) return Control(false, false, "", false, emptyList(), emptyMap(), false,
+            if (codexOpenNotTaken) CODEX_NOT_TAKEN else CODEX_AWAY)
         if (chat == AWAY_CLAUDE) return awayClaude(chat !in away, run, turn, queued, turnMap)
         // A conversation the demo just created, or Codex made from a reply, has nothing waiting in it.
         if (created.any { it.first.id == chat } || chat == MADE_THREAD) return when (app) {
@@ -448,8 +454,15 @@ class FixtureWorld {
         return JSONObject().put("delivered", !queued && n >= 2).put("queued", queued)
     }
 
-    /** 电脑上打开: no window opens, but a conversation the demo computer was not showing now is. */
+    /**
+     * 电脑上打开: no window opens, but a conversation the demo computer was not showing now is. 11-17: the stuck Codex
+     * one is not taken by any Codex window (codex_not_taken), and its state then says why.
+     */
     fun open(id: String): JSONObject {
+        if (id == AWAY_CODEX_STUCK) {
+            codexOpenNotTaken = true
+            throw ServiceFailure(400, "codex_not_taken", CODEX_NOT_TAKEN_REASON)
+        }
         away -= id
         return JSONObject().put("ok", true).put("text", "本地示例：没有真的打开电脑上的窗口")
     }
@@ -635,6 +648,7 @@ class FixtureWorld {
         const val NOW = 1_792_843_200_000L
         const val UNGROUPED = "ungrouped"
         const val AWAY_CODEX = "codex-away"
+        const val AWAY_CODEX_STUCK = "codex-away-stuck"
         const val AWAY_CLAUDE = "claude-away"
         /** The words on the desktop's mode button for the recorded modes (claude_control MODE_BUTTONS). */
         private val DESKTOP_MODES = mapOf("auto" to "Auto", "default" to "Manual", "acceptEdits" to "Accept edits", "plan" to "Plan")
@@ -678,6 +692,9 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
 """.trimIndent()
         /** codex_control's answer for a conversation no Codex window has open. */
         private const val CODEX_AWAY = """{"available":false,"reason":"电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试","settings":null}"""
+        /** 11-17: Codex was asked to open it and did not take it; the phone shows this reason and stays unable to send. */
+        const val CODEX_NOT_TAKEN_REASON = "Codex 没接手这个对话。请看电脑上这个对话有没有提示，或重启 Codex 再试"
+        private const val CODEX_NOT_TAKEN = """{"available":false,"reason":"$CODEX_NOT_TAKEN_REASON","settings":null}"""
         private const val TASK_TITLE = "整理发布清单"
         const val HEARD = "好的帮我把发布说明里的升级步骤补上"
         const val TIDIED = "好的，帮我把发布说明里的升级步骤补上。"

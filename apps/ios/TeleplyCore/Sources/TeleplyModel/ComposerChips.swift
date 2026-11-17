@@ -93,3 +93,19 @@ public func awayReason(app: String, raw: JSONValue) -> String? {
 public func sendsWhileAway(_ app: String) -> Bool {
     app == "claude"
 }
+
+/// What the composer's line above the box says, in order (spec 4.3; Android statusLineText): an error, the
+/// workspace's error, a local note, the last result, how an unknown action ended, the computer's reason, the last
+/// receipt. 11-17: while the computer says this conversation cannot take a message, an older result of 电脑上打开 no
+/// longer hides that reason (the phone used to keep it until the composer was left and opened again).
+public func statusLineText(chatError: String?, workspaceError: String?, note: String, result: String, unknown: Bool,
+                           away: String?, receipt: String?) -> String? {
+    if let chatError { return chatError }
+    if let workspaceError { return workspaceError }
+    if !note.isEmpty { return note }
+    if !result.isEmpty, away == nil { return result }
+    if unknown { return "上次操作的结果还没确认" }
+    if let away { return away }
+    if let receipt, receipt != "未接收", receipt != "送达状态待确认" { return receipt }
+    return nil
+}

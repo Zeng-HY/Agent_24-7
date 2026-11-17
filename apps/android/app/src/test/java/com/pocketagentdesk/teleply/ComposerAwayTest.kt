@@ -41,6 +41,27 @@ class ComposerAwayTest {
         assertFalse(chipAway("deepseek",JSONObject("""{"available":false}""")));assertNull(awayReason("deepseek",JSONObject("""{"available":false}""")))
         assertTrue(sendsWhileAway("claude"));assertFalse(sendsWhileAway("codex"));assertFalse(sendsWhileAway("deepseek"))
     }
+    /** 11-17: the computer's reason replaces an older "已打开" result; errors, the local note and 待核对 keep their places. */
+    @Test fun theComputersReasonComesBeforeAnOlderResult() {
+        fun line(chatError:String?=null,wsError:String?=null,pane:Boolean=false,local:String="",result:String="",unknown:Boolean=false,away:String?=null,receipt:String?=null)=
+            statusLineText(chatError,wsError,pane,local,result,unknown,away,receipt)
+        val reason="电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试"
+        // An old 电脑上打开 result is still kept from before: the computer's reason wins.
+        assertEquals(reason,line(result="电脑上已打开「x」，可以发了",away=reason))
+        // No reason from the computer: the result shows as before.
+        assertEquals("电脑上已打开「x」",line(result="电脑上已打开「x」"))
+        // Errors first; the local note and 待核对 in their places; the receipt last, and not "送达状态待确认".
+        assertEquals("出错了",line(chatError="出错了",away=reason))
+        assertEquals("工作区出错",line(wsError="工作区出错",away=reason))
+        assertEquals("草稿已存",line(local="草稿已存",away=reason))
+        assertEquals("上次操作的结果还没确认",line(unknown=true,away=reason))
+        assertEquals("已送达",line(receipt="已送达"))
+        assertEquals(reason,line(receipt="送达状态待确认",away=reason))
+        assertNull(line())
+        // A pane of its own (a file, questions) keeps its own error and result out of this line.
+        assertNull(line(wsError="工作区出错",result="已打开",pane=true))
+        assertEquals(reason,line(result="已打开",pane=true,away=reason))
+    }
     /** A null (or anything not an object) in a list the computer sent is left out, not taken for an entry or failing the read. */
     @Test fun listEntriesThatAreNotObjectsAreLeftOut() {
         val raw=JSONObject("""{"questions":[null,{"id":"q","status":"pending","questions":[null,{"question":"选哪个？"},"x"]},3]}""")

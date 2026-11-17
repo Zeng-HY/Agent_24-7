@@ -590,7 +590,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     /**
      * 电脑上打开: asks the computer to show this conversation in its desktop app. Not a message, nothing is sent. The
-     * state is read again at once, so the chips and the send button follow (web: openOnPC, then refresh).
+     * state is read again at once, so the chips and the send button follow (web: openOnPC, then refresh). 11-17: when
+     * Codex did not take the conversation it says why in that state, so that reason is shown instead of a red error.
      */
     fun openOnComputer() {
         val k=key ?: return;val service=api ?: return
@@ -602,7 +603,10 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 update(k) { it.copy(result=r.string("text").ifBlank { "已在电脑上打开" }) }
                 if(valid(k)) changed()
             }
-            catch(e:Exception) { update(k) { it.copy(error=e.message ?: "电脑上没有打开，请稍后再试") } }
+            catch(e:Exception) {
+                if(e is ServiceFailure && e.code=="codex_not_taken") { if(valid(k)) changed() }
+                else update(k) { it.copy(error=e.message ?: "电脑上没有打开，请稍后再试") }
+            }
             finally { update(k) { it.copy(busy=false) } }
         }
     }

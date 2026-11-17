@@ -269,6 +269,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(result if isinstance(result, dict) else {"ok": True, "result": result})
 
+    def _open_codex(self, tid: str) -> None:
+        """电脑上打开 for Codex (11-17): bring its window up on the desktop worker, then wait here in this request's
+        own thread for a Codex window to take the conversation (up to ten seconds), so Claude's sends do not queue
+        behind that wait on the desktop worker."""
+        try:
+            self.desktop.run(self.desktop.open, "codex", tid, timeout=45)
+            result = self.server.codex.confirm_open(tid)
+        except (chats.ChatError, codex_control.ControlError) as exc:
+            # Never 503: both phones read that as "the computer is offline", hiding the real reason.
+            self._json({"ok": False, "error": str(exc), "text": str(exc),
+                        "code": getattr(exc, "code", None) or None}, 400)
+            return
+        except TimeoutError:
+            self._json({"ok": False, "error": "超过 45 秒没做完"}, 504)
+            return
+        except Exception as exc:
+            self.log.write(traceback.format_exc())
+            text = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}"
+            self._json({"ok": False, "error": text, "text": text}, 500)
+            return
+        self._json(result if isinstance(result, dict) else {"ok": True, "result": result})
+
     def log_message(self, fmt, *args):
         if self.server.verbose:  # type: ignore[attr-defined]
             super().log_message(fmt, *args)
@@ -771,6 +793,9 @@ class Handler(BaseHTTPRequestHandler):
                     os.startfile('dsh://open')
                     self._json({'ok':True,'text':'已打开 DeepSeek；请在电脑侧选择对应对话'})
                 except (deepseek_control.DeepSeekError,OSError) as exc:self._json({'error':str(exc)},400)
+                return
+            if body.get('app') == 'codex':  # 11-17: only "opened" once a Codex window has taken the conversation
+                self._open_codex(str(body.get("id", "")))
                 return
             self._chat_call(self.desktop.open, str(body.get("app", "")), str(body.get("id", "")), timeout=45)
         elif path == "/api/chat/new":
