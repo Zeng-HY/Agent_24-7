@@ -202,8 +202,83 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
 
 ### 9.1 改了哪些文件、各改了什么
 
+**`codex_control.py`**
+
+- `TESTED_APP_VERSION` 改成 `26.1106.6628.0`，注释写了来历（11-17 在用户这台电脑上问 owner、v11 快照、发消息都正常）。
+- `ControlError` 多了 `code`（默认空）；`DesktopPipe.call()` 的 `no-client-found` 带 `code="no-client-found"`，别的错误带 `code=error[:80]`，超时带 `code="timeout"`。三句话的文字一字未改。
+- 新增 `_short`（话里出现的名字最多 24 个字符）、`version_newer`（按数字分段比，任一边为空或不是数字就 False）、`_codex_version_in_path`（从 `OpenAI.Codex_<版本>_` 取版本）、`_image_path`（进程完整路径，写法照 `winctl._process_name`）、`codex_version(pipe)`（取管道那头进程的路径，同一个连接只问一次，取不到返回空）、`thread_provider(tid)`（只读 `chats.codex_db()` 的 `threads.model_provider`）、`current_provider()`（`tomllib` 读 `chats.CODEX_HOME/config.toml`：profile 的 `model_provider` → 顶层 → `"openai"`；读不了/解析不了返回空）、`CodexNotTaken(chats.ChatError)`（`code = "codex_not_taken"`）。
+- 新增 `Bridge.owner(tid, timeout=3)`：问一次 `thread-owner-discovery`，`no-client-found` 返回 None，别的 `ControlError` 照抛。
+- 新增 `Bridge.confirm_open(tid, seconds=10.0, step=0.5)`：每 0.5 秒问一次 owner，最多 10 秒，**等待时不拿 `self.lock`**；有 owner 再 `status(tid, fresh=True)`。可用就清掉失败记录、返回「电脑上已打开「<标题>」，可以发了」；否则按第 3.1 节的顺序挑一句原因（连不上 / 提供商不同 / 有 owner 但读不到状态（分版本较新和不是）/ 没 owner 但版本较新 / 别的），原因存进 `_open_failed`（600 秒）、写一行日志、抛 `CodexNotTaken`。日志格式照第 3.1 节第 10 条，最后见到的 `code` 有就接在后面。
+- 新增 `_remember_open_failure` / `_forget_open_failure` / `_open_failure`（都走一把小锁 `_open_lock`，最多记 64 个对话）。
+- `Bridge.status()`：抛出的 `ControlError` 的 `code` 是 `no-client-found` 且这个对话 600 秒内有 `_open_failed` 记录时，`reason` 用那句原因，别的字段照旧；结果可用时删记录。新增 `_note_sendable`：每个对话记住上次的结果，变成不可用（或原因变了）写 `Codex 对话 <id 前 8 位>：手机发不了（<reason>）`，变回可用写 `…手机又能发了`，第一次见到且可用时不写；最多 64 个对话；写日志出错不影响 `status()` 的结果。
+
+**`remote.py`**
+
+- 新增 `Handler._open_codex(tid)`：`self.desktop.run(self.desktop.open, "codex", tid, timeout=45)` 照旧在桌面工作线程里开窗口，然后在请求自己的线程里调 `self.server.codex.confirm_open(tid)`（10 秒的等待不占桌面工作线程）。`chats.ChatError`（含 `CodexNotTaken`）和 `ControlError` → 400 `{"ok": False, "error", "text", "code"}`（`code` 没有就是 null）；`TimeoutError` → 504「超过 45 秒没做完」；别的 → 写 traceback、500。**不用 503。**
+- `/api/chat/open` 的 Codex 分支改走 `_open_codex`；DeepSeek 和 Claude 的分支没动。
+
+**安卓**
+
+- `ComposerUi.kt`：把这一行说什么抽成 `internal fun statusLineText(chatError, wsError, paneOpen, local, result, unknown, away, receipt)`；`away != null` 时不显示 `result`，其他顺序不变。`StatusLine` 调它，颜色、`opens`、按钮、行数规则都不变。
+- `WorkspaceController.kt`：`openOnComputer()` 捕获到 `ServiceFailure` 且 `code == "codex_not_taken"` 时，`error`、`result` 都不设，`changed()` 重读状态；别的异常照旧；成功照旧。
+- `FixtureApi.kt`：新增示例对话 `codex-away-stuck`「电脑上打开也接不上的 Codex 对话」；点「电脑上打开」抛 `ServiceFailure(400, "codex_not_taken", <"别的"那句>)`，之后它的状态 `reason` 变成同一句，仍不可用。`AWAY_CODEX` 没动。
+- `ComposerAwayTest.kt`：新单元测试 `theComputersReasonComesBeforeAnOlderResult`（不可用时结果不显示、显示原因；可用时结果照常；错误第一；`local`、`unknown`、回执的位置；`pane` 打开时错误和结果都不进这一行）。
+- `ReaderUiScenarios.kt`：新场景 `codexOpenThatIsNotTakenShowsTheReasonInsteadOfAnError`（点「电脑上打开」→ 那一行是那句原因，没有「本地示例：没有真的打开电脑上的窗口」，没有红字，发送键仍灰）。因为多了一个示例对话，两处列表条数断言跟着改：`chats.size` 9→10、加载更多后 10→11（同一文件，必须跟着改）。
+
+**iPhone**（这台电脑编不了，只改这四处）
+
+- `ComposerChips.swift`：新增 `statusLineText(chatError, workspaceError, note, result, unknown, away, receipt)`，规则和安卓一样：`away` 时不显示 `result`，其余顺序照 iOS 原来的（这一行 iOS 没有安卓的 `pane` 参数）。
+- `ComposerView.swift` 的 `lines`：改用它；只有电脑给的原因那一行（带「电脑上打开」按钮的那行）`lineLimit(3)`，其余仍是 2。
+- `WorkspaceModel.swift` 的 `openOnComputer()`：`catch` 里 `ServiceFailure.code == "codex_not_taken"` 时不设 `error`、调 `changed()`；别的照旧。
+- `ComposerAwayTests.swift`：和安卓同样的单元测试 `theComputersReasonComesBeforeAnOlderResult`。`DemoTransport.swift` 没动。
+
+**`tests/test_codex_open_check.py`（新建，14 个测试）**：`FakeClock`（`monotonic` 只在 `sleep` 时前进，测试不真等 10 秒）、假 pipe（`SimpleNamespace(closed=False, handle=…)`，不连真 Codex）、照 `tests/test_locked_send.py` 造一个假 handler。
+
 ### 9.2 新测试的名字，和在旧代码上的结果
+
+14 个，全在 `tests/test_codex_open_check.py`。旧代码按 main 的 `0f18d1e` 取（工作区里已有的改动不算），原样输出在工作区 `new-tests-on-old-code.log`：**14 个全部 ERROR**（`confirm_open`、`codex_version`、`thread_provider`、`CodexNotTaken`、`_codex_version_in_path` 在旧代码里都还没有，`ControlError` 也不认 `code`）。改完以后再跑，14 个全过（`new-tests-after-code.log`）。
+
+| 测试 | 旧代码 | 对应 |
+|---|---|---|
+| `test_a_taken_conversation_says_it_can_send_and_the_lock_is_free_while_waiting` | 没有 `confirm_open` | 3.1-9、3.1-10（等待不拿 `self.lock`） |
+| `test_no_owner_ever_says_so_and_writes_one_line` | 没有 `confirm_open` | 开-1、开-3（日志一行） |
+| `test_a_provider_mismatch_says_which_provider_to_switch_back_to` | 没有 `confirm_open` | 提供商那句、24 字截断 |
+| `test_a_newer_codex_that_does_not_take_it_says_it_may_need_an_update` | 没有 `confirm_open` | 版本那句（没有 owner） |
+| `test_an_owner_whose_state_cannot_be_read_says_what_to_do` | 没有 `confirm_open` | 「读不到状态」两句 |
+| `test_a_pipe_that_never_connects_says_codex_is_not_reachable` | 没有 `confirm_open` | 「连不上」那句 |
+| `test_the_reason_last_ten_minutes_and_goes_once_taken` | 没有 `confirm_open` / `_open_failed` | 开-2、3.1-11 |
+| `test_status_writes_one_line_on_each_change_of_being_sendable` | 没有 `_note_sendable` | 开-3、3.1-10 |
+| `test_desktop_pipe_call_keeps_the_words_and_adds_the_code` | `ControlError` 没有 `code` | 3.1-1 |
+| `test_the_codex_version_comes_from_its_package_folder_and_compares_by_numbers` | 没有 `codex_version` | 3.1-3、3.1-4 |
+| `test_current_provider_reads_the_profile_then_the_top_level` | 没有 `current_provider` | 3.1-6 |
+| `test_thread_provider_reads_the_conversations_own_provider` | 没有 `thread_provider` | 3.1-5 |
+| `test_opening_a_codex_conversation_waits_outside_the_desktop_worker` | 没有 `_open_codex` | 3.2 |
+| `test_a_codex_conversation_that_is_not_taken_is_a_400_with_its_code` | 没有 `_open_codex` | 3.2（400 带 code，不是 503） |
 
 ### 9.3 全部测试（和基线比）
 
+**Python**（仓库根目录，`python -m unittest discover -s tests`）
+
+- 改前基线（第一次，`-X utf8`，原样在 `baseline-deepseek-before.log`）：`Ran 851 tests`，`FAILED (failures=1, errors=22, skipped=6)`。
+- 先写测试、在旧代码上跑：`Ran 877 tests`，`FAILED (failures=1, errors=36, skipped=6)`——多出来的 14 个 ERROR 就是新测试。23 条已知失败/出错的清单和第一次基线逐条相同（`baseline-failures.txt`）。
+- 改后（最后一次，原样在 `after-deepseek-change-final.log`）：`Ran 878 tests`，`FAILED (failures=1, errors=22, skipped=6)`。
+- 逐行比对 23 条已知失败/出错：改前改后**完全一样**（`Compare-Object` 无差异）。新测试 14 个全过。
+- 总数 877→878 是这期间另一个会话又加了一个测试（这个仓库里同时有别的会话在干活），和这次无关；两次的 23 条已知项相同。
+- 两台旧的坏项照旧，和这次无关：Playwright 浏览器缺（`C:\Users\39011\AppData\Local\ms-playwright` 不在，webkit/chromium 那些 ERROR），`test_open_speed` 那 1 条 FAIL。
+
+**安卓**（`apps\android` 里 `.\scripts\build.ps1`，四个任务都过）
+
+- 改前：`BUILD SUCCESSFUL in 46s`（92 个任务 up-to-date），`app/build/test-results/testDebugUnitTest` 20 个 XML，**226** 个 JVM 测试，0 失败 0 出错。
+- 改后：`BUILD SUCCESSFUL in 1m 54s`，**228** 个 JVM 测试，0 失败 0 出错。多出的两条就是 `ComposerAwayTest.theComputersReasonComesBeforeAnOlderResult` 和 `ReaderRobolectricTest.codexOpenThatIsNotTakenShowsTheReasonInsteadOfAnError`；原来的 `codexNotOpenOnTheComputerSaysWhyAndOpensFromTheChip` 照旧过。
+
+**iPhone**：这台电脑没有 Swift 工具链，没编译、没跑 `TeleplyCore` 测试（见 9.4）。
+
 ### 9.4 没做的、拿不准的
+
+- **没在真窗口上验证成功的路子**：没有发 `codex://` 链接、没有往 Codex 窗口发消息、没有发 `thread-follower-*` 请求、没有启动/重启/关闭 Codex 或遥应。只做了一次只读核对：用 `Bridge()._app_version()` 连上 Codex 的 IPC（只发 `initialize`，用完立刻 `close()`），读到 `26.1106.6628.0`；`current_provider()` 读到 `openai`；`thread_provider('01a1e40d-…')` 读到 `openai`。**没有对任何对话调 `confirm_open`**，那一步留给 Claude 审的时候核对。
+- **iPhone 没编译过**：改动逐行对照了现有写法（`if let x` 简写、`ServiceFailure` 在 `TeleplyModel`、`TeleplyState` 已经 `import TeleplyModel`），但 `ComposerChips.swift`、`ComposerView.swift`、`WorkspaceModel.swift`、`ComposerAwayTests.swift` 都没编过；`openOnComputer()` 的 `codex_not_taken` 分支也只有纯函数测试，没有异步测试（要加得改测试用的假 transport，属于本次不让改的文件，所以没加）。推送后请在 Codemagic 上跑 `ios-native-check`。
+- **拿不准：`current_provider()` 的 profile 读法**：按交接文档第 1 节写的（`profile = "x"` 时看 `[profiles.x]`），这台电脑的 `config.toml` 是顶层 `openai`，profile 那条路没在真的文件上试过；读不懂时返回空、不拿它下结论。
+- **拿不准：版本号的取法**：这次在真管道上取到了；如果以后 Codex 换打包方式（路径里不再有 `OpenAI.Codex_<版本>_`），`codex_version` 返回空，日志写「未知」，原因句不会误报「版本较新」，会落到「原因不明」/「读不到状态」。
+- **600 秒的覆盖范围**：只覆盖 `no-client-found` 那一种；如果之后 Codex 换了原因（比如管道断了），手机上会先看到上次那句，最多 10 分钟。原因变了会再写一行日志（这是 3.1-10 要的）。
+- 安卓多了一个示例对话，所以 `ReaderUiScenarios.kt` 里两处列表条数断言（9→10、10→11）跟着改了；其他断言没动。
+- 没打包、没安装、没启动或重启遥应，没 push、没 rebase、没 amend，没动版本号和发版脚本。`chats.py`、`relay_*.py`、`live_events.py`、网页、`windows-version.json` 都没碰；提交前 `git status --short` 只有一个会话自己的文件，`git add` 一个一个加。
