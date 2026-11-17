@@ -184,6 +184,7 @@ class Press(unittest.TestCase):
             def run(self, fn, *args, timeout=None): return fn(*args)
             def _find(self, doc, kind, name): return list(test.found.get((kind, name), []))
             def _claude_show(self, hwnd): pass
+            def _claude_where(self, ctrl): return (False, None)  # 11-17: no side chat on the pages these tests draw
             def log(self, text): test.logged.append(text)
             def send(self, app, tid, text): test.sent.append((app, tid, text)); return {"ok": True}
         self.ctrl = claude_control.Controller.__new__(claude_control.Controller)

@@ -215,15 +215,33 @@ class Controller:
                 if not ctrl.IsOffscreen:out.append(ctrl)
             except Exception:continue
         return out
+    def _own(self,ctrl):
+        """Whether this control belongs to the session the phone shows. Claude's side chat (11-17) draws its own Stop,
+        Send now and, one day, model and task controls on the same page: anything under a layer named "Side chat" is not
+        the session's, nor is a control whose place cannot be told (chats.Desktop._claude_where). Not in the dock: task
+        cards and next-step boxes sit among the messages."""
+        try:where=self.desktop._claude_where(ctrl)
+        except Exception:return False
+        return where is not None and not where[0]
+
     @staticmethod
-    def _waiting_tasks(every):
+    def _candidate(ctrl):
+        """A button by the message box that could name this session's model, effort, usage, mode or its Stop. Only these
+        are walked up to see whose they are: the page holds dozens of other buttons, a walk costs 0.015-0.018 s, and the
+        phone reads this every 5 s."""
+        try:name=(ctrl.Name or '').strip()
+        except Exception:return False
+        return name=='Stop' or name.startswith(('Model: ','Effort: ','Usage: ','Permissions: ')) or name in MODE_BUTTONS
+    @staticmethod
+    def _waiting_tasks(every,own=None):
         """The titles of the task cards Claude proposed that still wait on the desktop (10-16), scrolled into view or not:
-        each has a cross named 'Dismiss suggestion <title>', gone once the task is started, done here or dismissed."""
+        each has a cross named 'Dismiss suggestion <title>', gone once the task is started, done here or dismissed.
+        own: whether a button is this session's (a side chat's card is not); None: every one counts."""
         out=[]
         for ctrl in every:
             try:name=(ctrl.Name or '').strip()
             except Exception:continue
-            if name.startswith('Dismiss suggestion '):out.append(name[len('Dismiss suggestion '):])
+            if name.startswith('Dismiss suggestion ') and (own is None or own(ctrl)):out.append(name[len('Dismiss suggestion '):])
         return out
     def _context(self,doc):
         """This conversation's context from the Context card in the panel beside it (Session details, 10-26), read whether
@@ -244,7 +262,7 @@ class Controller:
         # buttons: the document's buttons when the caller already walked it (a walk costs ~0.8 s in a long chat)
         out=[]
         for button in (buttons if buttons is not None else self._buttons(doc)):
-            if button.Name!='Send now' or not self._enabled(button):continue
+            if button.Name!='Send now' or not self._enabled(button) or not self._own(button):continue
             parent=button.GetParentControl()
             for _ in range(5):
                 if re.fullmatch(r'Message \d+',parent.Name or ''):break
@@ -404,7 +422,7 @@ class Controller:
         popup_name=popup.Name or ''
         prefix='Model: ' if popup_name.startswith(('Model: ','Effort ')) else 'Effort: ' if popup_name=='Effort' else None
         if prefix:
-            triggers=[c for c in self._buttons(doc) if (c.Name or '').startswith(prefix)]
+            triggers=[c for c in self._buttons(doc) if (c.Name or '').startswith(prefix) and self._own(c)]
             if len(triggers)==1:
                 self._expand(triggers[0],False)
                 return
@@ -443,8 +461,11 @@ class Controller:
         result={'settings':recorded,'runtime':runtime,'available':False,'on_screen':False,'actions':[],
                 'observed_at':int(time.time()*1000),'mode_options':self.modes,'recorded_label':self._model_name(recorded.get('model'))}
         try:
-            _,root,doc=self._document(item);every=self.desktop._find(doc,'ButtonControl');buttons=self._buttons(doc,every);names=[(c.Name or '').strip() for c in buttons]
-            result['tasks']=self._waiting_tasks(every)
+            _,root,doc=self._document(item);every=self.desktop._find(doc,'ButtonControl');buttons=self._buttons(doc,every)
+            # 11-17: with a side chat open its buttons are on the same page (its Stop while it runs, Send now for its
+            # queue); only the session's own are read, and only the buttons that could name a setting or Stop are walked.
+            names=[(c.Name or '').strip() for c in buttons if self._candidate(c) and self._own(c)]
+            result['tasks']=self._waiting_tasks(every,self._own)
             model_name=next((n for n in names if n.startswith('Model: ')),None)
             model=model_label(model_name) if model_name else None
             effort=next((n[8:] for n in names if n.startswith('Effort: ')),None) or effort_label(model_name)
@@ -542,7 +563,7 @@ class Controller:
             if self.menu_context[0]==item['id']:self._dismiss_popup(item,page)
             self.menu_context=None
             hwnd,root,doc=self._new_page(hwnd) if page else self._document(item)
-        buttons=self._buttons(doc)
+        buttons=[c for c in self._buttons(doc) if self._candidate(c) and self._own(c)]  # not a side chat's (11-17)
         combined=kind=='effort' and not any((c.Name or '').startswith('Effort: ') for c in buttons) and any(effort_label(c.Name) for c in buttons if (c.Name or '').startswith('Model: '))
         match=lambda c:(c.Name or '').startswith('Model: ') if kind in ('model','fast') or combined else (c.Name or '').startswith('Effort: ') if kind=='effort' else ((c.Name or '') in MODE_BUTTONS or (c.Name or '').startswith('Permissions: '))
         triggers=[c for c in buttons if match(c)]
@@ -550,7 +571,7 @@ class Controller:
         # buttons by the message box are drawn a moment after the page itself.
         deadline=time.monotonic()+6
         while (len(triggers)!=1 or not self._enabled(triggers[0])) and time.monotonic()<deadline:
-            time.sleep(.25);buttons=self._buttons(doc);triggers=[c for c in buttons if match(c)]
+            time.sleep(.25);buttons=[c for c in self._buttons(doc) if self._candidate(c) and self._own(c)];triggers=[c for c in buttons if match(c)]
         if len(triggers)!=1 or not self._enabled(triggers[0]):raise chats.ChatError('没有找到唯一可用的 Claude 设置按钮')
         menu=root.MenuControl(searchDepth=85)
         if menu.Exists(.2,.1):
@@ -883,7 +904,7 @@ class Controller:
                 elif ticket['kind']=='stop':
                     current=self._read(item)
                     if not current.get('running') or current.get('stop_revision')!=ticket['revision']:raise chats.ChatError('该轮已经结束或进入下一轮，未执行停止')
-                    _,_,doc=self._document(item);targets=[c for c in self._buttons(doc) if c.Name=='Stop' and self._enabled(c)]
+                    _,_,doc=self._document(item);targets=[c for c in self._buttons(doc) if c.Name=='Stop' and self._enabled(c) and self._own(c)]
                 elif ticket['kind']=='action':
                     revision,dock=self._action_state(item)
                     if revision!=ticket['revision']:raise chats.ChatError('计划或执行选项已变化，未执行旧选项')
@@ -922,14 +943,15 @@ class Controller:
         held either): at 10:00 a group with the recap, Dismiss, the question and a group 'Suggested next actions' with the
         buttons, named as their labels; at 12:40 the recap, the question and a list, one item per label, nothing to click
         (that turn also proposed a task). Read whether scrolled into view or not."""
-        walk=self.desktop.auto.WalkControl;groups=self.desktop._find(doc,'GroupControl','Suggested next actions')
+        walk=self.desktop.auto.WalkControl;groups=[g for g in self.desktop._find(doc,'GroupControl','Suggested next actions') if self._own(g)]
         for group in reversed(groups):
             try:
                 texts={chats.norm(c.Name or '') for c,_ in walk(group.GetParentControl(),maxDepth=4) if c.ControlTypeName=='TextControl'}
                 if box['ask'] and chats.norm(box['ask']) not in texts:continue
                 return 'buttons',[c for c,_ in walk(group,maxDepth=3) if c.ControlTypeName=='ButtonControl' and self._enabled(c)]
             except COMError:continue
-        for text in reversed(self.desktop._find(doc,'TextControl',box['ask'])) if box['ask'] else []:
+        texts=[t for t in self.desktop._find(doc,'TextControl',box['ask']) if self._own(t)] if box['ask'] else []
+        for text in reversed(texts):
             try:
                 row=text.GetParentControl().GetParentControl()
                 if [(c.Name or '').strip() for c,_ in walk(row,maxDepth=3) if c.ControlTypeName=='ListItemControl']==[a['label'] for a in box['actions']]:
@@ -976,8 +998,9 @@ class Controller:
         'Dismiss suggestion <title>', and Options, Do it here and Start."""
         out=[]
         for head in self.desktop._find(doc,'ButtonControl',title):
+            if not self._own(head):continue
             try:out+=[c for c,_ in self.desktop.auto.WalkControl(head.GetParentControl(),maxDepth=1)
-                      if c.ControlTypeName=='ButtonControl' and (c.Name or '').strip()==name and self._enabled(c)]
+                      if c.ControlTypeName=='ButtonControl' and (c.Name or '').strip()==name and self._enabled(c) and self._own(c)]
             except COMError:continue
         return out
     def task_step(self,tid,title,button):

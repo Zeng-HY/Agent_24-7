@@ -8,6 +8,7 @@ from claude_control import Controller,MODE_CHOICES,load_modes,signature,usage_fr
 
 class Desktop:
     def run(self,fn,*args,**kwargs):return fn(*args)
+    def _claude_where(self,ctrl):return (False,None)  # 11-17: no side chat on the pages these tests draw
 
 class Control:
     def __init__(self):self.calls=0
