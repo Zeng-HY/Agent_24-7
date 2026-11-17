@@ -1,8 +1,8 @@
 # 交接：手机上看 Codex 和 Claude 的用量，还能用掉一次 Codex 重置（2026-11-17）
 
-写给接手的 DeepSeek Harness 会话，由 Claude 监督。要做的东西已经查清楚，用户 11-17 同意做「看用量 + Codex 重置」。你照第 3 节写电脑端和两个手机端，补测试，本地提交，在第 9 节记结果。行号按 main 的 `0f18d1e` 写，可能前后差几行。
+写给接手的 DeepSeek Harness 会话，由 Claude 监督。要做的东西已经查清楚，用户 11-17 同意做「看用量 + Codex 重置」。你照第 3 节写电脑端和两个手机端，补测试，本地提交，在第 9 节记结果。行号按 main 的 `6f244e3` 写，可能前后差几行。
 
-**开工时间**：另一个 DeepSeek 会话正在做 `docs/handoff-codex-open-check.md`（改 `codex_control.py`、`remote.py` 的 `/api/chat/open`、安卓 `ComposerUi.kt` 的 `StatusLine`、iPhone `ComposerView.swift` 的 `lines` 等）。**等 Claude 说它的提交已经在 main 上，你再开工。** 这次的改动避开了它那些地方（见第 4 节）。
+**开工前提**：另一个会话的 `docs/handoff-codex-open-check.md` 已经做完、审完，在 main 上（代码 `8a29ffb`、`05c24ce`，审查记录 `6f244e3`）。它改了 `codex_control.py`、`remote.py` 的 `/api/chat/open`（新的 `_open_codex`）、安卓 `ComposerUi.kt`（状态行改成调 `statusLineText(...)`）、iPhone `ComposerChips.swift`（`statusLineText(...)`）等。这次的改动避开了它那些地方（见第 4 节）。
 
 ---
 
@@ -104,11 +104,12 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 - `tests/test_archives.py` 13–30：假的 `CodexServer`（`Archives(..., server=FakeServer)` 注入）。照这个写法测。
 - `chats.py`：48 `CODEX_HOME`；54 `CLAUDE_PROCESS = "claude.exe"`；337–343 `codex_db()`；1441–1444 `app_window(process)`；1531–1556 `Desktop`（UI Automation 只在它自己的一条线程上用，`run(fn, *args, timeout)` 把活交给那条线程）；1579–1582 `_need_auto()`；1629–1647 `_find(scope, kind, name=None)`（一次 `FindAll`，读到一半消失的元素会跳过）。**这次不改 `chats.py`**，只调用它。
 - `remote.py`：
-  - 450–622 `_get()`：按 `path` 一条条判断；`/api/notify` 在 497–499，新的 `/api/usage` 加在它后面。
-  - 626–760 `_post()`：`body = self._body()`（651），`_bad` 时 400；`/api/notify` 那组在 675 起，新的 `/api/usage/codex-reset` 加在那组前后都行。
+  - 472 起 `_get()`：按 `path` 一条条判断；`/api/notify` 在 519–521，新的 `/api/usage` 加在它后面。
+  - 648 起 `_post()`：`body = self._body()`（673），`_bad` 时 400；`/api/notify` 那组在 697 起，新的 `/api/usage/codex-reset` 加在那组前后都行。
+  - `_open_codex` 是另一个会话刚加的，不要动。
   - `_json(obj, status=200)`；出错一律回 JSON `{"error": 文字, ...}`。
-  - 1154–1220 `main()`：1174 `server.desktop`，1191 `server.archives`。新对象加在 1191 后面。
-  - 1197 `server.machine = machine_facts(cfg)`，`server.machine["apps"]` 是这台电脑装了的（`"codex"`、`"claude"`、`"deepseek"`）。注意它在 1197 才设，新对象要用 `apps=lambda: server.machine["apps"]` 这种晚取的写法（`archives` 就是这样）。
+  - 1179 起 `main()`：1199 `server.desktop`，1216 `server.archives`。新对象加在 `server.archives` 那几行后面。
+  - 1222 `server.machine = machine_facts(cfg)`，`server.machine["apps"]` 是这台电脑装了的（`"codex"`、`"claude"`、`"deepseek"`）。注意它在 1222 才设，新对象要用 `apps=lambda: server.machine["apps"]` 这种晚取的写法（`archives` 就是这样）。
   - 日志：`log.write(文字)`，自动带时间，写进当天的日志文件。
 - `app_paths.py` 的 `DATA`：遥应的数据目录（打包后在 `%LOCALAPPDATA%\AgentRemote\Data`）。
 - 中转（`relay_transport.py`）对路径不设限制，新接口不用改中转。
@@ -134,10 +135,10 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 - `TeleplyCore/Sources/TeleplyState/AppModel+Archive.swift` 122–125 `AppModel.deviceCall(_:query:body:)`：对当前电脑调 `detail`。
 - `Teleply/Settings/SettingsView.swift` 10–86：设置是一个自带 `NavigationStack` 的 sheet；选了电脑才有的几组（对话 → `ArchivedView`、`NotifySection`、`VoiceSection`）。
 - `Teleply/Settings/ArchivedView.swift`：`let model: AppModel`、`@State data: JSONValue?`、`.task { await load() }`、`.refreshable`；94–99 `.alert(… isPresented:) { Button("取消", role: .cancel) {}; Button("删除", role: .destructive) { … } } message: { Text(…) }`；148 带 `confirmed: true` 的 POST。照这页的写法做「用量」。
-- `Teleply/Chat/ConversationView.swift` 364–429 `ConversationMenu`（对话右上角 ⋯）：379「电脑上打开」、「会话状态」、「查找消息」…
+- `Teleply/Chat/ConversationView.swift` 431 起 `ConversationMenu`（对话右上角 ⋯）：446「电脑上打开」、「会话状态」、「查找消息」…
 - `TeleplyCore/Sources/TeleplyModel/UserFacingError.swift` 12 `describe(error)`；`Hints.swift`：电脑给的中文句子在英文界面里怎么翻（52–56 有例子）。
 - 界面文字：中文字面量当键，英文在 `Teleply/Resources/Localizable.xcstrings`（源语言 zh-Hans）。运行时拼的用 `Design/Localized.swift` 的 `L()`/`LK()`。
-- 示例数据：`TeleplyCore/Sources/TeleplyDemo/DemoTransport.swift` 168–320 按路由回假数据。
+- 示例数据：`TeleplyCore/Sources/TeleplyDemo/DemoTransport.swift` 174 起的 `switch route` 按路由回假数据。
 - 测试：`TeleplyCore/Tests/TeleplyCoreTests/*.swift`（Swift Testing：`@Test`、`#expect`）；`RelayReadTests.swift` 10–29 用 `RecordingTransport`（`TestTransports.swift` 39）。
 - 灵动岛早有"额度用完 · 几点恢复"的样子（`TeleplyIsland/IslandState.swift` 的 `limited`、`resets`，`IslandWords.swift`），是 `docs/handoff-dynamic-island.md` 方案七的计划，还没接数据。**这次不碰灵动岛**；以后做方案七时可以用这次的 `usage_limits.py`。
 - **这台电脑编不了 Swift**（11-12 工具链被删了），只能推到 GitHub 以后在 Codemagic 上编。改动越少越好，每一行都对着现有代码的写法核对。
@@ -182,7 +183,7 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 
 5. **Codex：用掉一次重置** `codex_redeem(request_id, credit_id, server_factory) -> dict`
    1. 检查：`request_id` 必须匹配 `[A-Za-z0-9-]{8,64}`，否则 `UsageError("请求编号不对", 400, "bad_request")`。`credit_id` 是 None 或不超过 200 字的字符串。
-   2. 记录文件 `data_dir / "attachments" / "codex-resets.jsonl"`（`data_dir` 默认 `app_paths.DATA`；开发时 `DATA` 就是仓库目录，`attachments/` 在 `.gitignore` 里，和 `remote.py` 1199 的 `computers.json` 放一起）。一行一个 JSON，最多留最后 200 行。测试一律传临时目录。这个 `request_id` 已经有最终结果（`reset`、`nothingToReset`、`noCredit`、`alreadyRedeemed`）→ 不再调 Codex，直接回那个结果（`usage` 用缓存的实时读，没有就记录里的）。
+   2. 记录文件 `data_dir / "attachments" / "codex-resets.jsonl"`（`data_dir` 默认 `app_paths.DATA`；开发时 `DATA` 就是仓库目录，`attachments/` 在 `.gitignore` 里，和 `remote.py` 1224 的 `computers.json` 放一起）。一行一个 JSON，最多留最后 200 行。测试一律传临时目录。这个 `request_id` 已经有最终结果（`reset`、`nothingToReset`、`noCredit`、`alreadyRedeemed`）→ 不再调 Codex，直接回那个结果（`usage` 用缓存的实时读，没有就记录里的）。
    3. 调之前先写一行 `{"request_id", "at", "stage": "sending"}`。
    4. `with server_factory() as s:`
       - `outcome = s.call("account/rateLimitResetCredit/consume", {"idempotencyKey": request_id, **({"creditId": credit_id} if credit_id else {})}, 30)["outcome"]`
@@ -241,7 +242,7 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 ### 3.2 `remote.py`
 
 1. `import usage_limits`。
-2. `_get()`，在 `/api/notify`（497–499）后面：
+2. `_get()`，在 `/api/notify`（519–521）后面：
 
    ```python
    if path == "/api/usage":  # 用量：Codex 和 Claude 的限额、几点重置；live=1 时 Codex 实时读（usage_limits.py）
@@ -251,7 +252,7 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
    ```
 
 3. `_post()`，`body` 解析之后：`/api/usage/codex-reset` → `self.server.usage.redeem(body)`；`UsageError` → `{"ok": False, "error": 文字, "text": 文字, "code": code}`，状态码用它的 `status`；别的异常写 traceback、回 500 `{"error": "电脑端出错，没确认这次用成了没有，请到电脑上的 Codex 里看用量"}`。**任何情况都不回 503。**
-4. `main()`，1191 后面：`server.usage = usage_limits.Usage(server.desktop, log.write, apps=lambda: server.machine["apps"])`。
+4. `main()`，`server.archives`（1216 起）那几行后面：`server.usage = usage_limits.Usage(server.desktop, log.write, apps=lambda: server.machine["apps"])`。
 
 ### 3.3 手机上的样子（安卓、iPhone 一样）
 
@@ -334,7 +335,7 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 2. 新文件 `TeleplyCore/Sources/TeleplyModel/Usage.swift`：和安卓第 2 条同样的结构和纯函数（从 `JSONValue` 解析），`public`，给 App 用。
 3. 新文件 `Teleply/Settings/UsageView.swift`：`struct UsageView: View { let model: AppModel … }`，照 `ArchivedView` 的写法：`List`、`.task { await load() }`、`.refreshable { await load() }`、`.alert`（`Button("先不用", role: .cancel) {}`、`Button("用掉 1 次", role: .destructive) { … }`），导航标题「用量」，出错用 `describe(error)`。
 4. `SettingsView.swift`：选了电脑才有的那几组旁边加一组「用量」，一行 `NavigationLink` 到 `UsageView(model: model)`，写法照「已归档对话」那一行。
-5. `ConversationView.swift` `ConversationMenu`（364–429）：「会话状态」下面加「用量」（DeepSeek 的对话不加），点了用 `.sheet` 打开 `NavigationStack { UsageView(model: …) }`。
+5. `ConversationView.swift` `ConversationMenu`（431 起）：「会话状态」下面加「用量」（DeepSeek 的对话不加），点了用 `.sheet` 打开 `NavigationStack { UsageView(model: …) }`。
 6. `Localizable.xcstrings`：这次新加的界面中文都补英文（比如「用量」Usage、「已用 {n}%」{n}% used、「用掉 1 次 Codex 重置？」Use 1 Codex reset?、「用掉 1 次」Use it、「先不用」Not now）。`Hints.swift`：电脑给的固定句子（3.1 第 5、6、7 条里的 `text`、`reason`）补英文。
 7. `DemoTransport.swift`：`usage`、`usage/codex-reset` 回 3.3 的示例数据。
 8. 测试：新文件 `TeleplyCore/Tests/TeleplyCoreTests/UsageTests.swift`，照安卓第 7 条的单元测试写同样几条；照 `RelayReadTests.swift` 的写法测两个路由的路径和 body。
@@ -346,7 +347,7 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 
 - **只改**：新建 `usage_limits.py`、`tests/test_usage_limits.py`；`remote.py`（只加 3.2 那几处）；安卓：`RelayApi.kt`（两张表）、新建 `Usage.kt` `UsageUi.kt`、`MainActivity.kt`（只动 `SettingsScreen`）、`ChatUi.kt`（只动 `ChatMenu` 和 `ChatSheets`）、`FixtureApi.kt`（加两个路由）、新建 `UsageTest.kt`、`RelayApiTest.kt` 和 `ReaderUiScenarios.kt`（各加几条）；iPhone：`Relay.swift`（两张表）、新建 `Usage.swift` `UsageView.swift` `UsageTests.swift`、`SettingsView.swift`、`ConversationView.swift`（只动 `ConversationMenu`）、`Localizable.xcstrings`、`Hints.swift`、`DemoTransport.swift`、`RelayReadTests.swift`（加几条）；本文件第 9 节。
 - **改每个文件之前**先跑 `git status --short <文件>`：要是它已经有不是你改的改动，**停下来告诉 Claude**，别动它。提交前 `git diff` 只能看到你的改动。`git add` 一个文件一个文件地加，提交用 `git commit -- <文件…>`，别把别人暂存的东西带进去。
-- **不要碰**：`codex_control.py`、`chats.py`、`archives.py`、`new_conversations.py`（只调用，不改）；`claude_control.py`；`relay_*.py`；`live_events.py`；安卓 `ComposerUi.kt`、`WorkspaceController.kt` 的 `openOnComputer`；iPhone `ComposerView.swift`、`WorkspaceModel.swift` 的 `openOnComputer`（另一个会话刚改过）；网页（`remote.html`、`static/`）；`windows-version.json` 和发版脚本；`docs/` 里别的文件；用户没提交的 `deploy/site/`、`pocketagentdesk.com.png`、`tests/test_activity_records.py`，以及别的会话没提交的文件。
+- **不要碰**：`codex_control.py`、`chats.py`、`archives.py`、`new_conversations.py`（只调用，不改）；`claude_control.py`；`relay_*.py`；`live_events.py`；安卓 `ComposerUi.kt`、`WorkspaceController.kt` 的 `openOnComputer`、`ComposerAwayTest.kt`；iPhone `ComposerView.swift`、`ComposerChips.swift`、`WorkspaceModel.swift` 的 `openOnComputer`、`ComposerAwayTests.swift`（另一个会话刚改过）；网页（`remote.html`、`static/`）；`windows-version.json` 和发版脚本；`docs/` 里别的文件；用户没提交的 `deploy/site/`、`pocketagentdesk.com.png`、`tests/test_activity_records.py`，以及别的会话没提交的文件。
 - **登录**：不读 `~/.codex/auth.json`，不读 Claude 的任何登录文件，不直接调 chatgpt.com、claude.ai、anthropic 的接口。用量只从 Codex 自己的后台程序、Codex 的对话记录、Claude 的窗口拿。
 - **重置次数是用户的东西，这台电脑上只有 1 次（12-13 到期）**：测试和核对里**绝对不能**对真 Codex 调 `account/rateLimitResetCredit/consume`，也不能经遥应的接口去用。测试一律用假的 `CodexServer`。对真 Codex **只许**调 `account/rateLimits/read`（第 5.4 节，一次）。
 - **Claude 窗口只读**：不点、不悬停、不恢复、不拉到前面。
