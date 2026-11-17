@@ -3,6 +3,7 @@ import gzip
 import io
 import json
 import sys
+import time
 import unittest
 from email.message import Message
 from pathlib import Path
@@ -119,6 +120,7 @@ class DeepSeekConnectionTests(unittest.TestCase):
     def test_a_successful_call_never_starts_a_search_for_the_port(self):
         client = deepseek_control.Client()
         client.connection = (1234, "cookie")
+        client.checked = time.monotonic()  # found just now: since af70c71 a connection is trusted for 540 s
         with patch("http.client.HTTPConnection", FakeHTTP), \
              patch("deepseek_control.discover", side_effect=AssertionError("started PowerShell")):
             self.assertEqual(client.call("catalog", {}), {"session": []})
@@ -127,6 +129,7 @@ class DeepSeekConnectionTests(unittest.TestCase):
     def test_a_failed_call_drops_the_connection_and_the_next_one_finds_it_again(self):
         client = deepseek_control.Client()
         client.connection = (1, "old")
+        client.checked = time.monotonic()  # still fresh, so the call goes out on it instead of searching for the port
         with patch("http.client.HTTPConnection", DownHTTP):
             with self.assertRaises(deepseek_control.DeepSeekError):
                 client.call("catalog", {})
