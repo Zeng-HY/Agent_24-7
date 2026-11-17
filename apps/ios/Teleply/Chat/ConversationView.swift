@@ -117,8 +117,13 @@ struct ConversationView: View {
         .scrollPosition($position, anchor: .top)
         .defaultScrollAnchor(reading.following ? .bottom : .top, for: .sizeChanges)
         .scrollDismissesKeyboard(.interactively)
+        // Near the bottom: the end of what shows above the input card is within 48 points of the content's end. 11-17,
+        // measured on iOS 26.5: containerSize is only the height between the bars (606 of 956) while contentOffset is
+        // the top of the whole bounds, so the old sum (offset + container − bottom inset) stopped 350 points short of
+        // the end and the page never read as near the bottom. The visible rect is the whole bounds: less the bottom
+        // bar, its end is the content's end when the page is at the bottom.
         .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom >= geometry.contentSize.height - 48
+            geometry.visibleRect.maxY - geometry.contentInsets.bottom >= geometry.contentSize.height - 48
         } action: { _, bottom in
             nearBottom = bottom
             probe(bottom ? "near" : "far")
@@ -360,7 +365,8 @@ struct ConversationView: View {
             reading = reading.opened(following: !model.newerAvailable)
             probe("restore↓")
         }
-        nearBottom = reading.following
+        // nearBottom is the scroll view's own measure only. Set here by hand (until 11-17) it stayed true while the
+        // measure never changed, and every drag up went back to the bottom when the finger stopped (the user's iPhone).
         restored = true
     }
 
