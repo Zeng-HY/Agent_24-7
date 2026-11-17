@@ -122,7 +122,20 @@ class Agent:
         async with client.ws_connect(self.origin+'/tunnel/stream/'+ident,
                 headers={'Authorization':'Bearer '+self.key,'Origin':self.origin},heartbeat=20,
                 max_msg_size=CHUNK+16384,compress=0) as ws:
-            sent=False
+            sent=False;finished=False;listener=None
+            main=asyncio.current_task()
+            async def watch():
+                # After the request is read, this is the only reader: receive() answers the relay's pings, so a
+                # slow local answer does not let the relay's heartbeat close the stream. Anything it returns is a
+                # closed channel or an unexpected message, so stop sending and let the local request go too.
+                try:
+                    await ws.receive()
+                except asyncio.CancelledError: raise
+                except Exception: pass
+                if not finished and not main.done(): main.cancel()
+            def listening():
+                nonlocal listener
+                if listener is None: listener=asyncio.create_task(watch())
             try:
                 message=await asyncio.wait_for(ws.receive(),15)
                 if message.type!=WSMsgType.TEXT: return
@@ -145,6 +158,7 @@ class Agent:
                             yield chunk.data
                         elif chunk.type==WSMsgType.TEXT and chunk.json().get('end'):
                             if length is not None and size!=length: raise ValueError('incomplete body')
+                            listening()  # the request is fully read; from here receive() only watches the channel
                             return
                         else: raise ConnectionError()
                 if meta['method']!='POST':
@@ -152,18 +166,28 @@ class Agent:
                         if chunk: raise ValueError('body on read request')
                 async with client.request(meta['method'],'http://127.0.0.1:'+str(self.port)+target,
                         data=body() if meta['method']=='POST' else None,headers=headers,allow_redirects=False) as response:
-                    await ws.send_json({'status':response.status,'headers':{k:v for k,v in response.headers.items() if k.lower() in RESPONSE_HEADERS}})
-                    sent=True
-                    if meta['method']!='HEAD':
-                        async for chunk in response.content.iter_chunked(CHUNK):
-                            await asyncio.wait_for(ws.send_bytes(chunk),120)
-                    await ws.send_json({'end':True})
+                    try:
+                        await ws.send_json({'status':response.status,'headers':{k:v for k,v in response.headers.items() if k.lower() in RESPONSE_HEADERS}})
+                        sent=True
+                        if meta['method']!='HEAD':
+                            async for chunk in response.content.iter_chunked(CHUNK):
+                                await asyncio.wait_for(ws.send_bytes(chunk),120)
+                        await ws.send_json({'end':True})
+                        finished=True
+                    except asyncio.CancelledError:
+                        response.close()  # the relay is gone: close the local request, do not return it to the pool half-read
+                        raise
             except (Exception,asyncio.CancelledError):
                 if not sent and not ws.closed:
                     with contextlib.suppress(Exception):
                         await ws.send_json({'status':502,'headers':{}})
                         await ws.send_json({'end':True})
                 raise
+            finally:
+                finished=True
+                if listener is not None:
+                    listener.cancel()
+                    await asyncio.gather(listener,return_exceptions=True)
 
     def finished(self, task):
         self.tasks.discard(task)
