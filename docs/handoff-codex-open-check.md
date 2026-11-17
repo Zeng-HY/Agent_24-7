@@ -295,3 +295,4 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
   1. Codex 卡住、问 owner 一直超时时，手机说「连不上电脑上的 Codex，请确认 Codex 开着…」；其实连上了只是不回应。日志里有「最后见到的错误 timeout」，看得出来。可以给超时单独一句（比如「电脑上的 Codex 没有回应，可能卡住了，请重启 Codex 再试」）。
   2. 有 owner 但读不到状态时，日志只写「读不到状态」，没带 `status()` 给的原文（比如「没有取得当前会话快照…」）；Codex 改版本时那句原文最有用。
 - **发布先后**：另一个会话 10:55 打的 Windows `0.27.0-dev.39`（`87b0b0b`，只装这台电脑）已经包含 `8a29ffb`、`05c24ce`，是在审查之前打的；审查没发现要返工的地方，dev.39 可以留着。那位安卓用户的电脑要装上带这两个提交的电脑端才有效；他的手机不更新也能看到原因（旧手机显示成红字），更新安卓新版以后显示在那一行。iPhone 要推送后在 Codemagic 上跑 `ios-native-check`。
+- **发给那位安卓用户**（11-17 11:2x，用户说「发给他」）：只把 dev.39 的安装包（`dist/0.27.0-dev.39`，提交 `87b0b0b` 打的；那时电脑端的改动都已提交，没提交的只有网站和一个测试文件，不进安装包）传到阿里云 `windows/AgentRemote-0.27.0-dev.39-Setup.exe`（用 `deploy/updates/publish.py` 自己的核对和上传，不许覆盖），从 `https://dl.pocketagentdesk.com/windows/AgentRemote-0.27.0-dev.39-Setup.exe` 取回，32,579,707 字节，SHA-256 和打包时一致。**测试版清单没动，还是 dev.37**，别的电脑不会自动收到 dev.39；GitHub Release 没建（要先推送）。以后正式发 dev.39 时，`publish.py` 会认出安装包已在、内容一样，不重传。
