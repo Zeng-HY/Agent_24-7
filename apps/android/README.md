@@ -6,6 +6,10 @@
 - **CSV、TSV 显示成表格**（`5c5fbba`，见 `docs/handoff-csv-table.md`）：可切回原文。
 - **Codex 发不出去时**（`8a29ffb`，见 `docs/handoff-codex-open-check.md`）：输入框上方显示电脑给的原因，不再被「已在电脑上打开」那行盖住。
 - 钥匙和 1.0.7 是同一把，1.0.7 能直接收到这一版的更新提示。
+- **文件**（11-17 13:00，提交 `1ce5001`）：`build/Teleply-1.0.8-19.apk`（2,690,011 字节，SHA-256 `8d1fe9752d997abe89bcab3e341d394a13d55e0497a4fbfd1a2b8b584d151810`，证书 `8230f6b1…fdfd74cf`），加上签好名的 `android-update.json` 和 `.sig`。包里读得到「用掉 1 次 Codex 重置？」「Codex 和 Claude 的用量」「再试一次（不会多用）」和 `usage/codex-reset`。
+- **检查**：`release.ps1` 跑了 JVM 测试（244 项）、release 构建、R8 和 lintVital，签名证书核对通过。
+- **发布**：阿里云已传（`publish.py android`，安装包、清单、签名）；从 `https://dl.pocketagentdesk.com/android/android-update.json` 读回：1.0.8（19），大小和 SHA-256 和本地一致，下载地址阿里云在前、GitHub 在后。**GitHub Release `android-v1.0.8` 还没建**：以前是用这台电脑上存的 GitHub 登录调接口建的，这次的会话不碰登录口令，留给用户定。
+- **没有做的**：没在真手机上从 1.0.7 点「检查更新」装上 1.0.8 试过。
 
 ## 1.0.7：换新钥匙（2026-11-16，已发布到 GitHub 和阿里云）
 

@@ -1,8 +1,10 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.7.6：手机看用量（11-17，用户说「安卓和 iPhone 都发」）
+## 0.7.6：手机看用量（11-17，构建 32 已传 TestFlight）
+
+- 构建 32（Codemagic `6afbdeded76b6ecab751f982`，5 分钟，`UPLOAD SUCCEEDED`），从 main 的 `94b1774` 打，Delivery UUID `0daf9fad-2905-4b51-93aa-b3ff78e543b2`；IPA 里读到的版本是 0.7.6、构建 32。只进内部测试，没有提交审核。用户 11-17 说「安卓和 iPhone 都发」。
 
 - **用量**（`0bf7104`、`96abf37`，见 `docs/handoff-usage-limits.md`）：设置里和对话右上角 ⋯ 菜单里的「用量」：Codex 每周（和可能有的 5 小时）用了多少、几点重置、还有几次重置；Claude 窗口上那一档。Codex 有重置时能用掉一次，先弹确认框，请求编号保证重试不多用。要电脑端 0.27.0-dev.40 或更新。11-17 Codemagic `ios-native-check` 编译和 287 条测试通过（`6afbdc8a`）。
 - **带上** main 上 11-17 的 Codex「电脑上打开」那行状态字（`8a29ffb`），0.7.5 里没有。
