@@ -304,6 +304,22 @@ class LiveTests(unittest.TestCase):
         self.assertEqual((409, "codex_refused"), (caught.exception.status, caught.exception.code))
         self.assertEqual("Codex 没给用量：unknown method: account/rateLimits/read", str(caught.exception))
 
+    def test_another_failure_while_talking_to_the_server_says_codex_is_unreachable(self):
+        """An OSError, a program that would not start: not a 500 for the phone, which can fall back to the records."""
+        FakeServer.errors["account/rateLimits/read"] = OSError("the pipe broke")
+        with self.assertRaises(usage_limits.UsageError) as caught:
+            usage_limits.codex_live(FakeServer)
+        self.assertEqual((409, "codex_unreachable"), (caught.exception.status, caught.exception.code))
+        self.assertEqual("读不到 Codex 的实时用量：OSError", str(caught.exception))
+
+        def would_not_start():
+            raise OSError("cannot spawn")
+
+        with self.assertRaises(usage_limits.UsageError) as caught:
+            usage_limits.codex_live(would_not_start)
+        self.assertEqual((409, "codex_unreachable"), (caught.exception.status, caught.exception.code))
+        self.assertEqual("读不到 Codex 的实时用量：OSError", str(caught.exception))
+
 
 class UsageReadTests(unittest.TestCase):
     """Usage.read: what the phone sees, the 30-second live cache, and falling back to the records."""
@@ -372,6 +388,28 @@ class UsageReadTests(unittest.TestCase):
         got = self.usage().read(False)["codex"]
         self.assertEqual("records", got["source"])
         self.assertEqual(0, FakeServer.opens)
+
+    def test_a_live_question_does_not_take_a_records_only_answer_from_the_cache(self):
+        usage = self.usage()
+        self.assertEqual("records", usage.read(False)["codex"]["source"])
+        self.assertEqual(0, FakeServer.opens)
+        self.assertEqual("live", usage.read(True)["codex"]["source"])
+        self.assertEqual(1, FakeServer.opens)
+
+    def test_a_fallback_after_a_failed_live_read_is_reused_within_the_cache(self):
+        FakeServer.errors["account/rateLimits/read"] = archives.ArchiveError("Codex 后台进程意外退出了", 503)
+        usage = self.usage()
+        self.assertEqual("records", usage.read(True)["codex"]["source"])
+        self.assertEqual(1, FakeServer.opens)
+        # Still the same 30 s, and it already answered the live question: no second app-server.
+        self.assertEqual("records", usage.read(True)["codex"]["source"])
+        self.assertEqual(1, FakeServer.opens)
+
+    def test_a_records_read_still_takes_its_cache(self):
+        usage = self.usage()
+        usage.read(False)
+        usage.read(False)
+        self.assertEqual(1, self.records.call_count)
 
     def test_a_computer_without_an_app_says_so(self):
         got = self.usage(apps=()).read(True)

@@ -45,7 +45,7 @@ _LOCK = threading.RLock()
 TAIL_BYTES = 512 * 1024  # how much of the end of a rollout file is read
 CONVERSATIONS = 8  # the conversations Codex worked on last, one of them last had a token_count
 CACHE_SECONDS = 30  # a live read is the same question within this
-LIVE_ERROR_MINUTES = 600  # the same live-read failure is logged once in this
+LIVE_ERROR_SECONDS = 600  # the same live-read failure is logged once in this many seconds
 RECORD_LINES = 200  # codex-resets.jsonl keeps this many lines
 CONFIRM_TEXT = "要先在手机上确认"
 USAGE_PREFIX = "Usage: "
@@ -217,6 +217,8 @@ def codex_live(server_factory) -> dict:
             raise UsageError("Codex 没给用量：" + str(exc)[:120], 409, "codex_refused") from None
         except archives.ArchiveError as exc:
             raise UsageError("读不到 Codex 的实时用量：" + str(exc), 409, "codex_unreachable") from None
+        except Exception as exc:  # an OSError, a program that would not start: the phone falls back to the records
+            raise UsageError("读不到 Codex 的实时用量：" + type(exc).__name__, 409, "codex_unreachable") from None
     return _live_snapshot(reply)
 
 
@@ -477,7 +479,9 @@ class Usage:
     def _codex(self, live: bool) -> dict:
         with _LOCK:
             if self._cache is not None and time.monotonic() - self._cache[0] < CACHE_SECONDS:
-                return self._cache[1]
+                # A records-only read is no answer to a live question: ask Codex itself instead of handing it back.
+                if not live or _came_from_live(self._cache[1]):
+                    return self._cache[1]
             result = self._live() if live else self._from_records()
             self._cache = (time.monotonic(), result)
             return result
@@ -498,7 +502,12 @@ class Usage:
     def _note_live_error(self, code: str) -> None:
         now = time.monotonic()
         last = self._live_errors.get(code)
-        if last is not None and now - last < LIVE_ERROR_MINUTES:
+        if last is not None and now - last < LIVE_ERROR_SECONDS:
             return
         self._live_errors[code] = now
         _say(self.log, f"用量：读不到 Codex 的实时用量（{code}）")
+
+
+def _came_from_live(result: dict) -> bool:
+    """Whether a read asked Codex itself: a live answer, or the records with the reason it could not be had."""
+    return result.get("source") == "live" or "live_error" in result
