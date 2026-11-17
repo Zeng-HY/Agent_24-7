@@ -2,7 +2,7 @@
 thread-owner-discovery answers only from the window showing it; a window that could not resume answers no-client-found).
 The phone is told why in the computer's own words, and gets that reason through status() for ten minutes after the try.
 """
-import json,sqlite3,sys,tempfile,unittest
+import json,sqlite3,sys,tempfile,threading,time,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
@@ -309,6 +309,22 @@ class OpenCheckTests(unittest.TestCase):
         handler=self.handler(desktop,SimpleNamespace(confirm_open=Mock()))
         handler._open_codex(TID)
         self.assertEqual(handler.responses,[({'ok':False,'error':'超过 45 秒没做完'},504)])
+
+    # 13. After Codex restarted, two threads asking for the pipe at once share one connection (the open request asks
+    # outside self.lock; the one-second status reads ask inside it).
+    def test_two_threads_asking_for_the_pipe_share_one_connection(self):
+        made=[]
+        class SlowPipe:
+            def __init__(self):
+                made.append(1)
+                time.sleep(0.05)
+                self.closed=False
+        bridge=Bridge()
+        with patch.object(codex_control,'DesktopPipe',SlowPipe):
+            threads=[threading.Thread(target=bridge._pipe) for _ in range(4)]
+            for thread in threads:thread.start()
+            for thread in threads:thread.join()
+        self.assertEqual(len(made),1)
 
 
 if __name__=='__main__':

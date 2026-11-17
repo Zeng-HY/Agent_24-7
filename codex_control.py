@@ -671,6 +671,9 @@ class Bridge:
         self._open_lock = threading.Lock()
         self._open_failed = {}  # tid -> (when, reason)
         self._sendable = {}  # tid -> (available, reason)
+        # 11-17: confirm_open asks for the owner without self.lock (its wait must not block the one-second status
+        # reads), so the pipe itself is made under its own small lock: two threads must not each open one.
+        self._pipe_lock = threading.Lock()
 
     def _log(self, text):
         """One line in the service log, when remote.py has given this bridge one. Never raise from logging."""
@@ -703,14 +706,15 @@ class Bridge:
             pass
 
     def _pipe(self):
-        if self.pipe is None or self.pipe.closed:
-            if self.pipe:
-                self.pipe.close()
-            try:
-                self.pipe = DesktopPipe()
-            except Exception as exc:
-                raise ControlError("无法连接 Codex 桌面，请确认客户端已打开") from exc
-        return self.pipe
+        with self._pipe_lock:
+            if self.pipe is None or self.pipe.closed:
+                if self.pipe:
+                    self.pipe.close()
+                try:
+                    self.pipe = DesktopPipe()
+                except Exception as exc:
+                    raise ControlError("无法连接 Codex 桌面，请确认客户端已打开") from exc
+            return self.pipe
 
     def owner(self, tid, timeout=3):
         """The Codex window that has this conversation (thread-owner-discovery, 11-17), or None when no window has it.
