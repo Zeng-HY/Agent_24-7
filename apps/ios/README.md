@@ -1,8 +1,20 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
-## 0.7.4 构建 30：滚动诊断测试版（11-17，从 `ios-scroll-probe` 分支打的，不在 main 上）
+## 0.7.5：往上翻停下后不再被拉回底部（11-17，构建 31 已传 TestFlight）
+
+**原因**（构建 30 的真机诊断截图 + Codemagic 模拟器复现查明）：判断「离底近」的算式是 `contentOffset + containerSize − 底部 inset ≥ 内容高 − 48`。iOS 26.5 上量到 `containerSize` 只是两条栏之间的高度（6.9 寸机 606/956），`contentOffset` 却是整个视口的顶，所以在最底部也差两条栏的高度（350 点），永远读成「远」。`restore()` 打开时又手动把它设成「近」，而 `onScrollGeometryChange` 只在算出的值变化时才回调；算出的一直是「远」，这个「近」就一直留着。于是每次手指停下（`.idle`）都按「在底部附近」处理，重新跟随并拉回底部（黄字里的 `idle↓`）。模拟器原先没复现，是因为示例对话加载太快，先后顺序正好错开；示例长对话在探针模式下晚 1.5 秒加载后就和真机一样了（`6afbb8c9`）。
+
+**改法**（`ConversationView.swift`）：离底近改用可见区域的底边减底部栏：`visibleRect.maxY − contentInsets.bottom ≥ 内容高 − 48`；`restore()` 不再手动设它，只认滚动区域自己的量。规则本身没变：手指停下时离底 48 点以内才重新跟随，否则停在原处、出「有新消息」。
+
+**验证**：Codemagic 模拟器 UI 测试 `testScrollHold`（`6afbbfea`，iOS 26.5，iPhone 17 Pro Max）全过：慢拖大半屏后停住、两秒不动；用力划两下停住、4 秒不动；划回底部后重新跟随。中间两次失败都是测试步骤不够远（慢拖只挪了不到 48 点、四下没划到底），已改。`TeleplyCore` 单元测试同时跑过。
+
+- 构建 31（Codemagic `6afbc19b`，`UPLOAD SUCCEEDED`），从 `ios-scroll-probe` 分支（`3a54bf4`）打，只进内部测试，没有提交审核。分支已合进 main（`baa4227`）。**main 上 11-17 别的会话改的 iOS 代码（Codex「电脑上打开」那行状态字）不在 0.7.5 里**，下一版从 main 打时一起带上。
+- 开发者选项里的「显示滚动诊断」留着，默认关；探针模式的示例帧、晚加载和 UI 测试也留着（只在 `-TeleplyDemoLive` 下起作用）。
+- 留给你在真机上验：装 0.7.5，往上翻一段停下，几秒内不被拉回；新内容来时底下出「有新消息」，点它回到最新；自己划回最底部后，又跟着新内容走。
+
+## 0.7.4 构建 30：滚动诊断测试版（11-17，从 `ios-scroll-probe` 分支打的；探针代码已随 0.7.5 合进 main）
 
 用户 11-17 说：装着 0.7.4（29）的 iPhone 上，所有对话往上翻一秒都停不住，总被拉回底部。0.7.4 的修复只有纯逻辑的单元测试，没在滑动的页面上测过。先在 Codemagic 模拟器上复现（`6afbb0ad`，UI 测试 `testScrollHold`，启动参数 `-TeleplyDemoLive` 让示例对话每半秒来一帧）：慢拖、用力划都停得住，出「有新消息」，**没复现**。所以打了这个测试版，只多一个开关：设置 → 开发者选项 → 「显示滚动诊断」。打开后对话页上方一行黄字：是否跟随、离底近不近、滑动阶段、帧数（rev）、打开次数（sr）、页面生成时间，以及最近是什么动了页面（`restore↓` 打开、`follow↓` 跟新内容、`idle↓` 停在底部附近、`sent↓` 发送、`keep` 加载更早消息、`appear`/`gone`）。构建 30（Codemagic `6afbb521`，`UPLOAD SUCCEEDED`），只进内部测试，没有提交审核。
 
