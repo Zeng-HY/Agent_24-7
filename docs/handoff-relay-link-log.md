@@ -154,12 +154,78 @@
 
 ### 9.1 改了哪些文件
 
+- `relay_agent.py`：新增 `format_duration`、`exception_reason`、`close_reason`、`LinkLog`；`Agent` 多收一个 `link=`，`once()` 在连上、断开时记账，`run()` 在连不上、被拒时记账。原因只用异常类型名、HTTP 状态码、WebSocket 关闭代码，不用 `str(exc)`。两处 `heartbeat=20`、重连间隔、401/403 停下都没改。
+- `relay_desktop.py`：新增 `day_log(text)`，路径和格式同 `remote.py` 的 `Log`：`DATA/logs/YYYYMMDD.log`，`HH:MM:SS 文字\n`，UTF-8，`\n`；每次打开、追加、关闭，文件夹不在就建，任何错误都吞掉。
+- `relay_controller.py`：`DesktopController` 建一份 `LinkLog` 并交给每个 `Agent`；`quit()` 写第 7 行，`rebind()` 确认后写第 8 行；`connect_agent()` 连续 3 次本机服务没回应才断开，`run_agent()` 负责等 5/10/20/40/60 秒后重启服务、重连；`backend()` 的 `ValueError` 写第 10 行并按同一间隔继续重试；每轮开始把状态设回「连接中」。
+- `tests/test_relay_link_log.py`：新增，19 项。
+
 ### 9.2 新测试的名字，和在旧代码上的结果
+
+- `LinkLogTests`：`test_first_connect_disconnect_ten_minute_report_and_reconnect`、`test_first_connect_after_startup_failures_is_the_first_connected_line`、`test_duration_words`、`test_refused_credential_line_and_then_silence`、`test_periodic_line_written_once_per_ten_minutes`
+- `ReasonTests`：`test_heartbeat_timeout_is_recognized_from_the_socket_exception`、`test_close_codes`、`test_handshake_status_and_connection_timeout`、`test_tls_error_is_not_reported_as_a_plain_connection_error`、`test_no_url_or_key_in_any_reason`
+- `ControllerRecoveryTests`：`test_one_or_two_health_failures_do_not_stop_the_connection`、`test_three_health_failures_restart_the_local_service_and_reconnect`、`test_backend_value_error_is_logged_once_and_retried`、`test_quit_while_waiting_to_retry_stops_the_worker_and_is_logged`、`test_rebind_line_only_after_the_confirmation`
+- `DayLogTests`：`test_line_goes_into_the_days_file`、`test_unwritable_folder_does_not_raise`
+- `RelayLinkIntegrationTests`：`test_real_agent_logs_connect_the_1008_close_and_the_reconnect`、`test_bad_credential_logs_the_refusal_and_the_agent_stops`
+
+旧代码上 19 项全部失败/报错（22 个 error，含 `test_duration_words` 的 4 个子测试）：`relay_agent` 没有 `LinkLog`/`close_reason`/`exception_reason`，`relay_desktop` 没有 `day_log`。原始输出：`20261117-relay-link-log\new-tests-on-old-code.log`。
+
+新代码上 19 项全过（4.083s）：`new-tests-final.log`；第一次跑通是 `new-tests-first-run.log`。
 
 ### 9.3 全部测试
 
+`.venv\Scripts\python.exe -m unittest discover -s tests`
+
+| 时间 | 结果 |
+|---|---|
+| 改前 | 795 项，1 失败、22 错误、6 跳过（462.763s） |
+| 改后 | 814 项（795 + 新 19），1 失败、22 错误、6 跳过（336.783s） |
+
+两次 `ERROR:`/`FAIL:` 清单逐行比对（`Compare-Object`）没有差异：`baseline-failures.txt`、`after-failures.txt`；原始输出 `baseline-all-tests.log`、`after-all-tests.log`。
+
+22 个错误全是 Playwright：`C:\Users\39011\AppData\Local\ms-playwright\webkit-2359\Playwright.exe` 不存在，或 `test_mobile_polish` 在 chromium 上等「复制命令」按钮超时。1 个失败是 `test_open_speed.DeepSeekConnectionTests.test_a_successful_call_never_starts_a_search_for_the_port`：测试只设了 `client.connection`、没设 `checked`，本机 `time.monotonic()` 早已大于 540，`connection_info()` 因此重新查端口；和这次改动无关，改前改后一样。没有新的失败。
+
 ### 9.4 日志的样子（测试里写出来的几行，原样贴）
+
+用假时钟跑 `LinkLog`，再用临时 `DATA` 目录跑 `day_log`（脚本 `demo_log_lines.py`，输出 `log-lines-demo.txt`）：
+
+```
+中转：连上了
+中转：断开了（中转关掉了这条连接（1008：中转重启、同一台电脑又连了一条，或被撤销、重新绑定）），这次连了 2 分钟
+中转：还没连上（已经断了 10 分钟，重连 2 次；最近一次：连不上中转（ClientConnectorError））
+中转：重新连上了（断了 11 分钟，重连 3 次）
+```
+
+`day_log` 真写出来的文件（临时目录，不是真的 `%LOCALAPPDATA%`）：
+
+```
+20261117.log
+09:13:23 中转：连上了
+09:13:23 中转：断开了（中转正常关闭（1000）），这次连了 5 分钟
+```
+
+控制器那几行由测试断言，原样是（等待秒数是测试里调小的值；正式版是 5/10/20/40/60）：
+
+```
+本机服务：连续 3 次没回应（每次等 3 秒），先断开中转，0.05 秒后重启本机服务再连
+本机服务：没启动起来（端口已被其他程序占用，未启动重复服务），0.2 秒后再试
+中转：电脑端退出，断开连接
+中转：重新绑定，断开连接
+中转：不认这台电脑的凭据（HTTP 401），停止重连，要在电脑上重新绑定
+```
+
+行首的 `HH:MM:SS` 由 `day_log` 加；测试里的列表不含时间。
 
 ### 9.5 没做的
 
+- 没在真机上验证：没打包、没安装、没启动/重启/结束 `G:\AgentRemote` 里正在跑的遥应；按 5.3 留给 Claude 和用户。
+- 没碰中转服务器：没改 `relay_transport.py`、`relay_service.py`、`relay_push.py`，没上服务器；「中转现在没连着」那句也没改（另做）。
+- 没加自己的心跳；`heartbeat=20`、重连间隔、`once()` 同时 32 个请求的上限都没改；401/403 仍停下不重连。
+- 没修基线就有的 `test_open_speed` 失败，它和这次改动无关。
+- 没写真的 `%LOCALAPPDATA%\AgentRemote\Data`，没连真的 `app.pocketagentdesk.com`；测试都用临时文件夹和 127.0.0.1 上起的测试中转。
+- 没 push、没打包、没改版本号、没发版；没动 `deploy/site/`、`pocketagentdesk.com.png`、`tests/test_activity_records.py`，也没动别的会话的文件。
+
 ### 9.6 提交
+
+- `f7ef29e` `电脑端：记下和中转的断开、连回（带原因），本机服务连续 3 次没回应时自动重启并重连`：4 个文件，新增 `tests/test_relay_link_log.py`，改 `relay_agent.py`、`relay_controller.py`、`relay_desktop.py`。
+- 本节随后单独提交，只改本文件。
+
