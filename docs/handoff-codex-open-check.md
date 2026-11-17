@@ -210,6 +210,7 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
 - 新增 `Bridge.owner(tid, timeout=3)`：问一次 `thread-owner-discovery`，`no-client-found` 返回 None，别的 `ControlError` 照抛。
 - 新增 `Bridge.confirm_open(tid, seconds=10.0, step=0.5)`：每 0.5 秒问一次 owner，最多 10 秒，**等待时不拿 `self.lock`**；有 owner 再 `status(tid, fresh=True)`。可用就清掉失败记录、返回「电脑上已打开「<标题>」，可以发了」；否则按第 3.1 节的顺序挑一句原因（连不上 / 提供商不同 / 有 owner 但读不到状态（分版本较新和不是）/ 没 owner 但版本较新 / 别的），原因存进 `_open_failed`（600 秒）、写一行日志、抛 `CodexNotTaken`。日志格式照第 3.1 节第 10 条，最后见到的 `code` 有就接在后面。
 - 新增 `_remember_open_failure` / `_forget_open_failure` / `_open_failure`（都走一把小锁 `_open_lock`，最多记 64 个对话）。
+- 新增 `_pipe_lock`：`Bridge._pipe()` 建立连接时走这把小锁。11-17 的 `confirm_open` 问 owner 时不能拿 `self.lock`（否则每秒的状态读会被 10 秒的等待挡住），所以两个线程同时发现管道不在时不能各开一条连接（旧代码没这把锁，4 个线程会开出 4 条，测试里实测过）。
 - `Bridge.status()`：抛出的 `ControlError` 的 `code` 是 `no-client-found` 且这个对话 600 秒内有 `_open_failed` 记录时，`reason` 用那句原因，别的字段照旧；结果可用时删记录。新增 `_note_sendable`：每个对话记住上次的结果，变成不可用（或原因变了）写 `Codex 对话 <id 前 8 位>：手机发不了（<reason>）`，变回可用写 `…手机又能发了`，第一次见到且可用时不写；最多 64 个对话；写日志出错不影响 `status()` 的结果。
 
 **`remote.py`**
@@ -232,11 +233,11 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
 - `WorkspaceModel.swift` 的 `openOnComputer()`：`catch` 里 `ServiceFailure.code == "codex_not_taken"` 时不设 `error`、调 `changed()`；别的照旧。
 - `ComposerAwayTests.swift`：和安卓同样的单元测试 `theComputersReasonComesBeforeAnOlderResult`。`DemoTransport.swift` 没动。
 
-**`tests/test_codex_open_check.py`（新建，14 个测试）**：`FakeClock`（`monotonic` 只在 `sleep` 时前进，测试不真等 10 秒）、假 pipe（`SimpleNamespace(closed=False, handle=…)`，不连真 Codex）、照 `tests/test_locked_send.py` 造一个假 handler。
+**`tests/test_codex_open_check.py`（新建，15 个测试）**：`FakeClock`（`monotonic` 只在 `sleep` 时前进，测试不真等 10 秒）、假 pipe（`SimpleNamespace(closed=False, handle=…)`，不连真 Codex）、照 `tests/test_locked_send.py` 造一个假 handler。
 
 ### 9.2 新测试的名字，和在旧代码上的结果
 
-14 个，全在 `tests/test_codex_open_check.py`。旧代码按 main 的 `0f18d1e` 取（工作区里已有的改动不算），原样输出在工作区 `new-tests-on-old-code.log`：**14 个全部 ERROR**（`confirm_open`、`codex_version`、`thread_provider`、`CodexNotTaken`、`_codex_version_in_path` 在旧代码里都还没有，`ControlError` 也不认 `code`）。改完以后再跑，14 个全过（`new-tests-after-code.log`）。
+15 个，全在 `tests/test_codex_open_check.py`。旧代码按 main 的 `0f18d1e` 取（`codex_control.py` 和 `remote.py` 都用那一版；工作区里已有的改动不算），原样输出在工作区 `new-tests-on-old-code.log`：**14 个 ERROR、1 个 FAIL**。ERROR 是因为 `confirm_open`、`codex_version`、`thread_provider`、`CodexNotTaken`、`_codex_version_in_path`、`_open_codex` 在旧代码里都还没有，`ControlError` 也不认 `code`；FAIL 是管道小锁那个（旧代码里 4 个线程各开了一条连接，实测 `4 != 1`）。改完以后再跑，15 个全过（`new-tests-after-code.log`）。
 
 | 测试 | 旧代码 | 对应 |
 |---|---|---|
@@ -254,16 +255,18 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
 | `test_thread_provider_reads_the_conversations_own_provider` | 没有 `thread_provider` | 3.1-5 |
 | `test_opening_a_codex_conversation_waits_outside_the_desktop_worker` | 没有 `_open_codex` | 3.2 |
 | `test_a_codex_conversation_that_is_not_taken_is_a_400_with_its_code` | 没有 `_open_codex` | 3.2（400 带 code，不是 503） |
+| `test_two_threads_asking_for_the_pipe_share_one_connection` | FAIL：4 条连接（`4 != 1`） | 3.1-9 的等待不拿 `self.lock` 之后，管道建立仍只开一条 |
 
 ### 9.3 全部测试（和基线比）
 
 **Python**（仓库根目录，`python -m unittest discover -s tests`）
 
 - 改前基线（旧代码，第一次跑）：`Ran 851 tests`，`FAILED (failures=1, errors=22, skipped=6)`。那次控制台输出是乱码，重跑时被覆盖了；它的 23 条失败/出错清单单独留成了 `known-failures-23.txt`。
-- 改前基线（旧代码，重跑，`-X utf8`，原样在 `baseline-deepseek-before.log`，此时新测试文件已在 `tests/` 里）：`Ran 877 tests`，`FAILED (failures=1, errors=36, skipped=6)`——36 = 已知的 22 条出错 + 新测试 14 条在旧代码上出错；失败 1 条、跳过 6 条和第一次一样。全量清单 `baseline-failures.txt`（37 条）。
-- 改后（最后一次，原样在 `after-deepseek-change-final.log`）：`Ran 878 tests`，`FAILED (failures=1, errors=22, skipped=6)`。
-- 逐行比对 23 条已知失败/出错：改前改后**完全一样**（`Compare-Object` 无差异；改后清单 `after-failures-final.txt`）。新测试 14 个全过（`new-tests-after-code.log`）。
-- 总数 877→878 是这期间另一个会话给 `tests/test_relay_tunnel_log.py` 加了一项（提交 `e3731f7`，10:46），和这次无关；两次的 23 条已知项相同。
+- 改前基线（旧代码，重跑，`-X utf8`，原样在 `baseline-deepseek-before.log`，此时新测试文件里是 14 个）：`Ran 877 tests`，`FAILED (failures=1, errors=36, skipped=6)`——36 = 已知的 22 条出错 + 新测试 14 条在旧代码上出错；失败 1 条、跳过 6 条和第一次一样。全量清单 `baseline-failures.txt`（37 条）。
+- 新测试单独在旧代码上跑（15 个，含后来补的管道小锁那个）：`Ran 15 tests`，`FAILED (failures=1, errors=14)`，15 = 14 个 ERROR + 1 个 FAIL（`new-tests-on-old-code.log`）。
+- 改后（最后一次，原样在 `after-deepseek-change-final.log`）：`Ran 879 tests`，`FAILED (failures=1, errors=22, skipped=6)`。
+- 逐行比对 23 条已知失败/出错：改前改后**完全一样**（`Compare-Object` 无差异；改后清单 `after-failures-final.txt`）。15 个新测试全过（`new-tests-after-code.log`）。
+- 总数 877→879：另一个会话给 `tests/test_relay_tunnel_log.py` 加了一项（提交 `e3731f7`，10:46），这次又补了管道小锁那一个测试。两次的 23 条已知项相同。
 - 两台旧的坏项照旧，和这次无关：Playwright 浏览器缺（`C:\Users\39011\AppData\Local\ms-playwright` 不在，webkit/chromium 那些 ERROR），`test_open_speed` 那 1 条 FAIL。
 
 **安卓**（`apps\android` 里 `.\scripts\build.ps1`，四个任务都过）
