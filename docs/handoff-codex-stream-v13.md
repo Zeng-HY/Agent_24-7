@@ -137,3 +137,10 @@
 - **真 Codex 只读核对**（这台电脑 26.1111.2228.0，用提交后的代码，没在内存里改任何东西）：Codex 正显示的对话 `confirm_open` 0.1 秒回「…可以发了」，`status` 可用；没显示的对话 10.1 秒后照旧给原因，日志写「Codex 26.1111.2228.0，遥应测过 26.1111.2228.0」。
 - **这台电脑上试不了的**：26.1106 的真 Codex（这台已经升级）；版本 11 由 `test_version_11_still_works` 保着。
 - **发布要知道的**：这台电脑上跑着的是 dev.39，还是旧代码，要装新版才好。dev.39（`87b0b0b`）以后 main 上的电脑端改动还有：手机看用量和用 Codex 重置的电脑端（`de3fc3e`、`2c79a40`，`usage_limits.py` 和 `/api/usage`，那个会话审过），中转的 `b90d6f9`（`relay_service.py`）。从 main 打 dev.40 会一起带上用量那部分；手机端的用量页没发版之前，它在电脑上不会被调用。
+
+### 9.7 Windows dev.40 打包、装到用户这台电脑（11-17，Claude）
+
+- 用户 11-17 说「打包并安装」。dev.40 = 提交 `0fa3e04`（只改版本号和发布说明，父提交 `0aa0cd9`），比 dev.39（`87b0b0b`）多带：本文件的版本 13 修复 `0d13c28`；手机看用量和用 Codex 重置的电脑端 `de3fc3e`、`2c79a40`（`usage_limits.py`、`/api/usage`，手机端的用量页没发版之前不会被调用）；中转的 `b90d6f9`（`relay_service.py`）。
+- 照 dev.39 的做法，在干净的临时工作树（`git worktree add --detach`）里打包，仓库目录里别人没提交的东西不进包；从仓库拷来 `.toolchain\MicrosoftEdgeWebview2Setup.exe`。打包前在工作树里跑 `test_codex_open_check`、`test_codex_status`、`test_codex_approvals`、`test_codex_delivery`、`test_usage_limits` 共 110 项，全过。
+- 安装包 `dist/0.27.0-dev.40/AgentRemote-0.27.0-dev.40-Setup.exe`：32,602,472 字节，SHA-256 `366f6b67add897d4b9432738b0d99f27458119eaca5d6061b7100bb38192df4c`；`build/windows-build.json` 记的提交是 `0fa3e04`。`--self-test`（空数据目录）退出码 0；`PYZ-00.toc` 里有 `codex_control`、`usage_limits`、`relay_agent`。没签更新清单，没传阿里云，没发 GitHub。
+- 装法：12:25:31 `taskkill /F /T` 关掉 dev.39 整棵进程树（托盘 48228、本机服务 21044、一个 WebView2 子进程），静默安装（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`）退出码 0，装在原来的 `G:\AgentRemote`，`_internal\windows-build.json` 是 dev.40 / `0fa3e04`。用 `explorer.exe` 打开启动文件夹里的 `Agent Remote 027.lnk` 启动（带 `--tray`），12:25:48 起来，12:25:56 当天日志写「中转：连上了」。手机这边断了约 25 秒。
