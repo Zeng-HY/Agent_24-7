@@ -1,7 +1,9 @@
 """Local desktop follower bridge. Never starts or resumes an independent app-server.
 
 Protocol verified against Codex Windows 26.1106.6628.0 and 26.1111.2228.0. 26.1111 only raised
-thread-stream-state-changed's version, 11 to 13; the snapshot and patch shapes were unchanged. A missing owner,
+thread-stream-state-changed's version, 11 to 13; the snapshot and patch shapes were unchanged. Both already wanted
+the queue at 3 (set-queued-follow-ups-state and its changed broadcast), which Teleply only caught up with on 11-17
+(see VERSIONS). A missing owner,
 unknown snapshot version or disconnected pipe disables actions instead of falling back to blind keystrokes. Only the
 narrow methods below are exposed to the phone.
 """
@@ -12,6 +14,7 @@ import ctypes
 import ctypes.wintypes as wt
 import hashlib
 import json
+import mmap
 import queue
 import re
 import sqlite3
@@ -49,8 +52,15 @@ VERSIONS = {"initialize": 0, "thread-owner-discovery": 1,
             "thread-follower-read-model-settings": 1, "thread-follower-start-turn": 2,
             "thread-follower-steer-turn": 1, "thread-follower-submit-user-input": 1}
 VERSIONS["thread-follower-interrupt-turn"] = 4
-VERSIONS.update({"thread-follower-set-queued-follow-ups-state": 1,
+# 11-17: Codex 26.1106 and 26.1111 take set-queued-follow-ups-state only at v3 (the table in early-bootstrap.js). v1
+# was answered request-version-mismatch, so from 11-15 on a message the phone sent while Codex was working never
+# reached Codex and stayed 送达状态待确认. The params did not change ({conversationId, state, discardedMessageIds});
+# v3's preparationMessageId is for a message Codex is still preparing itself (its Aj() throws for a plain one), so it
+# is not sent. A number Codex does not take is refused before anything is done, so v1 is tried next for a Codex that
+# has not updated yet. Its queue-changed broadcast went from v2 to v3 too ({conversationId, messages, hostId}).
+VERSIONS.update({"thread-follower-set-queued-follow-ups-state": (3, 1),
                  "thread-follower-remove-queued-message": 1})
+QUEUE_CHANGED_VERSIONS = (2, 3)
 # 11-16: Codex's approval cards reach the phone. The owner answers over the same follower pipe as its questions
 # (app.asar 26.1106: replyWithCommandExecutionApprovalDecision / replyWithFileChangeApprovalDecision).
 VERSIONS["thread-follower-command-approval-decision"] = 1
@@ -64,6 +74,30 @@ class ControlError(Exception):
         super().__init__(message)
         self.status = status
         self.code = code  # why, for the phone and the log: "no-client-found", "timeout", the desktop's own error
+
+
+# 11-17: what Codex answers before it does anything at all (its IPC handleRequest checks the version number, then
+# looks for a handler), and the router's "no window has this conversation". A request answered so was not carried
+# out, so a send can be called not sent (未接收) instead of staying 送达状态待确认 for good.
+REFUSED = ("request-version-mismatch", "no-handler-for-request")
+UNTAKEN = REFUSED + ("no-client-found",)
+
+
+def untaken(exc, codes=UNTAKEN):
+    return isinstance(exc, ControlError) and (exc.code in codes or any(c in str(exc) for c in codes))
+
+
+STUCK_AFTER = 600  # seconds: no send is still on its way to Codex this long after it began (relay and pipe give up first)
+
+
+def file_has(path, needle):
+    """Whether the bytes appear anywhere in the file, looked for through a map rather than read into memory."""
+    with open(path, "rb") as f:
+        try:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as view:
+                return view.find(needle) != -1
+        except ValueError:  # an empty file cannot be mapped
+            return False
 
 
 class DesktopPipe:
@@ -136,7 +170,7 @@ class DesktopPipe:
                                     "response": {"canHandle": False}})
                     elif msg.get("type") == "broadcast" and msg.get("method") == "thread-queued-followups-changed":
                         params = msg.get("params") or {}
-                        if msg.get("version") == 2 and params.get("hostId", "local") == "local":
+                        if msg.get("version") in QUEUE_CHANGED_VERSIONS and params.get("hostId", "local") == "local":
                             with self.condition:
                                 self.queues[params.get("conversationId")] = (msg.get("sourceClientId"), params)
                                 self.condition.notify_all()
@@ -184,11 +218,21 @@ class DesktopPipe:
     def call(self, method, params, owner=None, timeout=15):
         if method not in VERSIONS:
             raise ControlError("不支持这个操作")
+        versions = VERSIONS[method] if isinstance(VERSIONS[method], tuple) else (VERSIONS[method],)
+        for version in versions:
+            try:
+                return self._call(method, version, params, owner, timeout)
+            except ControlError as exc:
+                # Codex checks the number before it does anything, so trying the next one cannot do a thing twice.
+                if exc.code != "request-version-mismatch" or version == versions[-1]:
+                    raise
+
+    def _call(self, method, version, params, owner, timeout):
         rid = str(uuid.uuid4())
         waiter = queue.Queue()
         self.pending[rid] = waiter
         request = {"type": "request", "requestId": rid, "sourceClientId": self.client,
-                   "version": VERSIONS[method], "method": method, "params": params, "timeoutMs": int(timeout*1000)}
+                   "version": version, "method": method, "params": params, "timeoutMs": int(timeout*1000)}
         if owner:
             request["targetClientId"] = owner
         try:
@@ -198,6 +242,8 @@ class DesktopPipe:
                 error = str(result.get("error", "未知错误"))
                 if error == "no-client-found":
                     raise ControlError("电脑端尚未打开这个对话，请从右上角菜单选择「电脑上打开」后重试", code="no-client-found")
+                if error in REFUSED:
+                    raise ControlError("电脑上的 Codex 升级了，遥应还不会这一步，没有执行", code=error)
                 raise ControlError("Codex 未完成操作：" + error[:180], code=error[:80])
             if owner and result.get("handledByClientId") != owner:
                 raise ControlError("对话持有者发生变化，结果未确认")
@@ -680,6 +726,7 @@ class Bridge:
         # 11-17: confirm_open asks for the owner without self.lock (its wait must not block the one-second status
         # reads), so the pipe itself is made under its own small lock: two threads must not each open one.
         self._pipe_lock = threading.Lock()
+        self._arrival_checked = {}  # request id -> when _never_arrived last looked through the whole record for it
 
     def _log(self, text):
         """One line in the service log, when remote.py has given this bridge one. Never raise from logging."""
@@ -972,7 +1019,11 @@ class Bridge:
                     if original.get("settings") and normalize_settings(original["settings"]) != selected_settings(state):
                         raise ControlError("此消息修改了模型设置，请保留排队")
             self._begin(rid, tid, body)
-            removed = self._pipe().call("thread-follower-remove-queued-message", {"conversationId": tid, "messageId": mid}, owner, 20)["result"].get("removed")
+            try:
+                removed = self._pipe().call("thread-follower-remove-queued-message", {"conversationId": tid, "messageId": mid}, owner, 20)["result"].get("removed")
+            except ControlError as exc:
+                self._untaken(rid, exc)
+                raise
             if not removed or removed.get("canRestore") is False:
                 raise ControlError("未确认安全移出队列，已停止操作，请核对；不会重复发送")
             with self._db() as con:
@@ -1124,11 +1175,62 @@ class Bridge:
             except OSError:
                 pass  # A log failure must not turn an acknowledged send into an error.
 
+    def _untaken(self, rid, exc):
+        """11-17: Codex turned the request away before doing anything, or no window had the conversation: the send is
+        未接收 with the reason, so the phone offers 恢复草稿 / 移除 instead of 送达状态待确认 for good."""
+        if untaken(exc):
+            self._finish(rid, {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)})
+
+    def _never_arrived(self, tid, rid, body, created):
+        """11-17: a message still 'dispatching' ten minutes after it began and found nowhere: not in Codex's queue (its
+        settings file, or the queue database 26.1111 also has), and its request id nowhere in the conversation's whole
+        record. Two messages the phone queued while Codex worked (Codex refused the old request number) stayed
+        送达状态待确认, and 核对 could never say more. Only a plain send is judged: answers, stops, queue moves and
+        /compact leave no user message of their own to look for."""
+        if time.time() - (created or 0) < STUCK_AFTER:
+            return False
+        if body.get("question_id") or body.get("action") or body.get("message_id") or "text" not in body:
+            return False
+        if composer_commands.parse(str(body.get("text", ""))):
+            return False
+        now = time.monotonic()
+        last = self._arrival_checked.get(rid)
+        if last is not None and now - last < 300:
+            return False  # the whole record was read for it a moment ago; once in five minutes is enough
+        self._arrival_checked[rid] = now
+        try:
+            if any(v["id"] == rid for v in self._local_queue(tid)):
+                return False
+        except ControlError:
+            return False
+        if self._in_server_queue(rid) is not False:
+            return False
+        try:
+            return not file_has(Path(chats.find("codex", tid)["path"]), rid.encode())
+        except (OSError, chats.ChatError, KeyError, TypeError, ValueError):
+            return False
+
+    def _in_server_queue(self, rid):
+        """Codex 26.1111 also keeps a queue in its own database (queue_1.sqlite, table queued_items). True when an item
+        there carries this id, False when none does or there is no such database, None when it cannot be read."""
+        path = chats.CODEX_HOME / "queue_1.sqlite"
+        if not path.is_file():
+            return False
+        try:
+            con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+            try:
+                return con.execute("SELECT 1 FROM queued_items WHERE id=? OR instr(payload_json, ?) > 0 LIMIT 1",
+                                   (rid, rid)).fetchone() is not None
+            finally:
+                con.close()
+        except sqlite3.Error:
+            return None
+
     def receipt(self, tid, rid):
         if not (self.data_root / "delivery.sqlite").exists():
             return {"state": "unknown"}
         with self._db() as con:
-            row = con.execute("SELECT state,result,data FROM deliveries WHERE id=? AND thread=?", (rid,tid)).fetchone()
+            row = con.execute("SELECT state,result,data,created FROM deliveries WHERE id=? AND thread=?", (rid,tid)).fetchone()
         if not row:
             return {"state": "unknown"}
         body = json.loads(row[2])
@@ -1183,6 +1285,13 @@ class Bridge:
                           "evidence": evidence}
                 self._finish(rid,result)
                 status = "accepted"
+        # Only a send that never got further than 'dispatching': one that was queued and has just left the queue may
+        # be on its way into the record this very second.
+        if row[0] == status == "dispatching" and self._never_arrived(tid, rid, body, row[3]):
+            result = {"ok": False, "delivery_state": "rejected", "request_id": rid,
+                      "text": "这条没有送到 Codex：它的排队里没有，对话记录里也没有；可以恢复草稿后再发"}
+            self._finish(rid, result)
+            status = "rejected"
         if status == "accepted" and not body.get("question_id"):
             result["submission"] = {k:body.get(k) for k in ("text","attachments","settings","plan_id","references")}
         if self.dismiss_manager:
@@ -1360,18 +1469,22 @@ class Bridge:
             for v in images:
                 v["used"] = True
                 self._write_meta(v)
-            if running and intent != "queue":
-                return self._steer(tid, rid, text, owner, turn_id, attached=attached, skills=skill_inputs)
-            if intent == "queue" and running:
-                return self._enqueue(tid, rid, text, desired, attached, skill_inputs, owner, state)
             try:
-                phase('send_ack','提交消息并等待 Codex 回执')
-                result = self._pipe().call("thread-follower-start-turn", {"conversationId": tid, "turnStart": operation}, owner, 45)["result"]
-            except ControlError:
-                receipt = self.receipt(tid,rid)
-                if receipt["state"] == "accepted":
-                    self.cache.pop(tid,None)
-                    return receipt["result"]
+                if running and intent != "queue":
+                    return self._steer(tid, rid, text, owner, turn_id, attached=attached, skills=skill_inputs)
+                if intent == "queue" and running:
+                    return self._enqueue(tid, rid, text, desired, attached, skill_inputs, owner, state)
+                try:
+                    phase('send_ack','提交消息并等待 Codex 回执')
+                    result = self._pipe().call("thread-follower-start-turn", {"conversationId": tid, "turnStart": operation}, owner, 45)["result"]
+                except ControlError:
+                    receipt = self.receipt(tid,rid)
+                    if receipt["state"] == "accepted":
+                        self.cache.pop(tid,None)
+                        return receipt["result"]
+                    raise
+            except ControlError as exc:
+                self._untaken(rid, exc)  # turned away before anything was done: 未接收, not unknown
                 raise
             response = {"ok": True, "accepted": True, "delivery_state": "accepted", "intent": "start", "request_id": rid, "text": "已交给 Codex", "settings": desired, "desktop_result": result}
             phase('receipt','保存送达回执')
@@ -1449,8 +1562,7 @@ class Bridge:
             self._pipe().call(method, {"conversationId": tid, "requestId": card["request_id"],
                                        "decision": decision}, owner)
         except ControlError as exc:
-            text = str(exc)
-            if "request-version-mismatch" in text or "no-handler-for-request" in text:
+            if untaken(exc, REFUSED):
                 result = {"ok": False, "delivery_state": "rejected", "request_id": rid,
                           "text": "这个版本的 Codex 还不能从手机回答批准，请在电脑上处理"}
                 self._finish(rid, result)

@@ -422,3 +422,25 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
   - `6afa8ef7`：跑满 45 分钟超时。`ChatModelTests.aSendCountsOnceSoThePageFollows` 发送后没开假电脑 `CommandComputer` 的闸门就 `settleSends()`，一直等。日志在被杀时截断，其余「没结束」的测试多半只是结果没写出来；这一轮里其它新测试（批准卡片、outbox 三条、ReadingFollow、500MB）都已通过。`b91fb76` 补上 `computer.gate.open()`。
   - `6afa9aac`：**通过**，3 分钟。`TeleplyCore` 272 项测试（36 组）全过，应用 Debug 构建成功（`ConversationView.swift`、`QuestionCards.swift` 都编到了；有 3 个 `onChange(of:perform:)` 已弃用的警告，不影响）。
 - 还没做：iOS 0.7.4 版本号和 TestFlight 上传（等用户同意）；5.1 真实 Codex 批准；7.2 真机验证。
+
+### 9.9 批-3 坐实并修好（11-17 晚，Claude）
+
+**用户看到的**：11-17 17:18 和 17:31，Codex 正在干活时从 iPhone 发的两条（「她在问我们试验组统一哪个…」「这个项目在已完成的列表里了」）一直写「送达状态待确认」；点「核对待发送消息」没有任何变化；也没有撤回、移除的按钮。两条 Codex 都没收到。
+
+**证据**：
+
+- 电脑端 `delivery.sqlite`：两条都是 `intent=queue`，状态一直停在 `dispatching`，`result` 是空的（`_finish` 从没跑到）。最后一条排队成功的是 11-14 23:49；11-15 23:52 那条起，排队的全卡在 `dispatching`。Codex 空闲时发的（`intent=auto`，走开始新一轮）都正常。
+- Codex 对话记录：两条的请求编号都不在里面。17:31:49 有一条相近的「这个项目在已完成清单里了」，但编号不同、字也不同，不是遥应发的。
+- Codex 26.1111.2228.0 的 app.asar：`early-bootstrap.js` 的版本表里 `thread-follower-set-queued-follow-ups-state` 是 3、`thread-queued-followups-changed` 是 3；`handleRequest` 先比版本号，不对就回 `request-version-mismatch`，**什么也不做**（对不上处理函数时回 `no-handler-for-request`，也是什么都不做）。遥应发的是 1。其余遥应用到的请求版本号都对得上。
+- v3 的参数是 `{conversationId, state, discardedMessageIds, preparationMessageId}`。`preparationMessageId` 只用于 Codex 自己正在准备的消息（`Aj()` 遇到普通消息会抛错），所以不传；不传时整份队列替换、保留 `outcome-unknown` 的，和 v1 一样。排队消息的格式、发出时 `clientUserMessageId` 取消息的 `id`，都和原来一样。
+
+**为什么核对没反应**：Codex 拒收后，`send()` 把异常往上抛，记录停在 `dispatching`；`remote.py` 据此告诉手机「不确定是否送出」，手机写「送达状态待确认」。核对时电脑在 Codex 的排队和对话记录里都找不到，只能再回 `dispatching`，手机的字不变。
+
+**改动**（`codex_control.py`）：
+
+1. 排队请求按 3 发；Codex 回 `request-version-mismatch` 时再按 1 试一次（Codex 先比版本号，什么都没做，所以重试不会重复）。收排队变化通知认 2 和 3。
+2. Codex 回 `request-version-mismatch`、`no-handler-for-request`、`no-client-found` 时，这条发送、撤回直接记成 `rejected`，原因写清楚。手机因此收到 `not_submitted`，显示「上一条没发出去：…」和「恢复草稿」「移除」。超时、持有者变化这类说不准的，照旧不确定。
+3. 回执：发送记录在 `dispatching` 停了十分钟以上，Codex 的排队（设置文件和 `queue_1.sqlite`）里没有，整份对话记录里也找不到它的请求编号，就记成 `rejected`（「这条没有送到 Codex…」）。手机核对后变成「未接收」，可以恢复草稿或移除。只判普通发送；回答、停止、排队操作、`/compact` 不判；排过队、刚离开排队的不判（可能正在写进记录）。
+4. 批准回答原来按错误原文找 `request-version-mismatch`，改成同一个判断（错误原文现在是中文）。
+
+**测试**：新增 `tests/test_codex_queue_v3.py` 20 项，全过；Codex 相关旧测试全过。全部 Python 测试的结果见下。
