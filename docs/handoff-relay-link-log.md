@@ -286,3 +286,11 @@ Claude 复审后补了两处，只改 `relay_agent.py`、`relay_controller.py`�
 
 
 
+
+### 9.9 Windows dev.39 打包、装到用户这台电脑（11-17，Claude）
+
+- 用户 11-17 说「现在打包安装」。dev.39 = 提交 `87b0b0b`（只改版本号和发布说明，父提交 `05c24ce`），比 dev.38（`4776fe7`）多带：本节 9.8 的通道心跳修复 `f810484`；别的会话的 Codex「电脑上打开」核对真接手 `8a29ffb`、`05c24ce`。中转服务器的代码（`e3731f7` 等）也在这个提交里，但电脑端只用到 `relay_service.clean_target` 和 `relay_transport` 的几个常量。
+- 在干净的临时工作树（`git worktree add --detach`）里打包，仓库目录里别人没提交的东西不进包。打包前在工作树里跑 relay 相关和 `test_codex_open_check` 共 64 项，全过。`setup.iss` 要的 `.toolchain\MicrosoftEdgeWebview2Setup.exe` 不在仓库里，从仓库目录拷进工作树后重跑 Inno Setup 和 `version.py --manifest`（PyInstaller 那步第一次已经成功）。
+- 安装包 `dist/0.27.0-dev.39/AgentRemote-0.27.0-dev.39-Setup.exe`：32,579,707 字节，SHA-256 `331aa551c240b4cf618a69548e70b788bbc564efc314cb7b421fa2be313b380f`；`build/windows-build.json` 记的提交是 `87b0b0b`。`--self-test`（空数据目录）退出码 0；`PYZ-00.toc` 里有 `relay_agent`、`relay_service`、`relay_transport`、`relay_push`、`codex_control`。没签更新清单，没发 GitHub，没传阿里云。
+- 装法：照 dev.38 的经验，先 `taskkill /F /T` 关掉 dev.38 整棵进程树（托盘、本机服务、12 个 WebView2 子进程，没有别的子进程），10:58:28 关，静默安装（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`）退出码 0，装在原来的 `G:\AgentRemote`，`_internal\windows-build.json` 是 dev.39 / `87b0b0b`。用 `explorer.exe` 打开启动文件夹里的 `Agent Remote 027.lnk` 启动（带 `--tray`）。
+- 10:58:38 启动，10:58:47 当天日志写「中转：连上了」，到中转的新连接 10:58:47 建立。手机这边大约断了 19 秒。登录和绑定沿用。
