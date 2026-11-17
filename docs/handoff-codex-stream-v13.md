@@ -129,3 +129,11 @@
 - **拿不准**：如果以后 Codex 改了快照格式却仍然用版本 13，遥应会按旧格式读——`apply_patches` 对不上的补丁会把快照扔掉，不会读错，`status` 会回到「读不到状态」；版本号再变（14…）会被照旧扔掉，`confirm_open` 会写原因、手机提示更新遥应。
 - `thread-queued-followups-changed` 只收版本 2（Codex 两版都发 3）按文档没动，`self.queues` 目前别处没人读。
 - 真机核对时正好有两个对话开着，两个都过了；没有第三个窗口可试，也没有在手机上看实际效果。
+
+### 9.6 Claude 审查（11-17 12:1x）
+
+- **代码**：读过 `0d13c28` 的全部改动，和第 3 节一致：`STREAM_STATE_VERSIONS = (11, 13)` 用在 `_read` 的三处，不在里面的照旧扔掉；`TESTED_APP_VERSION` 和模块说明改对了；`confirm_open` 只读一次状态，有 owner 而状态不可用时日志接上原因。老测试那处断言改成跟着 `TESTED_APP_VERSION` 走，理由成立。
+- **测试（自己重跑）**：`tests.test_codex_open_check` 21 个全过；全量 `Ran 941 tests`，`FAILED (errors=22, skipped=6)`，0 个失败，22 条出错和 `after-v13-failures.txt` 逐条相同，全是缺 Playwright 浏览器的那些。
+- **真 Codex 只读核对**（这台电脑 26.1111.2228.0，用提交后的代码，没在内存里改任何东西）：Codex 正显示的对话 `confirm_open` 0.1 秒回「…可以发了」，`status` 可用；没显示的对话 10.1 秒后照旧给原因，日志写「Codex 26.1111.2228.0，遥应测过 26.1111.2228.0」。
+- **这台电脑上试不了的**：26.1106 的真 Codex（这台已经升级）；版本 11 由 `test_version_11_still_works` 保着。
+- **发布要知道的**：这台电脑上跑着的是 dev.39，还是旧代码，要装新版才好。dev.39（`87b0b0b`）以后 main 上的电脑端改动还有：手机看用量和用 Codex 重置的电脑端（`de3fc3e`、`2c79a40`，`usage_limits.py` 和 `/api/usage`，那个会话审过），中转的 `b90d6f9`（`relay_service.py`）。从 main 打 dev.40 会一起带上用量那部分；手机端的用量页没发版之前，它在电脑上不会被调用。
