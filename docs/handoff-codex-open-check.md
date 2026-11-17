@@ -285,3 +285,13 @@ Claude 和 DeepSeek 的分支不动。Codex 走一个新方法 `_open_codex(tid)
 - **600 秒的覆盖范围**：只覆盖 `no-client-found` 那一种；如果之后 Codex 换了原因（比如管道断了），手机上会先看到上次那句，最多 10 分钟。原因变了会再写一行日志（这是 3.1-10 要的）。
 - 安卓多了一个示例对话，所以 `ReaderUiScenarios.kt` 里两处列表条数断言（9→10、10→11）跟着改了；其他断言没动。
 - 没打包、没安装、没启动或重启遥应，没 push、没 rebase、没 amend，没动版本号和发版脚本。`chats.py`、`relay_*.py`、`live_events.py`、网页、`windows-version.json` 都没碰；提交前 `git status --short` 只有一个会话自己的文件，`git add` 一个一个加。
+
+### 9.5 Claude 审查（11-17 11:0x）
+
+- **代码**：读过 `8a29ffb`、`05c24ce` 的全部改动，和第 3 节一致。管道建立的小锁是 DeepSeek 自己补的，对：`confirm_open` 不拿 `self.lock`，没有这把锁时，打开和每秒的状态读取可能各开一条连接。`self.lock` 和 `_pipe_lock` 没有反着拿的地方。iPhone 四处逐行核对：`TeleplyState` 已 `import TeleplyModel`；`RelayClient.detail` 非 2xx 直接抛 `ServiceFailure`（`Relay.swift` 145），所以 `as? ServiceFailure` 拿得到 `code`；`statusLineText` 没有重名。没编译。
+- **真 Codex 只读核对**（26.1106.6628.0，没发链接、没发 follower 请求、没发消息）：Codex 正显示的对话，`confirm_open` 0.2 秒回「电脑上已打开「…」，可以发了」，状态可用；没显示的对话，10.1 秒后抛 `CodexNotTaken`（「原因不明」那句），日志写一行（`Codex：电脑上打开 01a1d911 后 10.1 秒没接手（原因不明）；Codex 26.1106.6628.0，遥应测过 26.1106.6628.0；这个对话的提供商 openai，当前 openai`），之后 `status()` 的原因就是那句，另写一行「手机发不了（…）」。
+- **测试（自己重跑）**：新测试 15 个全过；安卓清掉测试结果后重跑 `testDebugUnitTest`，228 个 JVM 测试 0 失败；Python 全量 `Ran 879 tests`，`FAILED (failures=1, errors=22, skipped=6)`，23 条失败/出错和 DeepSeek 的 `after-failures-final.txt` 逐条相同（Playwright 浏览器缺、`test_open_speed`），没有新的。
+- **小的改进（不挡发布，以后再做）**：
+  1. Codex 卡住、问 owner 一直超时时，手机说「连不上电脑上的 Codex，请确认 Codex 开着…」；其实连上了只是不回应。日志里有「最后见到的错误 timeout」，看得出来。可以给超时单独一句（比如「电脑上的 Codex 没有回应，可能卡住了，请重启 Codex 再试」）。
+  2. 有 owner 但读不到状态时，日志只写「读不到状态」，没带 `status()` 给的原文（比如「没有取得当前会话快照…」）；Codex 改版本时那句原文最有用。
+- **发布先后**：另一个会话 10:55 打的 Windows `0.27.0-dev.39`（`87b0b0b`，只装这台电脑）已经包含 `8a29ffb`、`05c24ce`，是在审查之前打的；审查没发现要返工的地方，dev.39 可以留着。那位安卓用户的电脑要装上带这两个提交的电脑端才有效；他的手机不更新也能看到原因（旧手机显示成红字），更新安卓新版以后显示在那一行。iPhone 要推送后在 Codemagic 上跑 `ios-native-check`。
