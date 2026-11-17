@@ -14,6 +14,7 @@ struct UsageView: View {
     @State private var sending = false
     @State private var note: String?
     @State private var noteIsError = false
+    @State private var noteMuted = false
     @State private var unconfirmed = false
     @State private var picked: ResetCredit?
     @State private var attempt = ResetAttempt()
@@ -65,7 +66,8 @@ struct UsageView: View {
                 if let note {
                     Text(note)
                         .noteFont()
-                        .foregroundStyle(noteIsError ? Palette.danger : Palette.muted)
+                        // Red is for failures only: a reset reads as ordinary text, the other outcomes in grey.
+                        .foregroundStyle(noteIsError ? Palette.danger : (noteMuted ? Palette.muted : Palette.ink))
                 }
                 if sending {
                     Text("正在用…")
@@ -206,6 +208,7 @@ struct UsageView: View {
         sending = true
         note = nil
         noteIsError = false
+        noteMuted = false
         unconfirmed = false
         picked = credit
         Task {
@@ -215,7 +218,7 @@ struct UsageView: View {
                 let answer = try await model.deviceCall("usage/codex-reset", body: .object(fields))
                 attempt.done()
                 note = Hints.text(answer["text"].string())
-                noteIsError = answer["outcome"].string() != "reset"
+                noteMuted = answer["outcome"].string() != "reset"
                 var whole = (data ?? JSONValue.object([:])).object
                 if answer["usage"].isObject, !whole.isEmpty {
                     whole["codex"] = answer["usage"]
@@ -232,6 +235,7 @@ struct UsageView: View {
                     note = describe(error)
                 }
                 noteIsError = true
+                noteMuted = false
             }
             sending = false
         }

@@ -157,4 +157,21 @@ struct UsageTests {
         attempt.done()
         #expect(attempt.id() != first)
     }
+
+    /// 11-17 review: only the answers that say for certain nothing was used may drop the request id.
+    @Test func onlyTheCodesThatSayNothingWasUsedDropTheId() {
+        let attempt = ResetAttempt()
+        // A 500 or a relay hiccup may hide a reset that did go through: the same id has to be sent again.
+        #expect(attempt.keepsId(ServiceFailure(status: 500)))
+        #expect(attempt.keepsId(ServiceFailure(status: 500, detail: "电脑端出错，没确认这次用成了没有，请到电脑上的 Codex 里看用量")))
+        #expect(attempt.keepsId(ServiceFailure(status: 502)))
+        #expect(attempt.keepsId(ServiceFailure(status: 504)))
+        #expect(attempt.keepsId(ServiceFailure(status: 409, code: "device_offline")))
+        #expect(attempt.keepsId(ServiceFailure(status: 409, code: "reset_unconfirmed")))
+        #expect(attempt.keepsId(URLError(.networkConnectionLost)))
+        // These say for certain nothing was used.
+        for code in ["not_confirmed", "bad_request", "codex_unreachable", "codex_refused", "no_codex"] {
+            #expect(!attempt.keepsId(ServiceFailure(status: 409, code: code)))
+        }
+    }
 }

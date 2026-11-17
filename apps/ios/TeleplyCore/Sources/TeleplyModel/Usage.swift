@@ -260,9 +260,14 @@ public final class ResetAttempt {
 
     public func done() { number = nil }
 
-    /// Whether the same request id must be kept: the computer may have used the credit, or never answered at all.
+    /// Whether the same request id must be kept. Only the codes that say for certain nothing was used lose it; every
+    /// other failure (another code, no code, not a ServiceFailure at all: a 500, a 502/504 from the relay, a broken
+    /// connection) keeps it, because the first try may have gone through and a new id could use a second credit.
     public func keepsId(_ error: any Error) -> Bool {
-        if let failure = error as? ServiceFailure { return failure.code == "reset_unconfirmed" }
-        return true
+        guard let failure = error as? ServiceFailure else { return true }
+        return !Self.explainedNotUsed.contains(failure.code)
     }
+
+    /// The computer's own answers that mean it did not use the credit (Android ResetAttempt).
+    private static let explainedNotUsed: Set<String> = ["not_confirmed", "bad_request", "codex_unreachable", "codex_refused", "no_codex"]
 }
