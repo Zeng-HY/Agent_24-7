@@ -407,10 +407,104 @@ Usage: 35% of 5-hour limit, Resets at 12:20 PM
 
 ### 9.1 改了哪些文件、各改了什么
 
+**`usage_limits.py`（新建）**
+
+- 文件头写了：数据从哪来（Codex 自己的 app-server 实时读、Codex 对话记录里每轮的 `token_count`、Claude 窗口上的按钮）；为什么用 Codex 自己的后台程序（遥应共用的 `codex-ipc` 只有对话方法，没有用量和重置；遥应不读登录，登录由 Codex 自己拿着）；为什么 Claude 只读窗口；11-17 在这台电脑上试过什么。
+- `UsageError(chats.ChatError)`：`status` 默认 409、`code` 默认空。两个手机把 503 读成「电脑已离线」，所以这里从不回 503。
+- `usage_window(minutes, used_percent, resets_at)`：窗口的通用格式。300 分钟是「5 小时」、10080 是「每周」、其他按分钟写「{n} 天」或「{n} 小时」（1440 → 「1 天」）；百分比四舍五入成整数、夹在 0–100。
+- `codex_records(now=None)`：只读打开 `chats.codex_db()`，按 `updated_at_ms`（没有这列就用 `updated_at`）取最近 8 个 `rollout_path`；路径过 `chats._strip_unc`；每个文件只读最后 512 KB、丢掉可能半截的第一行、从后往前逐行 `json.loads`，坏行跳过；认 `event_msg` + `token_count` + `rate_limits` 是 dict + `limit_id` 是 `codex` 或 null；8 个文件里挑时间戳最新的；返回 `source: "records"`、`as_of`（毫秒）、`plan`、`windows`、`reached`，`resets` 和 `ordinary_usage_allowed` 都是 null。库读不了、或一条都没有时返回 None。`now` 参数按第 3.1 节的签名留着，但没用上（时间只听记录里的 `timestamp`）。
+- `codex_live(server_factory)`：`account/rateLimits/read`（参数 `{"excludeResetCreditDetails": False}`，20 秒），拿 `rateLimitsByLimitId["codex"]`、没有就用 `rateLimits`；`resets` 从 `rateLimitResetCredits` 来（null → null；`credits` 是 null → `items` 也是 null；`items` 只留 `status == "available"` 的）；**不放 `accountId`、不放 `rateLimitUpsell`**。`CodexRefused` → `codex_refused`「Codex 没给用量：…」，`ArchiveError` → `codex_unreachable`「读不到 Codex 的实时用量：…」。
+- `codex_redeem(request_id, credit_id, server_factory, data_dir=None, log=None, cached=None)`：`request_id` 必须匹配 `[A-Za-z0-9-]{8,64}`（否则 400 `bad_request`「请求编号不对」），`credit_id` 是 None 或不超过 200 字（否则 400「重置编号不对」）。记录文件 `data_dir/attachments/codex-resets.jsonl`（开发时 `data_dir` 就是仓库目录，`attachments/` 在 `.gitignore` 里），最多留 200 行。同一个 `request_id` 已有最终结果就不再开后台程序。先写 `stage: "sending"`，再 `account/rateLimitResetCredit/consume {"idempotencyKey": request_id(, "creditId")}`（30 秒），随后再读一次用量（读不到不影响结果）；四种结果的那四句话一字不差照第 3.1 节，别的值写「Codex 回了不认识的结果（{outcome}），请到电脑上的 Codex 里看用量」。发出之后出错（超时、进程退出、读不懂回复）写 `stage: "unconfirmed"` 并回 `reset_unconfirmed`；开不了后台程序回 `codex_unreachable`「没用掉：连不上电脑上的 Codex（…）」、记录里没有 sending；`CodexRefused` 回 `codex_refused`「Codex 没让用：…」。多出来的三个可选参数是为了第 7 条：`Usage` 拿记录文件、日志和自己的实时缓存，模块级函数要把它们传进来（缓存在重放时作为 `usage` 回给手机）。
+- `claude_text(name)`：解析按钮名字（纯函数）。`Usage: ` 之后按 `", "` 切开，只认第一段（`{pct}% of {label}` 或 `{label}: {pct}%`），`Resets …` 段取重置时间：`at h:mm AM/PM` 换成 24 小时制，别的写法原样；`5-hour` → 5h「5 小时」、`Weekly · X` → weekly「每周（X）」（`all models` 写「全部模型」）、其他 → other，名字用原文。解析不了就是空 `windows`，`text` 照给。
+- `claude_window(desktop)`：`desktop._need_auto()`、`chats.app_window(chats.CLAUDE_PROCESS)`、`auto.ControlFromHandle`、`desktop._find(root, "ButtonControl")` 挑第一个名字以 `Usage: ` 开头的。**只读**：不点、不悬停、不恢复最小化、不拉到前面。`minimized` 用 `win32gui.IsIconic`。没窗口、没按钮、读不了各回第 3.1 节那三句。
+- `class Usage(desktop, log, apps, server_factory=archives.CodexServer, records=codex_records, data_dir=DATA)`：一把 `RLock`（`codex_live`、`codex_redeem` 和 `Usage` 共用；可重入，`Usage.read` 拿着它再调 `codex_live`）；实时缓存 `(monotonic, 结果)` 30 秒。`read(live)`：`live` 为真、缓存不到 30 秒就用缓存（等锁的线程拿到锁后会再查一次缓存，用别人的结果），否则调 `codex_live`，失败就改用 `codex_records` 并在结果里加 `live_error`（失败的结果也会进 30 秒缓存，避免一次刷新连开两次后台程序）；`live` 为假走 `codex_records`；没装 Codex / 没有记录各回第 3.1 节那两句；Claude 在 `desktop.run(claude_window, desktop, timeout=10)` 里读，超时或抛错回「这会儿读不到 Claude 窗口，请稍后再试」；回 `{codex, claude, now}`。`redeem(body)`：`confirmed` 必须是 `True`（否则 400 `not_confirmed`），没装 Codex 回 409 `no_codex`，然后 `codex_redeem`；成功后把新用量放进缓存。
+- 日志：用重置一行（请求编号前 8 位、结果、之后可用几次或「未知」）；没确认时一行（前 8 位、异常类型名）；实时读失败一行（code），同一个 code 10 分钟内只写一次；读成功不写。都不写账号、重置的 id 和标题、请求编号全文。
+
+**`remote.py`**（只加 3.2 那几处）
+
+- `import usage_limits`。
+- `_get()` 在 `/api/notify` 后面加 `/api/usage`：`read(self._query().get("live") == "1")`，`UsageError` 回 `{"error", "code"}` 和它的状态码。
+- `_post()` 在 `/api/notify` 那组前面加 `/api/usage/codex-reset`：成功回 `redeem` 的结果；`UsageError` 回 `{"ok": False, "error", "text", "code"}`；别的异常写 traceback、回 500「电脑端出错，没确认这次用成了没有，请到电脑上的 Codex 里看用量」。**任何情况都不回 503。**
+- `main()` 在 `server.archives` 后面加 `server.usage = usage_limits.Usage(server.desktop, log.write, apps=lambda: server.machine["apps"])`（`apps` 晚取）。
+
+**`tests/test_usage_limits.py`（新建，51 个测试）**
+
+- 假的 `CodexServer`（记录每次调用，按方法回 `answers`，`refuse` 抛 `CodexRefused`，`errors` 抛指定的异常）、临时 `state_5.sqlite` + 假 rollout 文件、假 `chats.Desktop`（`run` 直接调，`_need_auto`/`_find` 照真的形状，`run_error` 当超时）、`Clock`（移动 `time.monotonic`，不真等 30 秒），照 `tests/test_locked_send.py` 造假 handler 测 `remote.py` 的两条路由。没有一处碰到真的 Codex。
+
+**安卓**
+
+- `RelayApi.kt`：`DetailRoutes` 加 `"usage"`、`"usage/codex-reset"`；`SlowRoutes` 加 `"usage" to 45L`、`"usage/codex-reset" to 75L`。
+- 新建 `Usage.kt`（不碰界面，JVM 能测）：`UsageWindow`、`ResetCredit`、`CodexUsage`、`ClaudeUsage`、`UsageReport`；`parseUsage`/`parseCodexUsage`/`parseClaudeUsage`；纯函数 `resetLine`（今天/明天/M月d日 + HH:mm + 「还有 …」/「马上」/「已过重置时间」，`records` 时接「，等电脑上 Codex 下一次回话就会更新」）、`sourceLine`、`confirmText`（三句，按第 3.3 节）；`ResetAttempt`：`id()` 没有就生成、有就复用，`done()` 清掉，`keepsId(e)` 只有 `reset_unconfirmed` 和「不是 `ServiceFailure`」留着编号。
+- 新建 `UsageUi.kt`：`@Composable fun UsageSheet(vm, onClose)`，用 `TeleplySheet("用量", onClose)`（sheet 自己已经带滚动，里面不再套 `verticalScroll`，否则同方向嵌套会崩）；`LaunchedEffect(Unit)` 一打开就读 `usage?live=1`，右上「刷新」再读一次，不轮询；Codex/Claude 两块照第 3.3 节的顺序和文字；确认框是 `AlertDialog`（「用掉 1 次」红字、「先不用」），**两个按钮都先进这个框**；`reset_unconfirmed` 或没拿到回复时显示「没确认这次用成了没有。」和「再试一次（不会多用）」（用同一个编号、不再弹框）；时间都用电脑给的 `now` 算。
+- `MainActivity.kt` `SettingsScreen`：`var usage`，「对话」那组后面加 `SectionLabel("用量")` + `CardRow("Codex 和 Claude 的用量")`，`if(usage) UsageSheet(vm) { usage=false }`。
+- `ChatUi.kt`：`ChatSheets` 加 `usage`；`ChatMenu` 在「会话状态」下面加 `if (s.app != "deepseek") MenuRow("用量", …, icon = TeleplyIcons.Clock)`；`ChatSheetsHost` 里画 `UsageSheet`。
+- `FixtureApi.kt`：两个路由；`FixtureWorld.usage()`（Codex `live`、每周 84%、`resets_at` = 现在 + 34 小时、1 次「Full reset」30 天后到期；Claude 5 小时 35%、`12:20`）和 `usageReset(body)`（`confirmed` 不对回 400 `not_confirmed`；对了回 `reset` 和新的 `usage`：每周 0%、0 次）。
+- `UsageTest.kt`（12 个）、`RelayApiTest.kt` 加 2 个、`ReaderUiScenarios.kt` 加 1 个场景（设置 → 用量 → 看到「已用 84%」「可用重置：1 次」→「用掉这一次」→ 确认框 →「先不用」不发 POST → 再来一次「用掉 1 次」→ 显示「已用掉 1 次重置，Codex 用量恢复了」、变成「已用 0%」「没有可用的重置次数」）。
+
+**iPhone**
+
+- `Relay.swift`：`detailRoutes` 加 `"usage"`、`"usage/codex-reset"`；`slowRoutes` 加 `"usage": 45`、`"usage/codex-reset": 75`。
+- 新建 `TeleplyModel/Usage.swift`：和安卓一样的结构（`UsageWindow`、`ResetCredit`、`CodexUsage`、`ClaudeUsage`、`UsageReport`）和纯函数（`UsageReport.parse`、`resetLine`、`sourceLine`、`confirmText`，另加 `resetExpiryLine` 给列表那行用）；`ResetAttempt` 是 `final class`（安卓也是 class），`id()`/`done()`/`keepsId(_:)`。
+- 新建 `Teleply/Settings/UsageView.swift`：`List` + `.task`/`.refreshable` + `.alert`（「先不用」取消、「用掉 1 次」destructive），导航标题「用量」，出错用 `describe(error)`；电脑给的固定句子过 `Hints.text`。
+- `SettingsView.swift`：`if model.device != nil` 里「对话」那组后面加 `Section("用量")` + `NavigationLink("Codex 和 Claude 的用量") { UsageView(model: model) }`。
+- `ConversationView.swift` `ConversationMenu`：`@State usageShown`，「查找消息」下面加 `if model.app != "deepseek" { Button("用量", systemImage: "clock") }`，`.sheet` 打开 `NavigationStack { UsageView(model: model) }`。
+- `Localizable.xcstrings`：加 16 条英文（纯新增，160 行；「已用 %lld%%」照仓库里「上下文 %lld%%」的写法把 % 写成 %%；文件保持原来的顺序和 LF 换行）。
+- `Hints.swift`：电脑给的固定句子补英文（四种 `text`、没确认那句、四种 reason、`codex_unreachable`/`codex_refused`/`used` 的几种前缀）。
+- `DemoTransport.swift` + `DemoWorld.swift`：`/api/usage`、`/api/usage/codex-reset` 回第 3.3 节的示例数据（`codexResetUsed` 记着用没用掉）。
+- `UsageTests.swift`（12 个，和安卓同样的几条）、`RelayReadTests.swift` 加 1 个（`usage?live=1` 的路径和 45 秒、`usage/codex-reset` 的 POST body 和 75 秒）。
+
 ### 9.2 新测试的名字，和在旧代码上的结果
+
+51 个，全在 `tests/test_usage_limits.py`。旧代码（`usage_limits.py` 还不存在）跑这份文件只有 **1 个 ERROR**：`ModuleNotFoundError: No module named 'usage_limits'`（模块导入失败，整个文件没跑起来），原样输出在工作区 `new-tests-on-old-code.log`。改完以后再跑：`Ran 51 tests ... OK`（`new-tests-after-code.log`）；全量里这 51 个也全过。
+
+| 类 | 测试 |
+|---|---|
+| `RecordTests`（9） | `the_newest_token_count_wins_across_conversations`、`the_newest_line_of_one_conversation_wins`、`another_limit_id_and_a_null_rate_limits_are_skipped`、`a_secondary_five_hour_window`、`a_half_last_line_and_a_file_over_512_kb_are_read_from_the_tail`、`a_line_older_than_the_tail_is_not_used`、`no_conversation_with_usage_is_none`、`an_unreadable_thread_table_is_none`、`the_table_without_updated_at_ms_orders_by_updated_at` |
+| `WindowTests`（2） | `kinds_names_and_minutes`、`used_percent_is_rounded_and_kept_within_0_and_100` |
+| `LiveTests`（5） | `what_the_phone_shows_and_what_it_never_gets`、`credits_null_means_items_null_and_no_credits_means_no_resets`、`the_single_bucket_shape_works_too`、`a_server_that_cannot_start_says_codex_is_unreachable`、`a_codex_that_refuses_says_so_in_its_own_words` |
+| `UsageReadTests`（8） | `live_then_the_cache_for_thirty_seconds`、`a_live_read_that_fails_falls_back_to_the_records_with_its_reason`、`a_refusal_is_logged_once_per_ten_minutes`、`neither_live_nor_records_says_there_is_no_usage_yet`、`a_read_without_live_uses_the_records`、`a_computer_without_an_app_says_so`、`claude_comes_from_its_window_and_a_timeout_says_so`、`now_is_given_so_the_phone_need_not_trust_its_own_clock` |
+| `RedeemTests`（12） | `each_outcome_says_its_words_and_sends_the_request_id`、`no_credit_id_means_no_credit_id_in_the_call`、`two_record_lines_and_a_log_line_without_the_whole_request_id`、`a_request_that_already_has_its_answer_is_not_sent_again`、`an_unanswered_reset_keeps_the_same_request_id_and_may_have_worked`、`a_server_that_cannot_start_uses_nothing_and_records_nothing`、`the_phone_has_to_say_yes_first`、`a_request_id_that_is_short_or_odd_is_refused`、`a_reset_on_a_computer_without_codex_is_refused`、`a_refusal_from_codex_says_its_words`、`an_outcome_nobody_knows_is_shown_as_it_came`、`the_new_usage_replaces_the_cached_one` |
+| `ClaudeTextTests`（5） | `the_five_hour_limit_with_its_reset_time`、`a_weekly_limit_with_another_reset_spelling`、`a_weekly_limit_for_one_model_and_no_reset_time`、`midnight_and_morning_are_twenty_four_hours`、`words_it_does_not_know_leave_the_windows_empty_and_the_text_whole` |
+| `ClaudeWindowTests`（5） | `a_window_with_the_usage_button`、`a_minimised_window_is_only_said_to_be_minimised`、`no_claude_window_says_so`、`a_window_without_the_button_says_what_to_open`、`a_window_that_cannot_be_read_at_all_is_not_an_error_on_the_phone` |
+| `RemoteRouteTests`（5） | `the_usage_route_asks_for_a_live_read_only_when_asked`、`a_usage_error_comes_back_with_its_code_and_status`、`a_reset_is_answered_with_the_computers_words`、`a_reset_error_keeps_its_code_and_its_status`、`another_error_is_a_500_and_never_a_503` |
 
 ### 9.3 全部测试（和基线比）
 
+**Python**（仓库根目录，`python -m unittest discover -s tests`）
+
+- 改前基线（11:09 起跑，`baseline-python-tests.txt`）：`Ran 879 tests`，`FAILED (failures=1, errors=22, skipped=6)`；23 条失败/出错的清单单独存成 `baseline-failures.txt`。
+- 改后（`after-python-tests-verbose.txt`）：`Ran 930 tests`，`FAILED (failures=1, errors=22, skipped=6)`。930 = 879 + 51。
+- 逐行比对 23 条：**完全一样**（`Compare-Object` 无差异，改后清单 `after-failures.txt`）。51 个新测试全过，6 条跳过和基线一样。
+- 这 23 条和这次无关，都是以前就坏的：Playwright 浏览器缺（22 个 ERROR，webkit/chromium 那段）、`test_open_speed` 1 个 FAIL。
+
+**安卓**（`apps\android` 里 `.\scripts\build.ps1`，四个任务都过）
+
+- 改前：`BUILD SUCCESSFUL in 1s`（92 个任务 up-to-date）。为了确是跑出来的，又清掉 `app/build/test-results/testDebugUnitTest` 单跑 `testDebugUnitTest`：`BUILD SUCCESSFUL in 32s`，20 个 XML、**228** 个 JVM 测试、0 失败 0 出错（`baseline-android-tests.txt`）。
+- 改后：`BUILD SUCCESSFUL in 1m 14s`，93 个任务，21 个 XML、**243** 个 JVM 测试、0 失败 0 出错（`after-android-build.txt`）。多出的 15 条 = `UsageTest` 12 条 + `RelayApiTest` 2 条 + `ReaderRobolectricTest.usageShowsBothAppsAndOneResetGoesThroughAConfirmation` 1 条；原来的场景照样过。
+- lint 也过（`lintDebug` 没有报错）。
+
+**iPhone**：这台电脑没有 Swift 工具链，没编译、没跑 `TeleplyCore` 测试（见 9.5）。
+
 ### 9.4 这台电脑上的只读核对（5.4）
 
+用工作区的临时脚本（不进仓库）跑 `usage_limits.Usage(desktop, print, apps=lambda: ["codex", "claude"]).read(True)`，`desktop` 是真的 `chats.Desktop(log, threading.Lock())`（原样在 `read-only-check.txt`，下面是去掉 `id` 的结果）：
+
+- Codex：`source: "live"`，`plan: "pro"`，每周 `used_percent: 85`、`resets_at: 1795006481`（2026-11-18 20:54 北京时间），`reached: null`，`ordinary_usage_allowed: true`；重置 1 次：`Full reset`、"Thanks for using Codex! You've been granted one free rate limit reset."，`expires_at: 1797115689`（2026-12-13 06:48 北京时间）。
+- Claude：`source: "window"`，按钮原文 `Usage: 63% of 5-hour limit, Resets at 12:20 PM` → 一档 5 小时 63%、`resets_text: "12:20"`、`minimized: false`。（10:01 是 31%、10:06 是 35%，现在是 63%：它自己几分钟一变。）
+- `as_of` 1794885752742 / 1794885752813，`now` 1794885752814；日志一行也没有（读成功不写）。
+- **只调了这一次 `account/rateLimits/read`**，没有调 `consume`；没读 `~/.codex/auth.json`；没点、没恢复、没拉到前面 Claude 的窗口；没启动/关闭 Codex、Claude 或遥应。
+
 ### 9.5 没做的、拿不准的
+
+- **iPhone 没编译过**：这台电脑没有 Swift 工具链，`Usage.swift`、`UsageView.swift`、`UsageTests.swift`、`Relay.swift`/`SettingsView.swift`/`ConversationView.swift`/`Hints.swift`/`DemoTransport.swift`/`DemoWorld.swift`/`RelayReadTests.swift` 的改动都只逐行对照了现有写法（`JSONValue` 的下标 + `string()/bool()/int64()/has()`、`describe(error)`、`Palette`、`captionFont()/noteFont()`、`PillStyle(wide:)`、`.alert(_:isPresented:)`、`Section`/`NavigationLink`、`#expect`）。推送后请在 Codemagic 上跑 `ios-native-check`。最没把握的地方，按没关系排序：
+  1. `Text("已用 \(window.usedPercent)%")` 抽出来的键是「已用 %lld%%」（照仓库里「上下文 %lld%%」的写法加的）。如果 Xcode 抽成别的形式，英文界面会显示中文这一行。
+  2. `data.map(UsageReport.parse)` 把静态方法当函数值传给 `Optional.map`。编译不过的话改成 `data.map { UsageReport.parse($0) }`。
+  3. `UsageWindow` 的名字（「每周」「5 小时」）和 `resetLine`/`sourceLine`/`confirmText` 返回的是 `TeleplyModel` 里拼好的中文字符串，没走 `Localizable.xcstrings`；英文界面里这些句子仍是中文（电脑给的四句话走了 `Hints`）。
+  4. `ResetAttempt` 是 `final class` 放在 `@State` 里：只用它的 `id()`/`done()`，界面不靠它重绘；`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor` 下没有隔离问题，但没编译验证过。
+  5. `DemoWorld.usage()` 里 `.array([[...]])` 的嵌套字典字面量靠 `JSONValue` 的 `ExpressibleByDictionaryLiteral` 推断；同类写法 `DemoTransport` 里已有。
+- **拿不准：实时读失败也进 30 秒缓存**。交接第 3.1 节只写了成功时的缓存；我把失败后的「记录 + live_error」也缓存了，免得一次刷新连开两次后台程序。想改成失败不缓存也很容易。
+- **`codex_redeem` 多了三个可选参数**（`data_dir`、`log`、`cached`）：第 3.1 节给的是三个参数，但记录文件、日志和「缓存的实时读」都在 `Usage` 里，模块级函数只能靠参数拿。
+- **`codex_records(now=None)` 的 `now` 没用上**：第 3.1 节只规定 `as_of` 从记录里的 `timestamp` 换算。
+- **没做的事**：没对真 Codex 调 `account/rateLimitResetCredit/consume`，也没经遥应的接口用掉重置（这台电脑只有 1 次，是用户的）；没读任何登录文件；没直接调 chatgpt.com、claude.ai、anthropic；没打包、没安装、没启动或重启遥应；没 push、没 rebase、没 amend、没改版本号；没动 `chats.py`、`archives.py`、`codex_control.py`、`claude_control.py`、`relay_*.py`、`live_events.py`、两个 `ComposerUi.kt`/`ComposerChips.swift` 那条线、网页（`remote.html`、`static/`、`deploy/site/`）、`windows-version.json`、发版脚本、灵动岛；没碰用户没提交的 `deploy/site/`、`pocketagentdesk.com.png`、`tests/test_activity_records.py`。
+- 安卓 `UsageUi.kt` 一开始有个错：Codex 那两个按钮直接调了 `use()`，没先进确认框；`ReaderUiScenarios` 的场景当场发现（找「用掉 1 次 Codex 重置？」找不到），已改成先弹框。现在没有任何绕过确认框就能用掉重置的路子。
+
