@@ -393,6 +393,15 @@ class Service:
                 return response
 
 
+def setup_logging():
+    # 0.6.3: the push decisions are INFO lines; without this Python shows warnings only and the relay's own
+    # "which way did this event go" lines never reach journalctl (found 10-28).
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    # httpx writes every request at INFO with its whole URL, and an APNs URL ends in the phone's full device token
+    # (11-17: one line every ten seconds in journalctl). The relay's own lines name a token by its first 8 characters.
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--state',type=Path,required=True)
@@ -402,9 +411,7 @@ def main():
     parser.add_argument('--port',type=int,default=18771)
     parser.add_argument('--trusted-proxy',action='store_true')
     args=parser.parse_args()
-    # 0.6.3: the push decisions are INFO lines; without this Python shows warnings only and the relay's own
-    # "which way did this event go" lines never reach journalctl (found 10-28).
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    setup_logging()
     os.umask(0o077)
     store=Identity(args.state,int(os.getenv('AR_ACCOUNT_LIMIT','20')),int(os.getenv('AR_DEVICE_LIMIT','3')))
     service=Service(args.origin,store,trusted_proxy=args.trusted_proxy,aliases=args.alias_origin,legacy_origin=args.legacy_origin)

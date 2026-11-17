@@ -6,6 +6,7 @@ hangs up gives its computer's place back within about a second instead of when t
 """
 import asyncio
 import base64
+import logging
 import os
 from pathlib import Path
 import re
@@ -31,6 +32,23 @@ def lines(seen):
     """The captured lines without the logger prefix, how long things took made N (a slow machine may take a second
     more)."""
     return [re.sub(r'(这次连了|最久的开了|之后) \d+ 秒',r'\1 N 秒',line.split('relay.tunnel:',1)[1]) for line in seen.output]
+
+
+class LoggingSetupTests(unittest.TestCase):
+    def test_the_relay_writes_its_own_lines_but_not_httpx_request_urls(self):
+        # httpx's "HTTP Request: POST https://api.push.apple.com/3/device/<the whole token>" lines went to journalctl
+        # every ten seconds (11-17); the relay's lines must still come through
+        from relay_service import setup_logging
+        root=logging.getLogger();saved=root.handlers[:],root.level
+        httpx=logging.getLogger('httpx');httpx_level=httpx.level
+        root.handlers[:]=[]
+        try:
+            setup_logging()
+            for name in ('relay.tunnel','relay.push'):self.assertTrue(logging.getLogger(name).isEnabledFor(logging.INFO),name)
+            self.assertFalse(httpx.isEnabledFor(logging.INFO))
+            self.assertTrue(httpx.isEnabledFor(logging.WARNING))  # its failures still show
+        finally:
+            root.handlers[:]=saved[0];root.setLevel(saved[1]);httpx.setLevel(httpx_level)
 
 
 class TunnelLogTests(unittest.IsolatedAsyncioTestCase):
