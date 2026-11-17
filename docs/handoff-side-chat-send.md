@@ -243,7 +243,7 @@ Claude 自己的记录也说明它是侧边对话（这次的修改用不到）�
 - 改后：`Ran 830 tests`，`FAILED (failures=1, errors=22, skipped=6)`，原样输出在工作区 `after-deepseek-change.log`。
 - 逐行比对失败/出错清单（23 条）：改前改后**完全一样**，没有多出新的失败或出错。多出来的 16 个就是新测试，全部通过；`tests/test_claude_send.py`、`tests/test_claude_new_environment.py` 里改过的和没改的也都通过。
 - 两台已知的旧坏项照旧，和这次无关：Playwright 浏览器缺（`C:\Users\39011\AppData\Local\ms-playwright` 不在，webkit/chromium 那些 ERROR），`test_open_speed` 那 1 条 FAIL。
-- 交接文档说的 `baseline-claude-0e90118.log` 在工作区里没找到，所以拿自己跑的基线对比；失败/出错的名字和文档 5.1 描述的一致。
+- 交接文档说的 `baseline-claude-0e90118.log` 也在工作区（09:12 写入，`Ran 795 tests`，同样 `failures=1, errors=22, skipped=6`）：它的 23 条失败/出错和自己的基线逐条相同（条数少一些是那次跑得早，之后别的会话又加了测试）。
 
 ### 9.4 没做的、拿不准的
 
