@@ -13,7 +13,8 @@ class NewEnvironmentTests(unittest.TestCase):
         d.input_lock=threading.RLock()
         d._claude_root=Mock(return_value=(1,'root'))
         d._claude_show=Mock()
-        button=lambda name:SimpleNamespace(Name=name,IsOffscreen=False,IsEnabled=True)
+        button=lambda name:SimpleNamespace(Name=name,IsOffscreen=False,IsEnabled=True,GetParentControl=lambda:document)
+        document=SimpleNamespace(Name='new - Claude Code',ClassName='',ControlTypeName='DocumentControl',GetParentControl=lambda:None)  # 11-17: the page around every button
         d._claude_new_buttons=Mock(return_value=('doc',[button(n) for n in names]))
         d._claude_verified_prompt=Mock(return_value=('doc','edit'))
         d._fill_claude_prompt=Mock(return_value=('doc','edit'))

@@ -7,7 +7,16 @@ import chats
 from claude_control import Controller,signature
 
 class Edit:
-    def __init__(self,value='\n',bad=False):self.Value=value;self.IsReadOnly=False;self.bad=bad;self.writes=[]
+    def __init__(self,value='\n',bad=False):
+        self.Value=value;self.IsReadOnly=False;self.bad=bad;self.writes=[]
+        # 11-17: the page around a box is its composer, the dock its Send is looked for in, and the document; the page's
+        # own name is never read (a session may be titled "Side chat")
+        self.composer=SimpleNamespace(Name='',ClassName='bg-surface-3 rounded-composer',ControlTypeName='GroupControl')
+        self.dock=SimpleNamespace(Name='',ClassName='group/approval-dock pointer-events-auto',ControlTypeName='GroupControl')
+        self.document=SimpleNamespace(Name='test - Claude Code',ClassName='',ControlTypeName='DocumentControl',GetParentControl=lambda:None)
+        self.GetParentControl=lambda:self.composer
+        self.composer.GetParentControl=lambda:self.dock
+        self.dock.GetParentControl=lambda:self.document
     def GetValuePattern(self):return self
     def SetValue(self,text):self.writes.append(text);self.Value='a' if self.bad else text+'\n';return True
 
@@ -15,7 +24,7 @@ class SendTests(unittest.TestCase):
     def desktop(self,edit):
         d=object.__new__(chats.Desktop);d.input_lock=threading.Lock();d.log=Mock();d.sent_last={};d._claude_open=Mock(return_value=(1,'root'));d._claude_verified_prompt=Mock(return_value=('doc',edit))
         d._claude_show=Mock();d._keyboard_owner=Mock(return_value=None)  # never touch this PC's real windows
-        submit=Mock(return_value=True);button=SimpleNamespace(ControlTypeName='ButtonControl',Name='Send',IsOffscreen=False,IsEnabled=True,GetInvokePattern=lambda:SimpleNamespace(Invoke=submit))
+        submit=Mock(return_value=True);button=SimpleNamespace(ControlTypeName='ButtonControl',Name='Send',IsOffscreen=False,IsEnabled=True,GetParentControl=lambda:None,GetInvokePattern=lambda:SimpleNamespace(Invoke=submit))
         d._find=Mock(return_value=[button]);d._paste=Mock(side_effect=AssertionError('keyboard paste must not be used'))
         return d,submit
     def test_claude_send_has_no_ctrl_a_clipboard_or_enter(self):
@@ -23,13 +32,21 @@ class SendTests(unittest.TestCase):
         with patch('chats.require_send_desktop'),patch('chats.conversation_title',return_value='test'),patch('chats.winctl.press') as press:
             d._send_claude({'id':'s','title':'test'},'中文第一行\n第二行')
         self.assertEqual(edit.writes,['中文第一行\n第二行']);submit.assert_called_once();press.assert_not_called();d._paste.assert_not_called()
-        d._find.assert_called_once_with('doc','ButtonControl','Send')
+        # 侧-3：Send 只在主对话框所在的 dock 里找，不再整页找
+        d._find.assert_called_once_with(edit.dock,'ButtonControl','Send')
     def test_message_box_comes_from_one_query_and_must_be_the_only_one(self):
         # 10-12: walking Claude's page element by element took 0.7 s a time, and a send walked it six times or more
-        box=SimpleNamespace(IsOffscreen=False,IsEnabled=True);d=object.__new__(chats.Desktop);d._claude_document=Mock(return_value='doc')
-        d._find=Mock(return_value=[box,SimpleNamespace(IsOffscreen=True,IsEnabled=True),SimpleNamespace(IsOffscreen=False,IsEnabled=False)])
-        self.assertEqual(d._claude_verified_prompt('root','s'),('doc',box));d._find.assert_called_once_with('doc','EditControl','Prompt')
-        d._find=Mock(return_value=[box,box])
+        def box(off=False,enabled=True):  # 11-17: a box in a dock (its own page, not a side chat's)
+            edit=SimpleNamespace(Name='Prompt',ClassName='tiptap ProseMirror',ControlTypeName='EditControl',IsOffscreen=off,IsEnabled=enabled)
+            composer=SimpleNamespace(Name='',ClassName='bg-surface-3 rounded-composer',ControlTypeName='GroupControl')
+            dock=SimpleNamespace(Name='',ClassName='group/approval-dock pointer-events-auto',ControlTypeName='GroupControl')
+            document=SimpleNamespace(Name='s - Claude Code',ClassName='',ControlTypeName='DocumentControl',GetParentControl=lambda:None)
+            edit.GetParentControl=lambda:composer;composer.GetParentControl=lambda:dock;dock.GetParentControl=lambda:document
+            return edit
+        only=box();d=object.__new__(chats.Desktop);d._claude_document=Mock(return_value='doc')
+        d._find=Mock(return_value=[only,box(True),box(False,False)])
+        self.assertEqual(d._claude_verified_prompt('root','s'),('doc',only));d._find.assert_called_once_with('doc','EditControl','Prompt')
+        d._find=Mock(return_value=[box(),box()])
         with self.assertRaises(chats.InputNotSubmitted):d._claude_verified_prompt('root','s')
     def test_picture_count_reads_the_part_that_holds_the_add_button(self):
         inner,outer=SimpleNamespace(),SimpleNamespace();inner.GetParentControl=lambda:outer;edit=SimpleNamespace(GetParentControl=lambda:inner)
@@ -378,19 +395,23 @@ class SendTests(unittest.TestCase):
         self.assertEqual(pressed,['first','second']);link.assert_not_called()
     def test_question_area_is_found_by_going_up_from_the_message_box(self):
         # 10-12: searching the window for it took 0.45 s every 5 s; it is six levels above the box
-        dock=SimpleNamespace(ClassName='group/approval-dock pointer-events-auto');node=dock
-        for cls in ('bg-surface-3','relative w-full','relative min-w-0'):node=SimpleNamespace(ClassName=cls,GetParentControl=(lambda up:lambda:up)(node))
-        edit=SimpleNamespace(GetParentControl=(lambda up:lambda:up)(node))
+        document=SimpleNamespace(Name='s - Claude Code',ClassName='',ControlTypeName='DocumentControl',GetParentControl=lambda:None)
+        dock=SimpleNamespace(Name='',ClassName='group/approval-dock pointer-events-auto',ControlTypeName='GroupControl',GetParentControl=lambda:document);node=dock
+        for cls in ('bg-surface-3','relative w-full','relative min-w-0'):node=SimpleNamespace(Name='',ClassName=cls,ControlTypeName='GroupControl',GetParentControl=(lambda up:lambda:up)(node))
+        edit=SimpleNamespace(Name='Prompt',ClassName='tiptap ProseMirror',ControlTypeName='EditControl',GetParentControl=(lambda up:lambda:up)(node))
         root=SimpleNamespace(GroupControl=Mock(side_effect=AssertionError('the window must not be searched')))
         d=object.__new__(chats.Desktop);d._find=Mock(return_value=[edit])
         self.assertIs(d._claude_dock(root),dock);d._find.assert_called_once_with(root,'EditControl','Prompt')
-        found=SimpleNamespace(Exists=lambda *a:True);root=SimpleNamespace(GroupControl=Mock(return_value=found))
+        found=SimpleNamespace(Exists=lambda *a:True,GetParentControl=lambda:document);root=SimpleNamespace(GroupControl=Mock(return_value=found))
         d._find=Mock(return_value=[])  # no message box: a question took its place
         self.assertIs(d._claude_dock(root),found)
     def test_a_question_card_among_the_messages_is_where_claude_asks(self):
         # 10-26: Claude's new window asks in a card among the messages; read in the dock alone, the phone showed nothing
         button=lambda enabled=True:SimpleNamespace(IsEnabled=enabled)
-        card=lambda name:SimpleNamespace(name=name,ClassName='epitaxy-approval-card relative isolate flex flex-col')
+        def card(name):  # 11-17: a card among the session's own messages, not in a side chat
+            document=SimpleNamespace(Name='s - Claude Code',ClassName='',ControlTypeName='DocumentControl',GetParentControl=lambda:None)
+            node=SimpleNamespace(name=name,ClassName='epitaxy-approval-card relative isolate flex flex-col',GetParentControl=lambda:document)
+            return node
         old,new,answered=card('old'),card('new'),card('answered')
         # 10-27: the dock's classes hold '[&_.epitaxy-approval-card]:shrink'; a search within the class names finds it too
         dock_like=SimpleNamespace(name='dock_like',ClassName='group/approval-dock pointer-events-auto [&_.epitaxy-approval-card]:shrink')

@@ -98,6 +98,9 @@ OPTION_TYPES = ("ButtonControl", "RadioButtonControl", "CheckBoxControl", "ListI
 # each of its options is a button of the second class, which takes a real click only (10-27)
 CLAUDE_QUESTION_CARD = "epitaxy-approval-card"
 CLAUDE_ANSWER_OPTION = "epitaxy-answer-option"
+# A side chat (Claude 5.11492.5.0, 11-17) opens as a column right of the session, in the same page: its region and its
+# composer's group are both named "Side chat", and it has a "Prompt" box and a "Send" of its own (uia-side-chat-open.txt).
+CLAUDE_SIDE_CHAT = "Side chat"
 
 
 def in_notice(kinds: list[str]) -> bool:
@@ -123,6 +126,16 @@ def answer_option(ctrl) -> bool:
         return False
 
 
+def approval_dock(ctrl) -> bool:
+    """Whether this is the dock that holds Claude's message box and, above it, its questions. The class must be there as
+    a word of its own: the dock's own classes hold variants such as '[&_.epitaxy-approval-card]:shrink' (10-27), and parts
+    below it can mention 'approval-dock' (--approval-dock-floor) without being the dock."""
+    try:
+        return "group/approval-dock" in (ctrl.ClassName or "").split()
+    except Exception:
+        return False
+
+
 class ChatError(Exception):
     """Something the person can act on."""
 
@@ -134,6 +147,10 @@ class SendNotSubmitted(ChatError):
 
 class InputNotSubmitted(SendNotSubmitted):
     code = 'input_not_ready'
+
+    def __init__(self, message: str, detail: str = ''):
+        super().__init__(message)
+        self.detail = detail  # for the log only: the phone's text is the message
 
 
 class DesktopDraft(InputNotSubmitted):
@@ -1636,12 +1653,82 @@ class Desktop:
         found=scope.Element.FindAll(4,uia.CreatePropertyConditionEx(auto.PropertyId.ClassNameProperty,part,2))  # 2: within the name
         return [auto.Control.CreateControlFromElement(found.GetElement(i)) for i in range(found.Length)]
 
+    def _claude_where(self, ctrl):
+        """Where in Claude's window a control sits, walked up from it: (in_side_chat, dock), or None when that cannot be
+        told (Claude drew that part anew while it was read, or anything else went wrong). Callers take None for "not the
+        session's own", never for "the session's own": sending to the wrong place is worse than not sending.
+
+        in_side_chat: a parent named "Side chat" (11-17: the side chat's region and its composer's group are both), so its
+        box, Send, questions and dock can be passed over. The page itself is not read: a session may be titled
+        "Side chat" too, and the page's name is that title ("<title> - Claude Code").
+        dock: the nearest parent whose class holds 'group/approval-dock' as a word of its own, or None. In the same page
+        as the session, the side chat has no dock (11-17), and a box outside every dock is not the session's."""
+        try:
+            node = ctrl
+            in_side_chat = False
+            dock = None
+            for _ in range(40):
+                node = node.GetParentControl()
+                if node is None:
+                    break
+                if node.ControlTypeName in ("DocumentControl", "WindowControl"):
+                    break  # the page and the window are not looked at
+                if not in_side_chat and (node.Name or "").strip().casefold().startswith(CLAUDE_SIDE_CHAT.casefold()):
+                    in_side_chat = True
+                if dock is None and approval_dock(node):
+                    dock = node
+            return in_side_chat, dock
+        except Exception:
+            return None
+
     def _claude_verified_prompt(self,root,conv_id):
         doc=self._claude_document(root,conv_id)
         if doc is None:raise InputNotSubmitted('Claude 会话身份未核实，尚未发送；请打开目标对话')
         edits=[c for c in self._find(doc,'EditControl','Prompt') if not c.IsOffscreen and c.IsEnabled]
-        if len(edits)!=1:raise InputNotSubmitted('Claude 输入框不唯一或尚未就绪，尚未发送')
-        return doc,edits[0]
+        # Only the session's own box: while a side chat is open the page holds two boxes named Prompt, and its box must
+        # never be written into (11-17). An existing session's box sits in its dock; a new page's was never measured
+        # with one, so there no dock is required.
+        wanted=[]
+        in_side_chat=outside_dock=unclear=0
+        for edit in edits:
+            where=self._claude_where(edit)
+            if where is None:
+                unclear+=1;continue
+            side,dock=where
+            if side:
+                in_side_chat+=1;continue
+            if conv_id!='__new__' and dock is None:
+                outside_dock+=1;continue
+            wanted.append(edit)
+        if len(wanted)!=1:
+            # The log only: this runs every 0.1 s while a write is read back, and the phone's words do not change.
+            raise InputNotSubmitted('Claude 输入框不唯一或尚未就绪，尚未发送',
+                                    f'屏幕上可用的 Prompt 框有 {len(edits)} 个：{in_side_chat} 个在侧边对话里，'
+                                    f'{outside_dock} 个不在主对话的输入区里，{unclear} 个说不清')
+        return doc,wanted[0]
+
+    def _claude_send_button(self,doc,edit,conv_id):
+        """The one Send this message may be submitted with, once its box is verified.
+        An existing session's Send is looked for in that box's own dock alone (11-17: the side chat's Send is on the
+        same page, and pressing it would send the side chat's draft), and no side chat's button is ever taken, nor one
+        whose place cannot be told. A new page has no dock to look in (not measured), so the page is searched as before.
+        Raises the same refusals the caller gave before."""
+        if conv_id=='__new__':
+            scope=doc;refusal='Claude 新对话发送按钮尚未就绪'
+        else:
+            where=self._claude_where(edit)
+            if where is None:raise InputNotSubmitted('没有唯一可用的 Claude 发送按钮，尚未发送')
+            side,dock=where
+            if side or dock is None:raise InputNotSubmitted('没有唯一可用的 Claude 发送按钮，尚未发送')
+            scope=dock;refusal='没有唯一可用的 Claude 发送按钮，尚未发送'
+        buttons=[]
+        for button in self._find(scope,'ButtonControl','Send'):
+            if button.IsOffscreen or not button.IsEnabled:continue
+            where=self._claude_where(button)
+            if where is None or where[0]:continue
+            buttons.append(button)
+        if len(buttons)!=1:raise InputNotSubmitted(refusal)
+        return buttons[0]
 
     @staticmethod
     def _same_input(actual,expected):
@@ -1959,26 +2046,37 @@ class Desktop:
         """The part below the conversation that holds the message box and, above it, Claude's questions and plan
         choices (class approval-dock): six levels up from the box on 10-12. Going up from the box takes 0.03 s;
         searching the window for it took 0.45 s, every 5 s while the phone shows the conversation, on the one desktop
-        worker that also sends. With no message box (a question can take its place) the window is searched as before."""
+        worker that also sends. With no message box (a question can take its place) the window is searched as before,
+        and so is a side chat's dock (11-17) passed over."""
         try:
-            for edit in self._find(root,'EditControl','Prompt'):
-                node=edit
-                for _ in range(12):
-                    node=node.GetParentControl()
-                    if node is None:break
-                    if 'approval-dock' in (node.ClassName or ''):return node
+            for box in self._find(root,'EditControl','Prompt'):
+                where=self._claude_where(box)
+                if where is not None and not where[0] and where[1] is not None:return where[1]
         except Exception:pass
-        dock = root.GroupControl(searchDepth=45, Compare=lambda c, d: "approval-dock" in (c.ClassName or ""))
-        return dock if dock.Exists(1, 0.1) else None
+        try:
+            docks=[c for c in self._find_class(root,'approval-dock') if approval_dock(c)]
+        except Exception:docks=[]
+        for dock in docks:
+            where=self._claude_where(dock)
+            if where is not None and not where[0]:return dock
+        if docks:return None
+        dock = root.GroupControl(searchDepth=45, Compare=lambda c, d: approval_dock(c))
+        if not dock.Exists(1, 0.1):return None
+        where=self._claude_where(dock)
+        return None if where is None or where[0] else dock
 
     def _claude_ask(self, root, doc=None):
         """Where Claude asks something: its newest question card, or else the dock. In Claude's new window (10-26) a
         question (AskUserQuestion) is a card among the messages (CLAUDE_QUESTION_CARD) and the dock holds only the message
         box; read in the dock alone, the phone showed no question at all, with the conversation on screen all along
         (10-26 22:00-22:17), and none could be answered from it. A card with no button left to press is passed over.
+        A side chat's card is passed over too (11-17): picking one there would answer the side chat, not the phone's
+        session.
         doc: the conversation, to look in it alone (one question to Windows) rather than the whole window."""
         try:
             for card in reversed(self._find_class(doc if doc is not None else root, CLAUDE_QUESTION_CARD)):
+                where=self._claude_where(card)
+                if where is None or where[0]:continue
                 if question_card(card) and any(button.IsEnabled for button in self._find(card, "ButtonControl")):
                     return card
         except Exception:
@@ -2053,7 +2151,8 @@ class Desktop:
             else:
                 self._send_claude(item, text, images, replace)
         except ChatError as exc:  # the phone shows it too, but a failed send should be in the log
-            self.log(f"没发给 {name}「{item['title']}」（{time.time() - started:.1f} 秒）：{exc}")
+            self.log(f"没发给 {name}「{item['title']}」（{time.time() - started:.1f} 秒）：{exc}"
+                     + (f"；{exc.detail}" if getattr(exc, 'detail', '') else ''))
             raise
         self.log(f"发给 {name}「{item['title']}」：{one_line(text, 40)}（{time.time() - started:.1f} 秒提交）")
         return {"ok": True, "pressed": True, "offset": offset, "running": summary(item).get("status") == "running",
@@ -2213,8 +2312,7 @@ class Desktop:
                         self._paste_claude_image(hwnd,root,item,edit,image['path'],index)
                     doc,edit=self._claude_verified_prompt(root,item['id'])
                     if self._claude_image_count(edit)!=len(images):raise InputNotSubmitted('Claude 附件数量已变化，尚未发送')
-                controls=[c for c in self._find(doc,'ButtonControl','Send') if not c.IsOffscreen and c.IsEnabled]
-                if len(controls)!=1:raise InputNotSubmitted('没有唯一可用的 Claude 发送按钮，尚未发送')
+                button=self._claude_send_button(doc,edit,item['id'])
                 require_send_desktop()
                 _,edit=self._claude_verified_prompt(root,item['id'])
                 if not self._same_input(self._value(edit),text):raise InputNotSubmitted('提交前输入内容已变化，尚未发送')
@@ -2222,7 +2320,7 @@ class Desktop:
             except Exception as exc:  # the window changed under UI Automation before Send was pressed
                 raise InputNotSubmitted('Claude 界面正在变化，尚未发送；手机副本已保留') from exc
             try:
-                pattern=controls[0].GetInvokePattern()
+                pattern=button.GetInvokePattern()
                 if pattern is None:raise InputNotSubmitted('Claude 发送按钮不支持可靠提交，尚未发送')
                 if pattern.Invoke() is False:raise ChatError('Claude 发送按钮结果未确认，请先核对，不会重复提交')
             except InputNotSubmitted:raise
@@ -2419,9 +2517,8 @@ class Desktop:
             phase('claude_verify','核对输入内容和发送按钮')
             doc,edit=self._claude_verified_prompt(root,'__new__')
             if not ready(root) or not self._same_input(self._value(edit),text) or self._claude_image_count(edit)!=len(images) or not exact_folder(root,hwnd):raise InputNotSubmitted('新对话内容发生变化，尚未发送')
-            controls=[c for c in self._find(doc,'ButtonControl','Send') if c.IsEnabled and not c.IsOffscreen]
-            if len(controls)!=1:raise InputNotSubmitted('Claude 新对话发送按钮尚未就绪')
-            pattern=controls[0].GetInvokePattern()
+            button=self._claude_send_button(doc,edit,'__new__')
+            pattern=button.GetInvokePattern()
             if pattern is None:raise InputNotSubmitted('Claude 发送按钮暂不可操作')
             require_send_desktop();dispatched()
             phase('claude_invoke','提交给 Claude')
