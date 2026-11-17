@@ -212,6 +212,87 @@ final class ScreenshotTour: XCTestCase {
         app.terminate()
     }
 
+    /// 11-17: reading above while output arrives (user, iPhone 0.7.4: every conversation went back to the bottom within
+    /// a second). With -TeleplyDemoLive the demo page gets a frame every half second and a yellow probe line (follow,
+    /// near the bottom, unseen, scroll phase, frame count, then what last moved the page). A picture at each step, and
+    /// the probe's words beside it.
+    @MainActor func testScrollHold() throws {
+        continueAfterFailure = true
+        let app = launch(appearance: "light", extra: ["-TeleplyDemo", "-TeleplyDemoLive"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        if connect.waitForExistence(timeout: 5) { connect.tap() }
+        let search = app.textFields["搜索对话标题或文件夹"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10), "the list's search never showed")
+        search.tap()
+        search.typeText("performance\n")
+        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "长会话性能示例")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "the 200-message sample never showed")
+        row.tap()
+        XCTAssertTrue(app.staticTexts["scroll-probe"].firstMatch.waitForExistence(timeout: 10), "the probe line never showed")
+        sleep(3)
+        probeShot(app, "30-scroll-0-opened")
+        // A slow drag down by most of the screen, and the finger lifts without a fling. A third of the screen moved the
+        // simulator's page only about 100 points (Codemagic 6afbb0ad), and once less than the 48 that count as the
+        // bottom (6afbbbab), where following again is right; this one has to end well above it.
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.20))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
+        upper.press(forDuration: 0.1, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
+        probeShot(app, "30-scroll-1-released")
+        sleep(2)
+        probeShot(app, "30-scroll-2-two-seconds")
+        // The user's iPhone (11-17): at rest after a drag up, the page took itself for near the bottom and went back.
+        let afterDrag = app.staticTexts["scroll-probe"].firstMatch.label
+        XCTAssertTrue(afterDrag.hasPrefix("follow N"), "a drag up was pulled back to the bottom: \(afterDrag)")
+        // Two ordinary flings further back.
+        app.swipeDown()
+        app.swipeDown()
+        sleep(1)
+        probeShot(app, "30-scroll-3-flung")
+        sleep(3)
+        probeShot(app, "30-scroll-4-four-seconds")
+        let afterFlings = app.staticTexts["scroll-probe"].firstMatch.label
+        XCTAssertTrue(afterFlings.hasPrefix("follow N"), "flings up were pulled back to the bottom: \(afterFlings)")
+        // Back down with flings the other way until the page is at its end, then a rest there: at the bottom it follows
+        // again. Four flings were not always enough to reach the end (6afbbe06 stopped 235 points short after farther
+        // flings up), so up to eight, stopping once the page follows.
+        for _ in 0..<8 where !app.staticTexts["scroll-probe"].firstMatch.label.hasPrefix("follow Y") {
+            app.swipeUp()
+            sleep(1)
+        }
+        sleep(2)
+        probeShot(app, "30-scroll-5-back-down")
+        let atBottom = app.staticTexts["scroll-probe"].firstMatch.label
+        XCTAssertTrue(atBottom.hasPrefix("follow Y near Y"), "back at the bottom the page did not follow again: \(atBottom)")
+        app.terminate()
+    }
+
+    /// A picture at once (no settling wait, unlike snap) and the probe line's words beside it.
+    @MainActor private func probeShot(_ app: XCUIApplication, _ page: String) {
+        let line = app.staticTexts["scroll-probe"].firstMatch
+        let words = line.exists ? line.label : "(no probe line)"
+        print("PROBE \(page): \(words.replacingOccurrences(of: "\n", with: " | "))")
+        let note = XCTAttachment(string: words)
+        note.name = page + "-probe"
+        note.lifetime = .keepAlways
+        add(note)
+        let screenshot = app.screenshot()
+        let system = ProcessInfo.processInfo.operatingSystemVersion
+        let name = "\(page)-light-iOS\(system.majorVersion).\(system.minorVersion)"
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        if let folder = ProcessInfo.processInfo.environment["SHOTS_DIR"], !folder.isEmpty {
+            let base = URL(fileURLWithPath: folder)
+            try? screenshot.pngRepresentation.write(to: base.appendingPathComponent(name + ".png"))
+            try? words.write(to: base.appendingPathComponent(name + ".txt"), atomically: true, encoding: .utf8)
+        }
+    }
+
     /// One short, slow drag up (about a quarter of the screen), for bringing what is just under the bottom edge into
     /// view without the fling a normal swipe adds.
     @MainActor private func scrollSlowly(_ app: XCUIApplication) {

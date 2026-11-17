@@ -25,6 +25,14 @@ struct ConversationView: View {
     @State private var pickAfterFiles = false
     /// The messages' roles, the pictures sent with them and the waiting cards, kept between redraws.
     @State private var memo = TimelineMemo()
+    /// DemoLive (11-17 scroll probe): what last moved or flagged the page, newest last.
+    @State private var trail: [String] = []
+    /// 开发者选项 → 显示滚动诊断: the probe line on a real phone too (11-17).
+    @AppStorage("TeleplyScrollProbe") private var probeSetting = false
+    /// When this page instance was made: a new time after a jump means the page itself was made anew.
+    @State private var born = Date()
+    /// Probe only: the scroll view's latest numbers (ProbeGeometry).
+    @State private var geo = ProbeGeometry()
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
 
@@ -109,23 +117,43 @@ struct ConversationView: View {
         .scrollPosition($position, anchor: .top)
         .defaultScrollAnchor(reading.following ? .bottom : .top, for: .sizeChanges)
         .scrollDismissesKeyboard(.interactively)
+        // Near the bottom: the end of what shows above the input card is within 48 points of the content's end. 11-17,
+        // measured on iOS 26.5: containerSize is only the height between the bars (606 of 956) while contentOffset is
+        // the top of the whole bounds, so the old sum (offset + container − bottom inset) stopped 350 points short of
+        // the end and the page never read as near the bottom. The visible rect is the whole bounds: less the bottom
+        // bar, its end is the content's end when the page is at the bottom.
         .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom >= geometry.contentSize.height - 48
+            geometry.visibleRect.maxY - geometry.contentInsets.bottom >= geometry.contentSize.height - 48
         } action: { _, bottom in
             nearBottom = bottom
+            probe(bottom ? "near" : "far")
+        }
+        // Probe only: the scroll view's own numbers, to see how it measures its bottom (11-17).
+        .onScrollGeometryChange(for: ProbeGeometry.self) { geometry in
+            ProbeGeometry(offset: Int(geometry.contentOffset.y), size: Int(geometry.contentSize.height),
+                          box: Int(geometry.containerSize.height), top: Int(geometry.contentInsets.top),
+                          bottom: Int(geometry.contentInsets.bottom), seenTop: Int(geometry.visibleRect.minY),
+                          seenBottom: Int(geometry.visibleRect.maxY))
+        } action: { _, value in
+            if probing { geo = value }
         }
         // The fingers themselves decide: starting to drag stops following at once (a programmatic scroll into
         // .animating does not). At rest near the bottom it follows again and finishes the scroll there.
         .onScrollPhaseChange { _, next in
             phase = next
+            probe(String(describing: next))
             if next == .tracking || next == .interacting {
                 reading = reading.dragged()
             } else if next == .idle, nearBottom {
                 reading = reading.opened(following: true)
                 position.scrollTo(edge: .bottom)
+                probe("idle↓")
             }
         }
         .background(Palette.page)
+        .overlay(alignment: .top) { if probing { probeLine } }
+        .onAppear { probe("appear") }
+        .onDisappear { probe("gone") }
         .safeAreaBar(edge: .top) { notes(control: control) }
         .safeAreaBar(edge: .bottom) {
             VStack(spacing: 0) {
@@ -149,6 +177,7 @@ struct ConversationView: View {
             guard $0 > 0 else { return }
             reading = reading.sent()
             withAnimation(.easeOut(duration: 0.3)) { position.scrollTo(edge: .bottom) }
+            probe("sent↓")
         }
         .onChange(of: model.messages.first?.id) { keepPlace() }
         .sheet(item: $selecting) { message in SelectTextSheet(text: MarkdownReader.tidy(message.text)) }
@@ -330,11 +359,14 @@ struct ConversationView: View {
         if let anchor = model.anchor, model.messages.contains(where: { $0.id == anchor.message }) {
             position.scrollTo(id: anchor.message, anchor: .top)
             reading = reading.opened(following: false)
+            probe("restore@")
         } else {
             position.scrollTo(edge: .bottom)
             reading = reading.opened(following: !model.newerAvailable)
+            probe("restore↓")
         }
-        nearBottom = reading.following
+        // nearBottom is the scroll view's own measure only. Set here by hand (until 11-17) it stayed true while the
+        // measure never changed, and every drag up went back to the bottom when the finger stopped (the user's iPhone).
         restored = true
     }
 
@@ -343,6 +375,7 @@ struct ConversationView: View {
         guard restored, !model.messages.isEmpty else { return }
         if reading.following && !model.newerAvailable && phase == .idle {
             position.scrollTo(edge: .bottom)
+            probe("follow↓")
         } else {
             reading = reading.arrived(newer: model.newerAvailable, scrolling: phase != .idle)
         }
@@ -355,7 +388,41 @@ struct ConversationView: View {
         keepTop = nil
         reading = reading.dragged()
         position.scrollTo(id: keep, anchor: .top)
+        probe("keep")
     }
+
+    /// The probe line is on: the simulator check (DemoLive) or 开发者选项 → 显示滚动诊断.
+    private var probing: Bool { DemoLive.on || probeSetting }
+
+    /// Probe only: notes what moved or flagged the page, the last ten (11-17 scroll probe).
+    private func probe(_ event: String) {
+        guard probing else { return }
+        trail = Array((trail + [event]).suffix(10))
+    }
+
+    /// Probe only: following, near the bottom, the unseen mark, the scroll phase, the frame count, the open count
+    /// (scrollRevision) and when this page was made, then what last moved the page (11-17).
+    private var probeLine: some View {
+        let flags = "follow \(reading.following ? "Y" : "N") near \(nearBottom ? "Y" : "N") unseen \(reading.unseen ? "Y" : "N")"
+        let where_ = "phase \(String(describing: phase)) rev \(model.conversation.revision) sr \(model.scrollRevision)"
+        let made = "page " + born.formatted(date: .omitted, time: .standard)
+        let numbers = "off \(geo.offset) size \(geo.size) box \(geo.box) in \(geo.top)/\(geo.bottom) seen \(geo.seenTop)-\(geo.seenBottom)"
+        let line: String = flags + " " + where_ + " " + made + "\n" + numbers + "\n" + trail.joined(separator: " ")
+        return Text(verbatim: line)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(Color.black)
+            .padding(6)
+            .background(Color.yellow.opacity(0.9), in: RoundedRectangle(cornerRadius: 6))
+            .padding(.top, 140)
+            .padding(.horizontal, 12)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("scroll-probe")
+    }
+}
+
+/// 11-17 scroll probe: the scroll view's offset, content height, container height, insets and visible rect, in points.
+private struct ProbeGeometry: Equatable {
+    var offset = 0, size = 0, box = 0, top = 0, bottom = 0, seenTop = 0, seenBottom = 0
 }
 
 /// The context ring and ⋯ in the title bar, with what they open: 会话状态 (from the ring), 查找消息, 常用提示语 and

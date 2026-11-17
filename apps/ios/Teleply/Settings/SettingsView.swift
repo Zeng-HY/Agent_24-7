@@ -217,6 +217,8 @@ struct DeveloperView: View {
     @State private var speed = SpeedLog.shared
     @State private var network = DemoHolder.shared.network
     @State private var probing = false
+    /// 11-17: the conversation page's probe line (ConversationView), for "reading above is pulled back to the bottom".
+    @AppStorage("TeleplyScrollProbe") private var scrollProbe = false
 
     var body: some View {
         List {
@@ -293,6 +295,13 @@ struct DeveloperView: View {
                 }
             } header: {
                 Text("诊断测速")
+            }
+            Section {
+                Toggle("显示滚动诊断", isOn: $scrollProbe)
+            } header: {
+                Text("滚动诊断")
+            } footer: {
+                Text("对话页上方多一行黄字：是否跟着最新内容、离底部远近、手指在不在滑，以及刚才是什么把页面拉动了。查「往上翻被拉回底部」用，查完关掉。")
             }
             Section {
                 NavigationLink("最近的请求") { RecordsView() }
