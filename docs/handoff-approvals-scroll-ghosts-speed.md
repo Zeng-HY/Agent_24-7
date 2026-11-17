@@ -451,3 +451,11 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 再排一条 B「请只回复 OK」：数完后 Codex 自己把它发出，21:26:40 进了对话记录，回执按记录写「已送达」，Codex 回了 OK。
 
 9 项全过。这个对话留在 Codex 里，可以归档。另外看到：Codex 发出排队消息时，在字的末尾自己加了一个换行（遥应排进去的字没有），回执按请求编号认，不受影响。
+
+### 9.10 Windows dev.41 打包、装到用户这台电脑（11-17 晚，Claude）
+
+- 用户 11-17 说「打包并安装」。dev.41 = 提交 `0d73eb8`（只改版本号和发布说明），在分支 `codex-queue-v3` 上，比 dev.40（`0fa3e04`）多带修复 `30adeaa` 和真机记录 `b7e9cc7`。那时 main 在 `bbead30`，分支是它的直接后代，合并会是快进。
+- 在这个分支的工作树里打包（工作树里没有别人的改动）；从仓库拷来 `.toolchain\MicrosoftEdgeWebview2Setup.exe`；Python 用仓库的 `.venv`（3.11.8，PyInstaller 6.22.3）。打包前跑 `test_codex_open_check`、`test_codex_status`、`test_codex_approvals`、`test_codex_delivery`、`test_usage_limits`、`test_codex_queue_v3` 共 130 项，全过。
+- 安装包拷到仓库目录的 `dist/0.27.0-dev.41/AgentRemote-0.27.0-dev.41-Setup.exe`（旁边是 `windows-update.json`）：32,602,993 字节，SHA-256 `5113cc510e130ad3f9dece953a6780f8f4fd867d9b88abe79d5697ef30970093`；`build/windows-build.json` 记的提交是 `0d73eb8`。`--self-test`（空数据目录）退出码 0；包里的 `codex_control` 有 `QUEUE_CHANGED_VERSIONS`、`untaken`、`file_has`。没签更新清单，没传阿里云，没发 GitHub。
+- 装法：21:32:42 `taskkill /F /T` 关掉 dev.40 整棵进程树，静默安装（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`）退出码 0，装在原来的 `G:\AgentRemote`，`_internal\windows-build.json` 是 dev.41 / `0d73eb8`。用 `explorer.exe` 打开启动文件夹里的 `Agent Remote 027.lnk` 启动，21:32:53 起来，21:33:05 当天日志写「中转：连上了」。手机这边断了约 23 秒。
+- 还要在手机上看：那两条「送达状态待确认」按「核对」后变成「未接收」，能恢复草稿或移除；Codex 干活时再从手机发一条，显示「已排队」，能撤回。
