@@ -157,4 +157,21 @@ class UsageTest {
         attempt.done()
         assertEquals("id-2", attempt.id())
     }
+
+    /** 11-17 review: only the answers that say for certain nothing was used may drop the request id. */
+    @Test fun onlyTheCodesThatSayNothingWasUsedDropTheId() {
+        val attempt = ResetAttempt { "id" }
+        // A 500 or a relay hiccup may hide a reset that did go through: the same id has to be sent again.
+        assertTrue(attempt.keepsId(ServiceFailure(500)))
+        assertTrue(attempt.keepsId(ServiceFailure(500, detail = "电脑端出错，没确认这次用成了没有，请到电脑上的 Codex 里看用量")))
+        assertTrue(attempt.keepsId(ServiceFailure(502)))
+        assertTrue(attempt.keepsId(ServiceFailure(504)))
+        assertTrue(attempt.keepsId(ServiceFailure(409, "device_offline")))
+        assertTrue(attempt.keepsId(ServiceFailure(409, "reset_unconfirmed")))
+        assertTrue(attempt.keepsId(java.io.IOException("网络断了")))
+        // These say for certain nothing was used.
+        for (code in listOf("not_confirmed", "bad_request", "codex_unreachable", "codex_refused", "no_codex")) {
+            assertFalse(code, attempt.keepsId(ServiceFailure(409, code)))
+        }
+    }
 }

@@ -45,6 +45,7 @@ fun UsageSheet(vm: ReaderViewModel, onClose: () -> Unit) {
     var sending by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
     var noteError by remember { mutableStateOf(false) }
+    var noteMuted by remember { mutableStateOf(false) }
     var unconfirmed by remember { mutableStateOf(false) }
     var asking by remember { mutableStateOf(false) }
     var picked by remember { mutableStateOf<ResetCredit?>(null) }
@@ -70,6 +71,7 @@ fun UsageSheet(vm: ReaderViewModel, onClose: () -> Unit) {
         sending = true
         note = ""
         noteError = false
+        noteMuted = false
         unconfirmed = false
         picked = credit
         scope.launch {
@@ -79,7 +81,8 @@ fun UsageSheet(vm: ReaderViewModel, onClose: () -> Unit) {
                 val answer = vm.deviceCall("usage/codex-reset", body = body)
                 attempt.done()
                 note = answer.string("text")
-                noteError = answer.string("outcome") != "reset"
+                // Red is for failures only: a reset reads as ordinary text, the other outcomes in grey.
+                noteMuted = answer.string("outcome") != "reset"
                 val fresh = answer.optJSONObject("usage")
                 if (fresh != null) report = (report ?: UsageReport()).copy(codex = parseCodexUsage(fresh)) else load()
             } catch (e: Exception) {
@@ -91,6 +94,7 @@ fun UsageSheet(vm: ReaderViewModel, onClose: () -> Unit) {
                     note = e.message ?: "没成功"
                 }
                 noteError = true
+                noteMuted = false
             }
             sending = false
         }
@@ -103,7 +107,11 @@ fun UsageSheet(vm: ReaderViewModel, onClose: () -> Unit) {
         }
         if (loading && report == null) Text("读取中…", style = MaterialTheme.typography.note, color = p.muted)
         if (error.isNotBlank()) Text(error, style = MaterialTheme.typography.note, color = p.error)
-        if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.note, color = if (noteError) p.error else p.muted)
+        if (note.isNotBlank()) Text(note, style = MaterialTheme.typography.note, color = when {
+            noteError -> p.error
+            noteMuted -> p.muted
+            else -> p.text
+        })
         if (sending) Text("正在用…", style = MaterialTheme.typography.note, color = p.muted)
         if (unconfirmed) PillButton("再试一次（不会多用）", { use(picked) }, enabled = !sending, modifier = Modifier.fillMaxWidth())
         report?.let { data ->
@@ -145,7 +153,7 @@ private fun CodexBlock(codex: CodexUsage, now: Long, sending: Boolean, zone: Zon
     }
     when {
         !codex.resets -> if (codex.source == "records") {
-            Text("重置次数要实时读到才显示，下拉刷新试试", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = p.muted)
+            Text("重置次数要实时读到才显示，点「刷新」再读一次", style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = p.muted)
         }
         codex.resetsAvailable == 0 -> Text("没有可用的重置次数", style = MaterialTheme.typography.note, color = p.muted)
         else -> {

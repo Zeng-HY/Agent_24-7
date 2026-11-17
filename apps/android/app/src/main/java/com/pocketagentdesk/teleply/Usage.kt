@@ -180,9 +180,17 @@ class ResetAttempt(private val create: () -> String = { UUID.randomUUID().toStri
     private var number: String? = null
     fun id(): String = number ?: create().also { number = it }
     fun done() { number = null }
-    /** Whether the same request id must be kept: the computer may have used the credit, or never answered at all. */
-    fun keepsId(e: Throwable): Boolean = when (e) {
-        is ServiceFailure -> e.code == "reset_unconfirmed"
-        else -> true
+
+    /**
+     * Whether the same request id must be kept. Only the codes that say for certain nothing was used lose it; every
+     * other failure (another code, no code, not a ServiceFailure at all: a 500, a 502/504 from the relay, a broken
+     * connection) keeps it, because the first try may have gone through and a new id could use a second credit.
+     */
+    fun keepsId(e: Throwable): Boolean =
+        !(e is ServiceFailure && e.code in ExplainedNotUsed)
+
+    private companion object {
+        /** The computer's own answers that mean it did not use the credit. */
+        val ExplainedNotUsed = setOf("not_confirmed", "bad_request", "codex_unreachable", "codex_refused", "no_codex")
     }
 }
