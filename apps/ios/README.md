@@ -1,6 +1,13 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
+
+## 0.7.4 构建 30：滚动诊断测试版（11-17，从 `ios-scroll-probe` 分支打的，不在 main 上）
+
+用户 11-17 说：装着 0.7.4（29）的 iPhone 上，所有对话往上翻一秒都停不住，总被拉回底部。0.7.4 的修复只有纯逻辑的单元测试，没在滑动的页面上测过。先在 Codemagic 模拟器上复现（`6afbb0ad`，UI 测试 `testScrollHold`，启动参数 `-TeleplyDemoLive` 让示例对话每半秒来一帧）：慢拖、用力划都停得住，出「有新消息」，**没复现**。所以打了这个测试版，只多一个开关：设置 → 开发者选项 → 「显示滚动诊断」。打开后对话页上方一行黄字：是否跟随、离底近不近、滑动阶段、帧数（rev）、打开次数（sr）、页面生成时间，以及最近是什么动了页面（`restore↓` 打开、`follow↓` 跟新内容、`idle↓` 停在底部附近、`sent↓` 发送、`keep` 加载更早消息、`appear`/`gone`）。构建 30（Codemagic `6afbb521`，`UPLOAD SUCCEEDED`），只进内部测试，没有提交审核。
+
+- 下一个从 main 打的构建号是 31；探针代码只在 `ios-scroll-probe` 分支上（`9663c77`、`139423b`），还没合进 main。
+- 模拟器上另查到一处：刚打开、停在最底部时，「离底近」却读成否（`onScrollGeometryChange` 那条算式），所以自己划回底部后不会重新跟随，要点「有新消息」。等用户真机截图找到主要原因后一起改。
 
 ## 0.7.4：Codex 批准、往上翻不被拉回、淡色旧消息、打开更快、500MB（11-16，构建 29 已传 TestFlight）
 
