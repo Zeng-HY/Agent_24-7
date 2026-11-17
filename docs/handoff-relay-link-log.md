@@ -253,4 +253,36 @@ Claude 复审后补了两处，只改 `relay_agent.py`、`relay_controller.py`�
 - `650290b` `电脑端：控制器自己停连接时也开始计断开时长；只有心跳超时才写成心跳超时`：3 个文件（`relay_agent.py`、`relay_controller.py`、`tests/test_relay_link_log.py`）。
 - 本节随后单独提交，只改本文件。
 
+### 9.8 中转读通知通道在回传时的心跳（11-17）
+
+**问题**：`Agent.stream()` 读完请求（meta 和 end）后不再调 `ws.receive()`。中转的 ping 到了电脑这头只是进了队列，aiohttp 不会回 pong（回 pong 只在 `receive()` 里做）。中转 10 秒收不到东西就关通道，所以中转读通知每 1–2 分钟断一次，本机服务 20–30 秒以上才开始回答的请求在手机上变成 502。
+
+**改法**（只改 `relay_agent.py`）：
+
+- 请求读完时起一个 `watch()` 任务，持续 `ws.receive()`；ping 由 aiohttp 在 `receive()` 里自动回。GET/HEAD 在读到 `end` 时开，POST 在 `body()` 读到 `end` 以后开，所以 POST 读正文时始终只有一个 `receive()`。
+- `receive()` 返回任何东西（CLOSE/CLOSED/ERROR/多余消息）或抛错，就取消正在回传的主任务；主任务被取消时 `response.close()`，马上关掉对本机服务的请求，不等下一块数据。
+- 回传结束或出错时在 `finally` 里取消并收掉 `watch()`。
+- `heartbeat=20`、32 个并发上限、消息格式都没改；没碰中转服务器代码。
+
+**测试**：新增 `tests/test_relay_stream_heartbeat.py`，4 项：
+
+1. `test_a_slow_get_answer_survives_the_relay_heartbeat`
+2. `test_a_slow_post_answer_survives_the_relay_heartbeat`
+3. `test_a_stream_with_a_long_gap_keeps_reading`
+4. `test_closing_the_relay_stream_stops_the_local_request_at_once`
+
+测试里把中转那条 stream WebSocket 的心跳在测试进程中临时改成 0.5 秒（`relay_transport.py` 里写的是 20，不能改服务器代码），本机服务故意慢 1.5 秒；同一个竞态不用等 30 秒。Agent 的 `heartbeat=20` 没动。
+
+旧代码（`a01a529`）上 4 项全失败（1 个 failure、3 个 error）；新代码 4 项全过：`stream-heartbeat-tests-old-code.log`、`stream-heartbeat-tests-new-code.log`。
+
+`tests.test_relay_v2` + `tests.test_relay_link_log` 37 项全过。
+
+全量：877 项，1 失败、22 错误、6 跳过（378.675s）；`ERROR:`/`FAIL:` 清单和 9.7 的 23 条逐行比对没有差异（`after-stream-fix-failures.txt`）。这一轮全量第一次跑时撞上别的会话正在改 `codex_control.py`，多出 14 个 `test_codex_open_check` 错误；那 14 项单独重跑全过，重跑全量后只剩原来的 22 个 Playwright 错误和 1 个 `test_open_speed` 失败（原始输出 `after-stream-fix-all-tests-mid-edit-codex.log` 和 `after-stream-fix-all-tests.log`）。
+
+提交：
+
+- `f810484` `电脑端：转发回答时继续读中转通道，回答慢不再被中转心跳掐断`：2 个文件（`relay_agent.py`、新增 `tests/test_relay_stream_heartbeat.py`）。
+- 本节随后单独提交，只改本文件。
+
+
 
