@@ -70,8 +70,11 @@ class Service:
         self.app.on_cleanup.append(self.close)
 
     async def stopping(self,app):
-        # before aiohttp waits on and cancels the open handlers: the computers' links that end now say why
+        # The listening socket is shut by now, so nobody gets in until this process is gone. Cut the computers' links
+        # at once: their requests then end within a second. Left open, aiohttp waited shutdown_timeout on them twice
+        # over (11-17: with the default 60 s a restart sat about 90 s, until systemd killed it).
         self.hub.stopping()
+        await asyncio.gather(*(self.hub.disconnect(ident,'中转在关闭') for ident in list(self.hub.connections)))
 
     async def close(self,app):
         self.hub.stopping()
@@ -405,7 +408,8 @@ def main():
     os.umask(0o077)
     store=Identity(args.state,int(os.getenv('AR_ACCOUNT_LIMIT','20')),int(os.getenv('AR_DEVICE_LIMIT','3')))
     service=Service(args.origin,store,trusted_proxy=args.trusted_proxy,aliases=args.alias_origin,legacy_origin=args.legacy_origin)
-    web.run_app(service.app,host='127.0.0.1',port=args.port,access_log=None,print=None)
+    # what is still open 5 s into a stop is cut (an old FRP computer's stream, a long upload); see stopping()
+    web.run_app(service.app,host='127.0.0.1',port=args.port,access_log=None,print=None,shutdown_timeout=5)
 
 
 if __name__=='__main__': main()

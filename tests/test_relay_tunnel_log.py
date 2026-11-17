@@ -105,11 +105,12 @@ class TunnelLogTests(unittest.IsolatedAsyncioTestCase):
         await writer.drain()
         return reader,writer
 
-    async def phone(self,path,accept='application/json'):
+    async def phone(self,path,accept='application/json',port=None):
         """A phone's request on a connection of its own, which the test can hang up."""
-        reader,writer=await asyncio.open_connection('127.0.0.1',self.port)
+        port=port or self.port
+        reader,writer=await asyncio.open_connection('127.0.0.1',port)
         self.raw.append(writer)
-        writer.write(f'GET /d/{self.device}{path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n'
+        writer.write(f'GET /d/{self.device}{path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n'
                      f'Cookie: {COOKIE}={self.token}\r\nAccept: {accept}\r\n\r\n'.encode())
         await writer.drain()
         return reader,writer
@@ -183,6 +184,27 @@ class TunnelLogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'tunnel: busy {self.end} -> 之后 1 分钟里又拒了 2 个手机请求（503）',lines(seen)[0])
         self.assertEqual(lines(seen)[-1],f'tunnel: drop {self.end} -> 电脑断开了（中转在关闭），这次连了 N 秒')
         self.assertEqual(service.hub.busy,{})
+
+    async def test_a_relay_with_a_computer_and_a_phone_stream_open_stops_within_seconds(self):
+        # The listening socket shuts first, so every second of a stop keeps phones out. With a computer connected,
+        # aiohttp waited shutdown_timeout twice over: 6 s here, about 90 s on the server (60 s each, then systemd).
+        service=Service('https://relay.test',self.store,Mail())
+        runner=web.AppRunner(service.app,access_log=None,shutdown_timeout=3);await runner.setup()
+        site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+        port=site._server.sockets[0].getsockname()[1]
+        origin='http://127.0.0.1:'+str(port);service.origin=origin;service.authority='127.0.0.1:'+str(port)
+        try:
+            self.tasks.append(asyncio.create_task(Agent(origin,self.key,self.local_port,'local-0',test_http=True).run()))
+            await self.until(lambda:self.device in service.hub.connections)
+            reader,_=await self.phone('/events','text/event-stream',port)
+            await asyncio.wait_for(reader.readuntil(b'data: first'),5)
+        except BaseException:
+            await runner.cleanup();raise
+        with self.assertLogs('relay.tunnel','INFO') as seen:
+            started=time.monotonic()
+            await runner.cleanup()
+            self.assertLess(time.monotonic()-started,2.5)
+        self.assertIn(f'tunnel: drop {self.end} -> 电脑断开了（中转在关闭），这次连了 N 秒，断开时开着 1 个请求',lines(seen))
 
     async def test_a_busy_computer_is_written_at_most_once_a_minute_with_how_many_were_turned_away(self):
         await self.connect_agent()
