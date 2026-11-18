@@ -459,3 +459,10 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 安装包拷到仓库目录的 `dist/0.27.0-dev.41/AgentRemote-0.27.0-dev.41-Setup.exe`（旁边是 `windows-update.json`）：32,602,993 字节，SHA-256 `5113cc510e130ad3f9dece953a6780f8f4fd867d9b88abe79d5697ef30970093`；`build/windows-build.json` 记的提交是 `0d73eb8`。`--self-test`（空数据目录）退出码 0；包里的 `codex_control` 有 `QUEUE_CHANGED_VERSIONS`、`untaken`、`file_has`。没签更新清单，没传阿里云，没发 GitHub。
 - 装法：21:32:42 `taskkill /F /T` 关掉 dev.40 整棵进程树，静默安装（`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`）退出码 0，装在原来的 `G:\AgentRemote`，`_internal\windows-build.json` 是 dev.41 / `0d73eb8`。用 `explorer.exe` 打开启动文件夹里的 `Agent Remote 027.lnk` 启动，21:32:53 起来，21:33:05 当天日志写「中转：连上了」。手机这边断了约 23 秒。
 - 还要在手机上看：那两条「送达状态待确认」按「核对」后变成「未接收」，能恢复草稿或移除；Codex 干活时再从手机发一条，显示「已排队」，能撤回。
+
+### 9.11 dev.41 发到阿里云和 GitHub（11-18，Claude）
+
+- 用户 11-18 说「发布」。main 前一晚已推到 GitHub（`d9b1319`，含 dev.41 的 `0d73eb8`）。
+- **阿里云**：`.toolchain\release-venv\Scripts\python.exe deploy\updates\publish.py windows --dist dist/0.27.0-dev.41`，签了清单（`dist/0.27.0-dev.41/windows-update.json.sig`），安装包传到 `windows/`，清单和签名传到 `windows/dev/`，退出码 0。从阿里云下回安装包：32,602,993 字节，SHA-256 `5113cc51…` 对得上。用应用自己的 `relay_updates.check_aliyun` 以 dev.40 的身份核对：拿到 dev.41 / build 41，签名验过；以 dev.41 的身份核对：没有更新的。**装了测试版的电脑（dev.37 起）现在检查更新都会看到 dev.41**，那位安卓用户的电脑也在内。
+- **GitHub**：预发布 [`windows-v0.27.0-dev.41`](https://github.com/Zeng-HY/Agent_24-7/releases/tag/windows-v0.27.0-dev.41)，指向 `0d73eb8`。照 dev.40 用 git 存着的登录（`git credential fill`，没打印）走 GitHub API：先建草稿，传安装包、`windows-update.json`、`.sig` 三个文件，GitHub 记下的大小和 SHA-256 和本地一致，再发出。说明用 `windows-release-notes.json` 里 dev.41 的那段（前面加「本版变化」和要点）。`relay_updates.check_github` 以 dev.40 的身份核对：拿到 dev.41，签名验过；`relay_updates.check`（阿里云优先）也拿到 dev.41。
+- 这份记录在 main 上本地提交，没推送。
