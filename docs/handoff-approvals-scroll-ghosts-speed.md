@@ -465,4 +465,7 @@ iOS：只写代码和 TeleplyCore 测试，本机没有 Swift 工具链，**没�
 - 用户 11-18 说「发布」。main 前一晚已推到 GitHub（`d9b1319`，含 dev.41 的 `0d73eb8`）。
 - **阿里云**：`.toolchain\release-venv\Scripts\python.exe deploy\updates\publish.py windows --dist dist/0.27.0-dev.41`，签了清单（`dist/0.27.0-dev.41/windows-update.json.sig`），安装包传到 `windows/`，清单和签名传到 `windows/dev/`，退出码 0。从阿里云下回安装包：32,602,993 字节，SHA-256 `5113cc51…` 对得上。用应用自己的 `relay_updates.check_aliyun` 以 dev.40 的身份核对：拿到 dev.41 / build 41，签名验过；以 dev.41 的身份核对：没有更新的。**装了测试版的电脑（dev.37 起）现在检查更新都会看到 dev.41**，那位安卓用户的电脑也在内。
 - **GitHub**：预发布 [`windows-v0.27.0-dev.41`](https://github.com/Zeng-HY/Agent_24-7/releases/tag/windows-v0.27.0-dev.41)，指向 `0d73eb8`。照 dev.40 用 git 存着的登录（`git credential fill`，没打印）走 GitHub API：先建草稿，传安装包、`windows-update.json`、`.sig` 三个文件，GitHub 记下的大小和 SHA-256 和本地一致，再发出。说明用 `windows-release-notes.json` 里 dev.41 的那段（前面加「本版变化」和要点）。`relay_updates.check_github` 以 dev.40 的身份核对：拿到 dev.41，签名验过；`relay_updates.check`（阿里云优先）也拿到 dev.41。
+- **手机上核对过**（11-18）：用户说按「核对」以后，那两条变成了「未接收」。电脑上的发送记录（`attachments\delivery.sqlite`，只读查看）里，它们（对话 `01a1e40d…`，11-17 17:18:40 的 `c4771a4c…`、17:31:00 的 `04027bf9…`）都是 `rejected`，原因是「这条没有送到 Codex：它的排队里没有，对话记录里也没有…」。
+- 同时看到还有一条一样的：11-15 23:52:26 从手机排队发的 `47b983db…`（对话 `01a1d5ab…`），电脑上还停在 `dispatching`。Codex 的排队数据库里没有它，对话记录里也没有它的请求编号，就是没送到。回执只在手机来问时才判，所以要在手机上那个对话里按「核对」，它才会变成「未接收」。已告诉用户，还没按。
+- 「Codex 干活时从手机再发一条，显示『已排队』、能撤回」还没在手机上试过；电脑这边 11-17 真机试过（§9.9）。
 - 这份记录在 main 上本地提交，没推送。
