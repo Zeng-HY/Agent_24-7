@@ -64,7 +64,7 @@ ISLAND_ROTATE = ISLAND_LIFE - 45 * 60  # 11-01: an island this old ends and, if 
 BACKLOG_AFTER = 10 * 60         # events replayed after a break older than this only change the island (11-01)
 SNAPSHOT_MISS_AGE = 60           # a working conversation not in a snapshot whose last event is this old has stopped
 STEP_GAP = 15                    # seconds between two progress updates of one conversation (0.6.4)
-SNAPSHOT_MISSES = 2             # snapshots without a working conversation before it is taken as gone
+SNAPSHOT_MISSES = 2             # snapshots in a row without a working or waiting conversation before it is taken as gone
 GONE_REASONS = ('BadDeviceToken', 'DeviceTokenNotForTopic', 'Unregistered', 'ExpiredToken')
 KEEP = {'done': 86400, 'failed': 86400, 'waiting': 3 * 86400}  # how long Apple holds one for a phone that is away
 PHONES = 10                 # an account's phones; the one not seen for longest makes way for a new one
@@ -868,7 +868,8 @@ class Push:
 
     async def snapshot(self, device, event):
         """A computer's running and waiting conversations, every 60 s (0.6.4). Fills in what a restarted relay missed;
-        a working conversation absent from two snapshots in a row is taken as no longer running, silently."""
+        a working or waiting conversation absent from two snapshots in a row is taken as over, silently (waiting too
+        since 11-19)."""
         items = event.get('items')
         if not isinstance(items, list):
             return
@@ -917,21 +918,23 @@ class Push:
                 if key in seen:
                     self.snapshot_misses.pop((device, *key), None)
                     continue
-                if row['state'] == 'waiting':  # a waiting turn stays until its own event says otherwise
-                    continue
-                if now - (row['refreshed'] or 0) >= SNAPSHOT_MISS_AGE:
-                    # its last event is a minute old and the computer does not list it: it has stopped (11-01).
-                    # A turn that just started may not be in this snapshot yet, so only a young one waits for the next.
+                # A working one whose last event is a minute old has stopped (11-01); a turn that just started may not
+                # be in this snapshot yet, so only a young one waits for the next.
+                # 11-19: a waiting one goes too, though only after SNAPSHOT_MISSES snapshots in a row, never on its age
+                # alone. The computer lists every conversation it still counts as waiting (0.6.4), so one it leaves out
+                # waits no more. Before, it stayed until its own event: a DeepSeek turn whose approval the translation
+                # scheduler cancelled ended 'aborted', which the computer does not report, and the lock screen kept
+                # 等你 for it; it would have stayed a day.
+                old = row['state'] == 'working' and now - (row['refreshed'] or 0) >= SNAPSHOT_MISS_AGE
+                misses = 0 if old else self.snapshot_misses.get((device, *key), 0) + 1
+                if old or misses >= SNAPSHOT_MISSES:
                     db.execute('UPDATE push_conversations SET state="gone",refreshed=?,step="" '
                                'WHERE device=? AND app=? AND chat=?', (now, device, *key))
                     self.snapshot_misses.pop((device, *key), None)
-                    continue
-                misses = self.snapshot_misses.get((device, *key), 0) + 1
-                self.snapshot_misses[(device, *key)] = misses
-                if misses >= SNAPSHOT_MISSES:
-                    db.execute('UPDATE push_conversations SET state="gone",refreshed=?,step="" '
-                               'WHERE device=? AND app=? AND chat=?', (now, device, *key))
-                    self.snapshot_misses.pop((device, *key), None)
+                    log.info('push: snapshot %s：%s %s 不在电脑的清单里，算结束（原来%s）', chat_tail(device), key[0],
+                             chat_tail(key[1]), '等你' if row['state'] == 'waiting' else '在干活')
+                else:
+                    self.snapshot_misses[(device, *key)] = misses
             for conv in list(self.snapshot_misses):
                 if conv[0] == device and (conv[1], conv[2]) in seen:
                     self.snapshot_misses.pop(conv, None)

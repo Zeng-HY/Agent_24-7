@@ -443,7 +443,7 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
 
 - **时间**：电脑报的 `running.since`、`done/failed.started/ended` 都来自记录；中转 `remember()` 优先用它们，没有才退回现在的做法。岛的 `ended` 让「用了 N 分」在结束后不再变长；没有对话在动时，`aggregate()` 带上刚结束的那一个（`peers` 里一行，`working/waiting=0`），锁屏卡片显示它的标题和真实用时。
 - **电脑读法**：每个对话文件记住上次读到的位置，变长只读新增部分；第一次往回读最多 64MB 找最近一次开始和结束。电脑启动或中转重新连上时，正在跑的轮次用真实开始时间再报一次；只对已经结束的轮次不补报。记录停在「running」但 20 分钟没有新内容，不当成在干活。
-- **快照**：`{"kind":"snapshot","items":[…]}`，有对话在跑时每 60 秒（以及刚启动、刚连上中转）发一次；中转用它补上漏掉的对话，连续两次快照都没有、状态又不是等你的，记成 `gone`（不响、不补记录）。快照和进度用 `Feed.publish(keep=False)`，不留给断线补读。
+- **快照**：`{"kind":"snapshot","items":[…]}`，有对话在跑时每 60 秒（以及刚启动、刚连上中转）发一次；中转用它补上漏掉的对话，连续两次快照都没有的，记成 `gone`（不响、不补记录）。11-19 起「等你」的也这样撤；原来等你的要等它自己的事件，被停掉的 DeepSeek 对话因此在锁屏上挂了一整天，见 `handoff-island-and-duplicates.md` 第 10 节。快照和进度用 `Feed.publish(keep=False)`，不留给断线补读。
 - **远程开岛**：中转不再靠内存里的 `self.starts`，`sweep_islands()` 查 `push_conversations` 里「在干活/等你超过 60 秒、这台电脑还没有岛」的，中转重启也能开。
 - **进度**：`{"kind":"step","step":"edit|run|search|read"}`，电脑在动作变了才报、同一对话至少 15 秒；中转也守 15 秒，优先级 5、不带提醒。`content-state.step` 和每个 `peers[].step` 是可选字段，老手机解得开。
 - **状态接口**：`/api/<来源>/state`、`/api/chats`（`turn_started`、`turn_ended`、`step`）、`/api/chat`（顶层和每条消息的 `turn_started`/`turn_ended`、`step`）都带本轮时间；单位是 Unix 秒。网页和安卓界面这一步不改。

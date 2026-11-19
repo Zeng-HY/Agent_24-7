@@ -795,6 +795,50 @@ class IslandTests(RelayTests):
         self.assertEqual([(r['chat'], r['state']) for r in self.conversations()], [('c1', 'gone')])
         self.assertTrue(all('alert' not in s['payload']['aps'] for s in self.sender.sent))
 
+    async def test_two_snapshots_without_a_waiting_conversation_take_it_as_gone_silently(self):
+        # 11-19: a DeepSeek turn asked for an approval, the translation scheduler cancelled it and the turn ended
+        # 'aborted', which the computer does not report. Its snapshots stopped listing it, yet the lock screen kept
+        # 等你 for it; the row would only have aged out a day later.
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.computer(state='working', since=1761629700, turn=1761629700))
+        await self.service.push.sweep_islands()
+        await self.service.push.deliver(self.devices[0], {'id': 'r1', 'event': 'message', 'kind': 'running',
+                                                          'app': 'claude', 'chat': 'c1', 'since': 1761629700})
+        self.service.push.clock = lambda: 1761630011.0
+        await self.service.push.deliver(self.devices[0], {'id': 'w1', 'event': 'message', 'kind': 'waiting',
+                                                          'app': 'deepseek', 'chat': 'd1', 'started': 1761629800})
+        self.service.push.clock = lambda: 1761630040.0
+        await self.service.push.flush_islands()
+        self.sender.sent.clear()
+        still = [{'app': 'claude', 'chat': 'c1', 'state': 'working', 'started': 1761629700}]
+        self.service.push.clock = lambda: 1761630300.0  # its event is minutes old, yet one snapshot without it is not enough
+        await self.service.push.deliver(self.devices[0], {'id': 'snap1', 'event': 'message', 'kind': 'snapshot',
+                                                          'items': still})
+        self.assertEqual({r['chat']: r['state'] for r in self.conversations()}, {'c1': 'working', 'd1': 'waiting'})
+        self.service.push.clock = lambda: 1761630360.0
+        await self.service.push.deliver(self.devices[0], {'id': 'snap2', 'event': 'message', 'kind': 'snapshot',
+                                                          'items': still})
+        self.assertEqual({r['chat']: r['state'] for r in self.conversations()}, {'c1': 'working', 'd1': 'gone'})
+        self.service.push.clock = lambda: 1761630400.0
+        await self.service.push.flush_islands()
+        content = self.sender.sent[-1]['payload']['aps']['content-state']
+        self.assertEqual((content['state'], content['working'], content['waiting']), ('working', 1, 0))
+        self.assertEqual([p['chat'] for p in content['peers']], ['c1'])
+        self.assertTrue(all('alert' not in s['payload']['aps'] for s in self.sender.sent))
+
+    async def test_a_waiting_conversation_stays_while_the_snapshots_list_it_and_a_single_miss_is_forgiven(self):
+        self.service.push.clock = lambda: 1761630000.0
+        await self.post('activity', self.computer(state='working', since=1761629700, turn=1761629700))
+        await self.service.push.sweep_islands()
+        await self.service.push.deliver(self.devices[0], {'id': 'w1', 'event': 'message', 'kind': 'waiting',
+                                                          'app': 'deepseek', 'chat': 'd1', 'started': 1761629800})
+        listed = [{'app': 'deepseek', 'chat': 'd1', 'state': 'waiting', 'started': 1761629800}]
+        for n, items in enumerate((listed, [], listed, [], listed), 1):
+            self.service.push.clock = lambda n=n: 1761630000.0 + 60 * n
+            await self.service.push.deliver(self.devices[0], {'id': f'snap{n}', 'event': 'message', 'kind': 'snapshot',
+                                                              'items': items})
+            self.assertEqual([(r['chat'], r['state']) for r in self.conversations()], [('d1', 'waiting')], n)
+
     async def test_progress_is_priority_five_silent_and_at_most_every_fifteen_seconds(self):
         self.service.push.clock = lambda: 1761630000.0
         await self.post('activity', self.computer(state='working', since=1761629700, turn=1761629700))

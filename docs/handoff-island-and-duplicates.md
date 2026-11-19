@@ -301,3 +301,17 @@ sudo journalctl -u agent-relay-027 --since "2026-10-31 15:00" --until "2026-11-0
   - 全量 pytest（`.venv`）：703 项通过，3 项失败都是原来就有的——`test_mobile_polish` 找「复制命令」按钮的两项，和 `test_relay_mobile_layout::test_account_home_and_connection_panel`（在干净的 HEAD 临时工作树上复跑同样失败，确认与这次无关）。
   - iOS `swift test`：241 项全过（本机 Swift 6.4.1 + VS 2022 Build Tools；`--scratch-path` 指到工作区，没碰仓库里的 `.build`）。
   - 真机没验，等新版本装上以后照 7.2 做。
+
+---
+
+## 10. 锁屏卡片卡在「等你」（11-19，Claude）
+
+- **现象**：11-19 16:45 锁屏卡片写「3 个对话工作中 · 1 个对话等你定」，等你的那行是 DeepSeek「读取任务文件并写答案」；手机的对话列表里它早就空闲了。卡片上别的几行计时是新的（和列表差 3 秒），只有这一行是旧的。
+- **经过**（电脑当天日志，加 Harness 里这个对话的记录）：对话 `session-33b6870b…` 是翻译调度程序开的（工作区写权限，给 Q215 写答案），16:22:33 开始。16:23:37 它要求放开权限写答案文件（`approval/asked`），电脑 16:23:38 报中转「在等你选」。16:25:58 这个请求被取消（`approval/decided`，`cancelled`），这一轮的 `turn/end` 是 `aborted`（reason `user`）。调度程序另开了同名对话 `session-a9e70a32…` 重做，16:26:50 做完。
+- **原因**，两边各一半：
+  1. 电脑 `notify.py` 的 `_deepseek()`：一轮结束时只有 `reason.kind == completed` 才报「好了」。被停掉的（`aborted`）只是从电脑自己的「等你」里拿掉，什么都不报。
+  2. 中转 `relay_push.py` 的 `snapshot()`：「等你」的对话就算电脑的快照里已经没有它，也一直留着，要等它自己的事件（原来的「a waiting turn stays until its own event says otherwise」）。所以这一行要挂到 `push_conversations` 满 24 小时清理（第二天 16:23 左右）。翻译调度程序一天开几百个 DeepSeek 对话，每个要权限又被取消的都会这样挂一条。
+- **改法**：只改中转，提交在分支 `relay-waiting-gone`。「等你」的对话也按快照对账：连续两次快照都没有，就记成 `gone`，不响、不补记录。和干活中的不同，它不会因为「最后一次事件已过 60 秒」一次就被撤。依据：0.6.4（10-29）起，电脑每次快照都列出它还算在等你的对话；DeepSeek 的提问和批准、Codex 的批准每一轮都重新读，所以快照里没有，就是不再等了。电脑有对话在跑时每分钟发一次快照；最后一个对话结束时马上发一次空的，一分钟后再补一次。所以卡住的「等你」一两分钟内就会撤下。撤下时中转写一行日志：`push: snapshot …：deepseek …xxxxxx 不在电脑的清单里，算结束（原来等你）`（干活中的被撤也写这一行，写「原来在干活」）。
+- **测试**：`tests/test_relay_push.py` 新增两条。`test_two_snapshots_without_a_waiting_conversation_take_it_as_gone_silently`：一次快照没有，它仍是等你；两次以后变成 `gone`，岛变成 1 个工作中、0 个等你定，全程不带提醒。`test_a_waiting_conversation_stays_while_the_snapshots_list_it_and_a_single_miss_is_forgiven`：快照列着它就一直等你，中间只缺一次不算。第一条在旧代码上失败（d1 还是 `waiting`），所以它守得住这个毛病；新代码上 `test_relay_push` 62 项全过（5 项跳过，原来就跳过）。
+- **没改的**：电脑端没改，不用发 Windows 新版。另外读代码看到 Claude 的「等你」可能有反方向的毛病，没改，也没在真机上验证：Claude 提问后，电脑 2 秒内就把它从自己的「等你」里拿掉（记录读着还是在跑），按在干活列进快照；中转下一次快照（最多一分钟）就把它改回「工作中」。
+- **上线**：还没打包，也没上线。照第 8 节：在干净的临时工作树里用 `deploy/relay/pack-027.py` 打包；用户在 Workbench 运行 `update-027.sh`；永远不要运行 `switch-domain.py`。
