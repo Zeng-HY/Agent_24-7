@@ -270,6 +270,143 @@ final class ScreenshotTour: XCTestCase {
         app.terminate()
     }
 
+    /// 11-22: the iPad's two columns on the local demo: the list on the left, the conversation on the right, in
+    /// portrait and landscape; the sidebar over the list column; 会话状态 as a real popover; 对话文件 and a file;
+    /// 设置 as a form sheet. Words typed before turning the iPad have to still be in the box afterwards.
+    @MainActor func testIPadTour() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(appearance: "light", extra: ["-TeleplyDemo"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        snap(app, page: "40-ipad-login", variant: "ipad-portrait")
+
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        snap(app, page: "41-ipad-devices", variant: "ipad-portrait")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        XCTAssertTrue(connect.waitForExistence(timeout: 5), "测试电脑 A had no 连接")
+        connect.tap()
+        let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
+        sleep(1)
+        snap(app, page: "42-ipad-list", variant: "ipad-portrait")
+
+        // The sidebar still comes over the list column from the left.
+        let menu = app.buttons["打开导航"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), "the list's ☰ never showed")
+        menu.tap()
+        XCTAssertTrue(app.staticTexts["电脑遥控"].waitForExistence(timeout: 5), "the sidebar did not open")
+        snap(app, page: "43-ipad-drawer", variant: "ipad-portrait")
+        app.buttons["关闭导航"].firstMatch.tap()
+        sleep(1)
+
+        // Two columns: the conversation opens on the right, the list stays on the left.
+        first.tap()
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
+        XCTAssertTrue(menu.exists, "the list column left when the conversation opened")
+        sleep(1)
+        snap(app, page: "44-ipad-split", variant: "ipad-portrait")
+
+        // Words not sent survive turning the iPad.
+        let box = composer(app)
+        XCTAssertTrue(box.waitForExistence(timeout: 5), "the composer never showed")
+        if focus(box) {
+            box.typeText("转屏前写的字")
+            skipKeyboardTip(app)
+        }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(2)
+        snap(app, page: "45-ipad-split-landscape", variant: "ipad-landscape")
+        let kept = textBox(app, "输入消息")
+        XCTAssertTrue(kept.waitForExistence(timeout: 5), "the composer left after turning the iPad")
+        XCTAssertEqual(kept.value as? String, "转屏前写的字", "the draft did not survive turning the iPad")
+
+        // 会话状态 is a real popover on an iPad.
+        let ring = app.buttons.containing(NSPredicate(format: "label BEGINSWITH %@", "上下文已用约")).firstMatch
+        if ring.waitForExistence(timeout: 5) {
+            ring.tap()
+            if app.staticTexts["上下文"].waitForExistence(timeout: 5) {
+                snap(app, page: "46-ipad-runtime", variant: "ipad-landscape")
+            }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            sleep(1)
+        }
+
+        // 对话文件 and a file's page in the right column.
+        let more = app.buttons["对话菜单"].firstMatch
+        if more.waitForExistence(timeout: 5) {
+            more.tap()
+            let files = app.buttons["对话文件"].firstMatch
+            if files.waitForExistence(timeout: 5) {
+                files.tap()
+                let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "说明.md")).firstMatch
+                if note.waitForExistence(timeout: 10) {
+                    snap(app, page: "47-ipad-files", variant: "ipad-landscape")
+                    note.tap()
+                    if app.navigationBars["说明.md"].waitForExistence(timeout: 10) {
+                        sleep(1)
+                        snap(app, page: "48-ipad-file", variant: "ipad-landscape")
+                    }
+                    back(app)
+                }
+            }
+        }
+
+        // 设置 as a form sheet.
+        menu.tap()
+        let gear = app.buttons["设置"].firstMatch
+        if gear.waitForExistence(timeout: 5) {
+            gear.tap()
+            if app.navigationBars["设置"].waitForExistence(timeout: 5) {
+                snap(app, page: "49-ipad-settings", variant: "ipad-landscape")
+            }
+        }
+        app.terminate()
+    }
+
+    /// 11-22: an iPad window that is not wide (Split View, Slide Over, or the debug narrow switch): one page at a
+    /// time, the conversation pushed over the list exactly as on a phone, and the draft kept across a turn.
+    @MainActor func testIPadNarrow() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(appearance: "light", extra: ["-TeleplyDemo", "-TeleplyForceNarrow"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        if connect.waitForExistence(timeout: 5) { connect.tap() }
+        let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
+        snap(app, page: "50-ipad-narrow-list", variant: "ipad-narrow")
+
+        first.tap()
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
+        sleep(1)
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.buttons.element(boundBy: 0).exists, "the narrow window has no back button")
+        XCTAssertFalse(app.buttons["打开导航"].firstMatch.isHittable, "the narrow window kept the list beside the conversation")
+        snap(app, page: "51-ipad-narrow-chat", variant: "ipad-narrow")
+
+        let box = composer(app)
+        if box.waitForExistence(timeout: 5), focus(box) {
+            box.typeText("窄窗口的字")
+            skipKeyboardTip(app)
+        }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(2)
+        snap(app, page: "52-ipad-narrow-landscape", variant: "ipad-narrow")
+        XCTAssertEqual(textBox(app, "输入消息").value as? String, "窄窗口的字", "the draft did not survive turning the iPad")
+        back(app)
+        XCTAssertTrue(app.buttons["打开导航"].firstMatch.waitForExistence(timeout: 5), "back did not return to the list")
+        app.terminate()
+    }
+
     /// A picture at once (no settling wait, unlike snap) and the probe line's words beside it.
     @MainActor private func probeShot(_ app: XCUIApplication, _ page: String) {
         let line = app.staticTexts["scroll-probe"].firstMatch
