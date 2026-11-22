@@ -1,8 +1,9 @@
 #!/bin/bash
 # ios-native-check. "compile" (default): TeleplyCore tests plus a simulator build, to catch compile errors fast.
 # "shots": the same, then the screenshot tour on each simulator runtime in SHOT_RUNTIMES (default iOS 26.5;
-# add iOS-27-1 at the end of a phase) on a 6.9-inch iPhone, the size App Store Connect asks for. Pictures land in
-# build/shots.zip. A failed test does not wait for the simulator's diagnostics (they took 10 minutes in build 6adede40).
+# add iOS-27-1 at the end of a phase) and on each device in SHOT_DEVICES (default a 6.9-inch iPhone, the size App
+# Store Connect asks for; an iPad mini gives the iPad pictures). Pictures land in build/shots.zip. A failed test does
+# not wait for the simulator's diagnostics (they took 10 minutes in build 6adede40).
 set -euo pipefail
 source "$(dirname "$0")/ci-common.sh"
 
@@ -11,12 +12,12 @@ MODE="${1:-compile}"
 # side column moves the navigation bar (builds 6aded501, 6adeda5d). Add iOS-27-1 at the end of a phase.
 RUNTIMES="${SHOT_RUNTIMES:-iOS-26-5}"
 # The iPhone 17 Pro Max (6.9 inch, 1320 x 2868) by default: App Store screenshots must come from a 6.9-inch phone.
-# Where a runtime has none, pick_device takes another Pro Max, then an ordinary phone with a warning.
-DEVICE="${SHOT_DEVICE:-iPhone 17 Pro Max}"
+# iPad mini draws the iPad pictures; SHOT_DEVICES takes several devices, comma separated ("iPhone 17 Pro Max,iPad mini").
+DEVICES="${SHOT_DEVICES:-${SHOT_DEVICE:-iPhone 17 Pro Max}}"
+IFS=',' read -r -a DEVICE_LIST <<< "$DEVICES"
 # SHOT_ONLY: some of the tour's variants, e.g. "testLight testLargestText", to save build minutes after a small fix.
-ONLY=()
-for test in ${SHOT_ONLY:-}; do ONLY+=("-only-testing:TeleplyUITests/ScreenshotTour/$test"); done
-[ ${#ONLY[@]} -eq 0 ] && ONLY=("-only-testing:TeleplyUITests/ScreenshotTour")
+ONLY_TESTS=()
+for test in ${SHOT_ONLY:-}; do ONLY_TESTS+=("$test"); done
 
 cd "$IOS_DIR"
 mkdir -p build
@@ -52,12 +53,12 @@ pack_results() {
 }
 trap pack_results EXIT
 
-# The UDID of an available iPhone simulator on runtime $1, in this order: $DEVICE as the machine has it, or made
+# The UDID of an available simulator on runtime $1 whose name $2 asks for. iPhone: $2 as the machine has it, or made
 # new when the runtime supports it; another 6.9-inch phone (a Pro Max, newest first), had or made; else, as before,
 # an ordinary phone with a warning that the pictures are not the App Store size. Build #4 showed that a fixed
-# "iPhone 17" is refused on iOS 27.1 ("Incompatible device").
+# "iPhone 17" is refused on iOS 27.1 ("Incompatible device"). iPad: $2, else an iPad mini, else any iPad.
 pick_device() {
-  python3 - "$1" "$DEVICE" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 import json, re, subprocess, sys
 key, preferred = sys.argv[1], sys.argv[2]
 runtime_id = "com.apple.CoreSimulator.SimRuntime." + key
@@ -87,6 +88,36 @@ def make(kind, why):
     sys.stderr.write("Creating simulator %s on %s: %s\n" % (kind["name"], key, why))
     print(subprocess.check_output(["xcrun", "simctl", "create", "shots-" + key, kind["identifier"], runtime_id]).decode().strip())
     sys.exit(0)
+
+if preferred.startswith("iPad"):
+    pads = sorted((d for d in simctl("devices", "available")["devices"].get(runtime_id, []) if d["name"].startswith("iPad")), key=lambda d: d["name"])
+    pad_kinds = sorted((t for t in types if t["name"].startswith("iPad")), key=lambda t: t["name"])
+    sys.stderr.write("iPad simulators on %s: %s\n" % (key, ", ".join(d["name"] for d in pads)))
+    sys.stderr.write("iPad types %s supports: %s\n" % (key, ", ".join(t["name"] for t in pad_kinds)))
+    def use_pad(device, why):
+        sys.stderr.write("Using simulator %s (%s) on %s: %s\n" % (device["name"], device["udid"], key, why))
+        print(device["udid"])
+        sys.exit(0)
+    def make_pad(kind, why):
+        sys.stderr.write("Creating simulator %s on %s: %s\n" % (kind["name"], key, why))
+        print(subprocess.check_output(["xcrun", "simctl", "create", "shots-pad-" + key, kind["identifier"], runtime_id]).decode().strip())
+        sys.exit(0)
+    # 1. The preferred iPad, had or made.
+    for device in pads:
+        if device["name"] == preferred: use_pad(device, "the preferred iPad")
+    for kind in pad_kinds:
+        if kind["name"] == preferred: make_pad(kind, "the preferred iPad")
+    # 2. An iPad mini, had or made (its portrait window is the one to look at first).
+    for device in pads:
+        if device["name"].startswith("iPad mini"): use_pad(device, preferred + " is missing; an iPad mini")
+    for kind in pad_kinds:
+        if kind["name"].startswith("iPad mini"): make_pad(kind, preferred + " is missing; an iPad mini")
+    # 3. Any iPad.
+    if pads: use_pad(pads[0], "fallback")
+    if pad_kinds: make_pad(pad_kinds[0], "fallback")
+    sys.stderr.write("No iPad simulator for %s. Runtimes here: %s\n" % (runtime_id, ", ".join(r["identifier"] for r in runtimes)))
+    sys.exit(1)
+
 # 1. The preferred phone, had or made.
 for device in phones:
     if device["name"] == preferred: use(device, "the preferred phone")
@@ -118,14 +149,27 @@ XCTESTRUN=$(ls build/dd/Build/Products/*.xctestrun | head -n 1)
 
 rm -rf build/shots && mkdir -p build/shots
 for runtime in $RUNTIMES; do
-  udid=$(pick_device "$runtime")
-  xcrun simctl boot "$udid" 2>/dev/null || true  # already booted is fine
-  xcrun simctl bootstatus "$udid" -b
-  xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
-  TEST_RUNNER_SHOTS_DIR="$IOS_DIR/build/shots" xcodebuild test-without-building \
-    -xctestrun "$XCTESTRUN" -destination "id=$udid" \
-    "${ONLY[@]}" -collect-test-diagnostics never \
-    -resultBundlePath "build/shots-$runtime.xcresult" | xcbeautify
-  xcrun simctl shutdown "$udid" || true
+  for device in "${DEVICE_LIST[@]}"; do
+    udid=$(pick_device "$runtime" "$device")
+    xcrun simctl boot "$udid" 2>/dev/null || true  # already booted is fine
+    xcrun simctl bootstatus "$udid" -b
+    xcrun simctl status_bar "$udid" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+    # An iPad gets its own two pictures of the wide and the narrow layout; an iPhone runs the tour it always ran.
+    tests=()
+    if [ ${#ONLY_TESTS[@]} -gt 0 ]; then
+      for test in "${ONLY_TESTS[@]}"; do tests+=("-only-testing:TeleplyUITests/ScreenshotTour/$test"); done
+    elif [[ "$device" == iPad* ]]; then
+      tests=("-only-testing:TeleplyUITests/ScreenshotTour/testIPadTour"
+             "-only-testing:TeleplyUITests/ScreenshotTour/testIPadNarrow")
+    else
+      tests=("-only-testing:TeleplyUITests/ScreenshotTour")
+    fi
+    slug=$(echo "$device" | tr ' ' '-')
+    TEST_RUNNER_SHOTS_DIR="$IOS_DIR/build/shots" xcodebuild test-without-building \
+      -xctestrun "$XCTESTRUN" -destination "id=$udid" \
+      "${tests[@]}" -collect-test-diagnostics never \
+      -resultBundlePath "build/shots-$runtime-$slug.xcresult" | xcbeautify
+    xcrun simctl shutdown "$udid" || true
+  done
 done
 ls -1 build/shots

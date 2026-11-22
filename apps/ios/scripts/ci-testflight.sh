@@ -36,9 +36,10 @@ check_ipa() {
   [ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$plist")" = "false" ] || fail "encryption declaration"
   # iOS keeps the icon name inside CFBundleIcons (App Store Connect's ITMS-90713 checks it there).
   [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$plist")" = "AppIcon" ] || fail "app icon (CFBundleIcons)"
-  # iPhone only: once an App Store build supports iPad, later builds cannot drop it.
-  { [ "$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$plist")" = "1" ] &&
-    ! /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$plist" >/dev/null 2>&1; } || fail "iPhone only (UIDeviceFamily)"
+  # iPhone and iPad: once an App Store build supports iPad, later builds cannot drop it, so both must be in the
+  # package (and the widget extension must say the same as the app).
+  family() { /usr/libexec/PlistBuddy -c "Print :UIDeviceFamily:$2" "$1" 2>/dev/null || true; }
+  [ "$(family "$plist" 0)" = "1" ] && [ "$(family "$plist" 1)" = "2" ] || fail "device family (iPhone and iPad)"
   [ -f "$app/PrivacyInfo.xcprivacy" ] || fail "privacy manifest"
   # 遥应通知: the App Store profile must carry push (App ID capability on, profile made again after it), in the
   # production environment TestFlight uses; a token from any other would not reach the phone.
@@ -58,7 +59,7 @@ check_ipa() {
     "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" ] || fail "widget version"
   [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$extpl")" = "com.apple.widgetkit-extension" ] ||
     fail "widget extension point"
-  [ "$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$extpl")" = "1" ] || fail "widget iPhone only"
+  [ "$(family "$extpl" 0)" = "1" ] && [ "$(family "$extpl" 1)" = "2" ] || fail "widget device family (iPhone and iPad)"
   [ "$(/usr/libexec/PlistBuddy -c 'Print :NSSupportsLiveActivities' "$plist")" = "true" ] || fail "NSSupportsLiveActivities"
   echo "IPA checks passed for build $build"
 }

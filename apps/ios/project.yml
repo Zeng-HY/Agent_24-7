@@ -10,11 +10,11 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    MARKETING_VERSION: "0.7.6"
+    MARKETING_VERSION: "0.8.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "6.0"
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
-    TARGETED_DEVICE_FAMILY: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     LOCALIZATION_PREFERS_STRING_CATALOGS: YES
     DEAD_CODE_STRIPPING: YES
@@ -48,8 +48,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pocketagentdesk.teleply
         PRODUCT_NAME: Teleply
-        # iPhone only; XcodeGen's iOS app preset would set "1,2" here and override the project value.
-        TARGETED_DEVICE_FAMILY: "1"
+        # iPhone and iPad. XcodeGen's iOS app preset fills this in at the target level and would override the
+        # project value, so it is written here too; the extension and the UI tests follow the app.
+        TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_FILE: Teleply/Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -74,7 +75,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pocketagentdesk.teleply.island
         PRODUCT_NAME: TeleplyIslandWidget
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_FILE: TeleplyIslandWidget/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
@@ -92,7 +93,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pocketagentdesk.teleply.uitests
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
         TEST_TARGET_NAME: Teleply
