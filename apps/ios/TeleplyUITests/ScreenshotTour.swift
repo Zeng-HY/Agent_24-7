@@ -271,9 +271,9 @@ final class ScreenshotTour: XCTestCase {
         app.terminate()
     }
 
-    /// 11-22: the iPad's two columns on the local demo: the list on the left, the conversation on the right, in
-    /// portrait and landscape; the sidebar over the list column; 会话状态 as a real popover; 对话文件 and a file;
-    /// 设置 as a form sheet. Words typed before turning the iPad have to still be in the box afterwards.
+    /// 11-22: the iPad's two columns on the local demo, in portrait where the pictures come out right: the list on
+    /// the left, the conversation on the right; the sidebar over the list column; 会话状态 as a real popover; 对话文件
+    /// and a file; 本轮差异; 设置 as a form sheet. Words typed before turning the iPad have to survive turning it back.
     @MainActor func testIPadTour() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
         continueAfterFailure = true
@@ -282,25 +282,25 @@ final class ScreenshotTour: XCTestCase {
         let app = launch(appearance: "light", extra: ["-TeleplyDemo"])
         let enter = app.buttons["进入示例"]
         XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
-        snap(app, page: "40-ipad-login", variant: "ipad-portrait")
+        screenSnap(app, page: "40-ipad-login", variant: "ipad-portrait")
 
         enter.tap()
         XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
-        snap(app, page: "41-ipad-devices", variant: "ipad-portrait")
+        screenSnap(app, page: "41-ipad-devices", variant: "ipad-portrait")
         let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
         XCTAssertTrue(connect.waitForExistence(timeout: 5), "测试电脑 A had no 连接")
         connect.tap()
         let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
         sleep(1)
-        snap(app, page: "42-ipad-list", variant: "ipad-portrait")
+        screenSnap(app, page: "42-ipad-list", variant: "ipad-portrait")
 
         // The sidebar still comes over the list column from the left.
         let menu = app.buttons["打开导航"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "the list's ☰ never showed")
         menu.tap()
         XCTAssertTrue(app.staticTexts["电脑遥控"].waitForExistence(timeout: 5), "the sidebar did not open")
-        snap(app, page: "43-ipad-drawer", variant: "ipad-portrait")
+        screenSnap(app, page: "43-ipad-drawer", variant: "ipad-portrait")
         app.buttons["关闭导航"].firstMatch.tap()
         sleep(1)
 
@@ -309,9 +309,9 @@ final class ScreenshotTour: XCTestCase {
         XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
         XCTAssertTrue(menu.exists, "the list column left when the conversation opened")
         sleep(1)
-        snap(app, page: "44-ipad-split", variant: "ipad-portrait")
+        screenSnap(app, page: "44-ipad-split", variant: "ipad-portrait")
 
-        // Words not sent survive turning the iPad.
+        // Words not sent survive turning the iPad and coming back.
         let box = composer(app)
         XCTAssertTrue(box.waitForExistence(timeout: 5), "the composer never showed")
         if focus(box) {
@@ -319,18 +319,23 @@ final class ScreenshotTour: XCTestCase {
             skipKeyboardTip(app)
         }
         XCUIDevice.shared.orientation = .landscapeLeft
-        sleep(2)
-        snap(app, page: "45-ipad-split-landscape", variant: "ipad-landscape")
-        let kept = textBox(app, "输入消息")
-        XCTAssertTrue(kept.waitForExistence(timeout: 5), "the composer left after turning the iPad")
-        XCTAssertEqual(kept.value as? String, "转屏前写的字", "the draft did not survive turning the iPad")
+        sleep(3)
+        print("IPAD landscape app frame \(app.frame)")
+        let turned = textBox(app, "输入消息")
+        XCTAssertTrue(turned.waitForExistence(timeout: 5), "the composer left after turning the iPad")
+        XCTAssertEqual(turned.value as? String, "转屏前写的字", "the draft did not survive turning the iPad")
+        XCUIDevice.shared.orientation = .portrait
+        sleep(3)
+        XCTAssertEqual(textBox(app, "输入消息").value as? String, "转屏前写的字", "the draft did not survive turning back")
+        app.swipeDown()  // put the keyboard away
+        sleep(1)
 
         // 会话状态 is a real popover on an iPad.
         let ring = app.buttons.containing(NSPredicate(format: "label BEGINSWITH %@", "上下文已用约")).firstMatch
-        if ring.waitForExistence(timeout: 5) {
+        if ring.waitForExistence(timeout: 5), ring.isHittable {
             ring.tap()
             if app.staticTexts["上下文"].waitForExistence(timeout: 5) {
-                snap(app, page: "46-ipad-runtime", variant: "ipad-landscape")
+                screenSnap(app, page: "45-ipad-runtime", variant: "ipad-portrait")
             }
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             sleep(1)
@@ -338,33 +343,73 @@ final class ScreenshotTour: XCTestCase {
 
         // 对话文件 and a file's page in the right column.
         let more = app.buttons["对话菜单"].firstMatch
-        if more.waitForExistence(timeout: 5) {
-            more.tap()
-            let files = app.buttons["对话文件"].firstMatch
-            if files.waitForExistence(timeout: 5) {
-                files.tap()
-                let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "说明.md")).firstMatch
-                if note.waitForExistence(timeout: 10) {
-                    snap(app, page: "47-ipad-files", variant: "ipad-landscape")
-                    note.tap()
-                    if app.navigationBars["说明.md"].waitForExistence(timeout: 10) {
-                        sleep(1)
-                        snap(app, page: "48-ipad-file", variant: "ipad-landscape")
-                    }
-                    back(app)
-                }
+        XCTAssertTrue(more.waitForExistence(timeout: 5), "the conversation menu never showed")
+        more.tap()
+        let files = app.buttons["对话文件"].firstMatch
+        XCTAssertTrue(files.waitForExistence(timeout: 5), "the conversation menu had no 对话文件")
+        files.tap()
+        let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "说明.md")).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10), "对话文件 never listed 说明.md")
+        screenSnap(app, page: "46-ipad-files", variant: "ipad-portrait")
+        note.tap()
+        XCTAssertTrue(app.navigationBars["说明.md"].waitForExistence(timeout: 10), "the file's page never opened")
+        sleep(1)
+        screenSnap(app, page: "47-ipad-file", variant: "ipad-portrait")
+        back(app)
+
+        // 本轮差异, from the turn's 处理过程.
+        let process = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "处理过程")).firstMatch
+        XCTAssertTrue(process.waitForExistence(timeout: 5), "the conversation had no 处理过程")
+        if reach(app, process, up: false) {
+            process.tap()
+            let diff = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "本轮差异")).firstMatch
+            XCTAssertTrue(diff.waitForExistence(timeout: 5), "处理过程 had no 本轮差异")
+            if reach(app, diff) {
+                diff.tap()
+                XCTAssertTrue(app.navigationBars["本轮差异"].waitForExistence(timeout: 10), "本轮差异 never opened")
+                sleep(1)
+                screenSnap(app, page: "48-ipad-diff", variant: "ipad-portrait")
+                back(app)
             }
         }
 
         // 设置 as a form sheet.
         menu.tap()
         let gear = app.buttons["设置"].firstMatch
-        if gear.waitForExistence(timeout: 5) {
-            gear.tap()
-            if app.navigationBars["设置"].waitForExistence(timeout: 5) {
-                snap(app, page: "49-ipad-settings", variant: "ipad-landscape")
-            }
-        }
+        XCTAssertTrue(gear.waitForExistence(timeout: 5), "the sidebar had no 设置")
+        gear.tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5), "设置 never opened")
+        screenSnap(app, page: "49-ipad-settings", variant: "ipad-portrait")
+        app.terminate()
+    }
+
+    /// 11-22: the two columns on an iPad that starts in landscape. The app's own screenshot comes out turned in
+    /// landscape (Apple's forum 665859), so these use the screen's.
+    @MainActor func testIPadLandscape() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(2)
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(appearance: "light", extra: ["-TeleplyDemo"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        sleep(1)
+        print("IPAD landscape launch frame \(app.frame)")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        XCTAssertTrue(connect.waitForExistence(timeout: 5), "测试电脑 A had no 连接")
+        connect.tap()
+        let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
+        sleep(1)
+        screenSnap(app, page: "50-ipad-landscape-list", variant: "ipad-landscape")
+        first.tap()
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
+        sleep(1)
+        print("IPAD landscape split frame \(app.frame)")
+        screenSnap(app, page: "51-ipad-landscape-split", variant: "ipad-landscape")
         app.terminate()
     }
 
@@ -384,7 +429,7 @@ final class ScreenshotTour: XCTestCase {
         if connect.waitForExistence(timeout: 5) { connect.tap() }
         let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
-        snap(app, page: "50-ipad-narrow-list", variant: "ipad-narrow")
+        screenSnap(app, page: "52-ipad-narrow-list", variant: "ipad-narrow")
 
         first.tap()
         XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
@@ -392,7 +437,7 @@ final class ScreenshotTour: XCTestCase {
         let bar = app.navigationBars.firstMatch
         XCTAssertTrue(bar.buttons.element(boundBy: 0).exists, "the narrow window has no back button")
         XCTAssertFalse(app.buttons["打开导航"].firstMatch.isHittable, "the narrow window kept the list beside the conversation")
-        snap(app, page: "51-ipad-narrow-chat", variant: "ipad-narrow")
+        screenSnap(app, page: "53-ipad-narrow-chat", variant: "ipad-narrow")
 
         let box = composer(app)
         if box.waitForExistence(timeout: 5), focus(box) {
@@ -400,9 +445,12 @@ final class ScreenshotTour: XCTestCase {
             skipKeyboardTip(app)
         }
         XCUIDevice.shared.orientation = .landscapeLeft
-        sleep(2)
-        snap(app, page: "52-ipad-narrow-landscape", variant: "ipad-narrow")
+        sleep(3)
         XCTAssertEqual(textBox(app, "输入消息").value as? String, "窄窗口的字", "the draft did not survive turning the iPad")
+        app.swipeDown()  // put the keyboard away before the picture
+        sleep(1)
+        print("IPAD narrow landscape frame \(app.frame)")
+        screenSnap(app, page: "54-ipad-narrow-landscape", variant: "ipad-narrow")
         back(app)
         XCTAssertTrue(app.buttons["打开导航"].firstMatch.waitForExistence(timeout: 5), "back did not return to the list")
         app.terminate()
@@ -811,6 +859,22 @@ final class ScreenshotTour: XCTestCase {
     @MainActor private func snap(_ app: XCUIApplication, page: String, variant: String) {
         sleep(1)  // let the page finish rising into place (0.7 s, spec 5)
         let screenshot = app.screenshot()
+        let system = ProcessInfo.processInfo.operatingSystemVersion
+        let name = "\(page)-\(variant)-iOS\(system.majorVersion).\(system.minorVersion)"
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        if let folder = ProcessInfo.processInfo.environment["SHOTS_DIR"], !folder.isEmpty {
+            try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: folder).appendingPathComponent(name + ".png"))
+        }
+    }
+
+    /// The same picture taken from the screen: an iPad's own screenshot comes out turned (and partly black) in
+    /// landscape (Apple's forum 665859), while the screen's does not.
+    @MainActor private func screenSnap(_ app: XCUIApplication, page: String, variant: String) {
+        sleep(1)
+        let screenshot = XCUIScreen.main.screenshot()
         let system = ProcessInfo.processInfo.operatingSystemVersion
         let name = "\(page)-\(variant)-iOS\(system.majorVersion).\(system.minorVersion)"
         let attachment = XCTAttachment(screenshot: screenshot)

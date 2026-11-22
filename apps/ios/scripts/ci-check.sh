@@ -160,6 +160,7 @@ for runtime in $RUNTIMES; do
       for test in "${ONLY_TESTS[@]}"; do tests+=("-only-testing:TeleplyUITests/ScreenshotTour/$test"); done
     elif [[ "$device" == iPad* ]]; then
       tests=("-only-testing:TeleplyUITests/ScreenshotTour/testIPadTour"
+             "-only-testing:TeleplyUITests/ScreenshotTour/testIPadLandscape"
              "-only-testing:TeleplyUITests/ScreenshotTour/testIPadNarrow")
     else
       tests=("-only-testing:TeleplyUITests/ScreenshotTour")
