@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Walks the app on the local demo and keeps one screenshot per page and variant (plan: 云端检查): 登录 when the
