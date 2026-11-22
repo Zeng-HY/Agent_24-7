@@ -9,6 +9,7 @@ import XCTest
 /// with TEST_RUNNER_SHOTS_DIR on the xcodebuild line it is also written there.
 final class ScreenshotTour: XCTestCase {
     @MainActor func testLight() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .pad, "the iPhone tour; the iPad has its own tests")
         try tour(variant: "light", appearance: "light")
     }
 

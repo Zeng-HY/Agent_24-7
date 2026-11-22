@@ -11,6 +11,7 @@
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots -Only "testLight testLargestText"
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots -Device "iPad mini"
+  ./codemagic.ps1 -AppId <id> -Workflow ios-native-check -Mode shots -Devices "iPhone 17 Pro Max,iPad mini" -Only "testLight testIPadTour"
   ./codemagic.ps1 -AppId <id> -Workflow ios-native-testflight
   ./codemagic.ps1 -BuildId <id>        # follow a build already started, then download as above
 #>
@@ -24,6 +25,8 @@ param(
     [string]$Only = '',
     # The simulator to shoot on, e.g. "iPad mini"; empty keeps ci-check.sh's iPhone default.
     [string]$Device = '',
+    # Several simulators, comma separated ("iPhone 17 Pro Max,iPad mini"); the tour runs on each.
+    [string]$Devices = '',
     [string]$Branch = 'main',
     [string]$AppId = $env:TELEPLY_CODEMAGIC_APP,
     [string]$OutDir = (Join-Path $PSScriptRoot '..\build\codemagic'),
@@ -51,6 +54,7 @@ if ($BuildId) {
     if ($Runtimes) { $variables.SHOT_RUNTIMES = $Runtimes }
     if ($Only) { $variables.SHOT_ONLY = $Only }
     if ($Device) { $variables.SHOT_DEVICE = $Device }
+    if ($Devices) { $variables.SHOT_DEVICES = $Devices }
     $body = @{ appId = $AppId; workflowId = $Workflow; branch = $Branch; environment = @{ variables = $variables } } |
         ConvertTo-Json -Depth 5
     $buildId = (Invoke-RestMethod -Method Post -Headers $headers -ContentType 'application/json' -Body $body "$api/builds").buildId
