@@ -273,7 +273,7 @@ final class ScreenshotTour: XCTestCase {
 
     /// 11-22: the iPad's two columns on the local demo, in portrait where the pictures come out right: the list on
     /// the left, the conversation on the right; the sidebar over the list column; 会话状态 as a real popover; 对话文件
-    /// and a file; 本轮差异; 设置 as a form sheet. Words typed before turning the iPad have to survive turning it back.
+    /// and a file; 本轮差异; 设置 as a form sheet.
     @MainActor func testIPadTour() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
         continueAfterFailure = true
@@ -311,25 +311,6 @@ final class ScreenshotTour: XCTestCase {
         sleep(1)
         screenSnap(app, page: "44-ipad-split", variant: "ipad-portrait")
 
-        // Words not sent survive turning the iPad and coming back.
-        let box = composer(app)
-        XCTAssertTrue(box.waitForExistence(timeout: 5), "the composer never showed")
-        if focus(box) {
-            box.typeText("转屏前写的字")
-            skipKeyboardTip(app)
-        }
-        XCUIDevice.shared.orientation = .landscapeLeft
-        sleep(3)
-        print("IPAD landscape app frame \(app.frame)")
-        let turned = textBox(app, "输入消息")
-        XCTAssertTrue(turned.waitForExistence(timeout: 5), "the composer left after turning the iPad")
-        XCTAssertEqual(turned.value as? String, "转屏前写的字", "the draft did not survive turning the iPad")
-        XCUIDevice.shared.orientation = .portrait
-        sleep(3)
-        XCTAssertEqual(textBox(app, "输入消息").value as? String, "转屏前写的字", "the draft did not survive turning back")
-        app.swipeDown()  // put the keyboard away
-        sleep(1)
-
         // 会话状态 is a real popover on an iPad.
         let ring = app.buttons.containing(NSPredicate(format: "label BEGINSWITH %@", "上下文已用约")).firstMatch
         if ring.waitForExistence(timeout: 5), ring.isHittable {
@@ -337,15 +318,21 @@ final class ScreenshotTour: XCTestCase {
             if app.staticTexts["上下文"].waitForExistence(timeout: 5) {
                 screenSnap(app, page: "45-ipad-runtime", variant: "ipad-portrait")
             }
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            // Off the popover onto the conversation's title bar: inert, and not a list row that would open another.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.06)).tap()
+            _ = app.staticTexts["上下文"].waitForNonExistence(timeout: 3)
             sleep(1)
         }
 
         // 对话文件 and a file's page in the right column.
         let more = app.buttons["对话菜单"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 5), "the conversation menu never showed")
-        more.tap()
         let files = app.buttons["对话文件"].firstMatch
+        more.tap()
+        if !files.waitForExistence(timeout: 3) {
+            // The first tap can be taken by the popover that was just closing; one more opens the menu.
+            more.tap()
+        }
         XCTAssertTrue(files.waitForExistence(timeout: 5), "the conversation menu had no 对话文件")
         files.tap()
         let note = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "说明.md")).firstMatch
@@ -380,6 +367,43 @@ final class ScreenshotTour: XCTestCase {
         gear.tap()
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5), "设置 never opened")
         screenSnap(app, page: "49-ipad-settings", variant: "ipad-portrait")
+        app.terminate()
+    }
+
+    /// 11-22: turning the iPad while words are typed: the conversation stays open and the box keeps them (the
+    /// pictures of a turned iPad in the simulator are windows on a wallpaper, so this test takes none).
+    @MainActor func testIPadRotation() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(appearance: "light", extra: ["-TeleplyDemo"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        if connect.waitForExistence(timeout: 5) { connect.tap() }
+        let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
+        first.tap()
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
+
+        let box = composer(app)
+        XCTAssertTrue(box.waitForExistence(timeout: 5), "the composer never showed")
+        if focus(box) {
+            box.typeText("转屏前写的字")
+            skipKeyboardTip(app)
+        }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(3)
+        let turned = textBox(app, "输入消息")
+        XCTAssertTrue(turned.waitForExistence(timeout: 5), "the composer left after turning the iPad")
+        XCTAssertEqual(turned.value as? String, "转屏前写的字", "the draft did not survive turning the iPad")
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.exists, "the conversation left when the iPad turned")
+        XCUIDevice.shared.orientation = .portrait
+        sleep(3)
+        XCTAssertEqual(textBox(app, "输入消息").value as? String, "转屏前写的字", "the draft did not survive turning back")
         app.terminate()
     }
 
