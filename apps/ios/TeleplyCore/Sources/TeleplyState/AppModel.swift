@@ -66,15 +66,25 @@ public struct AppServices: Sendable {
 }
 
 /// The app's pages and where it stands (Android ReaderViewModel), on the main actor. Each user action runs as one
-/// operation; a newer one cancels the older, and an answer that comes back for a page no longer shown is dropped.
+/// operation; a newer one cancels the older (with the list beside the conversation, the list's own actions and the
+/// conversation's are separate lanes, see [operation]), and an answer that comes back for a page no longer shown is
+/// dropped.
 @Observable
 public final class AppModel {
     public enum Screen: String, Sendable {
         case launch, login, devices, chats, reading
     }
 
+    /// What an action does. A phone runs one action at a time; with the list beside the conversation (sideBySide)
+    /// the list's own actions and the conversation's keep their own lane (see [operation]).
+    public enum WorkLane: Sendable, Hashable {
+        case page, reading, list
+    }
+
     // Where the app stands
     public internal(set) var screen = Screen.launch
+    /// The window is wide enough for the list and the conversation side by side (iPad only; the view decides).
+    public internal(set) var sideBySide = false
     public internal(set) var origin: ServiceOrigin
     /// A random id per sign-in that keeps this phone's records apart; kept across a sign-in that ran out when the
     /// same account comes back (it owns the same computer), since the relay gives no stable account id.
@@ -90,6 +100,8 @@ public final class AppModel {
     public internal(set) var expired = false
     public internal(set) var busy = false
     public var error: String?
+    /// The list's own failure while it is beside a conversation (the page's [error] stays the conversation's).
+    public internal(set) var listError: String?
     /// A short line that comes and goes (归档、恢复…).
     public var notice: String?
     /// The local demo: nothing is saved and no real service is asked.
@@ -172,7 +184,16 @@ public final class AppModel {
     /// Goes up whenever [client] is replaced, so the live connection can tell an old client from a new one.
     @ObservationIgnored var clientGeneration = 0
     @ObservationIgnored var work: Task<Void, Never>?
-    @ObservationIgnored var generation = 0
+    @ObservationIgnored var readingWork: Task<Void, Never>?
+    @ObservationIgnored var listWork: Task<Void, Never>?
+    /// The newest action of each lane; [current] tells whether one is still wanted. Numbers are unique across lanes,
+    /// so a cancelled action of one lane can never pass for another lane's newest.
+    @ObservationIgnored var generationCounter = 0
+    @ObservationIgnored var pageGeneration = 0
+    @ObservationIgnored var readingGeneration = 0
+    @ObservationIgnored var listGeneration = 0
+    /// The lanes with work under way; [busy] while any is.
+    var busyLanes: Set<WorkLane> = []
     @ObservationIgnored var pendingRestore: Place?
     @ObservationIgnored var foreground = true
     @ObservationIgnored var devicePoll: Task<Void, Never>?
@@ -233,56 +254,118 @@ public final class AppModel {
 
     // MARK: Operations
 
-    /// Runs one user action; a newer one cancels it. Errors become the page's message; a 401 goes to 登录 with
-    /// the place kept. What the page said before goes as it starts.
-    func operation(_ block: @escaping (Int) async throws -> Void) {
+    /// Runs one user action. On a phone a newer one cancels it, as before. With the list beside the conversation,
+    /// the list's own actions and the conversation's run in their own lanes: a search on the left no longer cancels
+    /// the conversation loading on the right, and neither cancels the other; a page action (signing in, another
+    /// computer, 新建对话) still cancels everything. Errors become the page's message; a 401 goes to 登录 with the
+    /// place kept. What the page said before goes as it starts.
+    func operation(_ lane: WorkLane = .page, _ block: @escaping (Int) async throws -> Void) {
+        if sideBySide {
+            switch lane {
+            case .page:
+                cancelLanes()
+                pageGeneration = nextGeneration()
+                work = run(.page, pageGeneration, block)
+            case .reading:
+                readingWork?.cancel()
+                readingGeneration = nextGeneration()
+                readingWork = run(.reading, readingGeneration, block)
+            case .list:
+                listWork?.cancel()
+                listGeneration = nextGeneration()
+                listWork = run(.list, listGeneration, block)
+            }
+        } else {
+            // The phone's one action at a time: any new action cancels what ran before, whatever lane it names.
+            cancelLanes()
+            pageGeneration = nextGeneration()
+            work = run(.page, pageGeneration, block)
+        }
+    }
+
+    /// Cancels every lane's work and forgets its place (a page action, 退出, the demo).
+    private func cancelLanes() {
         work?.cancel()
-        generation += 1
-        let g = generation
+        readingWork?.cancel()
+        listWork?.cancel()
+        pageGeneration = 0
+        readingGeneration = 0
+        listGeneration = 0
+        busyLanes = []
+        busy = false
+    }
+
+    private func run(_ lane: WorkLane, _ g: Int, _ block: @escaping (Int) async throws -> Void) -> Task<Void, Never> {
+        busyLanes.insert(lane)
         busy = true
-        error = nil
-        forms.said = nil
-        work = Task { [weak self] in
+        if lane == .list && sideBySide { listError = nil } else { error = nil }
+        if lane == .page { forms.said = nil }
+        return Task { [weak self] in
             do {
                 try await block(g)
             } catch is CancellationError {
             } catch {
-                self?.fail(g, error)
+                self?.fail(g, lane, error)
             }
-            guard let self, g == self.generation else { return }
-            self.busy = false
+            guard let self, self.current(g) else { return }
+            self.busyLanes.remove(lane)
+            self.busy = !self.busyLanes.isEmpty
             self.live()
         }
     }
 
-    func current(_ g: Int) -> Bool {
-        g == generation && !Task.isCancelled
+    private func nextGeneration() -> Int {
+        generationCounter += 1
+        return generationCounter
     }
 
-    func fail(_ g: Int, _ failure: any Error) {
-        guard g == generation else { return }
-        error = describe(failure)
+    func current(_ g: Int) -> Bool {
+        g != 0 && (g == pageGeneration || g == readingGeneration || g == listGeneration) && !Task.isCancelled
+    }
+
+    func fail(_ g: Int, _ lane: WorkLane, _ failure: any Error) {
+        guard current(g) else { return }
+        let said = describe(failure)
+        if lane == .list && sideBySide { listError = said } else { error = said }
         if (failure as? ServiceFailure)?.status == 401 {
+            // 登录 says why, whatever lane found it.
+            error = said
             screen = .login
             expired = true
         }
     }
 
-    /// Waits until the page's work (and a sidebar read it started) is done: for tests and the launch screen.
+    /// Waits until the page's work, the conversation's and the list's (and a sidebar read it started) are done: for
+    /// tests and the launch screen.
     public func settle() async {
         while let running = work {
             await running.value
             if work == running { break }
+        }
+        while let running = readingWork {
+            await running.value
+            if readingWork == running { break }
+        }
+        while let running = listWork {
+            await running.value
+            if listWork == running { break }
         }
         await treeTask?.value
         await leaving?.value
     }
 
     func cancelWork() {
-        work?.cancel()
-        generation += 1
-        busy = false
+        cancelLanes()
         error = nil
+        listError = nil
+    }
+
+    /// The conversation's load is no longer wanted (back to the list); the list's own work stays.
+    func cancelReadingWork() {
+        readingWork?.cancel()
+        readingGeneration = 0
+        busyLanes.remove(.reading)
+        if busyLanes.isEmpty { busy = false }
     }
 
     func useClient(_ next: RelayClient) {
@@ -312,6 +395,7 @@ public final class AppModel {
         pendingNew = nil
         jobSheet = nil
         undo = nil
+        listError = nil
         forms.reset()
         clearReading()
     }
@@ -630,7 +714,7 @@ public final class AppModel {
         var key: ChatKey?
         if screen == .reading, !expired, let device, let chat { key = ChatKey(scope: scope, device: device.id, app: app, chat: chat.id) }
         let newPage = isNewPage(key?.chat)
-        pollList(foreground && screen == .chats && device != nil && !expired)
+        pollList(foreground && listShown && device != nil && !expired)
         pollDevices(foreground && screen == .devices && account != nil && !fixture)
         conversation.bind(key, client: client, clientGeneration: clientGeneration, active: foreground && !newPage, synthetic: fixture) { [weak self] frame, key in
             self?.apply(frame, for: key)
@@ -641,6 +725,28 @@ public final class AppModel {
         jobs.setForeground(foreground)
         jobs.onScreen = newPage ? key?.chat : nil
     }
+
+    /// The window grew into two columns (the list beside the conversation) or came back to one page. The layout is
+    /// the view's; what changes here is what runs: beside an open conversation the list's 10 s read runs too.
+    public func setSideBySide(_ on: Bool) {
+        guard sideBySide != on else { return }
+        sideBySide = on
+        live()
+    }
+
+    /// The conversation list is on screen: the page itself, or the left column beside an open conversation.
+    var listShown: Bool { screen == .chats || (sideBySide && screen == .reading) }
+
+    /// The list's own action is running (beside a conversation, the conversation's work does not hold the 10 s read).
+    var listBusy: Bool { busyLanes.contains(.list) }
+
+    /// The 10 s list read waits while the list's own action or a page action runs; beside a conversation it keeps
+    /// running while that conversation loads.
+    var listPollHeld: Bool { busyLanes.contains(.page) || busyLanes.contains(.list) }
+
+    /// What the list disables its rows and chips for: its own actions and page actions, or on a phone whatever is
+    /// under way. A conversation loading beside it leaves the list usable.
+    public var listPageBusy: Bool { sideBySide ? listPollHeld : busy }
 
     /// 外观: 跟随系统 / 浅色 / 深色.
     public func setAppearance(_ value: String) {
@@ -692,6 +798,7 @@ public final class AppModel {
             // slide-out is over, unless it is opened again meanwhile.
             screen = .chats
             listJustRead = true
+            if sideBySide { cancelReadingWork() }
             live()
             leaving?.cancel()
             leaving = Task { [weak self] in
@@ -699,7 +806,7 @@ public final class AppModel {
                 guard let self, !Task.isCancelled, self.screen != .reading else { return }
                 self.clearReading()
             }
-            operation { [weak self] g in
+            operation(sideBySide ? .list : .page) { [weak self] g in
                 guard let self else { return }
                 await self.persistSelection(scope: self.scope, device: self.device?.id ?? "")
                 // Back in the list it is read again (web closeConv → loadConvs): a conversation made meanwhile shows.
@@ -737,5 +844,10 @@ public final class AppModel {
         case .reading: if let chat { open(chat) }
         case .login, .launch: if account == nil && !fixture { relaunch() }
         }
+    }
+
+    /// The list's own 重试: beside a conversation its failures are its own, not the page's.
+    public func retryList() {
+        if listError != nil { searchChats(query) } else { retry() }
     }
 }

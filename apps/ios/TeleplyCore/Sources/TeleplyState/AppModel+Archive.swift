@@ -92,7 +92,7 @@ extension AppModel {
     public func restored(app: String, id: String) {
         hidden.remove(app + ":" + id)
         loadTree(force: true)
-        if screen == .chats { searchChats(query) }
+        if listShown { searchChats(query) }
     }
 
     /// The computer's voice service (web voice-ui.js): audio up, words back.

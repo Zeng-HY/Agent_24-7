@@ -14,7 +14,7 @@ extension AppModel {
         }) {
             jobs.drop(made)
         }
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self else { return }
             await self.useSource(chat.app)
             try await self.readChat(g, chat)
@@ -24,7 +24,7 @@ extension AppModel {
     /// 打开新建对话 under a Codex reply that made a conversation (web remote.html: the conversation is read first, and
     /// only then opened; it may not be in the list yet). Read failing, this page stays and says why.
     public func openCreated(_ id: String) {
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let device = self.device else { return }
             do {
                 _ = try await self.client.history(device: device.id, app: "codex", chat: id, around: nil)
@@ -91,7 +91,7 @@ extension AppModel {
 
     /// 加载更早消息.
     public func older() {
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let cursor = self.cursor, let device = self.device, let chat = self.chat else { return }
             let page = try await self.client.history(device: device.id, app: self.app, chat: chat.id, before: cursor)
             guard self.current(g) else { return }
@@ -107,7 +107,7 @@ extension AppModel {
 
     /// 回到最新.
     public func latest() {
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let chat = self.chat else { return }
             try await self.readChat(g, chat)
         }
@@ -115,7 +115,7 @@ extension AppModel {
 
     /// 展开全文: the whole of a message the page cut short, kept whole when the page is read again.
     public func expand(_ message: Message) {
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let device = self.device, let chat = self.chat else { return }
             let full = try await self.client.message(device: device.id, app: self.app, chat: chat.id, message: message.id)
             guard self.current(g) else { return }
@@ -128,7 +128,7 @@ extension AppModel {
     /// (web reading-ui.js fullText). [use] runs only when nothing newer was asked meanwhile.
     public func whole(_ message: Message, _ use: @escaping (Message) -> Void) {
         guard message.truncated else { return use(message) }
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let device = self.device, let chat = self.chat else { return }
             let full = try await self.client.message(device: device.id, app: self.app, chat: chat.id, message: message.id)
             guard self.current(g) else { return }
@@ -138,7 +138,7 @@ extension AppModel {
 
     /// 查找消息 inside the open conversation.
     public func searchHistory(_ words: String, more: Bool = false) {
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let device = self.device, let chat = self.chat else { return }
             let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !words.isEmpty else { throw ReadFailure("请输入要查找的内容。") }
@@ -161,7 +161,7 @@ extension AppModel {
 
     /// Opens the conversation around a found message: the page goes to it, until the conversation is opened again.
     public func jump(to message: Message) {
-        operation { [weak self] g in
+        operation(.reading) { [weak self] g in
             guard let self, let device = self.device, let chat = self.chat else { return }
             let page = try await self.client.history(device: device.id, app: self.app, chat: chat.id, around: message.id)
             guard self.current(g) else { return }

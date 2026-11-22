@@ -111,11 +111,11 @@ extension AppModel {
                     do { try await pacer.wait(wait) } catch { return }
                 }
                 guard let self else { return }
-                guard self.screen == .chats, !self.expired else {
+                guard self.listShown, !self.expired else {
                     wait = .seconds(10)
                     continue
                 }
-                if self.busy {
+                if self.listPollHeld {
                     wait = .seconds(1)
                     continue
                 }
@@ -126,7 +126,7 @@ extension AppModel {
     }
 
     public func searchChats(_ words: String) {
-        operation { [weak self] g in
+        operation(.list) { [weak self] g in
             guard let self else { return }
             self.query = words
             self.chats = []
@@ -138,7 +138,7 @@ extension AppModel {
 
     /// 加载更多对话.
     public func moreChats() {
-        operation { [weak self] g in try await self?.loadChats(g, more: true) }
+        operation(.list) { [weak self] g in try await self?.loadChats(g, more: true) }
     }
 
     /// The ⋯ 列表显示 menu: 分组, 排序, 状态, 来源.
@@ -151,7 +151,7 @@ extension AppModel {
         listStatus = status
         if let group { listGroup = group }
         guard reload else { return }
-        operation { [weak self] g in
+        operation(.list) { [weak self] g in
             guard let self else { return }
             self.chats = []
             self.listCursor = nil
@@ -214,7 +214,7 @@ extension AppModel {
         chats = []
         listCursor = nil
         listMore = false
-        if screen == .chats { operation { [weak self] g in try await self?.loadChats(g) } }
+        if listShown { operation(.list) { [weak self] g in try await self?.loadChats(g) } }
     }
 
     // MARK: The sidebar tree (spec 4.2)
