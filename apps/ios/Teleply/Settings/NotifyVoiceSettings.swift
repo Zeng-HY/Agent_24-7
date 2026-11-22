@@ -3,6 +3,7 @@ import Speech
 import SwiftUI
 import TeleplyModel
 import TeleplyState
+import UIKit
 
 /// 设置 → 手机通知 (spec 4.6, 7; plan "Teleply - iOS 原生推送方案"): one green switch for 遥应通知, this phone's own
 /// notifications through Apple's push service, kept by the service for the whole account (AppModel+Push). Nothing else

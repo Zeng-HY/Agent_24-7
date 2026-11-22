@@ -2,6 +2,7 @@ import SwiftUI
 import TeleplyDemo
 import TeleplyModel
 import TeleplyState
+import UIKit
 
 /// 设置 (spec 4.6; Android SettingsScreen): a full sheet with deeper pages in it. Only what users set, top to bottom:
 /// 对话 (已归档对话), 外观, 手机通知, 语音输入, the system permissions, 账号 (with 删除账号), 关于遥应 (with 隐私政策);
