@@ -344,20 +344,20 @@ final class ScreenshotTour: XCTestCase {
         screenSnap(app, page: "47-ipad-file", variant: "ipad-portrait")
         back(app)
 
-        // 本轮差异, from the turn's 处理过程.
+        // 本轮差异, from the turn's 处理过程 (which may be well above the bottom the page opened at).
         let process = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "处理过程")).firstMatch
         XCTAssertTrue(process.waitForExistence(timeout: 5), "the conversation had no 处理过程")
-        if reach(app, process, up: false) {
-            process.tap()
-            let diff = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "本轮差异")).firstMatch
-            XCTAssertTrue(diff.waitForExistence(timeout: 5), "处理过程 had no 本轮差异")
-            if reach(app, diff) {
-                diff.tap()
-                XCTAssertTrue(app.navigationBars["本轮差异"].waitForExistence(timeout: 10), "本轮差异 never opened")
-                sleep(1)
-                screenSnap(app, page: "48-ipad-diff", variant: "ipad-portrait")
-                back(app)
-            }
+        for _ in 0..<8 where !process.isHittable { app.swipeDown() }
+        XCTAssertTrue(process.isHittable, "处理过程 could not be reached")
+        process.tap()
+        let diff = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "本轮差异")).firstMatch
+        XCTAssertTrue(diff.waitForExistence(timeout: 5), "处理过程 had no 本轮差异")
+        if reach(app, diff) {
+            diff.tap()
+            XCTAssertTrue(app.navigationBars["本轮差异"].waitForExistence(timeout: 10), "本轮差异 never opened")
+            sleep(1)
+            screenSnap(app, page: "48-ipad-diff", variant: "ipad-portrait")
+            back(app)
         }
 
         // 设置 as a form sheet.
