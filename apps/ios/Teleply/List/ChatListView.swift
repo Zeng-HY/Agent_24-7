@@ -11,6 +11,8 @@ import TeleplyState
 /// and the computer cut to its first letter. It sits in the top safe-area bar, so rows still fade under it.
 struct ChatListView: View {
     let model: AppModel
+    /// Room the window's own controls take at the top-left (iPadOS 26); 0 on a phone or full screen.
+    var windowControlsInset: CGFloat = 0
     @Environment(Chrome.self) private var chrome
     @State private var query = ""
     @State private var folds = ListFolds()
@@ -72,7 +74,8 @@ struct ChatListView: View {
             }
             .disabled(model.device == nil || model.knownApps?.isEmpty == true)
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 16 + windowControlsInset)
+        .padding(.trailing, 16)
         .padding(.vertical, 8)
     }
 

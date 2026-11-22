@@ -35,6 +35,8 @@ struct DrawerView: View {
     let model: AppModel
     /// Goes up each time the drawer opens, to play the sources' arrival again (web lbrRowIn).
     let opening: Int
+    /// Room the window's own controls take at the top-left (iPadOS 26); 0 on a phone or full screen.
+    let windowControlsInset: CGFloat
     let close: () -> Void
     @Environment(Chrome.self) private var chrome
     @State private var folds = DrawerFolds()
@@ -57,7 +59,7 @@ struct DrawerView: View {
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel(Text("关闭导航"))
             }
-            .padding(.leading, 20)
+            .padding(.leading, 20 + windowControlsInset)
             .padding(.trailing, 12)
             .padding(.top, 8)
             .padding(.bottom, 4)

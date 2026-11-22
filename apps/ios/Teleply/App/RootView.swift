@@ -44,7 +44,7 @@ struct RootView: View {
     var body: some View {
         GeometryReader { geometry in
             let wide = isWide(for: geometry.size.width)
-            content(wide: wide, windowWidth: geometry.size.width)
+            content(wide: wide, windowWidth: geometry.size.width, windowControlsInset: WindowControls.inset)
                 // The model runs the list's 10 s read beside an open conversation only in this mode.
                 .onChange(of: wide, initial: true) { _, on in model.setSideBySide(on) }
                 .frame(maxWidth: forceNarrow ? Self.narrowPreview : .infinity)
@@ -60,13 +60,13 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func content(wide: Bool, windowWidth: CGFloat) -> some View {
+    private func content(wide: Bool, windowWidth: CGFloat, windowControlsInset: CGFloat) -> some View {
         ZStack {
             switch page {
             case .launch: LaunchView()
             case .login: LoginView(model: model)
             case .devices: DevicesView(model: model)
-            case .workspace: WorkspaceView(model: model, wide: wide, windowWidth: windowWidth)
+            case .workspace: WorkspaceView(model: model, wide: wide, windowWidth: windowWidth, windowControlsInset: windowControlsInset)
             }
         }
         .animation(.easeOut(duration: 0.2), value: page)
@@ -127,6 +127,8 @@ private struct WorkspaceView: View {
     let wide: Bool
     /// The window's width, which sizes the list column.
     let windowWidth: CGFloat
+    /// Room the window's own controls take at the top-left (iPadOS 26); 0 on a phone or full screen.
+    let windowControlsInset: CGFloat
     @Environment(Chrome.self) private var chrome
 
     var body: some View {
@@ -139,9 +141,9 @@ private struct WorkspaceView: View {
 
     /// One page at a time: exactly the way a phone shows the list and the conversation pushed on it.
     private var single: some View {
-        DrawerHost(model: model, enabled: model.screen == .chats) {
+        DrawerHost(model: model, enabled: model.screen == .chats, windowControlsInset: windowControlsInset) {
             NavigationStack(path: path) {
-                ChatListView(model: model)
+                ChatListView(model: model, windowControlsInset: windowControlsInset)
                     .navigationDestination(for: WorkspaceRoute.self) { route in destination(route) }
             }
         }
@@ -150,9 +152,9 @@ private struct WorkspaceView: View {
     /// The list on the left, the conversation on the right. Pulling the sidebar out stays the list page's gesture,
     /// so it cannot fight the conversation's swipe back; the list's ☰ is always there.
     private var columns: some View {
-        DrawerHost(model: model, enabled: model.screen == .chats) {
+        DrawerHost(model: model, enabled: model.screen == .chats, windowControlsInset: windowControlsInset) {
             HStack(spacing: 0) {
-                ChatListView(model: model)
+                ChatListView(model: model, windowControlsInset: windowControlsInset)
                     .frame(width: columnWidth)
                 Rectangle()
                     .fill(Palette.line)

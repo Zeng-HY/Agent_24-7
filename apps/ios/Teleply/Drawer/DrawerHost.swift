@@ -12,6 +12,8 @@ struct DrawerHost<Content: View>: View {
     let model: AppModel
     /// Pulling it out, only on the list: the conversation page keeps the system's swipe back.
     let enabled: Bool
+    /// Room the window's own controls take at the top-left (iPadOS 26); 0 on a phone or full screen.
+    let windowControlsInset: CGFloat
     @ViewBuilder let content: () -> Content
 
     @Environment(Chrome.self) private var chrome
@@ -52,7 +54,7 @@ struct DrawerHost<Content: View>: View {
                         .onTapGesture { close() }
                         .accessibilityHidden(true)
                         .transition(.opacity)
-                    DrawerView(model: model, opening: chrome.drawerOpenings, close: close)
+                    DrawerView(model: model, opening: chrome.drawerOpenings, windowControlsInset: windowControlsInset, close: close)
                         .frame(width: width)
                         .offset(x: drag ?? 0)
                         .accessibilityAddTraits(.isModal)
