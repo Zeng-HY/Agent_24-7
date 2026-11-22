@@ -1,4 +1,30 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+
+## 0.8.0：iPad 适配（11-22，构建 33 已传 TestFlight）
+
+- 构建 33（Codemagic `6b0306651efb7278279ac24f`，18 分钟，`UPLOAD SUCCEEDED`），从 `ipad-adapt` 分支（`f1544f2`）打；版本 0.8.0，Delivery UUID `f8e173eb-475b-4e16-aca3-662b22968421`。只进内部测试，没有提交审核。包里的应用和小组件扩展 `UIDeviceFamily` 都是 `[1, 2]`，iPad 四个方向都在，最低 iOS 26.0。
+- **全屏原生**：应用和扩展都声明 iPhone + iPad（`TARGETED_DEVICE_FAMILY: "1,2"` 四处），`Info.plist` 加 `UISupportedInterfaceOrientations~ipad` 四个方向；没有 `UIRequiresFullScreen`（TN3192）。
+- **宽屏左右并排**：iPad 窗口 ≥ 700 点时，左边列表（320–380 点），右边对话（自己的导航栈，文件页和本轮差异仍推在它上面）；窗口更窄（分屏、台前调度、Slide Over）时和 iPhone 一样，在列表里点一行推出对话。iPhone 永远走原来的导航栈。
+- **model**：`AppModel` 新增 `sideBySide`，把工作分成页面/对话/列表三条线；窄窗口仍是「新操作取消旧操作」。并排时列表照常每 10 秒刷新，左边搜索/筛选不取消右边正在加载的对话；列表自己的错误和「重试」分开。
+- **转屏和调窗口**：正在看的对话、文件页/差异页、没发的草稿都在 model 里，转屏不丢；对话页的滚动位置会回到最新一条（`ConversationView` 的页面状态不跨视图树保留）。
+- **大屏页面**：登录 380、我的电脑 440、对话正文和输入区 820 的上限沿用；文字文件页加 900、本轮差异加 1000 的行宽上限；设置、新建对话、文件页都是系统 sheet；会话状态在 iPad 上是真气泡。
+- **窗口左上角的三个圆点**：iPadOS 26 的可调窗口把关闭/最小化/全屏三个圆点画在内容上；列表和侧栏的标题栏在自己画的栏里让出 72 点（窗口占满屏幕时为 0），系统导航栏由系统自己避让。
+- **检查脚本**：`ci-testflight.sh` 要求应用和扩展都同时有 iPhone 和 iPad；`ci-check.sh` 能挑 iPad mini，iPad 跑四个用例（竖屏各页、转屏行为、横屏整屏、窄窗口），iPhone 仍跑原来的巡览；`codemagic.ps1` 加 `-Device`/`-Devices`。
+- **测试**：`TeleplyCore` 292 项（38 个套件）全过，含新增 `SideBySideTests` 5 项（并排时列表照常刷新、左边操作不取消右边加载、窄窗口保持旧行为）。Codemagic `ios-native-check` compile `6b02e69b12d4ac750220c0bd`（3 分钟）通过。
+- **iPad 截图**：Codemagic `6b02f7f8c6c1bd1ec1397ffe`（12 分钟，4 个 iPad 用例全过）和 `6b02fda3c0c74a57bd80b6e8`（补拍本轮差异）存 `F:\Android-Dev\work\20261101-island-duplicates\20261122-ipad\codemagic\...\artefacts\shots`。模拟器偶尔把应用放进带墙纸的窗口，截图里的窗口边框是模拟器状态，不是界面。
+- **没验到的**：这次没再跑 iPhone 的截图巡览（先出 TestFlight 包），iPhone 按窄窗口原路径保证，待真机对比；iPad 窗口模式下的圆点避让只在代码里做了，模拟器最后一轮没出现窗口模式，待真机看。
+
+### 留给你在真机上验（0.8.0）
+
+1. iPad mini 上装 TestFlight 的 0.8.0（33）：打开是全屏，没有黑边、没有右下角的旋转/放大按钮。
+2. 竖屏、横屏都转：列表和对话还在，输入框里没发的字还在；对话会回到最新一条。
+3. 分屏/台前调度/把窗口调窄：窄的时候在列表点一行推出对话；拉宽到大约 700 点以上变成左右并排。
+4. 并排时：左边点别的对话右边跟着换；左边搜索/换筛选，右边正在加载的对话不被打断；列表每 10 秒自己刷新。
+5. 侧栏：宽屏时在列表页右划能拉出；看对话时用左栏的 ☰；文件页/差异页的右划返回正常。
+6. 文件页、本轮差异、会话状态气泡、设置、新建对话、相机/相册/文件选择、语音输入各看一遍。
+7. 窗口左上角三个圆点：可调窗口下不再压住列表的 ☰ 和侧栏标题。
+8. 锁屏卡片（实时活动）：iPad 上系统支持就试一条；不支持时设置里会写「这台 iPad 没有可用的实时活动」。
+9. iPhone 上装同一构建：样子和行为应该和 0.7.6 一样，重点看列表、对话、输入、侧栏、设置。
 
 执行计划：`C:\Users\39011\.claude\plans\codex-ios-app-apple-developer-program-q-piped-hanrahan.md`（10-26 用户批准）。设计依据：Obsidian 里的《Teleply - iOS SwiftUI 设计规范》v0.8；页面和按钮照网页，向电脑要东西的时机、缓存和轮询照安卓 1.0.1（`apps/android`）。
 
@@ -352,7 +378,7 @@
 ## 身份和安装
 
 - **Bundle ID**：`com.pocketagentdesk.teleply`，桌面名字“遥应”，和安卓正式版一样（用户 10-26 确认）。旧的网页外壳 `mobile/ios`（`com.pocketagentdesk.remote`）和它的两个 Codemagic 工作流不动，两个应用可以同时装着。
-- **最低系统**：iOS 26；先只支持 iPhone（iPad 一旦上架支持就不能去掉，宽屏分栏做好再开）。
+- **最低系统**：iOS 26；iPhone 和 iPad 都支持（iPad 宽屏左右并排，窄窗口和 iPhone 一样）。App Store 上一旦有过支持 iPad 的版本就撤不掉，所以 0.8.0 只进内部测试。
 - **安装**：TestFlight 内部测试，只给用户自己。应用里不放“检查更新”，新构建由 TestFlight 提醒。
 - **版本**：`project.yml` 的 `MARKETING_VERSION`；构建号由 `ios-native-testflight` 取 TestFlight 上最新的加一，不用手改。
 
