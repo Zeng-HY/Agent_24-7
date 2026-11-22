@@ -119,9 +119,9 @@ struct SideBySideTests {
         model.setSideBySide(true)
         model.open(chat)
         // The conversation's read is at the computer, waiting; the list is searched meanwhile, as on the left.
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(300))
         model.searchChats("原生")
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(300))
         await transport.gate.release()
         await model.settle()
 
@@ -140,9 +140,9 @@ struct SideBySideTests {
         let chat = try demoChat(model)
 
         model.open(chat)
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(300))
         model.searchChats("原生")
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(300))
         await transport.gate.release()
         await model.settle()
 
