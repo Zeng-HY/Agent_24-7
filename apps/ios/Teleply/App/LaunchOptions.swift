@@ -24,6 +24,9 @@ enum LaunchOptions {
     /// -TeleplyDemoSite: the local demo as the website's pictures show it, DeepSeek alone (DemoSite).
     nonisolated static var siteShots: Bool { flag("-TeleplyDemoSite") }
 
+    /// -TeleplyForceNarrow: the iPad screenshot tour's narrow window, drawn as a phone-wide column on an iPad.
+    static var forceNarrow: Bool { flag("-TeleplyForceNarrow") }
+
     /// The phone's language is English, for the words in those pictures.
     nonisolated static var english: Bool { Locale.preferredLanguages.first?.hasPrefix("en") == true }
 

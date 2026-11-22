@@ -170,8 +170,11 @@ struct FilePage: View {
                     VStack(alignment: .leading, spacing: 12) {
                         scrolled(name, picture: picture)
                     }
+                    // Long text keeps a readable line length on an iPad; a phone is narrower anyway.
+                    .frame(maxWidth: 900, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -420,8 +423,11 @@ struct DiffPage: View {
                         .disabled(workspace.paneBusy)
                 }
             }
+            // A wide column does not stretch the diff's lines the whole way across.
+            .frame(maxWidth: 1000, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
         }
         .background(Palette.page)
         .navigationTitle("本轮差异")

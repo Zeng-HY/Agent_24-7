@@ -54,6 +54,8 @@ struct ChatListView: View {
         }
         .onChange(of: model.query) { if model.query.isEmpty { query = "" } }
         .onChange(of: model.device?.id) { query = model.query }
+        // A list made again (the window became one column, or two) starts from the words it is filtered by.
+        .onAppear { if query != model.query { query = model.query } }
     }
 
     // MARK: Title bar
@@ -76,19 +78,24 @@ struct ChatListView: View {
 
     private static let stateNotes = ["running": "只显示运行中的对话", "waiting": "只显示等待处理的对话", "idle": "只显示已结束的对话"]
 
+    /// The list's own failure beside a conversation, or the page's on a phone (where the list is the page).
+    private var failure: String? {
+        model.listError ?? (model.screen == .chats ? model.error : nil)
+    }
+
     @ViewBuilder
     private var notes: some View {
         VStack(spacing: 0) {
-            DelayedProgressLine(busy: model.busy)
+            DelayedProgressLine(busy: model.listPageBusy)
             if model.fixture {
                 NoteBar(text: "本地示例 · 固定数据 · 未连接真实服务", tone: .info)
             }
             // 11-02: the island's 还有 N 个 leaves the list on one state, with nothing on the page to say so.
             if let note = Self.stateNotes[model.listStatus] {
-                NoteBar(text: note, tone: .info, action: "显示全部", actionEnabled: !model.busy) { model.listDisplay(status: "all") }
+                NoteBar(text: note, tone: .info, action: "显示全部", actionEnabled: !model.listPageBusy) { model.listDisplay(status: "all") }
             }
-            if let error = model.error {
-                NoteBar(text: error, tone: .error, action: "重试", actionEnabled: !model.busy, onAction: model.retry)
+            if let error = failure {
+                NoteBar(text: error, tone: .error, action: "重试", actionEnabled: !model.listPageBusy, onAction: model.retryList)
             }
         }
     }
@@ -98,8 +105,8 @@ struct ChatListView: View {
     @ViewBuilder
     private var rows: some View {
         if model.chats.isEmpty {
-            if !model.busy {
-                EmptyList(model: model, searching: !query.trimmingCharacters(in: .whitespaces).isEmpty) {
+            if !model.listPageBusy {
+                EmptyList(model: model, failure: failure, searching: !query.trimmingCharacters(in: .whitespaces).isEmpty) {
                     query = ""
                     model.clearListFilters()
                 }
@@ -113,7 +120,7 @@ struct ChatListView: View {
             if model.listMore {
                 Button("加载更多对话", action: model.moreChats)
                     .buttonStyle(PillStyle())
-                    .disabled(model.busy)
+                    .disabled(model.listPageBusy)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 12)
                     .padding(.bottom, 24)
@@ -148,7 +155,7 @@ struct ChatListView: View {
                 ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil, draft: model.drafts[key])
             }
             .buttonStyle(RowPressStyle())
-            .disabled(model.busy)
+            .disabled(model.listPageBusy)
             // 左滑归档 (spec 4.1, web archive-ui.js): a slide uncovers 归档 and stops there; a tap on it archives. No full
             // swipe: the system's takes a flick as one too, and a conversation went at a brush (user 10-26). 撤销 stays
             // under the list for six seconds. VoiceOver finds it among the row's actions.
@@ -172,7 +179,7 @@ struct ChatListView: View {
                 ChildRow(chat: child)
             }
             .buttonStyle(RowPressStyle())
-            .disabled(model.busy)
+            .disabled(model.listPageBusy)
         case .more(let parent, let left):
             Button {
                 model.moreChildren(parent)
@@ -335,7 +342,7 @@ private struct SourceChips: View {
                                 model.listDisplay(source: value)
                                 withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(value) }
                             }
-                            .disabled(model.busy)
+                            .disabled(model.listPageBusy)
                             .id(value)
                         }
                         if known == nil, model.device != nil {
@@ -565,6 +572,8 @@ private struct UndoBar: View {
 /// says so with 重试 instead.
 private struct EmptyList: View {
     let model: AppModel
+    /// The list's failure, if any (beside a conversation it is the list's own).
+    let failure: String?
     let searching: Bool
     let clear: () -> Void
 
@@ -581,7 +590,7 @@ private struct EmptyList: View {
                 Button("重试", action: model.retrySources)
                     .buttonStyle(PillStyle())
             } else {
-                Text(model.error == nil ? "没有找到对话" : "暂时无法读取对话")
+                Text(failure == nil ? "没有找到对话" : "暂时无法读取对话")
                     .headingFont()
                     .foregroundStyle(Palette.ink)
                 if !conditions.isEmpty {

@@ -224,6 +224,8 @@ struct DeveloperView: View {
     @State private var probing = false
     /// 11-17: the conversation page's probe line (ConversationView), for "reading above is pulled back to the bottom".
     @AppStorage("TeleplyScrollProbe") private var scrollProbe = false
+    /// The window shown as if it were narrow (RootView), to check the one-page layout on an iPad.
+    @AppStorage("TeleplyForceNarrow") private var forceNarrow = false
 
     var body: some View {
         List {
@@ -274,14 +276,17 @@ struct DeveloperView: View {
                         .disabled(model.island.working)
                 }
                 if model.island.enabled == false {
-                    Text("系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。")
+                    Text(islandUnavailable)
                         .noteFont()
                         .foregroundStyle(Palette.muted)
                 }
                 if let note = model.island.note {
                     Text(note).noteFont().foregroundStyle(Palette.muted)
                 }
-                NavigationLink("灵动岛样子") { IslandPreviewPage() }
+                // The sketch is of an iPhone's island; on an iPad it says nothing useful.
+                if UIDevice.current.userInterfaceIdiom != .pad {
+                    NavigationLink("灵动岛样子") { IslandPreviewPage() }
+                }
             } header: {
                 Text("灵动岛")
             } footer: {
@@ -308,6 +313,18 @@ struct DeveloperView: View {
             } footer: {
                 Text("对话页上方多一行黄字：是否跟着最新内容、离底部远近、手指在不在滑，以及刚才是什么把页面拉动了。查「往上翻被拉回底部」用，查完关掉。")
             }
+            #if DEBUG
+            // Only an iPad has a window wide enough to check this; the phone's page stays as it was.
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                Section {
+                    Toggle("按窄窗口显示", isOn: $forceNarrow)
+                } header: {
+                    Text("窗口")
+                } footer: {
+                    Text("把界面按手机宽度显示，检查窄窗口的列表和推出的对话。只在这个调试版里有。")
+                }
+            }
+            #endif
             Section {
                 NavigationLink("最近的请求") { RecordsView() }
                 ShareLink(item: DiagnosticsExport(), preview: SharePreview("遥应诊断记录")) {
@@ -337,6 +354,14 @@ struct DeveloperView: View {
     /// 打开本地示例 starts over on the demo: the sheet goes first (this page's own dismiss would only go back).
     private func dismissAll() {
         chrome.settings = false
+    }
+
+    /// Why there are no islands: the system's switch, or an iPad that has no Dynamic Island and may have no Live
+    /// Activities (the app never starts one when the system says no).
+    private var islandUnavailable: String {
+        UIDevice.current.userInterfaceIdiom == .pad
+            ? "这台 iPad 没有可用的实时活动：iPadOS 支持时到 设置 → 遥应 里打开；不支持时就用不了。"
+            : "系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。"
     }
 
     /// 测一下连接: three status reads of the computer, each timed (web).

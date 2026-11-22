@@ -1,15 +1,29 @@
 import SwiftUI
 import TeleplyModel
 import TeleplyState
+import UIKit
 
 /// The window: the opening pages (spec 4.8) or the workspace (the list with the conversation pushed on it, the
-/// sidebar over them), with 设置 as a sheet from anywhere. The appearance follows 外观.
+/// sidebar over them), with 设置 as a sheet from anywhere. The appearance follows 外观. On an iPad whose window is
+/// wide enough the workspace is two columns: the list on the left, the conversation on the right (the view tells the
+/// model with [AppModel.setSideBySide], so the list keeps being read there).
 struct RootView: View {
     let model: AppModel
     @State private var chrome = Chrome()
     @Environment(\.scenePhase) private var scenePhase
+    /// 调试用: show the app as if the window were narrow (a developer switch, or the screenshot tour's launch
+    /// argument `-TeleplyForceNarrow`). Always false in a release build.
+    @AppStorage("TeleplyForceNarrow") private var forceNarrowSetting = false
+
+    private var forceNarrow: Bool { forceNarrowSetting || LaunchOptions.forceNarrow }
 
     private enum Page: Hashable { case launch, login, devices, workspace }
+
+    /// Below this width an iPad window shows one page at a time, as the phone does. iPad mini portrait is about 744
+    /// points and already two columns; a half or third of the screen is narrower and stays one.
+    private static let columnsFrom: CGFloat = 700
+    /// The narrow preview's width, about a phone's.
+    private static let narrowPreview: CGFloat = 480
 
     private var page: Page {
         switch model.screen {
@@ -21,12 +35,31 @@ struct RootView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
+            let wide = isWide(for: geometry.size.width)
+            content(wide: wide, windowWidth: geometry.size.width)
+                // The model runs the list's 10 s read beside an open conversation only in this mode.
+                .onChange(of: wide, initial: true) { _, on in model.setSideBySide(on) }
+                .frame(maxWidth: forceNarrow ? Self.narrowPreview : .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(Palette.page)
+    }
+
+    /// Two columns are an iPad's, and only from [columnsFrom] on; an iPhone, portrait or landscape, always stays on
+    /// the page it showed before.
+    private func isWide(for width: CGFloat) -> Bool {
+        UIDevice.current.userInterfaceIdiom == .pad && width >= Self.columnsFrom && !forceNarrow
+    }
+
+    @ViewBuilder
+    private func content(wide: Bool, windowWidth: CGFloat) -> some View {
         ZStack {
             switch page {
             case .launch: LaunchView()
             case .login: LoginView(model: model)
             case .devices: DevicesView(model: model)
-            case .workspace: WorkspaceView(model: model)
+            case .workspace: WorkspaceView(model: model, wide: wide, windowWidth: windowWidth)
             }
         }
         .animation(.easeOut(duration: 0.2), value: page)
@@ -78,25 +111,67 @@ struct RootView: View {
 
 /// The list as the root of a navigation stack and the open conversation pushed on it, so the system back button
 /// and the swipe back work (spec 4.3). The stack follows the model: reading pushes, leaving pops. 新建对话 and a
-/// new conversation's result sheet come up over either.
+/// new conversation's result sheet come up over either. In a wide window on an iPad the list and the conversation
+/// stand side by side instead, each in its own place: the list column on the left, the conversation (and a file or
+/// 本轮差异 over it) in a stack on the right.
 private struct WorkspaceView: View {
     let model: AppModel
+    /// The window is wide enough for both columns.
+    let wide: Bool
+    /// The window's width, which sizes the list column.
+    let windowWidth: CGFloat
     @Environment(Chrome.self) private var chrome
 
     var body: some View {
-        DrawerHost(model: model, enabled: model.screen == .chats) {
-            NavigationStack(path: path) {
-                ChatListView(model: model)
-                    .navigationDestination(for: WorkspaceRoute.self) { route in
-                        switch route {
-                        case .reading: ConversationView(model: model)
-                        case .detail: DetailPage(model: model)
-                        }
-                    }
-            }
+        Group {
+            if wide { columns } else { single }
         }
         .sheet(isPresented: newShown) { NewChatSheet(model: model) }
         .sheet(item: jobSheet) { route in NewJobSheet(model: model, request: route.id) }
+    }
+
+    /// One page at a time: exactly the way a phone shows the list and the conversation pushed on it.
+    private var single: some View {
+        DrawerHost(model: model, enabled: model.screen == .chats) {
+            NavigationStack(path: path) {
+                ChatListView(model: model)
+                    .navigationDestination(for: WorkspaceRoute.self) { route in destination(route) }
+            }
+        }
+    }
+
+    /// The list on the left, the conversation on the right. Pulling the sidebar out stays the list page's gesture,
+    /// so it cannot fight the conversation's swipe back; the list's ☰ is always there.
+    private var columns: some View {
+        DrawerHost(model: model, enabled: model.screen == .chats) {
+            HStack(spacing: 0) {
+                ChatListView(model: model)
+                    .frame(width: columnWidth)
+                Rectangle()
+                    .fill(Palette.line)
+                    .frame(width: 1)
+                NavigationStack(path: path) {
+                    WidePlaceholder()
+                        .navigationDestination(for: WorkspaceRoute.self) { route in destination(route) }
+                }
+            }
+        }
+    }
+
+    /// 320 points is the sidebar's own width, and enough for the list's title bar and rows; 380 at most, so the
+    /// conversation keeps the room.
+    private var columnWidth: CGFloat { min(380, max(320, windowWidth * 0.36)) }
+
+    @ViewBuilder
+    private func destination(_ route: WorkspaceRoute) -> some View {
+        switch route {
+        case .reading:
+            ConversationView(model: model)
+                // Two columns have no page to go back to: another row on the left replaces this one.
+                .navigationBarBackButtonHidden(wide)
+        case .detail:
+            DetailPage(model: model)
+        }
     }
 
     /// A file's page and 本轮差异 are pushed over the conversation (spec 4.5): the system back leaves them.
@@ -125,6 +200,24 @@ private struct WorkspaceView: View {
 
     private var jobSheet: Binding<JobSheetRoute?> {
         Binding(get: { model.jobSheet.map(JobSheetRoute.init) }, set: { if $0 == nil { model.closeJobSheet() } })
+    }
+}
+
+/// The right column with no conversation open: a quiet place, not a blank page.
+private struct WidePlaceholder: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(Palette.muted)
+            Text("从左边选一个对话")
+                .bodyFont()
+                .foregroundStyle(Palette.muted)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.page)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

@@ -22,7 +22,7 @@ struct NotifySection: View {
                 Task { await model.islandSetWanted(on) }
             }))
             .tint(.green)
-            .disabled(push.phase != .on || model.island.working)
+            .disabled(push.phase != .on || model.island.working || model.island.enabled == false)
         } header: {
             Text("手机通知")
         } footer: {
@@ -31,10 +31,17 @@ struct NotifySection: View {
                     .task(id: note) { AccessibilityNotification.Announcement(note).post() }
             } else if push.phase == .unavailable {
                 Text("服务器还没开通遥应通知")
+            } else if model.island.enabled == false {
+                Text(UIDevice.current.userInterfaceIdiom == .pad
+                     ? "这台 iPad 没有可用的实时活动。"
+                     : "系统里关了遥应的实时活动：到系统设置 → 遥应 里打开。")
             }
         }
         .listRowBackground(Palette.controlFill)
-        .task { await model.pushRefresh() }
+        .task {
+            await model.pushRefresh()
+            await model.islandReadEnabled()
+        }
         // back from the system's settings, where the switch may have changed
         .onChange(of: scenePhase) { if scenePhase == .active { Task { await model.pushRefresh() } } }
     }
