@@ -15,7 +15,14 @@ struct RootView: View {
     /// argument `-TeleplyForceNarrow`). Always false in a release build.
     @AppStorage("TeleplyForceNarrow") private var forceNarrowSetting = false
 
-    private var forceNarrow: Bool { forceNarrowSetting || LaunchOptions.forceNarrow }
+    private var forceNarrow: Bool {
+        #if DEBUG
+        // A debug build's switch stays behind: a TestFlight or App Store build must never open as a narrow column.
+        return forceNarrowSetting || LaunchOptions.forceNarrow
+        #else
+        return false
+        #endif
+    }
 
     private enum Page: Hashable { case launch, login, devices, workspace }
 
