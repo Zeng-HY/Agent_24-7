@@ -120,13 +120,28 @@ class TestingAgentTests(unittest.TestCase):
         self.assertTrue(agent.usage()["available"])
         self.assertEqual(agent.commands("test-running")[0]["name"], "test")
 
+    def test_the_test_assistant_can_be_listed_and_read(self):
+        from chat_history import History
+        history = History()
+        row = {"app": "testing", "id": "test-running", "title": "测试对话 A", "folder": "C:\\测试\\项目",
+               "cwd": "C:\\测试\\项目", "updated": 1767323045000, "created": 1767323040000, "pinned": False,
+               "status": "running", "preview": "正在跑测试"}
+        history._load = lambda: ([row], [])
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
+            page = history.conversations("all")
+            self.assertEqual([v["app"] for v in page["items"]], ["testing"])
+            read = history.conversation("testing", "test-running")
+            self.assertEqual(read["app"], "testing")
+            self.assertEqual([m["role"] for m in read["messages"]], ["user", "assistant"])
+            self.assertEqual(history.message("testing", "test-running", "m1")["text"], "跑一下测试")
+
 
 class EndpointTests(unittest.TestCase):
-    def handler(self, path, apps):
+    def handler(self, path, apps, protocol=None):
         handler = object.__new__(remote.Handler)
         sent = []
         handler.path = path
-        handler.headers = {}
+        handler.headers = {"X-Teleply-Protocol": str(protocol)} if protocol else {}
         handler.close_connection = False
         handler.server = SimpleNamespace(machine={"name": "公司电脑", "apps": apps, "voice": False},
                                         cfg={"token": "secret"})
@@ -134,13 +149,67 @@ class EndpointTests(unittest.TestCase):
         return handler, sent
 
     def test_api_agents_lists_the_computers_manifests(self):
-        handler, sent = self.handler("/api/agents?t=secret", ["codex", "claude"])
+        handler, sent = self.handler("/api/agents?t=secret", ["codex", "claude"], protocol=2)
         handler.do_GET()
         self.assertEqual(sent[0][0], 200)
         body = json.loads(sent[0][1])
         self.assertEqual(body["schema"], 1)
         self.assertEqual(body["protocol"], 2)
         self.assertEqual([a["id"] for a in body["agents"]], ["codex", "claude"])
+
+    def test_api_agents_is_not_exposed_to_protocol_one(self):
+        handler, sent = self.handler("/api/agents?t=secret", ["codex"])
+        handler.do_GET()
+        self.assertEqual(sent[0][0], 404)
+
+    def test_chats_hides_a_non_legacy_agent_from_protocol_one(self):
+        rows = [{"app": app, "id": app + "1", "title": app} for app in ("codex", "claude", "deepseek", "testing")]
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
+            handler, sent = self.handler("/api/chats?app=all&t=secret",
+                                         ["codex", "claude", "deepseek", "testing"])
+            handler.server.history = SimpleNamespace(
+                conversations=lambda *args, **kwargs: {"items": list(rows), "has_more": False,
+                                                        "next_cursor": "", "total": len(rows), "now": 0})
+            handler.server.tasks = SimpleNamespace(apply_status=lambda items: items)
+            handler.do_GET()
+            self.assertEqual([v["app"] for v in json.loads(sent[0][1])["items"]],
+                             ["codex", "claude", "deepseek"])
+            handler, sent = self.handler("/api/chats?app=all&t=secret",
+                                         ["codex", "claude", "deepseek", "testing"], protocol=2)
+            handler.server.history = SimpleNamespace(
+                conversations=lambda *args, **kwargs: {"items": list(rows), "has_more": False,
+                                                        "next_cursor": "", "total": len(rows), "now": 0})
+            handler.server.tasks = SimpleNamespace(apply_status=lambda items: items)
+            handler.do_GET()
+            self.assertEqual([v["app"] for v in json.loads(sent[0][1])["items"]],
+                             ["codex", "claude", "deepseek", "testing"])
+
+    def test_a_non_legacy_agent_cannot_be_read_by_protocol_one(self):
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
+            handler, sent = self.handler("/api/chat?app=testing&id=t1&t=secret", ["testing"])
+            handler.server.history = SimpleNamespace(conversation=lambda *args, **kwargs: {"app": "testing"})
+            handler.do_GET()
+            self.assertEqual(sent[0][0], 404)
+
+    def test_project_tree_and_archive_hide_a_non_legacy_agent_from_protocol_one(self):
+        apps = ["codex", "claude", "deepseek", "testing"]
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
+            handler, sent = self.handler("/api/chat/projects?t=secret", apps)
+            handler.server.history = SimpleNamespace(catalog=lambda: [], ungrouped=lambda: [])
+            tree = {"apps": [{"app": app, "name": app, "projects": []} for app in apps], "now": 0}
+            with patch.object(remote.chat_projects, "tree", return_value=tree):
+                handler.do_GET()
+            self.assertEqual([a["app"] for a in json.loads(sent[0][1])["apps"]],
+                             ["codex", "claude", "deepseek"])
+
+            archived = {"items": [{"app": app, "id": app} for app in apps], "apps": apps,
+                        "deletable": ["codex"], "problems": []}
+            handler, sent = self.handler("/api/chat/archived?t=secret", apps)
+            handler.server.archives = SimpleNamespace(archived=lambda: dict(archived))
+            handler.do_GET()
+            body = json.loads(sent[0][1])
+            self.assertEqual([v["app"] for v in body["items"]], ["codex", "claude", "deepseek"])
+            self.assertEqual(body["apps"], ["codex", "claude", "deepseek"])
 
     def test_api_agents_needs_the_token(self):
         handler, sent = self.handler("/api/agents", [])
@@ -149,7 +218,7 @@ class EndpointTests(unittest.TestCase):
 
     def test_api_agents_can_include_the_test_assistant_when_asked(self):
         with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
-            handler, sent = self.handler("/api/agents?t=secret", ["codex", "testing"])
+            handler, sent = self.handler("/api/agents?t=secret", ["codex", "testing"], protocol=2)
             handler.do_GET()
         self.assertEqual([a["id"] for a in json.loads(sent[0][1])["agents"]], ["codex", "testing"])
 

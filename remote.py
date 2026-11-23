@@ -326,6 +326,33 @@ class Handler(BaseHTTPRequestHandler):
             return any(login.casefold() == name.casefold() for name in allowed if name)
         return self._token_given() or secrets.compare_digest(self._cookie_token(), self.cfg["token"])
 
+    def _client_protocol(self) -> int:
+        """What the phone says it can read: a header, or protocol=2 where a header cannot be set. Missing is 1."""
+        raw = getattr(self, "headers", {}).get("X-Teleply-Protocol") or self._query().get("protocol") or "1"
+        try:
+            return 2 if int(str(raw)) >= 2 else 1
+        except (TypeError, ValueError):
+            return 1
+
+    def _app_visible(self, app: str) -> bool:
+        machine = getattr(self.server, "machine", None) or {}
+        apps = machine.get("apps") if isinstance(machine, dict) else None
+        if apps is not None and app not in apps:
+            return False
+        if self._client_protocol() >= 2:
+            return True
+        try:
+            return bool(agent_registry.get(app).manifest()["legacy"])
+        except Exception:
+            return False
+
+    def _visible_apps(self) -> list[str]:
+        machine = getattr(self.server, "machine", None) or {}
+        apps = machine.get("apps") if isinstance(machine, dict) else None
+        if apps is None:
+            return [a.id for a in agent_registry.load() if a.manifest()["legacy"]] if self._client_protocol() < 2 else agent_registry.ids()
+        return [app for app in apps if self._app_visible(app)]
+
     def _refusal(self) -> str:
         """What a refused page says: which account is not let in and how to let it in, or how to get the token."""
         name, login = self.server.machine["name"], self._visitor()  # type: ignore[attr-defined]
@@ -504,8 +531,11 @@ class Handler(BaseHTTPRequestHandler):
             self._refuse()
             return
         if path == "/api/agents":  # the assistants this computer has, each with its manifest
+            if self._client_protocol() < 2:
+                self._json({"error": "这个地址需要新版客户端"}, 404)
+                return
             self._json({"schema": 1, "protocol": 2,
-                        "agents": agent_registry.manifests_for(self.server.machine["apps"])})
+                        "agents": agent_registry.manifests_for(self._visible_apps())})
             return
         if path == "/api/hello":  # the other computers ask it to find this one (machines.py), through tailscale serve
             # with their account on the request: let in as the page is (10-20; it used to answer anyone)
@@ -570,15 +600,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:self._json({'error':str(exc)},400)
             return
         if path=='/api/composer/references':
-            q=self._query()
-            try:self._json(self.server.references.search(q.get('app','codex'),q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),force=q.get('fresh')=='1',scan_id=q.get('scan_id','')))
+            q=self._query();app=q.get('app','codex')
+            if not self._app_visible(app):
+                self._json({'error':'没有这个来源'},404);return
+            try:self._json(self.server.references.search(app,q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),force=q.get('fresh')=='1',scan_id=q.get('scan_id','')))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
         if path=='/api/composer/commands':  # 0.6.6: what the box offers after / (composer_commands.py)
             q=self._query();app=q.get('app','codex')
+            if not self._app_visible(app):
+                self._json({'error':'没有这个来源'},404);return
             try:
-                if app not in ('codex','claude','deepseek'):raise chats.ChatError('没有这个来源')
-                if app!='deepseek':chats.find(app,q.get('id',''))
+                if agent_registry.get(app).home_list:chats.find(app,q.get('id',''))
                 self._json(composer_commands.catalog(app,q.get('id',''),self.server.references,self.server.deepseek))
             except (chats.ChatError,deepseek_control.DeepSeekError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
@@ -591,7 +624,12 @@ class Handler(BaseHTTPRequestHandler):
             except (chats.ChatError,OSError,ValueError) as exc:self._json({'error':str(exc)},400)
             return
         if path=='/api/chat/archived':  # 设置 → 已归档对话 (archives.py)
-            try:self._json(self.server.archives.archived())
+            try:
+                out=self.server.archives.archived();visible=set(self._visible_apps())
+                out['items']=[v for v in out.get('items',[]) if v.get('app') in visible]
+                out['apps']=[a for a in out.get('apps',[]) if a in visible]
+                out['deletable']=[a for a in out.get('deletable',[]) if a in visible]
+                self._json(out)
             except chats.ChatError as exc:self._json({'error':str(exc)},getattr(exc,'status',400))
             return
         if path in ('/api/chat/new/state','/api/chat/new/references'):
@@ -601,7 +639,10 @@ class Handler(BaseHTTPRequestHandler):
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
         if path=='/api/chat/new/options':  # the models and effort steps the new-conversation sheet offers (10-14)
-            try:self._json(self.server.new_chats.options(self._query().get('app','')))
+            app=self._query().get('app','')
+            if app and not self._app_visible(app):
+                self._json({'error':'没有这个来源'},404);return
+            try:self._json(self.server.new_chats.options(app))
             except chats.ChatError as exc:self._json({'error':str(exc)},400)
             return
         if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta", "/api/file/pdf"):
@@ -618,19 +659,24 @@ class Handler(BaseHTTPRequestHandler):
             limit = max(5, min(100, int(q.get("limit", "40") or 40)))
             try:
                 result=self.history.conversations(q.get("app", "all"),limit,q.get("cursor", ""),q.get("query", ""),q.get('sort','updated'),q.get('status','all'),self.server.tasks.apply_status)
-                apps=self.server.machine["apps"]  # an app this computer lacks lists nothing, even with files left behind (10-20)
+                apps=self._visible_apps()  # an app this computer lacks, or an old phone cannot read, lists nothing
                 result['items']=[v for v in self.server.tasks.apply_status(result['items']) if v.get('app') in apps]
                 self._json(result)
             except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chats/children":  # past the first children a row carries (10-20)
-            q = self._query()
-            try:self._json(self.history.children(q.get("app", ""),q.get("id", ""),int(q.get("offset", "0") or 0),int(q.get("limit", "50") or 50)))
-            except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
+            q = self._query();app=q.get("app", "")
+            if app and not self._app_visible(app):
+                self._json({"error": "没有这个来源"}, 404)
+            else:
+                try:self._json(self.history.children(app,q.get("id", ""),int(q.get("offset", "0") or 0),int(q.get("limit", "50") or 50)))
+                except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chat":
-            q = self._query()
+            q = self._query();app=q.get("app", "")
+            if app and not self._app_visible(app):
+                self._json({"error": "没有这个来源"}, 404);return
             # 11-16: lite=1 is the phones' page: no tool detail or result, which neither phone keeps.
             lite = q.get("lite", "") in ("1", "true")
-            try:self._json(self.history.conversation(q.get("app", ""),q.get("id", ""),int(q.get("n", "60") or 60),q.get("before", ""),q.get("around", ""),lite=lite))
+            try:self._json(self.history.conversation(app,q.get("id", ""),int(q.get("n", "60") or 60),q.get("before", ""),q.get("around", ""),lite=lite))
             except (chat_history.HistoryError,chats.ChatError,ValueError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chat/projects":  # the sidebar's tree; with key=…: more conversations of that project
             q = self._query()
@@ -638,18 +684,26 @@ class Handler(BaseHTTPRequestHandler):
                 # DeepSeek sessions in no workspace go under 其他对话, as in the desktop's Ungrouped (10-20)
                 rows = self.history.catalog() + [dict(v, ungrouped=True) for v in self.history.ungrouped()]
                 if q.get("key"):
-                    self._json(chat_projects.page(rows, q.get("app", ""), q["key"],
-                                                  int(q.get("offset", "0") or 0), int(q.get("limit", "30") or 30), self._row_status))
+                    app=q.get("app", "")
+                    if app and not self._app_visible(app):
+                        self._json({"error":"没有这个来源"},404)
+                    else:
+                        self._json(chat_projects.page(rows, app, q["key"],
+                                                      int(q.get("offset", "0") or 0), int(q.get("limit", "30") or 30), self._row_status))
                 else:  # more=[[app, key, n], …]: projects the phone had opened further with 显示更多
                     more = {(str(a), str(k)): int(n) for a, k, n in json.loads(q.get("more") or "[]")[:50]}
                     tree = chat_projects.tree(rows, self._row_status, more=more)
-                    tree["apps"] = [a for a in tree["apps"] if a.get("app") in self.server.machine["apps"]]  # no Claude group without Claude
+                    tree["apps"] = [a for a in tree["apps"] if a.get("app") in self._visible_apps()]  # no group for an app this phone cannot read
                     self._json(tree)
             except Exception as exc:  # a locked Codex database, an unreadable state file
                 self._json({"error": str(exc)[:200]}, 400)
         elif path == "/api/chat/folders":
-            items=self.server.new_chats.folders(self._query().get('app',''))
-            self._json({'folders':[v['path'] for v in items],'items':items})
+            app=self._query().get('app','')
+            if app and not self._app_visible(app):
+                self._json({'folders':[],'items':[]})
+            else:
+                items=self.server.new_chats.folders(app)
+                self._json({'folders':[v['path'] for v in items],'items':items})
         elif path == "/api/chat/options":
             q = self._query()
             self._chat_call(self.desktop.claude_options, q.get("id", ""), q.get("open") == "1", timeout=40)
@@ -885,6 +939,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reading_get(self,path):
         q=self._query();app=q.get('app','codex');tid=q.get('id','')
+        if app and not getattr(self,"_app_visible",lambda _app:True)(app):
+            self._json({'error':'没有这个来源'},404);return
         try:
             if path=='/api/events':
                 with self.server.notifier.watching(app,tid):  # the phone has it open: its turns are not notified
