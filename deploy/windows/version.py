@@ -39,3 +39,5 @@ if '--manifest' not in sys.argv:
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     subprocess.run([str(compiler),'/nologo','/target:library','/optimize+','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll',
         '/out:'+str(root/'build/AgentRemote.Chrome.dll'),str(root/'deploy/windows/ChromeRenderer.cs')],check=True)
+    subprocess.run([str(compiler),'/nologo','/target:exe','/optimize+',
+        '/out:'+str(root/'build/TeleplyCodexHook.exe'),str(root/'deploy/windows/TeleplyCodexHook.cs')],check=True)
