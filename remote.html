@@ -676,9 +676,9 @@ function openConv(c, fromHistory = false) {
   window.codexUI?.onOpen(cur);
   window.claudeUI?.onOpen(cur);
   window.deepseekUI?.onOpen(cur);
-  window.genericAgentUI?.onOpen(cur);
   window.referencesUI?.onOpen(cur);
   window.activityUI?.onOpen(cur);
+  window.genericAgentUI?.onOpen(cur);
   window.navigationUI?.onOpen();
   loadConv(true);
   if (Agents.cardLayout(c.app) === 'claude.v1') loadOpts(false);
