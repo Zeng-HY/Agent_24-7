@@ -1314,7 +1314,7 @@ def list_conversations(app: str = "all", limit: int = 40) -> list[dict]:
             continue
         try:
             items += agent.catalog_entries(limit)
-        except Exception:
+        except sqlite3.Error:
             continue
     for item in items:
         s = summary(item)
