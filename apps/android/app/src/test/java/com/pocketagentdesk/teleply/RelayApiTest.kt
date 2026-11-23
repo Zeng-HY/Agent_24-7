@@ -77,17 +77,77 @@ class RelayApiTest {
         response("""{"state":"unknown"}""");api.receipt(device,"chat","r")
         val get=server.takeRequest();assertEquals("r",get.requestUrl!!.queryParameter("request_id"));assertEquals("GET",get.method)
     }
-    @Test fun mixedListKeepsEachRowSourceAndRejectsUnknownSources()=runTest {
-        response("""{"items":[{"id":"a","app":"codex","title":"A","updated":2000,"created":1000},{"id":"b","app":"claude","title":"B"},{"id":"c","app":"deepseek","title":"C"}],"has_more":false}""")
+    @Test fun mixedListKeepsUnknownValidSourcesAndRejectsCrossSourceOrMalformed()=runTest {
+        response("""{"items":[{"id":"a","app":"codex","title":"A","updated":2000,"created":1000},{"id":"b","app":"claude","title":"B"},{"id":"c","app":"deepseek","title":"C"},{"id":"t","app":"testing","title":"T"},{"id":"u","app":"unknown_new","title":"U"}],"has_more":false}""")
         val page=api.chatList(device,"all","",null,"created","waiting")
-        assertEquals(listOf("codex","claude","deepseek"),page.items.map { it.app })
+        assertEquals(listOf("codex","claude","deepseek","testing","unknown_new"),page.items.map { it.app })
         assertEquals(2000L to 1000L,page.items[0].updated to page.items[0].created)
         val request=server.takeRequest().requestUrl!!
         assertEquals("all",request.queryParameter("app"));assertEquals("created",request.queryParameter("sort"));assertEquals("waiting",request.queryParameter("status"))
-        response("""{"items":[{"id":"x","app":"other","title":"X"}]}""")
+        // Malformed ids are still refused.
+        response("""{"items":[{"id":"x","app":"../bad","title":"X"}]}""")
         assertTrue(runCatching { api.chatList(device,"all","",null) }.isFailure)
+        server.takeRequest()
+        // Cross-source rows in a single-source list are still refused.
         response("""{"items":[{"id":"x","app":"claude","title":"X"}]}""")
         assertTrue("a Codex-only list must not accept a Claude row",runCatching { api.chatList(device,"codex","",null) }.isFailure)
+        server.takeRequest()
+        // Valid custom source can be queried directly.
+        response("""{"items":[{"id":"t1","app":"testing","title":"测试对话"}]}""")
+        val custom=api.chatList(device,"testing","",null)
+        assertEquals(listOf("testing"),custom.items.map { it.app })
+        assertEquals("testing",server.takeRequest().requestUrl!!.queryParameter("app"))
+    }
+    @Test fun protocolHeadersAndQueryParamsAreSentOnEveryRequest()=runTest {
+        val clientTag=teleplyClientTag()
+        assertTrue(clientTag.startsWith("android/"))
+        // JSON GET
+        response("""{"devices":[],"email":""}""");api.account()
+        val acc=server.takeRequest()
+        assertEquals("2",acc.getHeader("X-Teleply-Protocol"));assertEquals(clientTag,acc.getHeader("X-Teleply-Client"))
+        // Stream (SSE): both headers and query params
+        server.enqueue(MockResponse().setHeader("Content-Type","text/event-stream").setBody("event: update\ndata: {\"protocol\":1,\"seq\":1,\"type\":\"snapshot\",\"app\":\"codex\",\"id\":\"chat\",\"chat\":{\"app\":\"codex\",\"id\":\"chat\",\"messages\":[]}}\n\n"))
+        api.events(device,"chat").first()
+        val sse=server.takeRequest()
+        assertEquals("2",sse.getHeader("X-Teleply-Protocol"));assertEquals(clientTag,sse.getHeader("X-Teleply-Client"))
+        assertEquals("2",sse.requestUrl!!.queryParameter("protocol"));assertEquals(clientTag,sse.requestUrl!!.queryParameter("client"))
+        // File download, stream download, sent picture, and Office PDF: both headers and query params
+        server.enqueue(MockResponse().setBody("bin"));api.download(device,"chat","f1")
+        val dl=server.takeRequest()
+        assertEquals("2",dl.getHeader("X-Teleply-Protocol"));assertEquals(clientTag,dl.getHeader("X-Teleply-Client"))
+        assertEquals("2",dl.requestUrl!!.queryParameter("protocol"));assertEquals(clientTag,dl.requestUrl!!.queryParameter("client"))
+        server.enqueue(MockResponse().setBody("bin"));api.downloadTo(device,"chat","f1",java.io.ByteArrayOutputStream())
+        val dlTo=server.takeRequest()
+        assertEquals("2",dlTo.requestUrl!!.queryParameter("protocol"));assertEquals(clientTag,dlTo.requestUrl!!.queryParameter("client"))
+        server.enqueue(MockResponse().setBody("png"));api.sentPicture(device,"a".repeat(32),true,java.io.ByteArrayOutputStream())
+        val pic=server.takeRequest()
+        assertEquals("2",pic.requestUrl!!.queryParameter("protocol"));assertEquals(clientTag,pic.requestUrl!!.queryParameter("client"))
+        server.enqueue(MockResponse().setHeader("Content-Type","application/pdf").setBody("%PDF"));api.filePdf(device,"chat","f1",1024)
+        val pdf=server.takeRequest()
+        assertEquals("2",pdf.getHeader("X-Teleply-Protocol"));assertEquals(clientTag,pdf.getHeader("X-Teleply-Client"))
+        assertEquals("2",pdf.requestUrl!!.queryParameter("protocol"));assertEquals(clientTag,pdf.requestUrl!!.queryParameter("client"))
+    }
+    @Test fun agentsEndpointParsesManifestsAndFallsBackOn404()=runTest {
+        response("""{"schema":1,"protocol":2,"agents":[
+            {"id":"codex","name":{"zh":"Codex","en":"Codex"},"order":10,"color":"#1E222A","color_dark":"#FFFFFF","icon":{"kind":"builtin","key":"codex"},"legacy":true,"min_protocol":1,"capabilities":{"list":true,"read":true,"stop":true,"send_modes":["send","steer","queue"]}},
+            {"id":"testing","name":{"zh":"测试助手","en":"Test Helper"},"order":99,"color":"#7C3AED","color_dark":"#A78BFA","icon":{"kind":"builtin","key":"generic"},"legacy":false,"min_protocol":2,"capabilities":{"list":true,"read":true,"stop":true,"usage":true,"send_modes":["send"]},"params":{"state_timeout_s":5,"refresh_ms":1000}}
+        ]}""")
+        val list=api.agents(device)
+        val req=server.takeRequest()
+        assertEquals("/d/$device/api/agents",req.requestUrl!!.encodedPath)
+        assertEquals("2",req.getHeader("X-Teleply-Protocol"))
+        assertEquals(listOf("codex","testing"),list!!.map { it.id })
+        // Shared catalog is updated and accessible via forSource("testing").
+        val testingApi=api.forSource("testing") as RelayApi
+        assertEquals("测试助手",testingApi.catalog.forDevice(device).name("testing",java.util.Locale.CHINA))
+        assertEquals(5L,testingApi.catalog.forDevice(device).params("testing").stateTimeoutS)
+        // Legacy computer returns 404 -> null and falls back to built-in 3.
+        val legacyDevice="b".repeat(32)
+        response("""{"error":"没有这个地址"}""",404)
+        assertNull(api.agents(legacyDevice))
+        server.takeRequest()
+        assertEquals(listOf("codex","claude","deepseek"),api.catalog.forDevice(legacyDevice).order)
+        assertFalse(api.catalog.forDevice(legacyDevice).fromServer)
     }
     @Test fun historyCarriesRuntimeAsPageMeta()=runTest {
         response("""{"app":"codex","id":"chat","title":"标题","folder":"项目","status":"idle","runtime":{"percent":46,"context_state":"available"},"messages":[{"id":"m","role":"assistant","text":"t","phase":"commentary"},{"id":"u","role":"user","text":"q","client_request_id":"r1"}]}""")

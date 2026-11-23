@@ -34,8 +34,14 @@ fun serviceOrigin(value: String): HttpUrl {
 }
 /** Whether [a] and [b] are one service address, however written ("https://host" or "https://host/"); never for a non-address. */
 fun sameService(a: String, b: String) = runCatching { serviceOrigin(a) == serviceOrigin(b) }.getOrDefault(false)
+/** Protocol handshake (plan §3.3): every request carries protocol 2 and client tag; streams/images/downloads also carry query params. */
+const val TeleplyProtocol = 2
+fun teleplyClientTag(): String = "android/${BuildConfig.VERSION_NAME}"
+
 interface ReadApi {
     fun forSource(app:String):ReadApi = this
+    /** Assistant manifests from GET /api/agents; null when the computer does not have it (404 / legacy host). */
+    suspend fun agents(device:String):List<AgentInfo>? = null
     suspend fun detail(device:String,route:String,query:Map<String,String?> = emptyMap(),body:JSONObject?=null):JSONObject = error("当前服务不支持此功能")
     suspend fun upload(device:String,chat:String,name:String,bytes:ByteArray,image:Boolean,draft:Boolean=false):JSONObject = error("上传不可用")
     suspend fun uploadStream(device:String,chat:String,name:String,size:Long,image:Boolean,draft:Boolean=false,open:()->java.io.InputStream):JSONObject = error("流式上传不可用")
@@ -75,9 +81,9 @@ interface ReadApi {
     suspend fun search(device: String, chat: String, query: String, cursor: String?): Page<Message>
     fun close()
 }
-class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHttpClient = OkHttpClient(),private val app:String="codex") : ReadApi {
-    init { require(app in setOf("codex","claude","deepseek")) }
-    override fun forSource(app:String):ReadApi = RelayApi(root.toString(),vault,client,app)
+class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHttpClient = OkHttpClient(),private val app:String="codex",val catalog:AgentCatalog=AgentCatalog()) : ReadApi {
+    init { require(isValidAgentId(app)) { "来源应用无效" } }
+    override fun forSource(app:String):ReadApi = RelayApi(root.toString(),vault,client,app,catalog)
     val root = serviceOrigin(origin)
     private val key = root.toString()
     // No automatic redirects (including same-host HTTPS -> HTTP), no browser CookieJar.
@@ -91,10 +97,14 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         require(Regex("[0-9a-f]{32}").matches(device)) { "电脑标识无效" }
         return "/d/$device$route"
     }
+    private fun Request.Builder.withProtocolHeaders(): Request.Builder =
+        header("X-Teleply-Protocol", "$TeleplyProtocol").header("X-Teleply-Client", teleplyClientTag())
+    private fun HttpUrl.Builder.withProtocolQuery(): HttpUrl.Builder =
+        addQueryParameter("protocol", "$TeleplyProtocol").addQueryParameter("client", teleplyClientTag())
     /** [timeout] in seconds, for the actions the computer takes long over (Claude's buttons, archiving, voice). */
     private suspend fun request(path: String, query: Map<String,String?> = emptyMap(), body: JSONObject? = null, bytes:ByteArray?=null,stream:RequestBody?=null,timeout:Long=0,type:String="application/octet-stream"): JSONObject = withContext(Dispatchers.IO) {
         val url = root.newBuilder().encodedPath(path).apply { query.forEach { (k,v) -> if (v != null) addQueryParameter(k,v) } }.build()
-        val builder = Request.Builder().url(url).header("Accept", "application/json")
+        val builder = Request.Builder().url(url).header("Accept", "application/json").withProtocolHeaders()
         vault.read(key)?.let { raw -> Cookie.parse(root, raw)?.takeIf { it.expiresAt > System.currentTimeMillis() }?.let { builder.header("Cookie", "${it.name}=${it.value}") } }
         if (body != null) builder.header("Origin", key.removeSuffix("/")).post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         if(bytes!=null) builder.header("Origin",key.removeSuffix("/")).post(bytes.toRequestBody(type.toMediaType()))
@@ -147,6 +157,13 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     override suspend fun revokeDevice(device: String) { devicePath(device, ""); request("/account/revoke", body = JSONObject().put("id", device)) }
     /** Done, the service has ended every sign-in of the account: the cookie here goes too, as for 退出登录. */
     override suspend fun deleteAccount(password: String) { request("/account/delete", body = JSONObject().put("password", password)); vault.write(key, null) }
+    override suspend fun agents(device: String): List<AgentInfo>? = try {
+        val parsed = parseAgentsResponse(request(devicePath(device, "/api/agents")))
+        catalog.put(device, parsed)
+        parsed
+    } catch (e: ServiceFailure) {
+        if (e.status == 404) { catalog.put(device, null); null } else throw e
+    }
     override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
         require(route in DetailRoutes)
         return request(devicePath(device,"/api/$route"),query,body,timeout=SlowRoutes[route] ?: 0)
@@ -180,23 +197,23 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         return request(devicePath(device,if(image) "/api/codex/upload" else "/api/files/upload"),mapOf("app" to app,(if(draft) "draft" else "id") to chat,"name" to name),stream=body)
     }
     override suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream) =
-        streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build(),output)
+        streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).withProtocolQuery().build(),output)
     override suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) =
-        streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/codex/image")).apply { if(small) addQueryParameter("thumb","1") }.addQueryParameter("id",id).build(),output)
+        streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/codex/image")).apply { if(small) addQueryParameter("thumb","1") }.addQueryParameter("id",id).withProtocolQuery().build(),output)
     /**
      * A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (10-27). The first time a version is
      * asked for, Office may take 5-30 s to start before a byte comes, so this waits much longer than other requests;
      * later the computer answers from its copy. The computer's own words when it cannot ({"error": …}).
      */
     override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray {
-        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file/pdf")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build()
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file/pdf")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).withProtocolQuery().build()
         val timer=Diagnostics.start(Diagnostics.Labels["/api/file/pdf"])
         return try { fetch(url,limit,client.newBuilder().readTimeout(90,TimeUnit.SECONDS).callTimeout(150,TimeUnit.SECONDS).build()).also { Diagnostics.finish(timer,it.size.toLong(),"请求完成") } }
         catch(e:Exception) { Diagnostics.finish(timer,0,when(e) { is ServiceFailure -> "HTTP ${e.status}"; is kotlinx.coroutines.CancellationException,is java.io.InterruptedIOException -> "已取消或超时"; else -> "网络失败" });throw e }
     }
     /** The bytes of a GET, at most [limit] ([PreviewTooLarge] past it); a refusal carries the computer's words, as the JSON routes do. */
     private suspend fun fetch(url:HttpUrl,limit:Long,caller:OkHttpClient):ByteArray = suspendCancellableCoroutine { continuation ->
-        val builder=Request.Builder().url(url)
+        val builder=Request.Builder().url(url).withProtocolHeaders()
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> builder.header("Cookie","${c.name}=${c.value}") } }
         val call=caller.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object:Callback {
@@ -218,7 +235,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     /** A file from the computer into [output], at most [DownloadLimit], whole or with an error. */
     private suspend fun streamTo(url:HttpUrl,output:java.io.OutputStream):Unit = suspendCancellableCoroutine { continuation ->
-        val builder=Request.Builder().url(url)
+        val builder=Request.Builder().url(url).withProtocolHeaders()
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> builder.header("Cookie","${c.name}=${c.value}") } }
         val call=fileClient.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object:Callback {
@@ -237,8 +254,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         })
     }
     override suspend fun download(device:String,chat:String,file:String):ByteArray = suspendCancellableCoroutine { continuation ->
-        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).build()
-        val builder=Request.Builder().url(url)
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).withProtocolQuery().build()
+        val builder=Request.Builder().url(url).withProtocolHeaders()
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> builder.header("Cookie","${c.name}=${c.value}") } }
         val call=client.newCall(builder.build());continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object:Callback {
@@ -265,9 +282,9 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         Page(j.rows("items") { require(it.string("app") == app) { "来源应用不匹配" }; parseChat(it) }, j.string("next_cursor").ifBlank { null }, j.optBoolean("has_more"))
     }
     override suspend fun chatList(device: String, app: String, query: String, cursor: String?, sort: String, status: String): Page<Chat> {
-        require(app == "all" || app in setOf("codex","claude","deepseek")) { "来源应用无效" }
+        require(app == "all" || isValidAgentId(app)) { "来源应用无效" }
         return request(devicePath(device,"/api/chats"), mapOf("app" to app, "limit" to "40", "query" to query, "cursor" to cursor, "sort" to sort, "status" to status)).let { j ->
-            Page(j.rows("items") { val c=parseChat(it); require(c.app in setOf("codex","claude","deepseek") && (app=="all" || c.app==app)) { "来源应用不匹配" }; c }, j.string("next_cursor").ifBlank { null }, j.optBoolean("has_more"))
+            Page(j.rows("items") { val c=parseChat(it); require(isValidAgentId(c.app) && (app=="all" || c.app==app)) { "来源应用不匹配" }; c }, j.string("next_cursor").ifBlank { null }, j.optBoolean("has_more"))
         }
     }
     override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int) = request(devicePath(device,"/api/chat"), mapOf("app" to app, "id" to chat, "n" to "$count", "before" to before, "around" to around, "lite" to "1")).let { j ->
@@ -287,8 +304,12 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
      * they change on every read while it works and the phone shows none of them (it uses `queued`). Left out, a poll
      * that finds nothing new is the same state, and the page is not drawn again (10-27, every 2.5 s).
      */
-    override suspend fun control(device: String, chat: String, fresh: Boolean) = parseControl(request(devicePath(device,"/api/$app/state"),mapOf("id" to chat,"fresh" to if(fresh) "1" else null),timeout=if(app=="claude") 20 else 0)
-        .apply { if(app=="deepseek") { put("queue_available",true);DeepSeekUnshown.forEach { remove(it) } } })
+    override suspend fun control(device: String, chat: String, fresh: Boolean): Control {
+        val stateTimeout = catalog.forDevice(device).params(app).stateTimeoutS
+        val timeout = if (stateTimeout == 40L) 0L else stateTimeout
+        return parseControl(request(devicePath(device,"/api/$app/state"),mapOf("id" to chat,"fresh" to if(fresh) "1" else null),timeout=timeout)
+            .apply { if(app=="deepseek") { put("queue_available",true);DeepSeekUnshown.forEach { remove(it) } } })
+    }
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
         require(route in setOf("send","stop","queue-action","answer"))
         if(app=="deepseek") {
@@ -321,8 +342,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     override fun events(device: String, chat: String) = kotlinx.coroutines.flow.callbackFlow {
         val reducer=StreamReducer(chat,app)
-        val url=root.newBuilder().encodedPath(devicePath(device,"/api/events")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("lite","1").build()
-        val request=Request.Builder().url(url).header("Accept","text/event-stream")
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/events")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("lite","1").withProtocolQuery().build()
+        val request=Request.Builder().url(url).header("Accept","text/event-stream").withProtocolHeaders()
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> request.header("Cookie","${c.name}=${c.value}") } }
         val streamClient=client.newBuilder().callTimeout(0,TimeUnit.SECONDS).readTimeout(25,TimeUnit.SECONDS).build()
         val source=okhttp3.sse.EventSources.createFactory(streamClient).newEventSource(request.build(),object:okhttp3.sse.EventSourceListener() {
