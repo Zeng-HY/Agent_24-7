@@ -371,7 +371,7 @@ class RelayApiTest {
      * query parameters, and request body; non-404 errors and non-legacy 404s never fall back.
      */
     @Test fun legacyHost404FallsBackToExactOriginalRoutesForAllThreeBuiltins()=runTest {
-        fun enqueue404Then(json:String) { response("""{"error":"没有这个地址"}""",404);response(json) }
+        fun enqueue404Then(json:String) { api.catalog.clear(device);response("""{"error":"没有这个地址"}""",404);response(json) }
 
         // --- Codex ---
         val codex=api.forSource("codex")
@@ -463,6 +463,7 @@ class RelayApiTest {
         assertEquals("/d/$device/api/claude/state",server.takeRequest().requestUrl!!.encodedPath)
 
         // Claude receipt on legacy host returns unknown locally after 404 without a second HTTP call.
+        api.catalog.clear(device)
         response("""{"error":"没有这个地址"}""",404)
         assertEquals("unknown",claude.receipt(device,"c2","r2").string("state"))
         assertEquals("/d/$device/api/agents/claude/receipt",server.takeRequest().requestUrl!!.encodedPath)
@@ -534,6 +535,7 @@ class RelayApiTest {
         assertEquals("/d/$device/api/deepseek/receipt",server.takeRequest().requestUrl!!.encodedPath)
 
         // --- Non-404 errors and non-legacy agent 404s do NOT fall back ---
+        api.catalog.clear(device)
         response("""{"error":"轮次已变化"}""",409)
         try { codex.command(device,"stop",JSONObject().put("id","c1"));fail() } catch(e:ServiceFailure) { assertEquals(409,e.status) }
         assertEquals("/d/$device/api/agents/codex/stop",server.takeRequest().requestUrl!!.encodedPath)
@@ -542,5 +544,198 @@ class RelayApiTest {
         response("""{"error":"没有这个来源"}""",404)
         try { testing.control(device,"test-running",false);fail() } catch(e:ServiceFailure) { assertEquals(404,e.status) }
         assertEquals("/d/$device/api/agents/testing/state",server.takeRequest().requestUrl!!.encodedPath)
+    }
+    /**
+     * When `/api/agents` returns 404 (legacy computer such as dev.41), every control read and action skips unified
+     * routes and sends only ONE request directly to the exact legacy route, query, and body.
+     */
+    @Test fun legacyHostWith404AgentsGoesDirectlyToLegacyRouteInOneRequest()=runTest {
+        response("""{"error":"没有这个地址"}""",404)
+        assertNull(api.agents(device))
+        assertEquals("/d/$device/api/agents",server.takeRequest().requestUrl!!.encodedPath)
+        assertTrue(api.catalog.shouldSkipUnified(device))
+
+        suspend fun assertSingle(block:suspend ()->Unit):okhttp3.mockwebserver.RecordedRequest {
+            val before=server.requestCount
+            block()
+            assertEquals("must send exactly one request directly to legacy route",before+1,server.requestCount)
+            return server.takeRequest()
+        }
+
+        // --- Codex ---
+        val codex=api.forSource("codex")
+        response("""{"available":true,"running":false}""")
+        val cxState=assertSingle { assertTrue(codex.control(device,"c1",true).available) }.requestUrl!!
+        assertEquals("/d/$device/api/codex/state",cxState.encodedPath);assertEquals("c1",cxState.queryParameter("id"));assertEquals("1",cxState.queryParameter("fresh"))
+
+        response("""{"request_id":"r1","delivery_state":"accepted"}""")
+        val cxSendBody=JSONObject().put("id","c1").put("request_id","r1").put("text","hello").put("intent","auto")
+        val cxSend=assertSingle { codex.command(device,"send",cxSendBody) }
+        assertEquals("/d/$device/api/codex/send",cxSend.requestUrl!!.encodedPath);assertEquals(cxSendBody.toString(),cxSend.body.readUtf8())
+
+        response("""{"ok":true}""")
+        val cxStopBody=JSONObject().put("id","c1").put("operation_id","op1").put("turn_id","t1")
+        val cxStop=assertSingle { codex.command(device,"stop",cxStopBody) }
+        assertEquals("/d/$device/api/codex/stop",cxStop.requestUrl!!.encodedPath);assertEquals(cxStopBody.toString(),cxStop.body.readUtf8())
+
+        response("""{"ok":true}""")
+        val cxQueueBody=JSONObject().put("id","c1").put("request_id","rq1").put("message_id","m1").put("action","cancel")
+        val cxQueue=assertSingle { codex.command(device,"queue-action",cxQueueBody) }
+        assertEquals("/d/$device/api/codex/queue-action",cxQueue.requestUrl!!.encodedPath);assertEquals(cxQueueBody.toString(),cxQueue.body.readUtf8())
+
+        response("""{"request_id":"ra1","accepted":true}""")
+        val cxAnswerBody=JSONObject().put("id","c1").put("request_id","ra1").put("question_id","q1").put("answers",JSONObject())
+        val cxAnswer=assertSingle { codex.command(device,"answer",cxAnswerBody) }
+        assertEquals("/d/$device/api/codex/answer",cxAnswer.requestUrl!!.encodedPath);assertEquals(cxAnswerBody.toString(),cxAnswer.body.readUtf8())
+
+        response("""{"state":"accepted"}""")
+        val cxRcpt=assertSingle { assertEquals("accepted",codex.receipt(device,"c1","r1").string("state")) }.requestUrl!!
+        assertEquals("/d/$device/api/codex/receipt",cxRcpt.encodedPath);assertEquals("c1",cxRcpt.queryParameter("id"));assertEquals("r1",cxRcpt.queryParameter("request_id"))
+
+        response("""{"ok":true}""")
+        val cxOpen=assertSingle { codex.detail(device,"chat/open",body=JSONObject().put("app","codex").put("id","c1")) }
+        assertEquals("/d/$device/api/chat/open",cxOpen.requestUrl!!.encodedPath)
+
+        response("""{"request_id":"n1","state":"creating"}""")
+        val cxNew=assertSingle { codex.detail(device,"chat/new",body=JSONObject().put("request_id","n1").put("app","codex").put("text","hi")) }
+        assertEquals("/d/$device/api/chat/new",cxNew.requestUrl!!.encodedPath)
+
+        response("""{"request_id":"n1","state":"accepted"}""")
+        val cxNewState=assertSingle { codex.detail(device,"chat/new/state",mapOf("request_id" to "n1","app" to "codex")) }.requestUrl!!
+        assertEquals("/d/$device/api/chat/new/state",cxNewState.encodedPath);assertEquals("n1",cxNewState.queryParameter("request_id"));assertNull(cxNewState.queryParameter("app"))
+
+        response("""{"models":[]}""")
+        val cxOpt=assertSingle { codex.detail(device,"chat/new/options",mapOf("app" to "codex")) }.requestUrl!!
+        assertEquals("/d/$device/api/chat/new/options",cxOpt.encodedPath);assertEquals("codex",cxOpt.queryParameter("app"))
+
+        response("""{"id":"img1"}""")
+        val cxUp=assertSingle { codex.upload(device,"c1","a.png",byteArrayOf(7,8),image=true) }
+        assertEquals("/d/$device/api/codex/upload",cxUp.requestUrl!!.encodedPath);assertEquals("codex",cxUp.requestUrl!!.queryParameter("app"))
+
+        // --- Claude ---
+        val claude=api.forSource("claude")
+        response("""{"available":true,"running":false}""")
+        assertEquals("/d/$device/api/claude/state",assertSingle { assertTrue(claude.control(device,"c2",true).available) }.requestUrl!!.encodedPath)
+
+        // Claude receipt on legacy host sends 0 HTTP requests.
+        val beforeClaudeRcpt=server.requestCount
+        assertEquals("unknown",claude.receipt(device,"c2","r2").string("state"))
+        assertEquals(beforeClaudeRcpt,server.requestCount)
+
+        response("""{"ok":true,"pressed":true,"offset":10}""")
+        val clSend=assertSingle { claude.command(device,"send",JSONObject().put("id","c2").put("request_id","r2").put("text","hi")) }
+        assertEquals("/d/$device/api/chat/send",clSend.requestUrl!!.encodedPath);assertEquals("claude",JSONObject(clSend.body.readUtf8()).string("app"))
+
+        response("""{"ok":true}""")
+        val clStop=assertSingle { claude.command(device,"stop",JSONObject().put("id","c2").put("token","t-stop")) }
+        assertEquals("/d/$device/api/claude/choose",clStop.requestUrl!!.encodedPath);assertEquals("t-stop",JSONObject(clStop.body.readUtf8()).string("token"))
+
+        for(route in listOf("claude/choose","claude/next","claude/task")) {
+            response("""{"ok":true}""")
+            assertEquals("/d/$device/api/$route",assertSingle { claude.detail(device,route,body=JSONObject().put("id","c2").put("token","t1")) }.requestUrl!!.encodedPath)
+        }
+
+        // --- DeepSeek ---
+        val ds=api.forSource("deepseek")
+        response("""{"available":true,"running":true,"seq":9,"queued":[]}""")
+        val dsStateReq=assertSingle {
+            val ctrl=ds.control(device,"c3",false)
+            assertTrue(ctrl.queueAvailable);assertFalse(JSONObject(ctrl.raw).has("seq"))
+        }
+        assertEquals("/d/$device/api/deepseek/state",dsStateReq.requestUrl!!.encodedPath)
+
+        response("""{"accepted":true}""")
+        val dsSend=assertSingle {
+            assertEquals("accepted",ds.command(device,"send",JSONObject().put("id","c3").put("request_id","r3").put("text","hi").put("intent","auto")).string("delivery_state"))
+        }
+        assertEquals("/d/$device/api/deepseek/send",dsSend.requestUrl!!.encodedPath);assertEquals("steer",JSONObject(dsSend.body.readUtf8()).string("intent"))
+
+        response("""{"ok":true}""")
+        val dsStop=assertSingle { ds.command(device,"stop",JSONObject().put("id","c3").put("turn_id","t3")) }
+        assertEquals("/d/$device/api/deepseek/stop",dsStop.requestUrl!!.encodedPath);assertEquals("t3",JSONObject(dsStop.body.readUtf8()).string("expected_turn"))
+
+        response("""{"ok":true}""")
+        val dsQueue=assertSingle { ds.command(device,"queue-action",JSONObject().put("id","c3").put("message_id","q3").put("action","promote")) }
+        assertEquals("/d/$device/api/deepseek/queue",dsQueue.requestUrl!!.encodedPath);assertEquals("steer",JSONObject(dsQueue.body.readUtf8()).string("action"))
+
+        for(route in listOf("deepseek/approval","deepseek/answer")) {
+            response("""{"ok":true}""")
+            assertEquals("/d/$device/api/$route",assertSingle { ds.detail(device,route,body=JSONObject().put("id","c3").put("event_id","e1").put("choice","allowed-once")) }.requestUrl!!.encodedPath)
+        }
+
+        response("""{"state":"accepted","id":"c3"}""")
+        assertEquals("/d/$device/api/deepseek/receipt",assertSingle { assertEquals("r3",ds.receipt(device,"c3","r3").string("request_id")) }.requestUrl!!.encodedPath)
+    }
+    /**
+     * When a computer has `/api/agents` (such as dev.43) but returns `404 {"error":"没有这个地址"}` for unified routes,
+     * the first call falls back and caches that this computer has no unified routes; subsequent calls go straight to
+     * legacy routes in 1 request; when `/api/status` reports a new version, unified routes are tried again.
+     */
+    @Test fun routeMissing404RemembersLegacyAndRetriesAfterStatusVersionChange()=runTest {
+        // Host starts as dev.43: has /api/agents, does NOT have /api/agents/<id>/...
+        response("""{"schema":1,"protocol":2,"agents":[{"id":"codex","name":{"zh":"Codex","en":"Codex"},"order":10,"color":"#1E222A","color_dark":"#FFFFFF","icon":{"kind":"builtin","key":"codex"},"legacy":true,"min_protocol":1}]}""")
+        assertNotNull(api.agents(device));server.takeRequest()
+        response("""{"ok":true,"ui_version":"0.27.0-dev.43"}""")
+        api.detail(device,"status");server.takeRequest()
+        assertFalse(api.catalog.shouldSkipUnified(device))
+
+        // First call tries unified -> 404 "没有这个地址" -> falls back to legacy (2 requests) and remembers.
+        response("""{"error":"没有这个地址"}""",404);response("""{"available":true,"running":false}""")
+        assertTrue(api.control(device,"c1",false).available)
+        assertEquals("/d/$device/api/agents/codex/state",server.takeRequest().requestUrl!!.encodedPath)
+        assertEquals("/d/$device/api/codex/state",server.takeRequest().requestUrl!!.encodedPath)
+        assertTrue(api.catalog.shouldSkipUnified(device))
+
+        // Subsequent calls on Codex AND DeepSeek go straight to legacy (1 request each).
+        val beforeSecond=server.requestCount
+        response("""{"available":true,"running":false}""")
+        api.control(device,"c1",false)
+        assertEquals(beforeSecond+1,server.requestCount)
+        assertEquals("/d/$device/api/codex/state",server.takeRequest().requestUrl!!.encodedPath)
+
+        val beforeDs=server.requestCount
+        response("""{"available":true,"running":false}""")
+        api.forSource("deepseek").control(device,"c3",false)
+        assertEquals(beforeDs+1,server.requestCount)
+        assertEquals("/d/$device/api/deepseek/state",server.takeRequest().requestUrl!!.encodedPath)
+
+        // Same status version keeps the cache.
+        response("""{"ok":true,"ui_version":"0.27.0-dev.43"}""")
+        api.detail(device,"status");server.takeRequest()
+        assertTrue(api.catalog.shouldSkipUnified(device))
+
+        // Computer upgrades to dev.44 -> /api/status reports new version -> cache cleared -> unified routes tried again!
+        response("""{"ok":true,"ui_version":"0.27.0-dev.44"}""")
+        api.detail(device,"status");server.takeRequest()
+        assertFalse(api.catalog.shouldSkipUnified(device))
+
+        val beforeUpgraded=server.requestCount
+        response("""{"available":true,"running":true}""")
+        assertTrue(api.control(device,"c1",false).running)
+        assertEquals(beforeUpgraded+1,server.requestCount)
+        assertEquals("/d/$device/api/agents/codex/state",server.takeRequest().requestUrl!!.encodedPath)
+    }
+    /**
+     * A 404 caused by a missing conversation or unknown source must NOT be confused with a missing route and must NOT
+     * disable unified routes for the computer.
+     */
+    @Test fun conversationNotFound404DoesNotDisableUnifiedRoutes()=runTest {
+        response("""{"error":"找不到这个对话（可能已归档或删掉了）"}""",404)
+        val before=server.requestCount
+        try { api.control(device,"gone",false);fail() } catch(e:ServiceFailure) { assertEquals(404,e.status);assertTrue(e.detail.contains("找不到这个对话")) }
+        assertEquals(before+1,server.requestCount)
+        assertEquals("/d/$device/api/agents/codex/state",server.takeRequest().requestUrl!!.encodedPath)
+        assertFalse(api.catalog.shouldSkipUnified(device))
+
+        // Unknown-source 404 also never disables unified routes.
+        response("""{"error":"没有这个来源"}""",404)
+        try { api.control(device,"c1",false);fail() } catch(e:ServiceFailure) { assertEquals(404,e.status) }
+        server.takeRequest()
+        assertFalse(api.catalog.shouldSkipUnified(device))
+
+        // Next call still uses the unified route directly.
+        response("""{"available":true,"running":false}""")
+        assertTrue(api.control(device,"alive",false).available)
+        assertEquals("/d/$device/api/agents/codex/state",server.takeRequest().requestUrl!!.encodedPath)
     }
 }

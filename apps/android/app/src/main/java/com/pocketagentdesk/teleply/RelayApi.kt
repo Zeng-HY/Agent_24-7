@@ -164,45 +164,75 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     } catch (e: ServiceFailure) {
         if (e.status == 404) { catalog.put(device, null); null } else throw e
     }
-    /** Tries the unified `/api/agents/<id>/...` route first; falls back to [legacy] only on HTTP 404. */
-    private suspend fun <T> withLegacyFallback(allowFallback: Boolean, primary: suspend () -> T, legacy: suspend () -> T): T =
-        try { primary() } catch (e: ServiceFailure) { if (e.status == 404 && allowFallback) legacy() else throw e }
+    /** `remote.py` lines 712 & 896 return `404 {"error":"没有这个地址"}` for any unknown route (GET/POST). */
+    private fun isMissingRoute404(e: ServiceFailure): Boolean = e.status == 404 && e.detail == "没有这个地址"
+
+    /**
+     * Tries the unified `/api/agents/<id>/...` route first; goes directly to [legacy] when [catalog] already knows
+     * [device] lacks `/api/agents` or unified routes. Only marks [device] on route-missing 404 (`没有这个地址`), never on
+     * conversation-not-found or unknown-source 404s.
+     */
+    private suspend fun <T> withLegacyFallback(
+        device: String,
+        allowFallback: Boolean,
+        primary: suspend () -> T,
+        legacy: suspend () -> T,
+    ): T {
+        if (allowFallback && catalog.shouldSkipUnified(device)) return legacy()
+        return try {
+            primary()
+        } catch (e: ServiceFailure) {
+            if (!allowFallback || e.status != 404) throw e
+            when {
+                isMissingRoute404(e) -> {
+                    catalog.markUnifiedUnsupported(device)
+                    legacy()
+                }
+                e.detail == "没有这个接口" -> legacy()
+                else -> throw e
+            }
+        }
+    }
 
     override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
         require(route in DetailRoutes)
         val timeout = SlowRoutes[route] ?: 0L
         return when (route) {
+            "status" -> request(devicePath(device, "/api/status"), query, body, timeout = timeout).also { result ->
+                val ver = result.string("ui_version").ifBlank { result.string("version") }
+                if (ver.isNotBlank()) catalog.updateVersion(device, ver)
+            }
             "chat/open" -> {
                 val target = body?.string("app")?.takeIf { isValidAgentId(it) } ?: app
-                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/open"), body = body, timeout = timeout) }) {
+                withLegacyFallback(device, true, { request(devicePath(device, "/api/agents/$target/open"), body = body, timeout = timeout) }) {
                     request(devicePath(device, "/api/chat/open"), query, body, timeout = timeout)
                 }
             }
             "chat/new" -> {
                 val target = body?.string("app")?.takeIf { isValidAgentId(it) } ?: app
-                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/create"), body = body, timeout = timeout) }) {
+                withLegacyFallback(device, true, { request(devicePath(device, "/api/agents/$target/create"), body = body, timeout = timeout) }) {
                     request(devicePath(device, "/api/chat/new"), query, body, timeout = timeout)
                 }
             }
             "chat/new/state" -> {
                 val target = query["app"]?.takeIf { isValidAgentId(it) } ?: app
                 val clean = query.filterKeys { it != "app" }
-                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/create/state"), clean, timeout = timeout) }) {
+                withLegacyFallback(device, true, { request(devicePath(device, "/api/agents/$target/create/state"), clean, timeout = timeout) }) {
                     request(devicePath(device, "/api/chat/new/state"), clean, timeout = timeout)
                 }
             }
             "chat/new/options" -> {
                 val target = query["app"]?.takeIf { isValidAgentId(it) } ?: app
-                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/options"), timeout = timeout) }) {
+                withLegacyFallback(device, true, { request(devicePath(device, "/api/agents/$target/options"), timeout = timeout) }) {
                     request(devicePath(device, "/api/chat/new/options"), query, timeout = timeout)
                 }
             }
-            "claude/choose", "claude/next", "claude/task" -> withLegacyFallback(true, {
+            "claude/choose", "claude/next", "claude/task" -> withLegacyFallback(device, true, {
                 request(devicePath(device, "/api/agents/claude/answer"), body = body, timeout = timeout)
             }) {
                 request(devicePath(device, "/api/$route"), query, body, timeout = timeout)
             }
-            "deepseek/approval", "deepseek/answer" -> withLegacyFallback(true, {
+            "deepseek/approval", "deepseek/answer" -> withLegacyFallback(device, true, {
                 request(devicePath(device, "/api/agents/deepseek/answer"), body = body, timeout = timeout)
             }) {
                 request(devicePath(device, "/api/$route"), query, body, timeout = timeout)
@@ -230,7 +260,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         require(bytes.isNotEmpty() && bytes.size <= if(image) 20*1024*1024 else 100*1024*1024) { "文件超过上传上限" }
         val keyParam = if(draft) "draft" else "id"
         if (!image) return request(devicePath(device,"/api/files/upload"),mapOf("app" to app,keyParam to chat,"name" to name),bytes=bytes)
-        return withLegacyFallback(true, {
+        return withLegacyFallback(device, true, {
             request(devicePath(device,"/api/agents/$app/upload"),mapOf(keyParam to chat,"name" to name),bytes=bytes)
         }) {
             request(devicePath(device,"/api/codex/upload"),mapOf("app" to app,keyParam to chat,"name" to name),bytes=bytes)
@@ -245,7 +275,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         }
         val keyParam = if(draft) "draft" else "id"
         if (!image) return request(devicePath(device,"/api/files/upload"),mapOf("app" to app,keyParam to chat,"name" to name),stream=makeBody())
-        return withLegacyFallback(true, {
+        return withLegacyFallback(device, true, {
             request(devicePath(device,"/api/agents/$app/upload"),mapOf(keyParam to chat,"name" to name),stream=makeBody())
         }) {
             request(devicePath(device,"/api/codex/upload"),mapOf("app" to app,keyParam to chat,"name" to name),stream=makeBody())
@@ -363,7 +393,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         val stateTimeout = catalog.forDevice(device).params(app).stateTimeoutS
         val timeout = if (stateTimeout == 40L) 0L else stateTimeout
         val query = mapOf("id" to chat, "fresh" to if (fresh) "1" else null)
-        val raw = withLegacyFallback(app in LegacyApps, {
+        val raw = withLegacyFallback(device, app in LegacyApps, {
             request(devicePath(device, "/api/agents/$app/state"), query, timeout = timeout)
         }) {
             request(devicePath(device, "/api/$app/state"), query, timeout = timeout)
@@ -382,7 +412,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
                     "queue-action" -> { outgoing.put("item_id", body.string("message_id")).put("action", if (body.string("action") == "promote") "steer" else "remove"); "queue" to "queue" }
                     else -> "answer" to route
                 }
-                val result = withLegacyFallback(true, {
+                val result = withLegacyFallback(device, true, {
                     request(devicePath(device, "/api/agents/deepseek/$unifiedAction"), body = outgoing)
                 }) {
                     request(devicePath(device, "/api/deepseek/$legacyAction"), body = outgoing)
@@ -393,7 +423,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
             "claude" -> when (route) {
                 "send" -> {
                     val unifiedBody = JSONObject(body.toString()).put("intent", "send").apply { remove("expected_turn") }
-                    withLegacyFallback(true, {
+                    withLegacyFallback(device, true, {
                         request(devicePath(device, "/api/agents/claude/send"), body = unifiedBody)
                     }) {
                         request(devicePath(device, "/api/chat/send"), body = JSONObject(body.toString()).put("app", "claude"))
@@ -401,7 +431,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
                 }
                 "stop" -> {
                     require(body.string("token").isNotBlank()) { "Claude 的停止与队列动作需使用当前桌面令牌" }
-                    withLegacyFallback(true, {
+                    withLegacyFallback(device, true, {
                         request(devicePath(device, "/api/agents/claude/stop"), body = body)
                     }) {
                         request(devicePath(device, "/api/claude/choose"), body = body)
@@ -414,13 +444,13 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
                     val unifiedBody = JSONObject(body.toString())
                         .put("item_id", body.string("message_id"))
                         .put("action", if (body.string("action") == "promote") "promote" else "remove")
-                    withLegacyFallback(true, {
+                    withLegacyFallback(device, true, {
                         request(devicePath(device, "/api/agents/codex/queue"), body = unifiedBody)
                     }) {
                         request(devicePath(device, "/api/codex/queue-action"), body = body)
                     }
                 }
-                else -> withLegacyFallback(true, {
+                else -> withLegacyFallback(device, true, {
                     request(devicePath(device, "/api/agents/codex/$route"), body = body)
                 }) {
                     request(devicePath(device, "/api/codex/$route"), body = body)
@@ -439,7 +469,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     override suspend fun receipt(device: String, chat: String, request: String):JSONObject {
         val query = mapOf("id" to chat, "request_id" to request)
-        val response = withLegacyFallback(app in LegacyApps, {
+        val response = withLegacyFallback(device, app in LegacyApps, {
             request(devicePath(device, "/api/agents/$app/receipt"), query)
         }) {
             if (app == "claude") JSONObject().put("state", "unknown")

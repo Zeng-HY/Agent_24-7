@@ -229,6 +229,8 @@ data class AgentCatalogSnapshot(
  */
 class AgentCatalog {
     private val entries = mutableMapOf<String, AgentCatalogSnapshot>()
+    private val versions = mutableMapOf<String, String>()
+    private val unifiedUnsupported = mutableSetOf<String>()
 
     @Synchronized
     fun get(device: String): AgentCatalogSnapshot? = entries[device]
@@ -239,35 +241,69 @@ class AgentCatalog {
 
     @Synchronized
     fun put(device: String, agents: List<AgentInfo>?, version: String = ""): AgentCatalogSnapshot {
+        val effectiveVersion = version.ifBlank { versions[device].orEmpty() }
+        if (effectiveVersion.isNotBlank()) versions[device] = effectiveVersion
+        unifiedUnsupported.remove(device)
         val snapshot = if (agents != null) {
-            AgentCatalogSnapshot.fromServer(agents, version)
+            AgentCatalogSnapshot.fromServer(agents, effectiveVersion)
         } else {
-            AgentCatalogSnapshot.Builtin.copy(version = version)
+            AgentCatalogSnapshot.Builtin.copy(version = effectiveVersion)
         }
         entries[device] = snapshot
         return snapshot
     }
 
+    /** Remembers that [device] returned a route-missing 404 (`没有这个地址`) for `/api/agents/<id>/...`. */
+    @Synchronized
+    fun markUnifiedUnsupported(device: String) {
+        unifiedUnsupported += device
+    }
+
+    /**
+     * True when [device] is already known to have no unified routes: either `GET /api/agents` returned 404
+     * (`fromServer == false`), or a unified route returned `404 {"error":"没有这个地址"}`.
+     */
+    @Synchronized
+    fun shouldSkipUnified(device: String): Boolean {
+        if (device in unifiedUnsupported) return true
+        val existing = entries[device]
+        return existing != null && !existing.fromServer
+    }
+
     @Synchronized
     fun updateVersion(device: String, statusVersion: String): Boolean {
         if (statusVersion.isBlank()) return false
-        val existing = entries[device] ?: return true
-        if (existing.version.isBlank()) {
-            entries[device] = existing.copy(version = statusVersion)
+        val previous = versions[device].orEmpty()
+        if (previous.isBlank()) {
+            versions[device] = statusVersion
+            entries[device]?.let { entries[device] = it.copy(version = statusVersion) }
             return false
         }
-        return existing.version != statusVersion
+        if (previous == statusVersion) return false
+        versions[device] = statusVersion
+        unifiedUnsupported.remove(device)
+        entries.remove(device)
+        return true
     }
 
     @Synchronized
     fun needsRefresh(device: String, statusVersion: String = ""): Boolean {
-        val existing = entries[device] ?: return true
-        return statusVersion.isNotBlank() && existing.version.isNotBlank() && existing.version != statusVersion
+        if (device !in entries) return true
+        val previous = versions[device].orEmpty()
+        return statusVersion.isNotBlank() && previous.isNotBlank() && previous != statusVersion
     }
 
     @Synchronized
     fun clear(device: String? = null) {
-        if (device == null) entries.clear() else entries.remove(device)
+        if (device == null) {
+            entries.clear()
+            versions.clear()
+            unifiedUnsupported.clear()
+        } else {
+            entries.remove(device)
+            versions.remove(device)
+            unifiedUnsupported.remove(device)
+        }
     }
 
     /**
@@ -283,9 +319,14 @@ class AgentCatalog {
         if (!force) {
             val cached = get(device)
             if (cached != null && !needsRefresh(device, statusVersion)) {
-                if (statusVersion.isNotBlank() && cached.version.isBlank()) {
-                    synchronized(this) { entries[device] = cached.copy(version = statusVersion) }
-                    return cached.copy(version = statusVersion)
+                if (statusVersion.isNotBlank()) {
+                    synchronized(this) {
+                        if (versions[device].isNullOrBlank()) {
+                            versions[device] = statusVersion
+                            entries[device] = cached.copy(version = statusVersion)
+                        }
+                    }
+                    return get(device) ?: cached
                 }
                 return cached
             }
