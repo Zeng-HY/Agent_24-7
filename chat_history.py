@@ -102,9 +102,10 @@ class History:
         self.catalog_load_lock=threading.Lock();self.catalog_generation=0
     def transcript(self,app,tid):
         from agents import registry
-        agent=registry.get(app)
+        from agents.base import AgentError
+        try:agent=registry.get(app)
+        except AgentError as exc:raise HistoryError(str(exc),400) from None
         if not agent.home_list:
-            from agents.base import AgentError
             try:return agent.transcript(tid)
             except AgentError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
             except chats.ChatError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
@@ -201,9 +202,11 @@ class History:
     def children(self,app,tid,offset=0,limit=50):
         """More children of one conversation, or more of the Ungrouped bucket, past the first CHILDREN_SHOWN."""
         from agents import registry
-        from agents.base import AgentError
+        from agents.base import AgentError, UnknownAgent, Unsupported
         try:
             return registry.get(app).children(tid,offset,limit)
+        except (UnknownAgent,Unsupported):
+            raise HistoryError('只有 DeepSeek 对话有子对话',400) from None
         except AgentError as exc:
             raise HistoryError(str(exc),getattr(exc,'status',400)) from None
         except chats.ChatError as exc:
@@ -240,7 +243,9 @@ class History:
         return {'items':out}
     def conversation(self,app,tid,limit=60,before='',around='',lite=False):
         from agents import registry
-        agent=registry.get(app)
+        from agents.base import AgentError
+        try:agent=registry.get(app)
+        except AgentError as exc:raise HistoryError(str(exc),400) from None
         if not agent.home_list:
             try:return agent.read(tid,limit=limit,before=before,around=around,lite=lite)
             except chats.ChatError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
@@ -310,8 +315,8 @@ class History:
         from message_files import references
         from agents import registry
         import office_preview  # Word, Excel and PowerPoint files the computer can show as PDF
-        agent=registry.get(app)
         item,entry=self.transcript(app,tid)
+        agent=registry.get(app)
         out=[];seen_paths=set()
         with entry.lock:
             if message_id:message_id=(getattr(entry,'by_id',{}).get(message_id) or {}).get('id',message_id)  # a merged copy's id too

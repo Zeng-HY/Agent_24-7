@@ -334,24 +334,22 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             return 1
 
-    def _app_visible(self, app: str) -> bool:
-        machine = getattr(self.server, "machine", None) or {}
-        apps = machine.get("apps") if isinstance(machine, dict) else None
-        if apps is not None and app not in apps:
-            return False
+    def _app_visible(self, app: str):
+        """True: this phone may read it; False: an old phone may not; None: unknown, let the old route say so."""
+        try:
+            agent = agent_registry.get(app)
+        except Exception:
+            return None
         if self._client_protocol() >= 2:
             return True
-        try:
-            return bool(agent_registry.get(app).manifest()["legacy"])
-        except Exception:
-            return False
+        return bool(agent.manifest()["legacy"])
 
     def _visible_apps(self) -> list[str]:
         machine = getattr(self.server, "machine", None) or {}
         apps = machine.get("apps") if isinstance(machine, dict) else None
         if apps is None:
             return [a.id for a in agent_registry.load() if a.manifest()["legacy"]] if self._client_protocol() < 2 else agent_registry.ids()
-        return [app for app in apps if self._app_visible(app)]
+        return [app for app in apps if self._app_visible(app) is True]
 
     def _refusal(self) -> str:
         """What a refused page says: which account is not let in and how to let it in, or how to get the token."""
@@ -601,17 +599,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path=='/api/composer/references':
             q=self._query();app=q.get('app','codex')
-            if not self._app_visible(app):
+            if self._app_visible(app) is False:
                 self._json({'error':'没有这个来源'},404);return
             try:self._json(self.server.references.search(app,q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),force=q.get('fresh')=='1',scan_id=q.get('scan_id','')))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
         if path=='/api/composer/commands':  # 0.6.6: what the box offers after / (composer_commands.py)
             q=self._query();app=q.get('app','codex')
-            if not self._app_visible(app):
-                self._json({'error':'没有这个来源'},404);return
+            try:agent=agent_registry.get(app)
+            except Exception:
+                self._json({'error':'没有这个来源'},400);return
+            if self._app_visible(app) is False:
+                self._json({'error':'没有这个来源'},400);return
             try:
-                if agent_registry.get(app).home_list:chats.find(app,q.get('id',''))
+                if agent.home_list:chats.find(app,q.get('id',''))
                 self._json(composer_commands.catalog(app,q.get('id',''),self.server.references,self.server.deepseek))
             except (chats.ChatError,deepseek_control.DeepSeekError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
@@ -625,10 +626,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path=='/api/chat/archived':  # 设置 → 已归档对话 (archives.py)
             try:
-                out=self.server.archives.archived();visible=set(self._visible_apps())
-                out['items']=[v for v in out.get('items',[]) if v.get('app') in visible]
-                out['apps']=[a for a in out.get('apps',[]) if a in visible]
-                out['deletable']=[a for a in out.get('deletable',[]) if a in visible]
+                out=self.server.archives.archived()
+                out['items']=[v for v in out.get('items',[]) if self._app_visible(v.get('app')) is not False]
+                out['apps']=[a for a in out.get('apps',[]) if self._app_visible(a) is not False]
+                out['deletable']=[a for a in out.get('deletable',[]) if self._app_visible(a) is not False]
                 self._json(out)
             except chats.ChatError as exc:self._json({'error':str(exc)},getattr(exc,'status',400))
             return
@@ -640,7 +641,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path=='/api/chat/new/options':  # the models and effort steps the new-conversation sheet offers (10-14)
             app=self._query().get('app','')
-            if app and not self._app_visible(app):
+            if app and self._app_visible(app) is False:
                 self._json({'error':'没有这个来源'},404);return
             try:self._json(self.server.new_chats.options(app))
             except chats.ChatError as exc:self._json({'error':str(exc)},400)
@@ -665,14 +666,14 @@ class Handler(BaseHTTPRequestHandler):
             except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chats/children":  # past the first children a row carries (10-20)
             q = self._query();app=q.get("app", "")
-            if app and not self._app_visible(app):
+            if app and self._app_visible(app) is False:
                 self._json({"error": "没有这个来源"}, 404)
             else:
                 try:self._json(self.history.children(app,q.get("id", ""),int(q.get("offset", "0") or 0),int(q.get("limit", "50") or 50)))
                 except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))
         elif path == "/api/chat":
             q = self._query();app=q.get("app", "")
-            if app and not self._app_visible(app):
+            if app and self._app_visible(app) is False:
                 self._json({"error": "没有这个来源"}, 404);return
             # 11-16: lite=1 is the phones' page: no tool detail or result, which neither phone keeps.
             lite = q.get("lite", "") in ("1", "true")
@@ -685,7 +686,7 @@ class Handler(BaseHTTPRequestHandler):
                 rows = self.history.catalog() + [dict(v, ungrouped=True) for v in self.history.ungrouped()]
                 if q.get("key"):
                     app=q.get("app", "")
-                    if app and not self._app_visible(app):
+                    if app and self._app_visible(app) is False:
                         self._json({"error":"没有这个来源"},404)
                     else:
                         self._json(chat_projects.page(rows, app, q["key"],
@@ -699,7 +700,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)[:200]}, 400)
         elif path == "/api/chat/folders":
             app=self._query().get('app','')
-            if app and not self._app_visible(app):
+            if app and self._app_visible(app) is False:
                 self._json({'folders':[],'items':[]})
             else:
                 items=self.server.new_chats.folders(app)
@@ -939,8 +940,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reading_get(self,path):
         q=self._query();app=q.get('app','codex');tid=q.get('id','')
-        if app and not getattr(self,"_app_visible",lambda _app:True)(app):
-            self._json({'error':'没有这个来源'},404);return
+        if app and not (str(q.get('file','')).startswith('pc.') and path.startswith('/api/file')):
+            if getattr(self,"_app_visible",lambda _app:True)(app) is False:
+                self._json({'error':'没有这个来源'},404);return
         try:
             if path=='/api/events':
                 with self.server.notifier.watching(app,tid):  # the phone has it open: its turns are not notified
