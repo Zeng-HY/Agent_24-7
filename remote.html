@@ -16,6 +16,7 @@
 <link rel="manifest" href="/manifest.webmanifest?v=__TELEPLY_VERSION__">
 <title>Teleply</title>
 <!--machine-->
+<script src="/agents.js"></script>
 <script>
 // Pointer taps and programmatic dialog focus must not leave keyboard rings on iOS.
 if(!window.arFocusModality){window.arFocusModality=true;document.documentElement.dataset.input='pointer';
@@ -95,7 +96,7 @@ document.addEventListener('keydown',event=>{if(event.key==='Tab')document.docume
   .conv .cm { color:var(--muted); font-size:12px; white-space:nowrap; }
   .conv .c2 { font-size:13px; color:var(--muted); margin-top:2px; }
   .conv .c3 { font-size:14px; color:#4b5563; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .badge { font-size:11px; font-weight:700; padding:2px 6px; border-radius:6px; flex:none; }
+  .badge { font-size:11px; font-weight:700; padding:2px 6px; border-radius:6px; flex:none; background:#6b7280; color:#fff; }
   .badge.codex { background:#111827; color:#fff; }
   .badge.claude { background:#d97757; color:#fff; }
   .badge.deepseek { background:#4d6bfe; color:#fff; }
@@ -423,7 +424,8 @@ function showSessionExpired(force=false){
 }
 async function api(path, body, timeout) {
   const stop = timeout ? new AbortController() : null, timer = stop && setTimeout(() => stop.abort(), timeout);
-  let r; try { r = await fetch(path, {...(body ? {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {}), ...(stop ? {signal: stop.signal} : {})}); }
+  const headers = {'X-Teleply-Protocol': '2', ...(body ? {'Content-Type':'application/json'} : {})};
+  let r; try { r = await fetch(path, {...(body ? {method:'POST', headers, body: JSON.stringify(body)} : {headers}), ...(stop ? {signal: stop.signal} : {})}); }
   catch (e) { if (stop?.signal.aborted) throw new Error('电脑 ' + Math.round(timeout / 1000) + ' 秒没回应'); throw e; }
   finally { if (timer) clearTimeout(timer); }
   let j = null; try { j = await r.json(); } catch (e) {}

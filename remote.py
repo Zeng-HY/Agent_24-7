@@ -112,6 +112,7 @@ DEFAULT_CONFIG = {
 RETIRED_KEYS = ("browser", "profile", "userscripts", "window", "download_dir", "inbox", "urls", "dialog_wait_seconds",
                 "chooser_wait_seconds", "question_wait_seconds", "page_pins", "win_presets")
 STATIC_FILES = {
+    '/agents.js': ('agents.js','application/javascript; charset=utf-8'),
     '/artifact-preview.js': ('artifact-preview.js','application/javascript; charset=utf-8'),
     '/artifact-preview.css': ('artifact-preview.css','text/css; charset=utf-8'),  # served without the token: home-screen icons and the web app manifest
     '/markdown-it.min.js': ('markdown-it.min.js','application/javascript; charset=utf-8'),
