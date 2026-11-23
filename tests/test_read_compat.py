@@ -63,6 +63,12 @@ class CompatTests(unittest.TestCase):
         self.assertEqual(sent[0][0], 200)
         self.assertIn("page", calls)
 
+        handler, sent = self.handler("/api/chat/search?app=claude&id=c&query=x&t=secret", apps)
+        handler.server.history = SimpleNamespace(search=lambda *args: (calls.append("search"), {"items": []})[1])
+        handler._reading_get("/api/chat/search")
+        self.assertEqual(sent[0][0], 200)
+        self.assertIn("search", calls)
+
     def test_archive_filter_is_protocol_only_not_the_apps_list(self):
         apps = ["codex", "deepseek"]
         archived = {"items": [{"app": "claude", "id": "c1"}], "apps": ["claude"], "deletable": [], "problems": []}
