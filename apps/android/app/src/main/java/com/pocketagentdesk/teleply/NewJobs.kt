@@ -150,7 +150,7 @@ class NewChatJobs(private val scope: CoroutineScope, private val store: ReaderSt
         scope.launch {
             var again = 500L
             try {
-                val r = service.detail(k.device, "chat/new/state", mapOf("request_id" to rid))
+                val r = service.detail(k.device, "chat/new/state", mapOf("request_id" to rid, "app" to job.app))
                 val now = current(rid) ?: return@launch
                 require(r.string("request_id").let { it.isBlank() || it == rid }) { "回执身份不匹配" }
                 // The computer has no submission for it: the same request may be sent on, it would not be created twice.

@@ -46,6 +46,13 @@ object Diagnostics {
         // Word, Excel and PowerPoint as PDF (10-27): the first time, Office on the computer may take half a minute.
         "/api/file/pdf" to "文件预览",
     )
+    private val UnifiedAction = Regex("^/api/agents/[a-z][a-z0-9_-]{0,31}/(send|create|upload)$")
+    fun labelFor(path: String): String? = Labels[path] ?: when (UnifiedAction.matchEntire(path)?.groupValues?.get(1)) {
+        "send" -> "消息提交"
+        "create" -> "新对话提交"
+        "upload" -> "图片上传"
+        else -> null
+    }
 
     class Timer internal constructor(val label: String, val start: Long, val generation: Int, val hidden: Int)
 

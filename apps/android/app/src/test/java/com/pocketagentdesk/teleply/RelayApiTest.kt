@@ -19,7 +19,7 @@ class RelayApiTest {
         response("""{"app":"deepseek","id":"chat","messages":[]}""");ds.history(device,"chat")
         assertEquals("deepseek",server.takeRequest().requestUrl!!.queryParameter("app"))
         response("""{"id":"image"}""");ds.uploadStream(device,"chat","测试.png",3L,true) { java.io.ByteArrayInputStream(byteArrayOf(1,2,3)) }
-        val upload=server.takeRequest();assertEquals("/d/$device/api/codex/upload",upload.requestUrl!!.encodedPath);assertEquals("deepseek",upload.requestUrl!!.queryParameter("app"));assertEquals(server.url("/").toString().removeSuffix("/"),upload.getHeader("Origin"));assertArrayEquals(byteArrayOf(1,2,3),upload.body.readByteArray())
+        val upload=server.takeRequest();assertEquals("/d/$device/api/agents/deepseek/upload",upload.requestUrl!!.encodedPath);assertEquals("chat",upload.requestUrl!!.queryParameter("id"));assertEquals(server.url("/").toString().removeSuffix("/"),upload.getHeader("Origin"));assertArrayEquals(byteArrayOf(1,2,3),upload.body.readByteArray())
         server.enqueue(MockResponse().setBody("fixture"));assertEquals("fixture",String(ds.download(device,"chat","file")))
         val download=server.takeRequest();assertEquals("/d/$device/api/file",download.requestUrl!!.encodedPath);assertEquals("deepseek",download.requestUrl!!.queryParameter("app"))
         server.enqueue(MockResponse().setBody("streamed-file"));val out=java.io.ByteArrayOutputStream();ds.downloadTo(device,"chat","file",out);assertEquals("streamed-file",out.toString());assertEquals("file",server.takeRequest().requestUrl!!.queryParameter("file"))
@@ -73,9 +73,9 @@ class RelayApiTest {
     @Test fun commandAndReceiptBindDeviceOriginAndOriginalRequest()=runTest {
         response("""{"request_id":"r","delivery_state":"accepted"}""")
         api.command(device,"send",JSONObject().put("id","chat").put("request_id","r").put("text","fixture"))
-        val post=server.takeRequest();assertEquals("/d/$device/api/codex/send",post.requestUrl!!.encodedPath);assertEquals(server.url("/").toString().removeSuffix("/"),post.getHeader("Origin"))
+        val post=server.takeRequest();assertEquals("/d/$device/api/agents/codex/send",post.requestUrl!!.encodedPath);assertEquals(server.url("/").toString().removeSuffix("/"),post.getHeader("Origin"))
         response("""{"state":"unknown"}""");api.receipt(device,"chat","r")
-        val get=server.takeRequest();assertEquals("r",get.requestUrl!!.queryParameter("request_id"));assertEquals("GET",get.method)
+        val get=server.takeRequest();assertEquals("/d/$device/api/agents/codex/receipt",get.requestUrl!!.encodedPath);assertEquals("r",get.requestUrl!!.queryParameter("request_id"));assertEquals("GET",get.method)
     }
     @Test fun mixedListKeepsUnknownValidSourcesAndRejectsCrossSourceOrMalformed()=runTest {
         response("""{"items":[{"id":"a","app":"codex","title":"A","updated":2000,"created":1000},{"id":"b","app":"claude","title":"B"},{"id":"c","app":"deepseek","title":"C"},{"id":"t","app":"testing","title":"T"},{"id":"u","app":"unknown_new","title":"U"}],"has_more":false}""")
@@ -306,5 +306,241 @@ class RelayApiTest {
         val body=JSONObject(post.body.readUtf8())
         assertEquals("reset-request-0001",body.string("request_id"));assertEquals("credit-available",body.string("credit_id"))
         assertEquals(true,body.getBoolean("confirmed"))
+    }
+    /** Step 7 (unified-routes.md): unified `/api/agents/<id>/...` routes work for all three built-ins and the fake testing helper. */
+    @Test fun unifiedRoutesWorkForBuiltinsAndTestingHelper()=runTest {
+        val testing=api.forSource("testing")
+        response("""{"available":true,"running":true,"turn_id":"t1"}""")
+        val state=testing.control(device,"test-running",true)
+        assertTrue(state.running)
+        val stateReq=server.takeRequest()
+        assertEquals("/d/$device/api/agents/testing/state",stateReq.requestUrl!!.encodedPath)
+        assertEquals("test-running",stateReq.requestUrl!!.queryParameter("id"))
+        assertEquals("1",stateReq.requestUrl!!.queryParameter("fresh"))
+
+        response("""{"ok":true,"accepted":true,"request_id":"r1","delivery_state":"accepted"}""")
+        testing.command(device,"send",JSONObject().put("id","test-running").put("request_id","r1").put("text","hi"))
+        assertEquals("/d/$device/api/agents/testing/send",server.takeRequest().requestUrl!!.encodedPath)
+
+        response("""{"ok":true}""")
+        testing.command(device,"stop",JSONObject().put("id","test-running").put("turn_id","t1"))
+        assertEquals("/d/$device/api/agents/testing/stop",server.takeRequest().requestUrl!!.encodedPath)
+
+        response("""{"ok":true}""")
+        testing.command(device,"queue-action",JSONObject().put("id","test-running").put("message_id","q1").put("action","cancel"))
+        val queueReq=server.takeRequest()
+        assertEquals("/d/$device/api/agents/testing/queue",queueReq.requestUrl!!.encodedPath)
+        val queueBody=JSONObject(queueReq.body.readUtf8())
+        assertEquals("q1",queueBody.string("item_id"));assertEquals("remove",queueBody.string("action"))
+
+        response("""{"ok":true}""")
+        testing.command(device,"answer",JSONObject().put("id","test-waiting").put("answers",JSONObject()))
+        assertEquals("/d/$device/api/agents/testing/answer",server.takeRequest().requestUrl!!.encodedPath)
+
+        response("""{"state":"accepted","id":"test-running","request_id":"r1"}""")
+        assertEquals("accepted",testing.receipt(device,"test-running","r1").string("state"))
+        assertEquals("/d/$device/api/agents/testing/receipt",server.takeRequest().requestUrl!!.encodedPath)
+
+        response("""{"ok":true}""")
+        testing.detail(device,"chat/open",body=JSONObject().put("app","testing").put("id","test-running"))
+        assertEquals("/d/$device/api/agents/testing/open",server.takeRequest().requestUrl!!.encodedPath)
+
+        response("""{"request_id":"rid1","state":"accepted","id":"test-new-1"}""")
+        testing.detail(device,"chat/new",body=JSONObject().put("request_id","rid1").put("app","testing").put("text","hi"))
+        assertEquals("/d/$device/api/agents/testing/create",server.takeRequest().requestUrl!!.encodedPath)
+
+        response("""{"request_id":"rid1","state":"accepted","id":"test-new-1"}""")
+        testing.detail(device,"chat/new/state",mapOf("request_id" to "rid1","app" to "testing"))
+        val createState=server.takeRequest().requestUrl!!
+        assertEquals("/d/$device/api/agents/testing/create/state",createState.encodedPath)
+        assertEquals("rid1",createState.queryParameter("request_id"))
+        assertNull(createState.queryParameter("app"))
+
+        response("""{"models":[]}""")
+        testing.detail(device,"chat/new/options",mapOf("app" to "testing"))
+        assertEquals("/d/$device/api/agents/testing/options",server.takeRequest().requestUrl!!.encodedPath)
+
+        // Diagnostics labels recognize unified routes too.
+        assertEquals("消息提交",Diagnostics.labelFor("/api/agents/testing/send"))
+        assertEquals("新对话提交",Diagnostics.labelFor("/api/agents/codex/create"))
+        assertEquals("图片上传",Diagnostics.labelFor("/api/agents/claude/upload"))
+    }
+    /**
+     * Step 7 (prompt §三.7): when a legacy computer returns 404 for `/api/agents/<id>/...`,
+     * every action for Codex, Claude, and DeepSeek falls back to the exact original legacy route,
+     * query parameters, and request body; non-404 errors and non-legacy 404s never fall back.
+     */
+    @Test fun legacyHost404FallsBackToExactOriginalRoutesForAllThreeBuiltins()=runTest {
+        fun enqueue404Then(json:String) { response("""{"error":"没有这个地址"}""",404);response(json) }
+
+        // --- Codex ---
+        val codex=api.forSource("codex")
+        enqueue404Then("""{"available":true,"running":false}""")
+        assertTrue(codex.control(device,"c1",true).available)
+        assertEquals("/d/$device/api/agents/codex/state",server.takeRequest().requestUrl!!.encodedPath)
+        val cxState=server.takeRequest().requestUrl!!
+        assertEquals("/d/$device/api/codex/state",cxState.encodedPath);assertEquals("c1",cxState.queryParameter("id"));assertEquals("1",cxState.queryParameter("fresh"))
+
+        enqueue404Then("""{"request_id":"r1","delivery_state":"accepted"}""")
+        val cxSendBody=JSONObject().put("id","c1").put("request_id","r1").put("text","hello").put("intent","auto")
+        codex.command(device,"send",cxSendBody)
+        assertEquals("/d/$device/api/agents/codex/send",server.takeRequest().requestUrl!!.encodedPath)
+        val cxSendLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/codex/send",cxSendLegacy.requestUrl!!.encodedPath)
+        assertEquals(cxSendBody.toString(),cxSendLegacy.body.readUtf8())
+
+        enqueue404Then("""{"ok":true}""")
+        val cxStopBody=JSONObject().put("id","c1").put("operation_id","op1").put("turn_id","t1")
+        codex.command(device,"stop",cxStopBody)
+        assertEquals("/d/$device/api/agents/codex/stop",server.takeRequest().requestUrl!!.encodedPath)
+        val cxStopLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/codex/stop",cxStopLegacy.requestUrl!!.encodedPath)
+        assertEquals(cxStopBody.toString(),cxStopLegacy.body.readUtf8())
+
+        enqueue404Then("""{"ok":true}""")
+        val cxQueueBody=JSONObject().put("id","c1").put("request_id","rq1").put("message_id","m1").put("action","cancel")
+        codex.command(device,"queue-action",cxQueueBody)
+        val cxQueueUnified=server.takeRequest()
+        assertEquals("/d/$device/api/agents/codex/queue",cxQueueUnified.requestUrl!!.encodedPath)
+        assertEquals("remove",JSONObject(cxQueueUnified.body.readUtf8()).string("action"))
+        val cxQueueLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/codex/queue-action",cxQueueLegacy.requestUrl!!.encodedPath)
+        // Legacy Codex receives original "cancel" and "message_id" untouched.
+        assertEquals(cxQueueBody.toString(),cxQueueLegacy.body.readUtf8())
+
+        enqueue404Then("""{"request_id":"ra1","accepted":true}""")
+        val cxAnswerBody=JSONObject().put("id","c1").put("request_id","ra1").put("question_id","q1").put("answers",JSONObject())
+        codex.command(device,"answer",cxAnswerBody)
+        assertEquals("/d/$device/api/agents/codex/answer",server.takeRequest().requestUrl!!.encodedPath)
+        val cxAnswerLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/codex/answer",cxAnswerLegacy.requestUrl!!.encodedPath)
+        assertEquals(cxAnswerBody.toString(),cxAnswerLegacy.body.readUtf8())
+
+        enqueue404Then("""{"state":"accepted"}""")
+        assertEquals("accepted",codex.receipt(device,"c1","r1").string("state"))
+        assertEquals("/d/$device/api/agents/codex/receipt",server.takeRequest().requestUrl!!.encodedPath)
+        val cxRcpt=server.takeRequest().requestUrl!!
+        assertEquals("/d/$device/api/codex/receipt",cxRcpt.encodedPath);assertEquals("c1",cxRcpt.queryParameter("id"));assertEquals("r1",cxRcpt.queryParameter("request_id"))
+
+        enqueue404Then("""{"ok":true}""")
+        codex.detail(device,"chat/open",body=JSONObject().put("app","codex").put("id","c1"))
+        assertEquals("/d/$device/api/agents/codex/open",server.takeRequest().requestUrl!!.encodedPath)
+        val cxOpenLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/chat/open",cxOpenLegacy.requestUrl!!.encodedPath)
+        assertEquals("codex",JSONObject(cxOpenLegacy.body.readUtf8()).string("app"))
+
+        enqueue404Then("""{"request_id":"n1","state":"creating"}""")
+        codex.detail(device,"chat/new",body=JSONObject().put("request_id","n1").put("app","codex").put("text","hi"))
+        assertEquals("/d/$device/api/agents/codex/create",server.takeRequest().requestUrl!!.encodedPath)
+        assertEquals("/d/$device/api/chat/new",server.takeRequest().requestUrl!!.encodedPath)
+
+        enqueue404Then("""{"request_id":"n1","state":"accepted"}""")
+        codex.detail(device,"chat/new/state",mapOf("request_id" to "n1","app" to "codex"))
+        assertEquals("/d/$device/api/agents/codex/create/state",server.takeRequest().requestUrl!!.encodedPath)
+        val cxNewStateLegacy=server.takeRequest().requestUrl!!
+        assertEquals("/d/$device/api/chat/new/state",cxNewStateLegacy.encodedPath)
+        assertEquals("n1",cxNewStateLegacy.queryParameter("request_id"));assertNull(cxNewStateLegacy.queryParameter("app"))
+
+        enqueue404Then("""{"models":[]}""")
+        codex.detail(device,"chat/new/options",mapOf("app" to "codex"))
+        assertEquals("/d/$device/api/agents/codex/options",server.takeRequest().requestUrl!!.encodedPath)
+        val cxOptLegacy=server.takeRequest().requestUrl!!
+        assertEquals("/d/$device/api/chat/new/options",cxOptLegacy.encodedPath);assertEquals("codex",cxOptLegacy.queryParameter("app"))
+
+        enqueue404Then("""{"id":"img1"}""")
+        codex.upload(device,"c1","a.png",byteArrayOf(7,8),image=true)
+        assertEquals("/d/$device/api/agents/codex/upload",server.takeRequest().requestUrl!!.encodedPath)
+        val cxUpLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/codex/upload",cxUpLegacy.requestUrl!!.encodedPath)
+        assertEquals("codex",cxUpLegacy.requestUrl!!.queryParameter("app"))
+        assertArrayEquals(byteArrayOf(7,8),cxUpLegacy.body.readByteArray())
+
+        // --- Claude ---
+        val claude=api.forSource("claude")
+        enqueue404Then("""{"available":true,"running":false}""")
+        assertTrue(claude.control(device,"c2",true).available)
+        assertEquals("/d/$device/api/agents/claude/state",server.takeRequest().requestUrl!!.encodedPath)
+        assertEquals("/d/$device/api/claude/state",server.takeRequest().requestUrl!!.encodedPath)
+
+        // Claude receipt on legacy host returns unknown locally after 404 without a second HTTP call.
+        response("""{"error":"没有这个地址"}""",404)
+        assertEquals("unknown",claude.receipt(device,"c2","r2").string("state"))
+        assertEquals("/d/$device/api/agents/claude/receipt",server.takeRequest().requestUrl!!.encodedPath)
+
+        enqueue404Then("""{"ok":true,"pressed":true,"offset":10}""")
+        claude.command(device,"send",JSONObject().put("id","c2").put("request_id","r2").put("text","hi").put("intent","steer").put("expected_turn","t2"))
+        val clSendUnified=server.takeRequest()
+        assertEquals("/d/$device/api/agents/claude/send",clSendUnified.requestUrl!!.encodedPath)
+        val clSendUnifiedJson=JSONObject(clSendUnified.body.readUtf8())
+        assertEquals("send",clSendUnifiedJson.string("intent"));assertFalse(clSendUnifiedJson.has("expected_turn"))
+        val clSendLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/chat/send",clSendLegacy.requestUrl!!.encodedPath)
+        assertEquals("claude",JSONObject(clSendLegacy.body.readUtf8()).string("app"))
+
+        enqueue404Then("""{"ok":true}""")
+        claude.command(device,"stop",JSONObject().put("id","c2").put("token","t-stop"))
+        assertEquals("/d/$device/api/agents/claude/stop",server.takeRequest().requestUrl!!.encodedPath)
+        val clStopLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/claude/choose",clStopLegacy.requestUrl!!.encodedPath)
+        assertEquals("t-stop",JSONObject(clStopLegacy.body.readUtf8()).string("token"))
+
+        for(route in listOf("claude/choose","claude/next","claude/task")) {
+            enqueue404Then("""{"ok":true}""")
+            claude.detail(device,route,body=JSONObject().put("id","c2").put("token","t1"))
+            assertEquals("/d/$device/api/agents/claude/answer",server.takeRequest().requestUrl!!.encodedPath)
+            assertEquals("/d/$device/api/$route",server.takeRequest().requestUrl!!.encodedPath)
+        }
+
+        // --- DeepSeek ---
+        val ds=api.forSource("deepseek")
+        enqueue404Then("""{"available":true,"running":true,"seq":9,"queued":[]}""")
+        val dsCtrl=ds.control(device,"c3",false)
+        assertTrue(dsCtrl.queueAvailable);assertFalse(JSONObject(dsCtrl.raw).has("seq"))
+        assertEquals("/d/$device/api/agents/deepseek/state",server.takeRequest().requestUrl!!.encodedPath)
+        assertEquals("/d/$device/api/deepseek/state",server.takeRequest().requestUrl!!.encodedPath)
+
+        enqueue404Then("""{"accepted":true}""")
+        val dsSendRes=ds.command(device,"send",JSONObject().put("id","c3").put("request_id","r3").put("text","hi").put("intent","auto"))
+        assertEquals("accepted",dsSendRes.string("delivery_state"))
+        assertEquals("/d/$device/api/agents/deepseek/send",server.takeRequest().requestUrl!!.encodedPath)
+        val dsSendLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/deepseek/send",dsSendLegacy.requestUrl!!.encodedPath)
+        assertEquals("steer",JSONObject(dsSendLegacy.body.readUtf8()).string("intent"))
+
+        enqueue404Then("""{"ok":true}""")
+        ds.command(device,"stop",JSONObject().put("id","c3").put("turn_id","t3"))
+        assertEquals("/d/$device/api/agents/deepseek/stop",server.takeRequest().requestUrl!!.encodedPath)
+        val dsStopLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/deepseek/stop",dsStopLegacy.requestUrl!!.encodedPath)
+        assertEquals("t3",JSONObject(dsStopLegacy.body.readUtf8()).string("expected_turn"))
+
+        enqueue404Then("""{"ok":true}""")
+        ds.command(device,"queue-action",JSONObject().put("id","c3").put("message_id","q3").put("action","promote"))
+        assertEquals("/d/$device/api/agents/deepseek/queue",server.takeRequest().requestUrl!!.encodedPath)
+        val dsQueueLegacy=server.takeRequest()
+        assertEquals("/d/$device/api/deepseek/queue",dsQueueLegacy.requestUrl!!.encodedPath)
+        assertEquals("steer",JSONObject(dsQueueLegacy.body.readUtf8()).string("action"))
+
+        for(route in listOf("deepseek/approval","deepseek/answer")) {
+            enqueue404Then("""{"ok":true}""")
+            ds.detail(device,route,body=JSONObject().put("id","c3").put("event_id","e1").put("choice","allowed-once"))
+            assertEquals("/d/$device/api/agents/deepseek/answer",server.takeRequest().requestUrl!!.encodedPath)
+            assertEquals("/d/$device/api/$route",server.takeRequest().requestUrl!!.encodedPath)
+        }
+
+        enqueue404Then("""{"state":"accepted","id":"c3"}""")
+        assertEquals("r3",ds.receipt(device,"c3","r3").string("request_id"))
+        assertEquals("/d/$device/api/agents/deepseek/receipt",server.takeRequest().requestUrl!!.encodedPath)
+        assertEquals("/d/$device/api/deepseek/receipt",server.takeRequest().requestUrl!!.encodedPath)
+
+        // --- Non-404 errors and non-legacy agent 404s do NOT fall back ---
+        response("""{"error":"轮次已变化"}""",409)
+        try { codex.command(device,"stop",JSONObject().put("id","c1"));fail() } catch(e:ServiceFailure) { assertEquals(409,e.status) }
+        assertEquals("/d/$device/api/agents/codex/stop",server.takeRequest().requestUrl!!.encodedPath)
+
+        val testing=api.forSource("testing")
+        response("""{"error":"没有这个来源"}""",404)
+        try { testing.control(device,"test-running",false);fail() } catch(e:ServiceFailure) { assertEquals(404,e.status) }
+        assertEquals("/d/$device/api/agents/testing/state",server.takeRequest().requestUrl!!.encodedPath)
     }
 }

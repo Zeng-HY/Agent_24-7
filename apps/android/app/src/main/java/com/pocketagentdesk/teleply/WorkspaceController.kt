@@ -556,7 +556,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 fun kept(status:String)=JSONObject().put("route",route).put("body",payload).put("status",status).put("at",at).apply { if(local!=null) put("local",JSONObject(local.toString())) }
                 persist(k,next.put("pending_action",kept("unknown")),synthetic)
                 posted=true
-                val result=if(route=="codex/answer") service.command(k.device,"answer",payload) else service.detail(k.device,route,body=payload)
+                val result=when {
+                    route=="codex/answer" -> service.command(k.device,"answer",payload)
+                    route=="claude/choose" && local?.string("what")=="stop" -> service.command(k.device,"stop",payload)
+                    else -> service.detail(k.device,route,body=payload)
+                }
                 persist(k,saved(k).put("pending_action",kept("done")),synthetic)
                 update(k) { it.copy(result=result.string("text").ifBlank { "操作已返回，请刷新核对实际状态" }) }
                 if(state.value.pane!=null) refresh(state.value.pane.orEmpty())

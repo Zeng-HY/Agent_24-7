@@ -112,7 +112,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         val caller = if(timeout>0) client.newBuilder().callTimeout(timeout,TimeUnit.SECONDS).readTimeout(timeout,TimeUnit.SECONDS).build() else client
         val call = caller.newCall(builder.build())
         // 诊断测速 times the requests that carry a message or a file (web: the same routes, POST only).
-        val timer = if(body!=null || bytes!=null || stream!=null) Diagnostics.start(Diagnostics.Labels[path.replace(DevicePrefix,"")]) else null
+        val timer = if(body!=null || bytes!=null || stream!=null) Diagnostics.start(Diagnostics.labelFor(path.replace(DevicePrefix,""))) else null
         val size = bytes?.size?.toLong() ?: stream?.contentLength() ?: 0L
         try { timed(call).also { Diagnostics.finish(timer,size,speedOutcome(it)) } }
         catch(e:Exception) {
@@ -164,9 +164,51 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     } catch (e: ServiceFailure) {
         if (e.status == 404) { catalog.put(device, null); null } else throw e
     }
+    /** Tries the unified `/api/agents/<id>/...` route first; falls back to [legacy] only on HTTP 404. */
+    private suspend fun <T> withLegacyFallback(allowFallback: Boolean, primary: suspend () -> T, legacy: suspend () -> T): T =
+        try { primary() } catch (e: ServiceFailure) { if (e.status == 404 && allowFallback) legacy() else throw e }
+
     override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
         require(route in DetailRoutes)
-        return request(devicePath(device,"/api/$route"),query,body,timeout=SlowRoutes[route] ?: 0)
+        val timeout = SlowRoutes[route] ?: 0L
+        return when (route) {
+            "chat/open" -> {
+                val target = body?.string("app")?.takeIf { isValidAgentId(it) } ?: app
+                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/open"), body = body, timeout = timeout) }) {
+                    request(devicePath(device, "/api/chat/open"), query, body, timeout = timeout)
+                }
+            }
+            "chat/new" -> {
+                val target = body?.string("app")?.takeIf { isValidAgentId(it) } ?: app
+                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/create"), body = body, timeout = timeout) }) {
+                    request(devicePath(device, "/api/chat/new"), query, body, timeout = timeout)
+                }
+            }
+            "chat/new/state" -> {
+                val target = query["app"]?.takeIf { isValidAgentId(it) } ?: app
+                val clean = query.filterKeys { it != "app" }
+                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/create/state"), clean, timeout = timeout) }) {
+                    request(devicePath(device, "/api/chat/new/state"), clean, timeout = timeout)
+                }
+            }
+            "chat/new/options" -> {
+                val target = query["app"]?.takeIf { isValidAgentId(it) } ?: app
+                withLegacyFallback(true, { request(devicePath(device, "/api/agents/$target/options"), timeout = timeout) }) {
+                    request(devicePath(device, "/api/chat/new/options"), query, timeout = timeout)
+                }
+            }
+            "claude/choose", "claude/next", "claude/task" -> withLegacyFallback(true, {
+                request(devicePath(device, "/api/agents/claude/answer"), body = body, timeout = timeout)
+            }) {
+                request(devicePath(device, "/api/$route"), query, body, timeout = timeout)
+            }
+            "deepseek/approval", "deepseek/answer" -> withLegacyFallback(true, {
+                request(devicePath(device, "/api/agents/deepseek/answer"), body = body, timeout = timeout)
+            }) {
+                request(devicePath(device, "/api/$route"), query, body, timeout = timeout)
+            }
+            else -> request(devicePath(device, "/api/$route"), query, body, timeout = timeout)
+        }
     }
     override suspend fun voice(device:String,route:String,query:Map<String,String?>,bytes:ByteArray?,type:String):JSONObject {
         require(route in setOf("voice","voice/stream/start","voice/stream/chunk","voice/stream/end","voice/stream/cancel","voice/stream/cloud"))
@@ -176,6 +218,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     private companion object {
         val DevicePrefix=Regex("^/d/[0-9a-f]{32}")
+        val LegacyApps=setOf("codex","claude","deepseek")
         /** Fields of DeepSeek's state that change on every read while it works and that the phone does not show. */
         val DeepSeekUnshown=listOf("seq","subagents","inbox")
         val DetailRoutes=setOf("chat/new/options","chat/folders","chat/new/draft","chat/new","chat/new/state","chat/new/retry","chat/new/references","composer/references","files/places","files/list","files/image","files/remove","codex/remove-attachment","codex/attachments","chat/files","chat/diff","file/text","file/meta","deepseek/models","deepseek/permissions","deepseek/model","deepseek/permission","deepseek/answer","deepseek/approval","claude/catalog","claude/setting","claude/choose","claude/menu","claude/close-menu","chat/projects","chat/open","chat/resolve",
@@ -185,16 +228,28 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     }
     override suspend fun upload(device:String,chat:String,name:String,bytes:ByteArray,image:Boolean,draft:Boolean):JSONObject {
         require(bytes.isNotEmpty() && bytes.size <= if(image) 20*1024*1024 else 100*1024*1024) { "文件超过上传上限" }
-        return request(devicePath(device,if(image) "/api/codex/upload" else "/api/files/upload"),mapOf("app" to app,(if(draft) "draft" else "id") to chat,"name" to name),bytes=bytes)
+        val keyParam = if(draft) "draft" else "id"
+        if (!image) return request(devicePath(device,"/api/files/upload"),mapOf("app" to app,keyParam to chat,"name" to name),bytes=bytes)
+        return withLegacyFallback(true, {
+            request(devicePath(device,"/api/agents/$app/upload"),mapOf(keyParam to chat,"name" to name),bytes=bytes)
+        }) {
+            request(devicePath(device,"/api/codex/upload"),mapOf("app" to app,keyParam to chat,"name" to name),bytes=bytes)
+        }
     }
     override suspend fun uploadStream(device:String,chat:String,name:String,size:Long,image:Boolean,draft:Boolean,open:()->java.io.InputStream):JSONObject {
         require(size>0 && size<=if(image) 20L*1024*1024 else 100L*1024*1024) { "文件超过上传上限" }
-        val body=object:RequestBody() {
+        fun makeBody()=object:RequestBody() {
             override fun contentType()="application/octet-stream".toMediaType()
             override fun contentLength()=size
             override fun writeTo(sink:okio.BufferedSink) { open().use { input -> val buffer=ByteArray(65536);var written=0L;while(true) { val n=input.read(buffer);if(n<0) break;written+=n;if(written>size) throw IOException("所选文件已变化");sink.write(buffer,0,n) };if(written!=size) throw IOException("文件读取不完整") } }
         }
-        return request(devicePath(device,if(image) "/api/codex/upload" else "/api/files/upload"),mapOf("app" to app,(if(draft) "draft" else "id") to chat,"name" to name),stream=body)
+        val keyParam = if(draft) "draft" else "id"
+        if (!image) return request(devicePath(device,"/api/files/upload"),mapOf("app" to app,keyParam to chat,"name" to name),stream=makeBody())
+        return withLegacyFallback(true, {
+            request(devicePath(device,"/api/agents/$app/upload"),mapOf(keyParam to chat,"name" to name),stream=makeBody())
+        }) {
+            request(devicePath(device,"/api/codex/upload"),mapOf("app" to app,keyParam to chat,"name" to name),stream=makeBody())
+        }
     }
     override suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream) =
         streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).withProtocolQuery().build(),output)
@@ -307,36 +362,92 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     override suspend fun control(device: String, chat: String, fresh: Boolean): Control {
         val stateTimeout = catalog.forDevice(device).params(app).stateTimeoutS
         val timeout = if (stateTimeout == 40L) 0L else stateTimeout
-        return parseControl(request(devicePath(device,"/api/$app/state"),mapOf("id" to chat,"fresh" to if(fresh) "1" else null),timeout=timeout)
-            .apply { if(app=="deepseek") { put("queue_available",true);DeepSeekUnshown.forEach { remove(it) } } })
+        val query = mapOf("id" to chat, "fresh" to if (fresh) "1" else null)
+        val raw = withLegacyFallback(app in LegacyApps, {
+            request(devicePath(device, "/api/agents/$app/state"), query, timeout = timeout)
+        }) {
+            request(devicePath(device, "/api/$app/state"), query, timeout = timeout)
+        }
+        return parseControl(raw.apply { if (app == "deepseek") { put("queue_available", true); DeepSeekUnshown.forEach { remove(it) } } })
     }
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
         require(route in setOf("send","stop","queue-action","answer"))
-        if(app=="deepseek") {
-            val outgoing=JSONObject(body.toString())
-            val actual=when(route) {
-                "send" -> { if(outgoing.string("intent")=="auto") outgoing.put("intent","steer");"send" }
-                "stop" -> { outgoing.put("expected_turn",body.string("turn_id"));"stop" }
-                // 立即补充 is "steer" for DeepSeek, 撤回 is "remove".
-                "queue-action" -> { outgoing.put("item_id",body.string("message_id")).put("action",if(body.string("action")=="promote") "steer" else "remove");"queue" }
-                else -> route
+        return when (app) {
+            "deepseek" -> {
+                val outgoing = JSONObject(body.toString())
+                val (unifiedAction, legacyAction) = when (route) {
+                    "send" -> { if (outgoing.string("intent") == "auto") outgoing.put("intent", "steer"); "send" to "send" }
+                    "stop" -> { outgoing.put("expected_turn", body.string("turn_id")); "stop" to "stop" }
+                    // 立即补充 is "steer" for DeepSeek, 撤回 is "remove".
+                    "queue-action" -> { outgoing.put("item_id", body.string("message_id")).put("action", if (body.string("action") == "promote") "steer" else "remove"); "queue" to "queue" }
+                    else -> "answer" to route
+                }
+                val result = withLegacyFallback(true, {
+                    request(devicePath(device, "/api/agents/deepseek/$unifiedAction"), body = outgoing)
+                }) {
+                    request(devicePath(device, "/api/deepseek/$legacyAction"), body = outgoing)
+                }
+                if (route == "send" && result.optBoolean("accepted")) result.put("delivery_state", if (outgoing.string("intent") == "queue") "queued" else "accepted")
+                result
             }
-            val result=request(devicePath(device,"/api/deepseek/$actual"),body=outgoing)
-            if(route=="send" && result.optBoolean("accepted")) result.put("delivery_state",if(outgoing.string("intent")=="queue") "queued" else "accepted")
-            return result
+            "claude" -> when (route) {
+                "send" -> {
+                    val unifiedBody = JSONObject(body.toString()).put("intent", "send").apply { remove("expected_turn") }
+                    withLegacyFallback(true, {
+                        request(devicePath(device, "/api/agents/claude/send"), body = unifiedBody)
+                    }) {
+                        request(devicePath(device, "/api/chat/send"), body = JSONObject(body.toString()).put("app", "claude"))
+                    }
+                }
+                "stop" -> {
+                    require(body.string("token").isNotBlank()) { "Claude 的停止与队列动作需使用当前桌面令牌" }
+                    withLegacyFallback(true, {
+                        request(devicePath(device, "/api/agents/claude/stop"), body = body)
+                    }) {
+                        request(devicePath(device, "/api/claude/choose"), body = body)
+                    }
+                }
+                else -> throw IllegalArgumentException("Claude 的停止与队列动作需使用当前桌面令牌")
+            }
+            "codex" -> when (route) {
+                "queue-action" -> {
+                    val unifiedBody = JSONObject(body.toString())
+                        .put("item_id", body.string("message_id"))
+                        .put("action", if (body.string("action") == "promote") "promote" else "remove")
+                    withLegacyFallback(true, {
+                        request(devicePath(device, "/api/agents/codex/queue"), body = unifiedBody)
+                    }) {
+                        request(devicePath(device, "/api/codex/queue-action"), body = body)
+                    }
+                }
+                else -> withLegacyFallback(true, {
+                    request(devicePath(device, "/api/agents/codex/$route"), body = body)
+                }) {
+                    request(devicePath(device, "/api/codex/$route"), body = body)
+                }
+            }
+            else -> when (route) {
+                "queue-action" -> {
+                    val unifiedBody = JSONObject(body.toString())
+                        .put("item_id", body.string("message_id"))
+                        .put("action", if (body.string("action") == "promote") "promote" else "remove")
+                    request(devicePath(device, "/api/agents/$app/queue"), body = unifiedBody)
+                }
+                else -> request(devicePath(device, "/api/agents/$app/$route"), body = body)
+            }
         }
-        if(app=="claude") {
-            require(route=="send") { "Claude 的停止与队列动作需使用当前桌面令牌" }
-            return request(devicePath(device,"/api/chat/send"),body=JSONObject(body.toString()).put("app","claude"))
-        }
-        return request(devicePath(device,"/api/codex/$route"),body=body)
     }
     override suspend fun receipt(device: String, chat: String, request: String):JSONObject {
-        if(app=="claude") return JSONObject().put("state","unknown")
-        val response=request(devicePath(device,"/api/$app/receipt"),mapOf("id" to chat,"request_id" to request))
-        if(app=="deepseek" && response.string("state")!="unknown") {
-            require(response.string("id")==chat) { "回执会话身份不匹配" }
-            response.put("request_id",request)
+        val query = mapOf("id" to chat, "request_id" to request)
+        val response = withLegacyFallback(app in LegacyApps, {
+            request(devicePath(device, "/api/agents/$app/receipt"), query)
+        }) {
+            if (app == "claude") JSONObject().put("state", "unknown")
+            else request(devicePath(device, "/api/$app/receipt"), query)
+        }
+        if (app == "deepseek" && response.string("state") != "unknown") {
+            require(response.string("id") == chat) { "回执会话身份不匹配" }
+            response.put("request_id", request)
         }
         return response
     }
