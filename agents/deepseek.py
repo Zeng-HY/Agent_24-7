@@ -29,6 +29,8 @@ DEEPSEEK_STEPS = {
 class DeepSeekAgent(Agent):
     id = "deepseek"
     home_list = False
+    has_skills = False
+    archive_order = 20
 
     def step_of(self, name: str, argument: str = "") -> str:
         return DEEPSEEK_STEPS.get((name or "").rsplit(".", 1)[-1]) or ""
@@ -183,6 +185,52 @@ class DeepSeekAgent(Agent):
         import machines
 
         return (machines.APPDATA / "@deepseek-ai" / "dsh-desktop").is_dir()
+
+    # -- commands, archives
+
+    def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
+        import composer_commands
+        if deepseek is None:
+            return []
+        rows = []
+        for command in deepseek.commands(conv_id):
+            name = command["name"]
+            if name in composer_commands.DEEPSEEK_HIDDEN:
+                continue
+            words = composer_commands.DEEPSEEK.get(name, {})
+            rows.append(composer_commands.item(
+                name, words.get("title", ""),
+                words.get("detail") or composer_commands.one_line(command.get("description")),
+                command.get("hint", ""),
+            ))
+        return rows
+
+    def delete_unavailable_reason(self) -> str:
+        return "DeepSeek 没有删除对话的功能，只能恢复"
+
+    def archive_conv(self, svc, conv_id: str) -> None:
+        import archives
+        import deepseek_control
+        ds = svc.deepseek()
+        ds.find(conv_id)
+        try:
+            ds.client.call("workspace/archiveSession", {"request": {"sessionId": conv_id}})
+        except deepseek_control.DeepSeekError as exc:
+            if getattr(exc, "code", "") == "workspace/session-active":
+                raise archives.ArchiveError("这个对话正在运行，先停止这一轮再归档") from None
+            raise archives.ArchiveError("DeepSeek 没有归档：" + archives.deepseek_reason(exc)) from None
+
+    def unarchive_conv(self, svc, conv_id: str) -> None:
+        import archives
+        import deepseek_control
+        try:
+            svc.deepseek().client.call("workspace/unarchiveSession", {"request": {"sessionId": conv_id}})
+        except deepseek_control.DeepSeekError as exc:
+            raise archives.ArchiveError("DeepSeek 没有恢复：" + archives.deepseek_reason(exc)) from None
+
+    def archived_list(self, svc) -> list[dict]:
+        import archives
+        return [dict(v, can_delete=False) for v in archives.deepseek_archived(svc.deepseek())]
 
 
 AGENT = DeepSeekAgent

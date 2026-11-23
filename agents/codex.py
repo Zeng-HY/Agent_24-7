@@ -31,6 +31,9 @@ class CodexAgent(Agent):
     assign_turn_id = True
     final_answer_plan = True
     desktop_tasks = True
+    has_skills = True
+    can_reset_usage = True
+    archive_order = 10
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -291,6 +294,141 @@ class CodexAgent(Agent):
             return packages.is_dir() and any(packages.glob(prefix + "_*"))
 
         return package("OpenAI.Codex") or (machines.LOCALAPPDATA / "OpenAI" / "Codex").is_dir()
+
+    # -- commands, references, usage, archives
+
+    def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
+        import composer_commands
+        return [composer_commands.item(**v) for v in composer_commands.CODEX]
+
+    def skill_roots(self, home, cwd: str, read_config, warnings: list, warn_fn) -> tuple[list, set]:
+        import stat
+        disabled = set()
+        conf = read_config(home / ".codex/config.toml")
+        skills = conf.get("skills", {})
+        plugins = conf.get("plugins", {})
+        if not isinstance(skills, dict) or not isinstance(plugins, dict):
+            raise ValueError("Invalid skill/plugin configuration")
+        rows = skills.get("config", [])
+        if not isinstance(rows, list):
+            raise ValueError("Invalid skill configuration")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Invalid skill rule")
+            if row.get("enabled") is False and row.get("path"):
+                disabled.add(str(Path(row["path"]).resolve()).casefold())
+        roots = [
+            (home / ".codex/skills", "个人技能", False),
+            (home / ".codex/skills/.system", "内置技能", False),
+            (home / ".agents/skills", "个人技能", False),
+        ]
+        for key, value in plugins.items():
+            if not isinstance(value, dict):
+                raise ValueError("Invalid plugin rule")
+            if value.get("enabled") is not True or "@" not in key:
+                continue
+            plugin, market = key.rsplit("@", 1)
+            base = home / ".codex/plugins/cache" / market / plugin
+            try:
+                versions = [p for p in base.iterdir() if re.fullmatch(r"\d+(?:\.\d+)*", p.name)]
+                if not versions:
+                    raise ValueError("No supported numeric plugin version")
+                selected = max(versions, key=lambda p: tuple(map(int, p.name.split("."))))
+                root = selected / "skills"
+                if not stat.S_ISDIR(selected.stat().st_mode):
+                    raise ValueError("Plugin version is not a directory")
+                roots.append((root, plugin, False))
+            except (OSError, ValueError) as exc:
+                warn_fn(warnings, plugin, exc)
+        current = Path(cwd) if cwd else None
+        for parent in ([current, *current.parents] if current and current.is_absolute() else [])[:12]:
+            if parent == home:
+                break
+            for name in (".agents/skills", ".codex/skills"):
+                roots.insert(0, (parent / name, "项目技能 · " + parent.name, False))
+        return roots, disabled
+
+    def format_skills(self, skills: list[dict]) -> tuple[str, list[dict]]:
+        names = " ".join("$" + s["name"] for s in skills)
+        native = [{"type": "skill", "name": s["name"], "path": s["path"]} for s in skills]
+        return names, native
+
+    def read_usage(self, svc, live: bool = False) -> dict:
+        return svc._codex(bool(live))
+
+    def redeem_usage(self, svc, body: dict) -> dict:
+        import time
+        import usage_limits
+        with usage_limits._LOCK:
+            cached = svc._cache[1] if svc._cache and svc._cache[1].get("source") == "live" else None
+        result = usage_limits.codex_redeem(
+            body.get("request_id"), body.get("credit_id"), svc.server_factory,
+            data_dir=svc.data_dir, log=svc.log, cached=cached,
+        )
+        if result.get("usage"):
+            with usage_limits._LOCK:
+                svc._cache = (time.monotonic(), result["usage"])
+        return result
+
+    def archive_conv(self, svc, conv_id: str) -> None:
+        import archives
+        item = chats.find(self.id, conv_id)
+        if chats.summary(item).get("status") == "running":
+            raise archives.ArchiveError("这个对话正在运行，先停止这一轮再归档")
+        with svc.lock, svc.server() as server:
+            try:
+                server.call("thread/archive", {"threadId": conv_id})
+            except archives.CodexRefused as exc:
+                if any(w in str(exc).lower() for w in archives.WRITER):
+                    raise archives.ArchiveError(
+                        "电脑上的 Codex 正开着这个对话（或刚开过），这段记录被它占着，现在归档不了。"
+                        "过几分钟再试，或者在电脑上归档。"
+                    ) from None
+                raise archives.ArchiveError("Codex 没有归档：" + str(exc)) from None
+        svc._tell_desktop("thread-archived", 2, conv_id)
+
+    def unarchive_conv(self, svc, conv_id: str) -> None:
+        import archives
+        row = archives.codex_row(conv_id)
+        if row is None:
+            raise archives.ArchiveError("找不到这个 Codex 对话（可能已经删掉了）", 404)
+        if row["archived"]:
+            with svc.lock, svc.server() as server:
+                try:
+                    server.call("thread/unarchive", {"threadId": conv_id}, 60)
+                except archives.CodexRefused as exc:
+                    raise archives.ArchiveError("Codex 没有恢复：" + str(exc)) from None
+            svc._tell_desktop("thread-unarchived", 1, conv_id)
+
+    def archived_list(self, svc) -> list[dict]:
+        import archives
+        return [dict(v, can_delete=True) for v in archives.codex_rows("archived = 1")]
+
+    def prepare_delete(self, conv_id: str) -> dict | None:
+        import archives
+        row = archives.codex_row(conv_id)
+        if row is None:
+            return {"app": self.id, "id": conv_id, "ok": True, "gone": True}
+        if not row["archived"]:
+            return {"app": self.id, "id": conv_id, "ok": False, "error": "只能删除已归档的对话"}
+        return None
+
+    def delete_convs(self, svc, conv_ids: list[str]) -> list[dict]:
+        import archives
+        results = []
+        if conv_ids:
+            with svc.lock, svc.server() as server:
+                for tid in conv_ids:
+                    try:
+                        server.call("thread/delete", {"threadId": tid}, 60)
+                        results.append({"app": self.id, "id": tid, "ok": True})
+                    except archives.CodexRefused as exc:
+                        results.append({"app": self.id, "id": tid, "ok": False, "error": str(exc)[:160]})
+            for r in results:
+                if r.get("ok") and not r.get("gone"):
+                    svc._tell_desktop("thread-archived", 2, r["id"])
+                    svc.log(f"手机上删除了 Codex 对话 {r['id']}")
+        return results
 
 
 AGENT = CodexAgent

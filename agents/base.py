@@ -115,6 +115,9 @@ class Agent:
     assign_turn_id = False       # put the current turn id on every message (Codex)
     final_answer_plan = False    # Codex's plan is a final answer; Claude's is a separate message
     desktop_tasks = False        # desktop IPC task summary tracking (Codex)
+    has_skills = False           # supports skill discovery in composer_references
+    can_reset_usage = False      # supports usage reset credit redemption (Codex)
+    archive_order: int | None = None  # display order in archived list (defaults to manifest order)
 
     def __init__(self) -> None:
         self._manifest = self.build_manifest()
@@ -282,9 +285,62 @@ class Agent:
     def usage(self, *, live: bool = False) -> dict:
         raise Unsupported("这个助手没有用量")
 
+    def read_usage(self, svc, live: bool = False) -> dict:
+        return self.usage(live=live)
+
+    def usage_not_installed(self) -> dict:
+        return {"available": False, "reason": f"这台电脑没装 {self.manifest()['name']['zh']}"}
+
+    def redeem_usage(self, svc, body: dict) -> dict:
+        raise Unsupported("这个助手没有重置次数功能")
+
+    # -- archive hooks used by archives.Archives
+    def archive_available(self, svc) -> bool:
+        return self.can("archive")
+
+    def archive_unavailable_reason(self) -> str:
+        return f"{self.manifest()['name']['zh']} 的对话还不能从手机归档"
+
+    def delete_unavailable_reason(self) -> str:
+        return "这种对话还不能删除"
+
+    def archive_conv(self, svc, conv_id: str) -> None:
+        self.archive(conv_id)
+
+    def unarchive_conv(self, svc, conv_id: str) -> None:
+        self.restore(conv_id)
+
+    def archived_list(self, svc) -> list[dict]:
+        return []
+
+    def prepare_delete(self, conv_id: str) -> dict | None:
+        """Return an immediate result dict if this item shouldn't enter batch delete, else None."""
+        return None
+
+    def delete_convs(self, svc, conv_ids: list[str]) -> list[dict]:
+        out = []
+        for tid in conv_ids:
+            try:
+                res = self.delete(tid)
+                out.append({"app": self.id, "id": tid, "ok": bool(res.get("ok", True)),
+                            **({"gone": True} if res.get("gone") else {})})
+            except Exception as exc:
+                out.append({"app": self.id, "id": tid, "ok": False, "error": str(exc)[:160]})
+        return out
+
+    # -- references and skills
+    def skill_roots(self, home, cwd: str, read_config, warnings: list, warn_fn) -> tuple[list, set]:
+        return [], set()
+
+    def format_skills(self, skills: list[dict]) -> tuple[str, list[dict]]:
+        text = "请使用以下选定技能完成本条请求：\n" + "\n".join(
+            "[" + s["name"] + "](<" + s["path"] + ">)" for s in skills
+        )
+        return text, []
+
     # -- attachments and commands
     def upload(self, conv_id: str, name: str, raw: bytes) -> dict:
         raise Unsupported("这个助手还不能收附件")
 
-    def commands(self, conv_id: str) -> list:
+    def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
         raise Unsupported("这个助手还没有斜杠命令")

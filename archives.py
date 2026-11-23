@@ -28,8 +28,6 @@ from pathlib import Path
 
 import chats
 
-APPS = ("codex", "deepseek", "claude")
-DELETABLE = ("codex",)
 WRITER = ("already has an active writer", "already has a live local writer")
 
 
@@ -212,7 +210,7 @@ class Archives:
         self.server = server
         self._deepseek = deepseek
         self.claude = claude
-        self.apps = apps or (lambda: list(APPS))  # the apps this computer has (remote.py: MACHINE.apps)
+        self.apps = apps or (lambda: [a.id for a in self._ordered_agents()])  # the apps this computer has (remote.py: MACHINE.apps)
         self.lock = threading.Lock()  # one app-server of ours at a time
 
     def deepseek(self):
@@ -237,68 +235,35 @@ class Archives:
         except Exception as exc:
             self.log(f"没能告诉 Codex 桌面版 {method}（{tid}）：{exc}")
 
-    def _check(self, app: str, tid) -> None:
-        if app == "claude" and self.claude is None:
-            raise ArchiveError("Claude 的对话还不能从手机归档", 400)
-        if app not in APPS:
-            raise ArchiveError("不认识这个软件", 400)
+    def _ordered_agents(self):
+        from agents import registry
+        agents = [a for a in registry.load() if a.can("archive")]
+        return sorted(agents, key=lambda a: (a.archive_order if a.archive_order is not None else a.manifest()["order"], a.id))
+
+    def _check(self, app: str, tid):
+        from agents import registry
+        try:
+            agent = registry.get(app)
+        except Exception:
+            raise ArchiveError("不认识这个软件", 400) from None
+        if not agent.can("archive") or not agent.archive_available(self):
+            raise ArchiveError(agent.archive_unavailable_reason(), 400)
         if not isinstance(tid, str) or not tid or len(tid) > 200:
             raise ArchiveError("对话编号无效", 400)
+        return agent
 
     # -- archive and restore
 
     def archive(self, app: str, tid: str) -> dict:
-        self._check(app, tid)
-        if app == "codex":
-            item = chats.find("codex", tid)  # an archived or unknown one is not found
-            if chats.summary(item).get("status") == "running":
-                raise ArchiveError("这个对话正在运行，先停止这一轮再归档")
-            with self.lock, self.server() as server:
-                try:
-                    server.call("thread/archive", {"threadId": tid})
-                except CodexRefused as exc:
-                    if any(w in str(exc).lower() for w in WRITER):
-                        raise ArchiveError("电脑上的 Codex 正开着这个对话（或刚开过），这段记录被它占着，现在归档不了。"
-                                           "过几分钟再试，或者在电脑上归档。") from None
-                    raise ArchiveError("Codex 没有归档：" + str(exc)) from None
-            self._tell_desktop("thread-archived", 2, tid)
-        elif app == "claude":
-            self.claude.session_actions.change(tid, True)
-        else:
-            import deepseek_control
-            ds = self.deepseek()
-            ds.find(tid)
-            try:
-                ds.client.call("workspace/archiveSession", {"request": {"sessionId": tid}})
-            except deepseek_control.DeepSeekError as exc:
-                if getattr(exc, "code", "") == "workspace/session-active":
-                    raise ArchiveError("这个对话正在运行，先停止这一轮再归档") from None
-                raise ArchiveError("DeepSeek 没有归档：" + deepseek_reason(exc)) from None
+        agent = self._check(app, tid)
+        agent.archive_conv(self, tid)
         self._changed()
         self.log(f"手机上归档了 {app} 对话 {tid}")
         return {"ok": True, "app": app, "id": tid, "archived": True}
 
     def unarchive(self, app: str, tid: str) -> dict:
-        self._check(app, tid)
-        if app == "codex":
-            row = codex_row(tid)
-            if row is None:
-                raise ArchiveError("找不到这个 Codex 对话（可能已经删掉了）", 404)
-            if row["archived"]:
-                with self.lock, self.server() as server:
-                    try:
-                        server.call("thread/unarchive", {"threadId": tid}, 60)
-                    except CodexRefused as exc:
-                        raise ArchiveError("Codex 没有恢复：" + str(exc)) from None
-                self._tell_desktop("thread-unarchived", 1, tid)
-        elif app == "claude":
-            self.claude.session_actions.change(tid, False)
-        else:
-            import deepseek_control
-            try:
-                self.deepseek().client.call("workspace/unarchiveSession", {"request": {"sessionId": tid}})
-            except deepseek_control.DeepSeekError as exc:
-                raise ArchiveError("DeepSeek 没有恢复：" + deepseek_reason(exc)) from None
+        agent = self._check(app, tid)
+        agent.unarchive_conv(self, tid)
         self._changed()
         self.log(f"手机上恢复了 {app} 对话 {tid}")
         return {"ok": True, "app": app, "id": tid, "archived": False}
@@ -307,55 +272,43 @@ class Archives:
 
     def archived(self) -> dict:
         items, problems, apps = [], [], self.apps()
-        if "codex" in apps:
+        listed_apps, deletable = [], []
+        for agent in self._ordered_agents():
+            if agent.id not in apps or not agent.archive_available(self):
+                continue
+            listed_apps.append(agent.id)
+            if agent.can("delete"):
+                deletable.append(agent.id)
             try:
-                items += [dict(v, can_delete=True) for v in codex_rows("archived = 1")]
-            except (sqlite3.Error, OSError) as exc:
-                problems.append(f"Codex：{exc}")
-        if "deepseek" in apps:
-            try:
-                items += [dict(v, can_delete=False) for v in deepseek_archived(self.deepseek())]
+                items += agent.archived_list(self)
             except Exception as exc:
-                problems.append(f"DeepSeek：{str(exc)[:120]}")
-        if 'claude' in apps and self.claude is not None:
-            try:
-                import claude_archive
-                items += claude_archive.archived()
-            except Exception as exc:
-                problems.append('Claude：' + str(exc)[:160])
-        return {"items": items, "problems": problems, "apps": [a for a in APPS if a in apps and (a != 'claude' or self.claude is not None)],
-                "deletable": [a for a in DELETABLE if a in apps]}
+                label = agent.manifest()["name"]["zh"]
+                problems.append(f"{label}：{str(exc)[:160]}")
+        return {"items": items, "problems": problems, "apps": listed_apps, "deletable": deletable}
 
     def delete(self, items) -> dict:
-        """Deletes archived Codex conversations for good; anything else is left alone and said so."""
+        """Deletes archived conversations for agents that support delete; anything else is left alone and said so."""
+        from agents import registry
         if not isinstance(items, list) or not items or len(items) > 200:
             raise ArchiveError("没有选要删除的对话", 400)
-        results, codex = [], []
+        results, pending = [], {}
         for v in items:
             app, tid = (v.get("app"), v.get("id")) if isinstance(v, dict) else (None, None)
-            if app == "codex" and isinstance(tid, str) and tid:
-                row = codex_row(tid)
-                if row is None:
-                    results.append({"app": app, "id": tid, "ok": True, "gone": True})
-                elif not row["archived"]:
-                    results.append({"app": app, "id": tid, "ok": False, "error": "只能删除已归档的对话"})
+            try:
+                agent = registry.get(app) if isinstance(app, str) else None
+            except Exception:
+                agent = None
+            if agent is not None and agent.can("delete") and isinstance(tid, str) and tid:
+                early = agent.prepare_delete(tid)
+                if early is not None:
+                    results.append(early)
                 else:
-                    codex.append(tid)
+                    pending.setdefault(agent.id, (agent, []))[1].append(tid)
             else:
-                results.append({"app": app, "id": tid, "ok": False,
-                                "error": "DeepSeek 没有删除对话的功能，只能恢复" if app == "deepseek" else "这种对话还不能删除"})
-        if codex:
-            with self.lock, self.server() as server:
-                for tid in codex:
-                    try:
-                        server.call("thread/delete", {"threadId": tid}, 60)
-                        results.append({"app": "codex", "id": tid, "ok": True})
-                    except CodexRefused as exc:
-                        results.append({"app": "codex", "id": tid, "ok": False, "error": str(exc)[:160]})
-            for r in results:
-                if r["app"] == "codex" and r.get("ok") and not r.get("gone"):
-                    self._tell_desktop("thread-archived", 2, r["id"])  # the desktop reads its archived list again
-                    self.log(f"手机上删除了 Codex 对话 {r['id']}")
+                reason = agent.delete_unavailable_reason() if agent is not None else "这种对话还不能删除"
+                results.append({"app": app, "id": tid, "ok": False, "error": reason})
+        for agent, tids in pending.values():
+            results.extend(agent.delete_convs(self, tids))
         self._changed()
         return {"ok": all(r.get("ok") for r in results), "results": results,
                 "deleted": sum(1 for r in results if r.get("ok") and not r.get("gone"))}

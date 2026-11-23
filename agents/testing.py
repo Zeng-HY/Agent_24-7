@@ -228,8 +228,12 @@ class TestingAgent(Agent):
     def upload(self, conv_id: str, name: str, raw: bytes) -> dict:
         return {"id": "att-1", "name": name, "size": len(raw), "app": self.id}
 
-    def commands(self, conv_id: str) -> list:
-        return [{"name": "test", "title": "测试命令", "detail": "只用于测试"}]
+    def archived_list(self, svc) -> list[dict]:
+        return [dict(r, can_delete=True) for r in self._rows if r["archived"]]
+
+    def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
+        import composer_commands
+        return [composer_commands.item("test", "测试命令", "只用于测试")]
 
 
 AGENT = TestingAgent

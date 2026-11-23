@@ -31,6 +31,8 @@ class ClaudeAgent(Agent):
     requires_running_state = False
     relative_links = True
     mark_next_open = True
+    has_skills = True
+    archive_order = 30
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -262,6 +264,77 @@ class ClaudeAgent(Agent):
         return (package("Claude")
                 or (machines.LOCALAPPDATA / "AnthropicClaude").is_dir()
                 or (machines.APPDATA / "Claude").is_dir())
+
+    # -- commands, references, usage, archives
+
+    def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
+        import re
+        import composer_commands
+        rows = [composer_commands.item(**v) for v in composer_commands.CLAUDE]
+        taken = {v["name"] for v in rows}
+        if references is not None:
+            for skill in references.skills(self.id, conv_id):
+                name = skill["name"]
+                if name in taken or not re.fullmatch(r"[A-Za-z][\w:.-]{0,63}", name):
+                    continue
+                taken.add(name)
+                rows.append(composer_commands.item(
+                    name, detail=composer_commands.one_line(skill.get("description")),
+                    scope=skill.get("scope") or "",
+                ))
+        return rows
+
+    def skill_roots(self, home, cwd: str, read_config, warnings: list, warn_fn) -> tuple[list, set]:
+        from pathlib import Path
+        roots = [
+            (home / ".claude/skills", "个人技能", False),
+            (home / ".claude/commands", "个人命令", True),
+        ]
+        installed = read_config(home / ".claude/plugins/installed_plugins.json").get("plugins", {})
+        enabled = read_config(home / ".claude/settings.json").get("enabledPlugins", {})
+        if not isinstance(installed, dict) or not isinstance(enabled, dict):
+            raise ValueError("Invalid Claude plugin configuration")
+        for key, entries in installed.items():
+            if enabled.get(key) is not True:
+                continue
+            if not isinstance(entries, list):
+                raise ValueError("Invalid installed plugin entries")
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("Invalid installed plugin entry")
+                if entry.get("scope") == "project" and str(entry.get("projectPath", "")).casefold() != str(cwd).casefold():
+                    continue
+                if entry.get("installPath"):
+                    roots.append((Path(entry["installPath"]) / "skills", key.split("@")[0], False))
+        current = Path(cwd) if cwd else None
+        for parent in ([current, *current.parents] if current and current.is_absolute() else [])[:12]:
+            if parent == home:
+                break
+            roots.insert(0, (parent / ".claude/skills", "项目技能 · " + parent.name, False))
+            roots.insert(0, (parent / ".claude/commands", "项目技能 · " + parent.name, True))
+        return roots, set()
+
+    def read_usage(self, svc, live: bool = False) -> dict:
+        import usage_limits
+        if svc.desktop is None:
+            return {"available": False, "reason": "这会儿读不到 Claude 窗口，请稍后再试"}
+        try:
+            return svc.desktop.run(usage_limits.claude_window, svc.desktop, timeout=10)
+        except Exception:
+            return {"available": False, "reason": "这会儿读不到 Claude 窗口，请稍后再试"}
+
+    def archive_available(self, svc) -> bool:
+        return svc.claude is not None
+
+    def archive_conv(self, svc, conv_id: str) -> None:
+        svc.claude.session_actions.change(conv_id, True)
+
+    def unarchive_conv(self, svc, conv_id: str) -> None:
+        svc.claude.session_actions.change(conv_id, False)
+
+    def archived_list(self, svc) -> list[dict]:
+        import claude_archive
+        return claude_archive.archived()
 
 
 AGENT = ClaudeAgent

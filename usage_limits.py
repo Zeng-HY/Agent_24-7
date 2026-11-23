@@ -443,36 +443,45 @@ class Usage:
         self._cache = None  # (monotonic time, the codex part of a read)
         self._live_errors = {}  # code -> when it was last logged
 
-    def read(self, live: bool) -> dict:
+    def read(self, live: bool, *, include_agents: bool = False) -> dict:
+        from agents import registry
         apps = list(self.apps() or [])
-        if "codex" in apps:
-            codex = self._codex(bool(live))
-        else:
-            codex = {"available": False, "reason": "这台电脑没装 Codex"}
-        if "claude" not in apps:
-            claude = {"available": False, "reason": "这台电脑没装 Claude"}
-        elif self.desktop is None:
-            claude = {"available": False, "reason": "这会儿读不到 Claude 窗口，请稍后再试"}
-        else:
-            try:  # UI Automation lives on the desktop's own thread
-                claude = self.desktop.run(claude_window, self.desktop, timeout=10)
-            except Exception:
-                claude = {"available": False, "reason": "这会儿读不到 Claude 窗口，请稍后再试"}
-        return {"codex": codex, "claude": claude, "now": _now_ms()}
+        out: dict = {}
+        by_agent: dict = {}
+        for agent in registry.load():
+            if not agent.can("usage"):
+                continue
+            data = agent.read_usage(self, bool(live)) if agent.id in apps else agent.usage_not_installed()
+            by_agent[agent.id] = data
+            if agent.manifest().get("legacy"):
+                out[agent.id] = data
+        out["now"] = _now_ms()
+        if include_agents:
+            out["agents"] = by_agent
+        return out
+
+    def read_agent(self, app: str, live: bool = False) -> dict:
+        from agents import registry
+        from agents.base import Unsupported
+        agent = registry.get(app)
+        if not agent.can("usage"):
+            raise Unsupported("这个助手没有用量")
+        apps = list(self.apps() or [])
+        if agent.id not in apps:
+            return agent.usage_not_installed()
+        return agent.read_usage(self, bool(live))
 
     def redeem(self, body: dict) -> dict:
+        from agents import registry
         if body.get("confirmed") is not True:
             raise UsageError(CONFIRM_TEXT, 400, "not_confirmed")
-        if "codex" not in list(self.apps() or []):
-            raise UsageError("这台电脑没装 Codex", 409, "no_codex")
-        with _LOCK:
-            cached = self._cache[1] if self._cache and self._cache[1].get("source") == "live" else None
-        result = codex_redeem(body.get("request_id"), body.get("credit_id"), self.server_factory,
-                              data_dir=self.data_dir, log=self.log, cached=cached)
-        if result.get("usage"):
-            with _LOCK:
-                self._cache = (time.monotonic(), result["usage"])
-        return result
+        apps = list(self.apps() or [])
+        agent = next((a for a in registry.load() if a.can_reset_usage), None)
+        if agent is None or agent.id not in apps:
+            label = agent.manifest()["name"]["zh"] if agent is not None else "Codex"
+            code = f"no_{agent.id}" if agent is not None else "no_agent"
+            raise UsageError(f"这台电脑没装 {label}", 409, code)
+        return agent.redeem_usage(self, body)
 
     # -- the codex part, with the 30-second cache and the fallback to the records
 

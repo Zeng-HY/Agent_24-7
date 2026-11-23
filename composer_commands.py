@@ -45,27 +45,10 @@ def one_line(text, limit=120):
 
 def catalog(app, tid, references=None, deepseek=None):
     """The / list of one conversation: {'items': [...]} in the order the phone shows it."""
-    if app == 'codex':
-        return {'items': [item(**v) for v in CODEX]}
-    if app == 'claude':
-        rows = [item(**v) for v in CLAUDE]
-        taken = {v['name'] for v in rows}
-        if references is not None:  # its own commands and skills: Claude runs them as /name too
-            for skill in references.skills('claude', tid):
-                name = skill['name']
-                if name in taken or not re.fullmatch(r'[A-Za-z][\w:.-]{0,63}', name):
-                    continue
-                taken.add(name)
-                rows.append(item(name, detail=one_line(skill.get('description')), scope=skill.get('scope') or ''))
-        return {'items': rows}
-    if app == 'deepseek' and deepseek is not None:
-        rows = []
-        for command in deepseek.commands(tid):
-            name = command['name']
-            if name in DEEPSEEK_HIDDEN:
-                continue
-            words = DEEPSEEK.get(name, {})
-            rows.append(item(name, words.get('title', ''), words.get('detail') or one_line(command.get('description')),
-                             command.get('hint', '')))
-        return {'items': rows}
-    return {'items': []}
+    from agents import registry
+    from agents.base import AgentError
+    try:
+        agent = registry.get(app)
+        return {'items': agent.commands(tid, references=references, deepseek=deepseek)}
+    except AgentError:
+        return {'items': []}
