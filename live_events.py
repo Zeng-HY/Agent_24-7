@@ -101,14 +101,14 @@ def merge_live_messages(page,entry,state,previous=None,lite=False):
     return messages,live_ids
 
 def stream(handler,history,bridge,tasks,app,tid,lite=False):
-    if app=='deepseek':return deepseek_stream(handler,tid)
-    watcher=None
+    from agents import registry
+    agent=registry.get(app)
+    if agent.native_stream(handler,tid):
+        return
+    watcher=agent.watch(bridge,tid)
     # Validate before switching the HTTP response into streaming mode.
-    if app=='deepseek':history.conversation(app,tid,5)
-    else:history.transcript(app,tid)
-    if app=='codex':
-        try:watcher=bridge.watch(tid)
-        except Exception:watcher=None
+    if agent.home_list:history.transcript(app,tid)
+    else:history.conversation(app,tid,5)
     handler.send_response(200);handler.send_header('Content-Type','text/event-stream; charset=utf-8');handler.send_header('Cache-Control','no-cache, no-store');handler.send_header('X-Accel-Buffering','no');handler.end_headers()
     handler.connection.settimeout(15)
     seq=0;previous={};previous_control=None;previous_meta=None;previous_live_ids=None;last_write=0
@@ -116,18 +116,17 @@ def stream(handler,history,bridge,tasks,app,tid,lite=False):
         while True:
             if select.select([handler.connection],[],[],0)[0]:
                 if not handler.connection.recv(1,2):break
-            if app=='codex' and (watcher is None or watcher.closed):
-                try:watcher=bridge.watch(tid)
-                except Exception:watcher=None
+            if watcher is not None and watcher.closed:
+                watcher=agent.watch(bridge,tid)
             page=history.conversation(app,tid,60,lite=lite)
-            control=bridge.status(tid) if app=='codex' else None
+            control=agent.control(bridge,tid)
             if control is not None and tasks is not None:tasks.observe(tid,control)
             messages=page['messages'];live_ids=[];state=None
             if watcher is not None:
                 with watcher.condition:record=watcher.snapshots.get(tid);state=copy.deepcopy(record[2]) if record else None
-            if app=='codex':
+            if agent.dedupe_twins:
                 _,entry=history.transcript(app,tid)
-                messages,live_ids=merge_live_messages(page,entry,state,previous,lite)
+                messages,live_ids=agent.merge_live(page,entry,state,previous,lite)
                 page={**page,'messages':messages}
             meta={k:page.get(k) for k in ('status','runtime','title','folder','activity_turns','activity_current')}
             clean_control={k:v for k,v in (control or {}).items() if k!='observed_at'}

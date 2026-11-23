@@ -83,6 +83,21 @@ class TestingAgent(Agent):
     def detect(self) -> bool:
         return True
 
+    def catalog_entries(self, limit: int) -> list[dict]:
+        return self.catalog(limit=limit)["items"]
+
+    def project_group(self, item: dict):
+        import chat_projects
+        if item.get("folder"):
+            return "p:" + item["folder"], item["folder"], ""
+        return chat_projects.OTHER_KEY, chat_projects.OTHER_NAME, ""
+
+    def new_folder(self, group: dict) -> str:
+        import chat_projects
+        if group["key"] == chat_projects.OTHER_KEY:
+            return ""
+        return group["items"][0][0].get("folder") or ""
+
     def catalog(self, *, limit: int = 40, cursor: str = "", query: str = "",
                 sort: str = "updated", status: str = "all") -> dict:
         rows = [r for r in self._rows if not r["archived"]]
@@ -120,6 +135,15 @@ class TestingAgent(Agent):
                 "cwd": item["cwd"], "status": item["status"], "runtime": {},
                 "messages": messages[-limit:], "has_more": False, "next_cursor": "",
                 "has_newer": False, "reset": False, "total": len(messages)}
+
+    def transcript(self, tid: str):
+        import threading
+        from types import SimpleNamespace
+        item = self.find(tid)
+        messages = [dict(m) for m in self._messages.get(tid, [])]
+        by_id = {m["id"]: m for m in messages}
+        return item, SimpleNamespace(messages=messages, by_id=by_id, state={"running": item["status"] == "running"},
+                                     context={}, offset=0, size=0, mtime=0, lock=threading.RLock())
 
     def state(self, conv_id: str, *, fresh: bool = False) -> dict:
         item = self.find(conv_id)

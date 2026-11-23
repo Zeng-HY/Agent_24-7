@@ -207,31 +207,18 @@ def claude_group(item: dict) -> tuple[str, str]:
 
 def _groups(catalog: list[dict]) -> dict[tuple[str, str], dict]:
     """(app, key) -> {key, name, items: [(conversation, folder shown under its title)]}; newest first, as the catalog."""
-    layout = codex_layout()
+    from agents import registry
     groups: dict[tuple[str, str], dict] = {}
     for item in catalog:
         app = item.get("app")
-        if app == "codex":
-            placed = codex_group(item, layout)
-            if placed is None:
-                continue
-            key, place = placed
-            name = OTHER_NAME if key == OTHER_KEY else layout[0][key]["name"]
-        elif app == "claude":
-            key, name = claude_group(item)
-            place = ""
-        elif app == 'deepseek':
-            # as the Harness sidebar: by workspace, sessions in none under 其他对话 (10-20; before, every folder was a
-            # project, and each one-shot session a script starts in its own folder made one more)
-            place = ''
-            if item.get('ungrouped'):
-                key, name = OTHER_KEY, OTHER_NAME
-            elif isinstance(item.get('workspace'), dict):
-                key, name = 'w:' + item['workspace']['id'], item['workspace']['name'] or item.get('folder') or OTHER_NAME
-            else:  # no workspace table: by folder, as before
-                key, name = item.get('cwd') or OTHER_KEY, item.get('folder') or OTHER_NAME
-        else:
+        try:
+            agent = registry.get(app)
+        except Exception:
             continue
+        placed = agent.project_group(item)
+        if placed is None:
+            continue
+        key, name, place = placed
         groups.setdefault((app, key), {"key": key, "name": name, "items": []})["items"].append((item, place))
     return groups
 
@@ -250,27 +237,23 @@ def _row(entry: tuple[dict, str], status, now_ms: int) -> dict:
 
 
 def _new_folder(app: str, group: dict, layout: tuple) -> str:
-    """Where the project's ＋ starts a conversation: a Codex project's own folder, for Claude the folder of the
-    project's latest conversation (a Claude project is a folder name; two folders of that name are one group)."""
-    if group["key"] == OTHER_KEY:
-        return ""
-    if app == "codex":
-        roots = layout[0].get(group["key"], {}).get("roots") or []
-        return roots[0] if roots else ""
-    item = group["items"][0][0]
-    if app == "deepseek" and isinstance(item.get("workspace"), dict) and item["workspace"].get("path"):
-        return item["workspace"]["path"]
-    return _strip(item.get("origin") or item.get("cwd"))
+    """Where the project's ＋ starts a conversation: the assistant decides (a project's own folder, or the
+    folder of its latest conversation)."""
+    from agents import registry
+    return registry.get(app).new_folder(group)
 
 
 def tree(catalog: list[dict], status, first: int = FIRST, more: dict | None = None) -> dict:
-    """Both apps, each with its projects (most recently used first, 其他对话 last) and their first conversations.
-    more: {(app, key): n} sends n more of that project (what the phone had opened with 显示更多 before a refresh).
-    Each project carries what its ＋ needs: folder, or projectless for 其他对话 (a conversation in no project)."""
+    """Every assistant, each with its projects (most recently used first, 其他对话 last) and their first
+    conversations. more: {(app, key): n} sends n more of that project (what the phone had opened with
+    显示更多 before a refresh). Each project carries what its ＋ needs: folder, or projectless for 其他对话."""
+    from agents import registry
     now_ms = int(time.time() * 1000)
     groups, more, layout = _groups(catalog), more or {}, codex_layout()
     apps = []
-    for app, label in (("codex", "Codex"), ("claude", "Claude"), ('deepseek','DeepSeek')):
+    for agent in registry.load():
+        app = agent.id
+        label = agent.manifest()["name"]["zh"]
         mine = [g for (a, _), g in groups.items() if a == app]
         mine.sort(key=lambda g: (g["key"] == OTHER_KEY, -int(g["items"][0][0].get("updated") or 0)))
         projects = []

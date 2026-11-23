@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from .base import Agent, make_manifest
+import chats
+
+from .base import Agent, NotFound, make_manifest
 
 
 class ClaudeAgent(Agent):
     id = "claude"
+    home_list = True
+    requires_running_state = False
+    relative_links = True
+    mark_next_open = True
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -46,6 +52,50 @@ class ClaudeAgent(Agent):
             ui={"card_layout": "claude.v1", "waiting_text": "等待你处理"},
             sources={"catalog": "json-index", "transcript": "jsonl", "control": "ui-automation+hook", "live": "file-poll"},
         )
+
+    def find(self, conv_id: str) -> dict:
+        item = next((s for s in chats.claude_sessions(100000) if s["id"] == conv_id), None)
+        if item is None:
+            raise NotFound("找不到这个对话（可能已归档或删掉了）")
+        return item
+
+    def transcript_path(self, item: dict):
+        return chats.claude_transcript(item)
+
+    def parse_lines(self, lines, context=None, parsed=None):
+        return chats.parse_claude(lines, context, parsed)
+
+    def record_uuid(self, raw: bytes) -> str:
+        return chats.record_uuid(raw)
+
+    def catalog_entries(self, limit: int) -> list[dict]:
+        return chats.claude_sessions(limit)
+
+    def summary(self, item: dict) -> dict:
+        return chats.summary_for(self, item)
+
+    def read(self, conv_id: str, *, limit: int = 60, before: str = "",
+             around: str = "", lite: bool = False) -> dict:
+        return chats.conversation_for(self, conv_id, limit)
+
+    def project_group(self, item: dict):
+        import chat_projects
+        key, name = chat_projects.claude_group(item)
+        return key, name, ""
+
+    def new_folder(self, group: dict) -> str:
+        import chat_projects
+        if group["key"] == chat_projects.OTHER_KEY:
+            return ""
+        item = group["items"][0][0]
+        return chat_projects._strip(item.get("origin") or item.get("cwd"))
+
+    def absolute_links(self, text: str, cwd: str) -> str:
+        from message_files import absolute_links
+        return absolute_links(text, cwd)
+
+    def mark_open_next(self, messages: list[dict]) -> None:
+        chats.mark_open_next(messages)
 
     def detect(self) -> bool:
         import machines

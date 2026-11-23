@@ -106,6 +106,14 @@ class Agent:
     """The questions one assistant answers. Unimplemented ones raise Unsupported."""
 
     id = ""
+    # Reading hooks the shared transcript reader asks about.
+    home_list = False            # appears in chats.list_conversations (the old home list)
+    requires_running_state = True  # a transcript without a running flag cannot be called idle
+    dedupe_twins = False         # two records of one answer (Codex)
+    relative_links = False       # rewrite relative file links against the working folder (Claude)
+    mark_next_open = False       # mark the next-step box seen after reading (Claude)
+    assign_turn_id = False       # put the current turn id on every message (Codex)
+    final_answer_plan = False    # Codex's plan is a final answer; Claude's is a separate message
 
     def __init__(self) -> None:
         self._manifest = self.build_manifest()
@@ -131,6 +139,83 @@ class Agent:
 
     def find(self, conv_id: str) -> dict:
         raise Unsupported("这个助手还不能定位对话")
+
+    def transcript_path(self, item: dict):
+        """The file a conversation is read from, or None (an interface-based assistant)."""
+        raise Unsupported("这个助手没有可读的记录文件")
+
+    def parse_lines(self, lines: list[bytes], context: dict | None = None,
+                    parsed: dict | None = None) -> tuple[list[dict], dict]:
+        raise Unsupported("这个助手还不能解析记录")
+
+    def parse_record(self, raw: bytes, context: dict | None = None,
+                     parsed: dict | None = None) -> tuple[list[dict], dict]:
+        return self.parse_lines([raw], context, parsed)
+
+    def record_uuid(self, raw: bytes) -> str:
+        """A record's own uuid when it has one, so a repeated copy can be left out."""
+        return ""
+
+    def skip_record(self, raw: bytes) -> bool:
+        """Whether this line carries nothing the phone shows."""
+        return False
+
+    def tail_step(self, path, started: int = 0) -> str:
+        return ""
+
+    def runtime(self, path) -> dict:
+        return {}
+
+    def catalog_entries(self, limit: int) -> list[dict]:
+        return []
+
+    def ungrouped(self) -> list[dict]:
+        return []
+
+    def children(self, tid: str, offset: int = 0, limit: int = 50) -> dict:
+        raise Unsupported("这个助手没有子对话")
+
+    def ungrouped_bucket(self, stray: list[dict]) -> dict:
+        raise Unsupported("这个助手没有未分组的会话")
+
+    def project_group(self, item: dict) -> tuple[str, str, str] | None:
+        """(key, display name, place) for the sidebar tree; None leaves the conversation out."""
+        raise Unsupported("这个助手还不能分项目")
+
+    def new_folder(self, group: dict) -> str:
+        return ""
+
+    def final_answer(self, message: dict) -> bool:
+        return False
+
+    def twins(self, a: dict, b: dict) -> bool:
+        return False
+
+    def absolute_links(self, text: str, cwd: str) -> str:
+        return text
+
+    def presented_files(self, message: dict, item: dict) -> list[str] | None:
+        """Files this message explicitly presented as deliverables, or None for the usual link scan."""
+        return None
+
+    def mark_open_next(self, messages: list[dict]) -> None:
+        pass
+
+    def transcript(self, tid: str):
+        """(item, transcript-like entry) for an interface-based assistant."""
+        raise Unsupported("这个助手没有本地记录")
+
+    def native_stream(self, handler, tid: str) -> bool:
+        return False
+
+    def watch(self, bridge, tid: str):
+        return None
+
+    def control(self, bridge, tid: str):
+        return None
+
+    def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False):
+        return page["messages"], []
 
     def summary(self, item: dict) -> dict:
         raise Unsupported("这个助手还不能算状态")

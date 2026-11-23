@@ -26,7 +26,9 @@ def decode(value):
 
 class Transcript:
     def __init__(self,path,app,cwd=''):
-        self.path=path;self.app=app;self.cwd=cwd;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
+        from agents import registry
+        self.agent=app if hasattr(app,'manifest') else registry.get(app)
+        self.path=path;self.app=self.agent.id;self.cwd=cwd;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
         self.context={}  # what a line needs to know of earlier ones (Claude's next-step boxes, 10-16)
         # 11-16: Codex writes each answer twice; the final answers by turn, so a big file is not scanned for each.
         self.final_answers={}
@@ -43,22 +45,21 @@ class Transcript:
                     raw=f.readline(st.st_size-f.tell())
                     if not raw.endswith(b'\n'):break
                     self.offset=f.tell()
-                    if self.app=='codex' and b'"event_msg"' not in raw[:160] and b'"response_item"' not in raw[:160] and b'"compacted"' not in raw[:160]:continue
-                    if self.app=='claude':
+                    if self.agent.skip_record(raw):continue
+                    uuid=self.agent.record_uuid(raw)
+                    if uuid:
                         # 11-01: a /compact made Claude write 1226 old records into the file again, every uuid twice.
                         # The copy is not new talk: no message, no state, no queue change (and no turn clock).
-                        uuid=chats.record_uuid(raw)
-                        if uuid:
-                            seen=self.context.setdefault('uuids',set())
-                            if uuid in seen:continue
-                            seen.add(uuid)
+                        seen=self.context.setdefault('uuids',set())
+                        if uuid in seen:continue
+                        seen.add(uuid)
                     parsed={}
-                    msgs,state=chats._parse(self.app,[raw],self.context,parsed)
+                    msgs,state=self.agent.parse_record(raw,self.context,parsed)
                     msgs=activity_records.enrich(self.app,raw,msgs,self.context,record=parsed or None)
                     for k,v in state.items():
                         self.state[k]=v
                     for m in msgs:
-                        if self.app=='codex' and m.get('role')=='assistant' and m.get('phase')=='final_answer':
+                        if self.agent.final_answer(m):
                             plan_text=lambda value:re.sub(r'</?proposed_plan>','',value).strip()
                             turn_id=self.state.get('current_turn_id')
                             peers=[v for v in self.final_answers.get(turn_id,[]) if v.get('role')=='assistant' and v.get('phase')=='final_answer' and bool(v.get('native_plan'))!=bool(m.get('native_plan')) and plan_text(v['text'])==plan_text(m['text'])]
@@ -69,8 +70,8 @@ class Transcript:
                                 continue
                         # Dual log representations may share a source ID, or turn/phase/content evidence
                         # milliseconds apart (chats.codex_twins). Never drop all legacy rows.
-                        if self.app=='codex':
-                            peer=next((v for v in reversed(self.messages[-4:]) if v.get('turn_id')==self.state.get('current_turn_id') and chats.codex_twins(v,m)),None)
+                        if self.agent.dedupe_twins:
+                            peer=next((v for v in reversed(self.messages[-4:]) if v.get('turn_id')==self.state.get('current_turn_id') and self.agent.twins(v,m)),None)
                             if peer:
                                 if m.get('source_id'):peer['source_id']=m['source_id'];self.by_id[m['source_id']]=peer
                                 continue
@@ -79,20 +80,19 @@ class Transcript:
                         self.duplicates[digest]=self.duplicates.get(digest,0)+1
                         m['id']=m.get('source_id') or digest+':'+str(self.duplicates[digest])
                         m['order']=self.offset
-                        if self.app=='codex' and self.state.get('current_turn_id'):m['turn_id']=self.state['current_turn_id']
-                        if self.app=='claude' and m.get('role')=='assistant':
-                            from message_files import absolute_links
-                            m['text']=absolute_links(m['text'],self.cwd)  # its links relative to the working folder
+                        if self.agent.assign_turn_id and self.state.get('current_turn_id'):m['turn_id']=self.state['current_turn_id']
+                        if self.agent.relative_links and m.get('role')=='assistant':
+                            m['text']=self.agent.absolute_links(m['text'],self.cwd)  # its links relative to the working folder
                         if m['id'] in self.by_id:
                             m['order']=self.by_id[m['id']]['order'];self.by_id[m['id']].update(m)
                         else:self.messages.append(m);self.by_id[m['id']]=m
-                        if self.app=='codex' and m.get('role')=='assistant' and m.get('phase')=='final_answer':
+                        if self.agent.final_answer(m):
                             row=self.by_id.get(m['id'])
                             if row is not None:
                                 rows=self.final_answers.setdefault(self.state.get('current_turn_id'),[])
                                 if not any(v is row for v in rows):rows.append(row)
             # Read a line at a time, a box looked open on its own line for good, even after the user had answered (10-16)
-            if self.app=='claude':chats.mark_open_next(self.messages)
+            if self.agent.mark_next_open:self.agent.mark_open_next(self.messages)
             self.size=st.st_size;self.mtime=st.st_mtime_ns
         return self
 
@@ -101,16 +101,19 @@ class History:
         self.entries=OrderedDict();self.lock=threading.RLock();self.roots=roots or [];self.secret=secret.encode();self.files={};self.catalog_cache=(0,[],[])
         self.catalog_load_lock=threading.Lock();self.catalog_generation=0
     def transcript(self,app,tid):
-        if app=='deepseek':
-            import deepseek_control
-            try:return deepseek_control.bridge().transcript(tid)
-            except deepseek_control.DeepSeekError as exc:raise HistoryError(str(exc),exc.status) from None
+        from agents import registry
+        agent=registry.get(app)
+        if not agent.home_list:
+            from agents.base import AgentError
+            try:return agent.transcript(tid)
+            except AgentError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
+            except chats.ChatError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
         item=chats.find(app,tid);path=chats.conv_path(item)
         if not path or not path.is_file():raise HistoryError('没有找到这段对话的记录',404)
         key=(app,tid,str(path))
         with self.lock:
             entry=self.entries.get(key)
-            if entry is None:entry=Transcript(path,app,item.get('cwd') or '');self.entries[key]=entry
+            if entry is None:entry=Transcript(path,agent,item.get('cwd') or '');self.entries[key]=entry
             self.entries.move_to_end(key)
             entry.refresh()  # its size decides how much of the cache it takes
             while len(self.entries)>MAX_TRANSCRIPTS or sum(v.size for v in self.entries.values())>MAX_TRANSCRIPT_BYTES:
@@ -126,13 +129,14 @@ class History:
         with self.lock:
             if time.monotonic()-self.catalog_cache[0]<10:return self.catalog_cache[1],self.catalog_cache[2]
             generation=self.catalog_generation
-        items=[]
-        try:items+=chats.codex_threads(1000000)
-        except Exception:pass
-        import deepseek_control
-        found=deepseek_control.listing()
-        items+=chats.claude_sessions(1000000);items+=copy.deepcopy(found['top']);items.sort(key=lambda v:(-v['updated'],v['app'],v['id']))
-        stray=copy.deepcopy(found['ungrouped'])
+        items=[];stray=[]
+        from agents import registry
+        for agent in registry.load():
+            try:items+=agent.catalog_entries(1000000)
+            except Exception:pass
+            try:stray+=agent.ungrouped()
+            except Exception:pass
+        items.sort(key=lambda v:(-v['updated'],v['app'],v['id']))
         with self.lock:
             if generation==self.catalog_generation:self.catalog_cache=(time.monotonic(),items,stray)
         return items,stray
@@ -145,13 +149,10 @@ class History:
     def ungrouped(self):
         """DeepSeek's Ungrouped bucket (10-20): sessions in no workspace that no conversation claims."""
         return list(self._load()[1])
-    @staticmethod
-    def bucket(stray):
+    def bucket(self,stray):
         """The Ungrouped bucket as one row of the list, placed by its newest session."""
-        running=sum(1 for c in stray if c.get('status')=='running')
-        return {'app':'deepseek','id':UNGROUPED,'group':True,'title':'未分组的会话','folder':'','cwd':'',
-                'updated':max(c['updated'] for c in stray),'status':'running' if running else 'idle',
-                'preview':'不在 DeepSeek 工作区里，多是脚本或命令行开的一次性会话','children':stray}
+        from agents import registry
+        return registry.get(stray[0]['app']).ungrouped_bucket(stray)
     @staticmethod
     def child_row(c):
         return {k:c.get(k) for k in ('app','id','title','folder','cwd','updated','status','kind','parent')}|(
@@ -162,13 +163,13 @@ class History:
         items=[v for v in found if app=='all' or v['app']==app]
         if query:
             # a search looks through children and the Ungrouped bucket too; a hit is a row of its own
-            if app in ('all','deepseek'):
+            if app=='all' or any(v.get('children') for v in found):
                 for v in found:
-                    if v['app']=='deepseek':items+=[c|{'parent_title':v['title']} for c in v.get('children',[])]
+                    items+=[c|{'parent_title':v['title']} for c in v.get('children',[])]
                 items+=stray
             items=[v for v in items if query in (v['title']+' '+(v.get('folder') or '')+' '+v['id']).casefold()]
             items.sort(key=lambda v:(-v['updated'],v['app'],v['id']))
-        elif stray and app in ('all','deepseek'):
+        elif stray and (app=='all' or app==stray[0]['app']):
             items=sorted(items+[self.bucket(stray)],key=lambda v:(-v['updated'],v['app'],v['id']))
         if status not in ('all','running','waiting','idle'):raise HistoryError('状态筛选无效')
         if sort not in ('updated','created'):raise HistoryError('排序无效')
@@ -199,12 +200,14 @@ class History:
         return {'items':out,'has_more':bool(next_cursor),'next_cursor':next_cursor,'total':total,'now':int(time.time()*1000)}
     def children(self,app,tid,offset=0,limit=50):
         """More children of one conversation, or more of the Ungrouped bucket, past the first CHILDREN_SHOWN."""
-        if app!='deepseek':raise HistoryError('只有 DeepSeek 对话有子对话',400)
-        found,stray=self._load()
-        kids=stray if tid==UNGROUPED else next((v.get('children',[]) for v in found if v['app']==app and v['id']==tid),None)
-        if kids is None:raise HistoryError('找不到这个对话，请刷新列表',404)
-        offset=max(0,int(offset));limit=max(1,min(100,int(limit)))
-        return {'items':[self.child_row(c) for c in kids[offset:offset+limit]],'total':len(kids),'offset':offset}
+        from agents import registry
+        from agents.base import AgentError
+        try:
+            return registry.get(app).children(tid,offset,limit)
+        except AgentError as exc:
+            raise HistoryError(str(exc),getattr(exc,'status',400)) from None
+        except chats.ChatError as exc:
+            raise HistoryError(str(exc),getattr(exc,'status',400)) from None
     @staticmethod
     def public_message(m,full=False,lite=False):
         result=activity_records.public_message(m)
@@ -236,10 +239,11 @@ class History:
                 out.append(result)
         return {'items':out}
     def conversation(self,app,tid,limit=60,before='',around='',lite=False):
-        if app=='deepseek':
-            import deepseek_control
-            try:return deepseek_control.bridge().conversation(tid,limit,before,around)
-            except deepseek_control.DeepSeekError as exc:raise HistoryError(str(exc),exc.status) from None
+        from agents import registry
+        agent=registry.get(app)
+        if not agent.home_list:
+            try:return agent.read(tid,limit=limit,before=before,around=around,lite=lite)
+            except chats.ChatError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
         item,entry=self.transcript(app,tid);limit=max(5,min(100,limit));reset=False
         with entry.lock:
             rows=entry.messages;end=len(rows)
@@ -263,7 +267,7 @@ class History:
                 timed={**m,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
                 items.append(self.public_message(timed,lite=lite))
             return chats.public(item)|{'messages':items, 'status':chats._status(entry.state,entry.mtime/1e9),
-                'size':entry.size,'runtime':chats.runtime_info(app,entry.path),'modified':entry.mtime//1000000,
+                'size':entry.size,'runtime':agent.runtime(entry.path),'modified':entry.mtime//1000000,
                 # 0.6.4: the turn's own times, Unix seconds; each message of that turn carries them too.
                 'turn_started':seconds(clock.get('started_at')),'turn_ended':seconds(clock.get('ended_at')),
                 'turn_status':clock.get('status',''),
@@ -304,7 +308,9 @@ class History:
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
     def list_files(self,app,tid,message_id=None):
         from message_files import references
+        from agents import registry
         import office_preview  # Word, Excel and PowerPoint files the computer can show as PDF
+        agent=registry.get(app)
         item,entry=self.transcript(app,tid)
         out=[];seen_paths=set()
         with entry.lock:
@@ -312,15 +318,9 @@ class History:
             messages=[m for m in entry.messages if (m['role']=='assistant' or (m.get('current_file') and m.get('tool_status')=='completed')) and (not message_id or m['id']==message_id)]
             for m in reversed(messages):
                 paths=references(m['text']) if m['role']=='assistant' else [m['current_file']]
-                if app=='deepseek' and m.get('kind')=='deliverables':
-                    paths=[]
-                    for declaration in m.get('presented_files',[]):
-                        raw=declaration['path'];p=Path(raw)
-                        if not p.is_absolute():
-                            cwd=Path(item.get('cwd') or '')
-                            if not cwd.is_absolute() or p.drive or raw.startswith(('\\','/')):continue
-                            p=Path(os.path.abspath(cwd/p))
-                        paths.append(str(p.absolute()))
+                presented=agent.presented_files(m,item)
+                if presented is not None:
+                    paths=presented
                 for index,raw in enumerate(paths):
                     p=Path(raw)
                     # Only an explicit source reference authorizes this exact regular local file.

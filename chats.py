@@ -502,27 +502,19 @@ def claude_transcript(item: dict) -> Path | None:
 
 
 def find(app: str, conv_id: str) -> dict:
-    if app == 'deepseek':
-        import deepseek_control
-        try:return deepseek_control.bridge().find(conv_id)
-        except deepseek_control.DeepSeekError as exc:raise ChatError(str(exc)) from None
-    if app == "codex":
-        item = codex_thread(conv_id)
-    elif app == "claude":
-        item = next((s for s in claude_sessions(100000) if s["id"] == conv_id), None)
-    else:
-        raise ChatError(f"不认识的应用 {app}")
-    if item is None:
-        raise ChatError("找不到这个对话（可能已归档或删掉了）")
-    return item
+    from agents import registry
+    from agents.base import NotFound, UnknownAgent
+    try:
+        return registry.get(app).find(conv_id)
+    except UnknownAgent:
+        raise ChatError(f"不认识的应用 {app}") from None
+    except NotFound as exc:
+        raise ChatError(str(exc)) from None
 
 
 def conv_path(item: dict) -> Path | None:
-    if item['app']=='deepseek':return None
-    if item["app"] == "codex":
-        p = Path(item["path"]) if item.get("path") else None
-        return p if p is not None and p.is_file() else None
-    return claude_transcript(item)
+    from agents import registry
+    return registry.get(item["app"]).transcript_path(item)
 
 
 def _codex_command(item: dict) -> str:
@@ -1085,7 +1077,8 @@ def claude_last_sent(lines: list[bytes]) -> list[str]:
 
 
 def _parse(app: str, lines: list[bytes], context: dict | None = None, parsed: dict | None = None) -> tuple[list[dict], dict]:
-    return parse_codex(lines, context, parsed) if app == "codex" else parse_claude(lines, context, parsed)
+    from agents import registry
+    return registry.get(app).parse_lines(lines, context, parsed)
 
 
 def _status(state: dict, mtime: float) -> str:
@@ -1113,8 +1106,12 @@ def summary(item: dict) -> dict:
     if not item.get('app'):
         return {'status':item.get('status','unknown'),'preview':item.get('preview',''),
                 'turn_started':0,'turn_ended':0,'step':''}
-    if item['app']=='deepseek':return {'status':item.get('status','unknown'),'preview':item.get('preview',''),
-                                      'turn_started':0,'turn_ended':0,'step':''}
+    from agents import registry
+    return registry.get(item['app']).summary(item)
+
+
+def summary_for(agent, item: dict) -> dict:
+    """The shared file summary; the agent supplies its parser and transcript path."""
     path = conv_path(item)
     if path is None:
         return {"status": "unknown", "preview": "", "path_missing": True}
@@ -1135,7 +1132,7 @@ def summary(item: dict) -> dict:
     while True:
         lines, first, end = read_tail_span(path, nbytes)
         at_start = first == 0
-        msgs, state = _parse(item["app"], lines)
+        msgs, state = _parse(agent.id, lines)
         have_message=any(m["role"] in ("user", "assistant") for m in msgs)
         # 0.6.4: a running turn whose start record is farther back still needs its own start for the timer. Once
         # found it is kept by file, so a growing turn does not rescan tens of megabytes on every list poll.
@@ -1162,7 +1159,7 @@ def summary(item: dict) -> dict:
                 need_start=not at_start and nbytes < (64 << 20)
                 if not need_start:  # no start to be had: no timer rather than a wrong one, and no search on every poll
                     _started_cache[key_path] = ('', end)
-        have_status=item['app']!='codex' or state.get('running') is not None
+        have_status=(not agent.requires_running_state) or state.get('running') is not None
         if (have_message and have_status and not need_start) or at_start or nbytes >= (64 << 20):
             break
         nbytes = min(nbytes * 4, 64 << 20)
@@ -1308,14 +1305,17 @@ def runtime_info(app: str, path: Path) -> dict:
 
 
 def list_conversations(app: str = "all", limit: int = 40) -> list[dict]:
+    from agents import registry
     items: list[dict] = []
-    if app in ("all", "codex"):
+    for agent in registry.load():
+        if not agent.home_list:
+            continue
+        if app not in ("all", agent.id):
+            continue
         try:
-            items += codex_threads(limit)
-        except sqlite3.Error:
-            pass
-    if app in ("all", "claude"):
-        items += claude_sessions(limit)
+            items += agent.catalog_entries(limit)
+        except Exception:
+            continue
     for item in items:
         s = summary(item)
         item["status"], item["preview"] = s["status"], s["preview"]
@@ -1328,8 +1328,13 @@ def list_conversations(app: str = "all", limit: int = 40) -> list[dict]:
 
 
 def conversation(app: str, conv_id: str, n: int = 60) -> dict:
-    item = find(app, conv_id)
-    path = conv_path(item)
+    from agents import registry
+    return registry.get(app).read(conv_id, limit=n)
+
+
+def conversation_for(agent, conv_id: str, n: int = 60) -> dict:
+    item = agent.find(conv_id)
+    path = agent.transcript_path(item)
     out = public(item) | {"messages": [], "status": "unknown", "size": 0, "runtime": None}
     if path is None:
         out["note"] = "没找到这个对话的记录文件"
@@ -1338,12 +1343,12 @@ def conversation(app: str, conv_id: str, n: int = 60) -> dict:
     nbytes, msgs, state = 1 << 20, [], {}
     while True:
         lines, at_start = read_tail(path, nbytes)
-        msgs, state = _parse(app, lines)
+        msgs, state = _parse(agent.id, lines)
         talk = sum(1 for m in msgs if m["role"] in ("user", "assistant"))
         if talk >= n // 2 or at_start or nbytes >= (32 << 20):
             break
         nbytes *= 4
-    if app == "claude" and state.get("title"):
+    if state.get("title"):
         out["title"] = state["title"]
     duplicates: dict[str, int] = {}
     for m in msgs:
@@ -1355,7 +1360,7 @@ def conversation(app: str, conv_id: str, n: int = 60) -> dict:
             m["text"] = m["text"][:6000] + "\n…（太长，后面略）"
         m.pop("legacy", None)
     out.update(messages=msgs[-n:], status=_status(state, st.st_mtime), size=st.st_size,
-               modified=int(st.st_mtime * 1000), runtime=runtime_info(app, path))
+               modified=int(st.st_mtime * 1000), runtime=agent.runtime(path))
     return out
 
 
