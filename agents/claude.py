@@ -33,6 +33,9 @@ class ClaudeAgent(Agent):
     mark_next_open = True
     has_skills = True
     archive_order = 30
+    desktop_process = chats.CLAUDE_PROCESS
+    desktop_send_text = "已提交，等待对话记录确认"
+    delivery_markers = (b"enqueue", b'"user"', b'"queued_command"')
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -511,6 +514,224 @@ class ClaudeAgent(Agent):
                 svc._record_claude(rid, data)
                 svc._save(rid, state, data, result)
         return state, result
+
+    # -- desktop, lifecycle & delivery hooks
+
+    def is_our_delivery(self, rec: dict, want: str) -> bool:
+        steered = chats._claude_steer_message(rec)
+        if steered:
+            return want in chats.norm(steered["text"])
+        if rec.get("type") == "queue-operation" and rec.get("operation") == "enqueue":
+            return want in chats.norm(chats._join_text(rec.get("content")))
+        if rec.get("type") == "user":
+            return want in chats.norm(chats._join_text((rec.get("message") or {}).get("content")))
+        return False
+
+    def desktop_send(self, desktop, item: dict, text: str, images=None, replace=None) -> None:
+        desktop._send_claude(item, text, images, replace)
+
+    def desktop_check(self, item: dict, offset: int, text: str) -> dict:
+        stage = chats.claude_delivery_stage(chats.conv_path(item), int(offset), text)
+        return {"delivered": stage == "received", "queued": stage == "queued", "stage": stage}
+
+    def desktop_open(self, desktop, item: dict) -> None:
+        desktop._claude_open(item, [item["title"], chats.conversation_title(item)])
+
+    def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
+        import remote
+        remote.hook_settings(cfg, self.id in apps, log)
+
+    def chat_send_with_references(self, handler, body: dict) -> dict:
+        import time
+        tid = str(body.get("id", ""))
+        text = str(body.get("text", ""))
+        images = []
+        if body.get("attachments"):
+            ids = body["attachments"]
+            if (not isinstance(ids, list) or len(ids) > 5
+                    or any(not isinstance(v, str) for v in ids) or len(set(ids)) != len(ids)):
+                raise chats.InputNotSubmitted("图片请求无效，尚未发送")
+            images = [handler.server.codex.attachment(v, tid) for v in ids]
+            if any(v.get("app", "codex") != "claude" for v in images) or sum(v["original_size"] for v in images) > 50 << 20:
+                raise chats.InputNotSubmitted("图片不属于此 Claude 会话或超过大小限制，尚未发送")
+            if not text.strip():
+                text = "请查看这些图片。"
+        if body.get("references"):
+            text, _ = handler.server.references.compose(self.id, tid, text, body["references"])
+        if images:
+            previous = handler.server.codex._begin(str(body.get("request_id", "")), tid, body)
+            if previous:
+                return previous
+            for image in images:
+                image["used"] = True
+                handler.server.codex._write_meta(image)
+        replace = {"replace": body["replace_draft"][:2000]} if isinstance(body.get("replace_draft"), str) else {}
+        result = (
+            handler.desktop.send(self.id, tid, text, images, **replace)
+            if images else handler.desktop.send(self.id, tid, text, **replace)
+        )
+        result["accepted_at"] = int(time.time() * 1000)
+        for image in images:
+            image["used"] = True
+            handler.server.codex._write_meta(image)
+        if body.get("references") or images:
+            result["check_text"] = text
+        if images:
+            handler.server.codex._finish(body["request_id"], result)
+        return result
+
+    def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
+        return handler.server.codex.upload(tid, name, raw, self.id)
+
+    # -- HTTP action handlers (shared by /api/agents/claude/* and /api/claude/*)
+
+    def _run_claude_post(self, handler, path_label: str, fn) -> None:
+        import traceback
+        import claude_control
+        try:
+            handler._json(fn())
+        except Exception as exc:
+            if not isinstance(exc, chats.ChatError):
+                handler.log.write(f"Claude 操作 {path_label} 出错：\n" + traceback.format_exc())
+            handler._json(
+                {
+                    "error": claude_control.plain_error(exc),
+                    "not_submitted": bool(getattr(exc, "not_submitted", False)),
+                    "code": getattr(exc, "code", None),
+                },
+                409,
+            )
+
+    def http_state(self, handler) -> None:
+        import time
+        try:
+            q = handler._query()
+            tid = q.get("id", "")
+            ua = handler.headers.get("User-Agent") or ""
+            handler.server.claude_reads.append({
+                "time": time.strftime("%H:%M:%S"),
+                "id": tid[-6:],
+                "fresh": q.get("fresh") == "1",
+                "from": "iPhone" if "iPhone" in ua else "Android" if "Android" in ua else "other",
+            })
+            handler._json({
+                **handler.server.claude.state(tid, q.get("fresh") == "1"),
+                "images": handler.server.codex.message_images(tid),
+            })
+        except Exception as exc:
+            handler._json({"error": str(exc)}, 400)
+
+    def http_receipt(self, handler) -> None:
+        q = handler._query()
+        tid, rid = q.get("id", ""), q.get("request_id", "")
+        bridge = getattr(handler.server, "codex", None)
+        if bridge is not None and rid:
+            try:
+                rec = bridge.receipt(tid, rid)
+                if isinstance(rec, dict) and rec.get("state") and rec.get("state") != "unknown":
+                    handler._json(rec)
+                    return
+            except Exception:
+                pass
+        handler._json({"state": "unknown", "id": tid, "request_id": rid})
+
+    def http_send(self, handler, body: dict) -> None:
+        if body.get("intent") == "steer" and (body.get("expected_turn") or body.get("turn_id")):
+            def run():
+                tid = str(body.get("id", ""))
+                text = str(body.get("text", ""))
+                if body.get("references"):
+                    text, _ = handler.server.references.compose(self.id, tid, text, body["references"])
+                expected = str(body.get("expected_turn") or body.get("turn_id") or "")
+                result = handler.server.claude.send_steer(tid, text, expected, str(body.get("request_id", "")))
+                result["check_text"] = text
+                return result
+            self._run_claude_post(handler, "/api/claude/steer", run)
+            return
+        handler._chat_call(handler._send_with_references, {**body, "app": self.id}, timeout=60)
+
+    def http_stop(self, handler, body: dict) -> None:
+        if body.get("token"):
+            self._run_claude_post(
+                handler, "/api/claude/choose",
+                lambda: handler.server.claude.choose(str(body.get("id", "")), str(body.get("token", "")), None),
+            )
+            return
+        if isinstance(body.get("option"), dict):
+            handler._chat_call(
+                handler.desktop.claude_press, str(body.get("id", "")), body["option"],
+                str(body.get("text", "")), bool(body.get("enter")), timeout=40,
+            )
+            return
+        handler._json({"error": "停止 Claude 需要当前桌面令牌（token）"}, 400)
+
+    def http_queue(self, handler, body: dict) -> None:
+        handler._json({"error": "这个助手还没有队列", "code": "unsupported"}, 400)
+
+    def http_answer(self, handler, body: dict) -> None:
+        tid = str(body.get("id", ""))
+        if body.get("token"):
+            self._run_claude_post(
+                handler, "/api/claude/choose",
+                lambda: handler.server.claude.choose(tid, str(body.get("token", "")), body.get("value")),
+            )
+        elif "tool_id" in body:
+            self._run_claude_post(
+                handler, "/api/claude/next",
+                lambda: handler.server.claude.next_step(tid, str(body.get("tool_id", "")), int(body.get("index", -1)), str(body.get("label", ""))),
+            )
+        elif "title" in body and "button" in body:
+            self._run_claude_post(
+                handler, "/api/claude/task",
+                lambda: handler.server.claude.task_step(tid, str(body.get("title", "")), str(body.get("button", ""))),
+            )
+        elif isinstance(body.get("option"), dict):
+            handler._chat_call(
+                handler.desktop.claude_press, tid, body["option"],
+                str(body.get("text", "")), bool(body.get("enter")), timeout=40,
+            )
+        else:
+            handler._json({"error": "缺少回答所需的令牌或选项"}, 400)
+
+    def http_open(self, handler, body: dict) -> None:
+        handler._chat_call(handler.desktop.open, self.id, str(body.get("id", "")), timeout=45)
+
+    def http_legacy_get(self, handler, sub: str) -> None:
+        if sub == "state":
+            self.http_state(handler)
+            return
+        handler._json({"error": "没有这个地址"}, 404)
+
+    def http_legacy_post(self, handler, sub: str, body: dict) -> None:
+        path = "/api/claude/" + sub
+        def run():
+            tid = str(body.get("id", ""))
+            if sub == "menu":
+                return handler.server.claude.menu(tid, str(body.get("kind", "")))
+            if sub == "catalog":
+                return handler.server.claude.catalog(tid, bool(body.get("fresh")))
+            if sub == "setting":
+                return handler.server.claude.select_setting(
+                    tid, str(body.get("kind", "")), str(body.get("name", "")),
+                    body.get("value"), body.get("expected_model"),
+                )
+            if sub == "choose":
+                return handler.server.claude.choose(tid, str(body.get("token", "")), body.get("value"))
+            if sub == "close-menu":
+                return handler.server.claude.close_menu(tid)
+            if sub == "next":
+                return handler.server.claude.next_step(tid, str(body.get("tool_id", "")), int(body.get("index", -1)), str(body.get("label", "")))
+            if sub == "task":
+                return handler.server.claude.task_step(tid, str(body.get("title", "")), str(body.get("button", "")))
+            if sub == "steer":
+                text = str(body.get("text", ""))
+                if body.get("references"):
+                    text, _ = handler.server.references.compose(self.id, tid, text, body["references"])
+                result = handler.server.claude.send_steer(tid, text, str(body.get("expected_turn", "")), str(body.get("request_id", "")))
+                result["check_text"] = text
+                return result
+            raise chats.ChatError("没有这个操作")
+        self._run_claude_post(handler, path, run)
 
 
 AGENT = ClaudeAgent

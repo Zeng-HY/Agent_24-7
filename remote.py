@@ -76,6 +76,7 @@ import voice  # the microphone button: recordings from the phone turned into tex
 import voice_local  # the same button, recognised on this PC while the user talks (SenseVoice + Qwen3-ASR)
 import voice_terms  # the voice dictionary: words to listen for and how to spell them
 import machines  # this computer's name and apps, and the other computers the page can switch to
+from agents import legacy as agent_legacy
 from agents import registry as agent_registry  # the list of desktop assistants, one module each
 import notify  # a notification on the phone (Bark, ntfy) when a conversation is done
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
@@ -272,26 +273,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(result if isinstance(result, dict) else {"ok": True, "result": result})
 
     def _open_codex(self, tid: str) -> None:
-        """电脑上打开 for Codex (11-17): bring its window up on the desktop worker, then wait here in this request's
-        own thread for a Codex window to take the conversation (up to ten seconds), so Claude's sends do not queue
-        behind that wait on the desktop worker."""
-        try:
-            self.desktop.run(self.desktop.open, "codex", tid, timeout=45)
-            result = self.server.codex.confirm_open(tid)
-        except (chats.ChatError, codex_control.ControlError) as exc:
-            # Never 503: both phones read that as "the computer is offline", hiding the real reason.
-            self._json({"ok": False, "error": str(exc), "text": str(exc),
-                        "code": getattr(exc, "code", None) or None}, 400)
-            return
-        except TimeoutError:
-            self._json({"ok": False, "error": "超过 45 秒没做完"}, 504)
-            return
-        except Exception as exc:
-            self.log.write(traceback.format_exc())
-            text = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}"
-            self._json({"ok": False, "error": text, "text": text}, 500)
-            return
-        self._json(result if isinstance(result, dict) else {"ok": True, "result": result})
+        """Backwards-compatible entry point; delegates to CodexAgent.http_open."""
+        agent_registry.get(agent_legacy.CODEX).http_open(self, {"id": tid})
 
     def log_message(self, fmt, *args):
         if self.server.verbose:  # type: ignore[attr-defined]
@@ -369,14 +352,30 @@ class Handler(BaseHTTPRequestHandler):
         login = self._visitor()
         self._json({"error": f"这台电脑没放行 Tailscale 账号 {login}" if login is not None else "口令不对"}, 403)
 
+    def _agent_for_unified(self, path: str):
+        """Resolve /api/agents/<id>/<subpath> with protocol filtering."""
+        rest = path[len("/api/agents/"):]
+        agent_id, _, sub = rest.partition("/")
+        if not agent_id or not sub:
+            self._json({"error": "没有这个接口"}, 404)
+            return None, ""
+        try:
+            agent = agent_registry.get(agent_id)
+        except Exception:
+            self._json({"error": "没有这个来源"}, 404)
+            return None, ""
+        if self._client_protocol() < 2 and not agent.manifest().get("legacy"):
+            self._json({"error": "没有这个来源"}, 404)
+            return None, ""
+        return agent, sub
+
     def _recheck_apps(self) -> None:
         """Which desktop apps this computer has, looked at again each time the page opens (a few folder checks), so an
         app installed after the service started shows on the next load. A new dict, not a change to the shared one."""
         apps = machine_facts(self.cfg)["apps"]
         self.server.machine = {**self.server.machine, "apps": apps}  # type: ignore[attr-defined]
-        deepseek = getattr(self.server, "deepseek", None)
-        if deepseek is not None and "deepseek" in apps and deepseek_control.HOME.is_dir():
-            deepseek.events.start()  # its live events, if DeepSeek came after the service; started once, later calls do nothing
+        for agent in agent_registry.load():
+            agent.on_apps_rechecked(self.server, apps)
 
     def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
         headers = dict(extra or {})
@@ -519,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._recheck_apps()
                 page = stamp_page(page)  # each script's URL carries this version; the file itself holds none
                 # version: the page compares it with what /api/status says later, and reloads itself after an update
-                capabilities = {"claude_archive": True} if "claude" in self.server.machine["apps"] else {}
+                capabilities = agent_legacy.page_capabilities(self.server.machine["apps"])
                 agents = agent_registry.manifests_for(self.server.machine["apps"])
                 facts = json.dumps({**self.server.machine, "version": VERSION, "agents": agents, **capabilities}, ensure_ascii=False).replace("<", "\\u003c")
                 page = page.replace(b"<!--machine-->", f"<script>window.MACHINE={facts};</script>".encode("utf-8"), 1)
@@ -534,6 +533,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json({"schema": 1, "protocol": 2,
                         "agents": agent_registry.manifests_for(self._visible_apps())})
+            return
+        if path.startswith("/api/agents/"):
+            agent, sub = self._agent_for_unified(path)
+            if agent is not None:
+                agent.http_get(self, sub)
             return
         if path == "/api/hello":  # the other computers ask it to find this one (machines.py), through tailscale serve
             # with their account on the request: let in as the page is (10-20; it used to answer anyone)
@@ -554,9 +558,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/notify":  # 设置 → 手机通知: whether an address is set (never the address) and the last outcomes
             self._json(self.server.notifier.public())
             return
-        if path == "/api/usage":  # 用量：Codex 和 Claude 的限额、几点重置；live=1 时 Codex 实时读（usage_limits.py）
+        if path == "/api/usage":  # 用量：限额、几点重置；live=1 时实时读（usage_limits.py）
             try:
-                self._json(self.server.usage.read(self._query().get("live") == "1"))
+                self._json(self.server.usage.read(self._query().get("live") == "1",
+                                                  include_agents=self._client_protocol() >= 2))
             except usage_limits.UsageError as exc:
                 self._json({"error": str(exc), "code": exc.code}, exc.status)
             return
@@ -579,33 +584,22 @@ class Handler(BaseHTTPRequestHandler):
             host = (self.headers.get("Host") or "").split(":")[0]  # a ts.net address: let in by the account, no token (10-20)
             self._json({"url": f"https://{host}/" if host.endswith(".ts.net") else ""})
             return
-        if path.startswith('/api/deepseek/'):
-            self._deepseek(path)
-            return
-        if path.startswith("/api/codex/"):
-            self._codex_get(path)
-            return
         if path == '/api/debug/claude-reads':  # did the phone read Claude's state, and when (it restores a minimised window)
             self._json({'reads': list(self.server.claude_reads)})
             return
-        if path == '/api/claude/state':
-            try:
-                tid=self._query().get('id','')
-                agent=self.headers.get('User-Agent') or ''
-                self.server.claude_reads.append({'time':time.strftime('%H:%M:%S'),'id':tid[-6:],'fresh':self._query().get('fresh')=='1',
-                                                 'from':'iPhone' if 'iPhone' in agent else 'Android' if 'Android' in agent else 'other'})
-                self._json({**self.server.claude.state(tid,self._query().get('fresh')=='1'),'images':self.server.codex.message_images(tid)})
-            except Exception as exc:self._json({'error':str(exc)},400)
+        legacy_match = agent_legacy.match_prefix(path)
+        if legacy_match is not None:
+            agent_registry.get(legacy_match[0]).http_legacy_get(self, legacy_match[1])
             return
         if path=='/api/composer/references':
-            q=self._query();app=q.get('app','codex')
+            q=self._query();app=q.get('app',agent_legacy.DEFAULT_APP)
             if self._app_visible(app) is False:
                 self._json({'error':'没有这个来源'},404);return
             try:self._json(self.server.references.search(app,q.get('id',''),q.get('kind','chat'),q.get('query',''),int(q.get('offset','0')),force=q.get('fresh')=='1',scan_id=q.get('scan_id','')))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc)},400)
             return
         if path=='/api/composer/commands':  # 0.6.6: what the box offers after / (composer_commands.py)
-            q=self._query();app=q.get('app','codex')
+            q=self._query();app=q.get('app',agent_legacy.DEFAULT_APP)
             try:agent=agent_registry.get(app)
             except Exception:
                 self._json({'error':'没有这个来源'},400);return
@@ -726,6 +720,14 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True  # the recording in the body is not read
             self._json({"error": "这台电脑没开语音"}, 404)
             return
+        if path.startswith("/api/agents/") and path.endswith("/upload"):
+            agent, sub = self._agent_for_unified(path)
+            if agent is not None:
+                if sub == "upload":
+                    agent.http_upload(self)
+                else:
+                    self._json({"error": "没有这个接口"}, 404)
+            return
         if path == "/api/codex/upload":
             self._codex_upload()
             return
@@ -742,14 +744,23 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("_bad"):
             self._json({"error": body["_bad"]}, 400)
             return
+        if path.startswith("/api/agents/"):
+            agent, sub = self._agent_for_unified(path)
+            if agent is not None:
+                agent.http_post(self, sub, body)
+            return
         if path == '/api/chat/resolve':
             try:
-                app,tid,ids=body.get('app','codex'),body.get('id',''),body.get('request_ids')
-                if app not in ('codex','claude','deepseek') or not isinstance(tid,str) or not tid or len(tid)>200:
+                app,tid,ids=body.get('app',agent_legacy.DEFAULT_APP),body.get('id',''),body.get('request_ids')
+                try:agent=agent_registry.get(app)
+                except Exception:raise chat_history.HistoryError('会话定位请求无效',400) from None
+                if self._app_visible(app) is False:
+                    self._json({'error':'没有这个来源'},404);return
+                if not isinstance(tid,str) or not tid or len(tid)>200:
                     raise chat_history.HistoryError('会话定位请求无效',400)
                 if not isinstance(ids,list) or len(ids)>100 or any(not isinstance(v,str) or not v or len(v)>200 for v in ids):
                     raise chat_history.HistoryError('消息定位请求无效',400)
-                aliases=self.server.codex.delivery_locations(tid,ids) if app=='codex' else {}
+                aliases=agent.resolve_aliases(self.server,tid,ids)
                 self._json(self.history.resolve_requests(app,tid,ids,aliases))
             except (chat_history.HistoryError,chats.ChatError,ValueError,OSError) as exc:
                 self._json({'error':str(exc)},getattr(exc,'status',400))
@@ -804,9 +815,6 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             self._json({"ok": True})
             return
-        if path.startswith('/api/deepseek/'):
-            self._deepseek(path,body)
-            return
         if path in ('/api/files/image','/api/files/remove'):
             self._files_post(path,body)
             return
@@ -815,44 +823,35 @@ class Handler(BaseHTTPRequestHandler):
                 archives=self.server.archives
                 if path.endswith('/delete'):
                     if body.get('confirmed') is not True:raise chats.ChatError('删除要先在手机上确认')
-                    self._json(archives.delete(body.get('items')))
-                elif path.endswith('/unarchive'):self._json(archives.unarchive(str(body.get('app','')),body.get('id')))
-                else:self._json(archives.archive(str(body.get('app','')),body.get('id')))
+                    items=body.get('items')
+                    if isinstance(items,list) and any(isinstance(v,dict) and self._app_visible(v.get('app','')) is False for v in items):
+                        self._json({'error':'没有这个来源'},404);return
+                    self._json(archives.delete(items))
+                elif path.endswith('/unarchive'):
+                    app=str(body.get('app',''))
+                    if self._app_visible(app) is False:
+                        self._json({'error':'没有这个来源'},404);return
+                    self._json(archives.unarchive(app,body.get('id')))
+                else:
+                    app=str(body.get('app',''))
+                    if self._app_visible(app) is False:
+                        self._json({'error':'没有这个来源'},404);return
+                    self._json(archives.archive(app,body.get('id')))
             except chats.ChatError as exc:self._json({'error':str(exc)},getattr(exc,'status',400))
             except Exception as exc:
                 self.log.write(f'归档操作 {path} 出错：\n'+traceback.format_exc())
                 self._json({'error':f'{type(exc).__name__}: {str(exc)[:200]}'},500)
             return
-        if path.startswith("/api/codex/"):
-            self._codex_post(path, body)
-            return
-        if path.startswith('/api/claude/'):
-            try:
-                if path=='/api/claude/menu':result=self.server.claude.menu(str(body.get('id','')),str(body.get('kind','')))
-                elif path=='/api/claude/catalog':result=self.server.claude.catalog(str(body.get('id','')),bool(body.get('fresh')))
-                elif path=='/api/claude/setting':result=self.server.claude.select_setting(str(body.get('id','')),str(body.get('kind','')),str(body.get('name','')),body.get('value'),body.get('expected_model'))
-                elif path=='/api/claude/choose':result=self.server.claude.choose(str(body.get('id','')),str(body.get('token','')),body.get('value'))
-                elif path=='/api/claude/close-menu':result=self.server.claude.close_menu(str(body.get('id','')))
-                elif path=='/api/claude/next':result=self.server.claude.next_step(str(body.get('id','')),str(body.get('tool_id','')),int(body.get('index',-1)),str(body.get('label','')))
-                elif path=='/api/claude/task':result=self.server.claude.task_step(str(body.get('id','')),str(body.get('title','')),str(body.get('button','')))
-                elif path=='/api/claude/steer':
-                    tid=str(body.get('id',''));text=str(body.get('text',''))
-                    if body.get('references'):text,_=self.server.references.compose('claude',tid,text,body['references'])
-                    result=self.server.claude.send_steer(tid,text,str(body.get('expected_turn','')),str(body.get('request_id','')))
-                    result['check_text']=text
-                else:raise chats.ChatError('没有这个操作')
-                self._json(result)
-            except Exception as exc:
-                if not isinstance(exc,chats.ChatError):  # 10-14 a raw COM error reached the phone with nothing in the log
-                    self.log.write(f'Claude 操作 {path} 出错：\n'+traceback.format_exc())
-                self._json({'error':claude_control.plain_error(exc),'not_submitted':bool(getattr(exc,'not_submitted',False)),'code':getattr(exc,'code',None)},409)
+        legacy_match = agent_legacy.match_prefix(path)
+        if legacy_match is not None:
+            agent_registry.get(legacy_match[0]).http_legacy_post(self, legacy_match[1], body)
             return
         if path.startswith("/api/chat") and chats is None:
             self._json({"error": "对话功能不可用：" + CHATS_ERROR}, 500)
             return
-        # a new DeepSeek conversation goes through /api/chat/new like the others (10-20); the rest has its own channel
-        if body.get('app')=='deepseek' and path in ('/api/chat/send','/api/chat/enter','/api/chat/check'):
-            self._json({'error':'DeepSeek 请使用专用控制通道；草稿已保留','not_submitted':True},400)
+        refused = agent_legacy.refused_legacy_chat_route(str(body.get('app', '')), path)
+        if refused:
+            self._json({'error': refused, 'not_submitted': True}, 400)
             return
         if path == "/api/chat/send":
             self._chat_call(self._send_with_references,body,timeout=60)
@@ -864,18 +863,21 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/chat/enter":
             self._chat_call(self.desktop.press_enter, str(body.get("app", "")), str(body.get("id", "")), timeout=15)
         elif path == "/api/chat/open":
-            if body.get('app')=='deepseek':
-                try:
-                    self.server.deepseek.find(body.get('id'))
-                    os.startfile('dsh://open')
-                    self._json({'ok':True,'text':'已打开 DeepSeek；请在电脑侧选择对应对话'})
-                except (deepseek_control.DeepSeekError,OSError) as exc:self._json({'error':str(exc)},400)
+            app = str(body.get("app", ""))
+            if self._app_visible(app) is False:
+                self._json({"error": "没有这个来源"}, 404)
                 return
-            if body.get('app') == 'codex':  # 11-17: only "opened" once a Codex window has taken the conversation
-                self._open_codex(str(body.get("id", "")))
+            try:
+                agent = agent_registry.get(app)
+            except Exception:
+                self._chat_call(self.desktop.open, app, str(body.get("id", "")), timeout=45)
                 return
-            self._chat_call(self.desktop.open, str(body.get("app", "")), str(body.get("id", "")), timeout=45)
+            agent.http_open(self, body)
         elif path == "/api/chat/new":
+            app = str(body.get("app", ""))
+            if app and self._app_visible(app) is False:
+                self._json({"error": "没有这个来源"}, 404)
+                return
             try:self._json(self.server.new_chats.submit(body))
             except (chats.ChatError,OSError,ValueError,TypeError) as exc:self._json({'error':str(exc),'not_submitted':True},400)
         elif path == '/api/chat/new/draft':
@@ -896,36 +898,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "没有这个地址"}, 404)
 
     def _send_with_references(self,body):
-        app,tid=str(body.get('app','')),str(body.get('id',''));text=str(body.get('text',''))
-        if app=='codex':raise chats.InputNotSubmitted('页面版本已过期，请刷新后通过 Codex 控制通道发送；草稿已保留')
-        images=[]
-        if body.get('attachments'):
-            ids=body['attachments']
-            if app!='claude' or not isinstance(ids,list) or len(ids)>5 or any(not isinstance(v,str) for v in ids) or len(set(ids))!=len(ids):
-                raise chats.InputNotSubmitted('图片请求无效，尚未发送')
-            images=[self.server.codex.attachment(v,tid) for v in ids]
-            if any(v.get('app','codex')!='claude' for v in images) or sum(v['original_size'] for v in images)>50<<20:
-                raise chats.InputNotSubmitted('图片不属于此 Claude 会话或超过大小限制，尚未发送')
-            if not text.strip():text='请查看这些图片。'
-        if body.get('references'):
-            if app=='codex':raise chats.ChatError('带引用的消息请等待当前轮结束，再通过 Codex 控制通道发送')
-            text,_=self.server.references.compose(app,tid,text,body['references'])
-        if images:
-            previous=self.server.codex._begin(str(body.get('request_id','')),tid,body)
-            if previous:return previous
-            for image in images:
-                image['used']=True;self.server.codex._write_meta(image)
-        # replace_draft: the text the phone was shown in Claude's box (DesktopDraft) and agreed may go
-        replace={'replace':body['replace_draft'][:2000]} if app=='claude' and isinstance(body.get('replace_draft'),str) else {}
-        result=self.desktop.send(app,tid,text,images,**replace) if images else self.desktop.send(app,tid,text,**replace)
-        # 11-01: the computer's own time when it took the message. Claude's and DeepSeek's records carry this
-        # computer's clock, so the phone compares against this instead of its own (which was 13 s fast here).
-        result['accepted_at']=int(time.time()*1000)
-        for image in images:
-            image['used']=True;self.server.codex._write_meta(image)
-        if body.get('references') or images:result['check_text']=text
-        if images:self.server.codex._finish(body['request_id'],result)
-        return result
+        app=str(body.get('app',''))
+        try:agent=agent_registry.get(app)
+        except Exception:raise chats.ChatError(f'不认识的应用 {app}') from None
+        return agent.chat_send_with_references(self,body)
 
     def _row_status(self, item: dict) -> str:
         """running / idle / unknown for a row of the sidebar: from the end of its file, or what the desktop last told."""
@@ -939,7 +915,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.history
 
     def _reading_get(self,path):
-        q=self._query();app=q.get('app','codex');tid=q.get('id','')
+        q=self._query();app=q.get('app',agent_legacy.DEFAULT_APP);tid=q.get('id','')
         if app and not (str(q.get('file','')).startswith('pc.') and path.startswith('/api/file')):
             if getattr(self,"_app_visible",lambda _app:True)(app) is False:
                 self._json({'error':'没有这个来源'},404);return
@@ -1002,61 +978,16 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError,ConnectionError):self.close_connection=True
 
     def _deepseek(self,path,body=None):
-        bridge=self.server.deepseek
-        try:
-            q=self._query()
-            if body is None:
-                if path=='/api/deepseek/image':
-                    raw,mime=bridge.image(q.get('id',''),q.get('attachment',''),q.get('thumb')=='1')
-                    self._send(200,raw,mime)
-                    return
-                if path=='/api/deepseek/state':result=bridge.state(q.get('id',''))
-                elif path=='/api/deepseek/models':result=bridge.models()
-                elif path=='/api/deepseek/receipt':result=bridge.receipt(q.get('request_id',''))
-                elif path=='/api/deepseek/permissions':result=bridge.permissions(q.get('id',''))
-                else:raise deepseek_control.DeepSeekError('没有这个接口',404)
-            elif path=='/api/deepseek/send':
-                result=bridge.send(body)
-                result['accepted_at']=int(time.time()*1000)  # 11-01: the computer's own clock; see _send_with_references
-            elif path=='/api/deepseek/permission':result=bridge.set_permission(body.get('id'),body.get('preset'),body.get('confirmed') is True)
-            elif path=='/api/deepseek/queue':result=bridge.queue_action(body.get('id'),body.get('item_id'),body.get('action'))
-            elif path=='/api/deepseek/stop':result=bridge.stop(body.get('id'),body.get('expected_turn'))
-            elif path=='/api/deepseek/model':result=bridge.select_model(body.get('id'),body.get('settings',{}))
-            elif path=='/api/deepseek/create':result=bridge.create(body)
-            elif path=='/api/deepseek/answer':result=bridge.answer(body)
-            elif path=='/api/deepseek/approval':result=bridge.events.answer(body.get('id'),body.get('event_id'),body.get('choice'),'approval/request')
-            else:raise deepseek_control.DeepSeekError('没有这个接口',404)
-            self._json(result)
-        except (deepseek_control.DeepSeekError,codex_control.ControlError,chats.ChatError) as exc:
-            self._json({'error':str(exc),'not_submitted':bool(getattr(exc,'not_submitted',False))},getattr(exc,'status',400))
-        except (ValueError,TypeError,KeyError):self._json({'error':'DeepSeek 请求或接口格式不兼容'},400)
+        sub = path[len('/api/deepseek/'):] if path.startswith('/api/deepseek/') else path
+        agent = agent_registry.get(agent_legacy.DEEPSEEK)
+        if body is None:
+            agent.http_legacy_get(self, sub)
+        else:
+            agent.http_legacy_post(self, sub, body)
 
     def _codex_get(self, path):
-        bridge = self.server.codex
-        q = self._query()
-        try:
-            if path == "/api/codex/state":
-                data=bridge.status(q.get("id", ""), fresh=q.get("fresh") == "1")
-                if hasattr(self.server,"tasks"):self.server.tasks.observe(q.get("id", ""),data)
-                self._json(data)
-            elif path == "/api/codex/image":
-                meta = bridge.attachment(q.get("id", ""))
-                file = bridge.data_root / meta["id"] / ("thumb.png" if q.get("thumb") == "1" else "image.png")
-                self._send(200, file.read_bytes(), "image/png", {"X-Content-Type-Options": "nosniff"})
-            elif path == "/api/codex/attachments":
-                items = []
-                for ident in q.get("ids", "").split(",")[:5]:
-                    try:
-                        items.append(bridge.public_attachment(bridge.attachment(ident, q.get("id", ""))))
-                    except codex_control.ControlError:
-                        continue
-                self._json({"items": items})
-            elif path == "/api/codex/receipt":
-                self._json(bridge.receipt(q.get("id", ""), q.get("request_id", "")))
-            else:
-                self._json({"error": "没有这个接口"}, 404)
-        except (codex_control.ControlError, chats.ChatError, OSError) as exc:
-            self._json({"error": str(exc)}, getattr(exc, "status", 400))
+        sub = path[len('/api/codex/'):] if path.startswith('/api/codex/') else path
+        agent_registry.get(agent_legacy.CODEX).http_legacy_get(self, sub)
 
     def _voice_stream(self, path: str):
         """Recognition on this PC while the user talks: start, small pieces of 16 kHz audio, end."""
@@ -1149,53 +1080,23 @@ class Handler(BaseHTTPRequestHandler):
             if body.get("draft"):
                 self._json(self.server.new_chats.upload(str(body["draft"]), name, raw))
             else:
-                self._json(self.server.codex.upload(str(body.get("id", "")), name, raw, str(body.get("app", "codex"))))
+                self._json(self.server.codex.upload(str(body.get("id", "")), name, raw, str(body.get("app", agent_legacy.DEFAULT_APP))))
         except pc_files.FileError as exc:
             self._json({"error": str(exc)}, exc.status)
         except (codex_control.ControlError, chats.ChatError, OSError, ValueError, TypeError) as exc:
             self._json({"error": str(exc)}, getattr(exc, "status", 400))
 
     def _codex_upload(self):
+        app = self._query().get("app") or agent_legacy.DEFAULT_APP
         try:
-            size = int(self.headers.get("Content-Length") or 0)
-            if not 0 < size <= 20 << 20:
-                self.close_connection = True
-                raise codex_control.ControlError("单张图片不能超过 20 MB", 413)
-            q = self._query()
-            raw = self.rfile.read(size)
-            if len(raw) != size:
-                raise codex_control.ControlError("图片上传不完整", 400)
-            self._json(self.server.new_chats.upload(q['draft'],q.get('name','图片'),raw) if q.get('draft') else self.server.codex.upload(q.get("id", ""), q.get("name", "图片"), raw,q.get('app','codex')))
-        except (codex_control.ControlError, chats.ChatError, OSError, ValueError) as exc:
-            self._json({"error": str(exc)}, getattr(exc, "status", 400))
+            agent = agent_registry.get(app)
+        except Exception:
+            agent = agent_registry.get(agent_legacy.DEFAULT_APP)
+        agent.http_upload(self)
 
     def _codex_post(self, path, body):
-        try:
-            bridge = self.server.codex
-            if path == "/api/codex/send":
-                result = bridge.send(body)
-                result['accepted_at'] = int(time.time()*1000)  # 11-01: the computer's own clock; see _send_with_references
-            elif path == "/api/codex/stop":
-                result = bridge.stop_turn(body)
-            elif path == "/api/codex/answer":
-                result = bridge.answer(body)
-            elif path == "/api/codex/queue-action":
-                result = bridge.queue_action(body)
-            elif path == "/api/codex/remove-attachment":
-                result = bridge.remove_attachment(str(body.get("id", "")), str(body.get("attachment", "")))
-            else:
-                raise codex_control.ControlError("没有这个接口", 404)
-            self._json(result)
-        except (codex_control.ControlError, chats.ChatError, OSError, ValueError, TypeError) as exc:
-            not_submitted = bool(getattr(exc,'not_submitted',False))
-            if isinstance(exc, codex_control.ControlError) and body.get('request_id'):
-                try:not_submitted = bridge.receipt(str(body.get('id','')),str(body['request_id']))['state'] in ('unknown','rejected')
-                except Exception:pass
-            self._json({"error": str(exc),"not_submitted":not_submitted,
-                        "code":getattr(exc,'code',None)}, getattr(exc, "status", 400))
-        except Exception:
-            self.log.write(traceback.format_exc())
-            self._json({"error": "Codex 操作结果未确认，请检查对话；不会自动重试"}, 500)
+        sub = path[len("/api/codex/"):] if path.startswith("/api/codex/") else path
+        agent_registry.get(agent_legacy.CODEX).http_legacy_post(self, sub, body)
 
 
 # ---------------------------------------------------------------- main
@@ -1309,7 +1210,8 @@ def main(argv: list[str] | None = None) -> int:
     server.claude_hooks = claude_hooks.Bridge(log.write, notify=server.notifier.asking,  # type: ignore[attr-defined]
                                               changed=lambda tid: server.claude.cache.pop(tid, None))
     server.claude.hooks = server.claude_hooks
-    hook_settings(cfg, "claude" in server.machine["apps"], log.write)
+    for agent in agent_registry.load():
+        agent.on_server_start(cfg, server.machine["apps"], log.write)
     if server.machine["voice"]:
         server.voice = voice.Voice(cfg, log)  # type: ignore[attr-defined]
         server.local_asr = voice_local.LocalASR(cfg, log)  # type: ignore[attr-defined]  (loads in the background)

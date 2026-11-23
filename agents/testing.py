@@ -16,6 +16,7 @@ class TestingAgent(Agent):
     id = "testing"
     notify_uses_file = False
     new_requires_desktop = False
+    new_managed = False
 
     def new_options(self, svc) -> dict:
         return {"models": [{"id": "test-model", "label": "测试模型", "efforts": [{"id": "high", "label": "高"}], "default_effort": "high"}], "note": ""}

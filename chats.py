@@ -1298,36 +1298,31 @@ def recent_folders(limit: int = 12) -> list[str]:
 
 
 def _is_ours(app: str, rec: dict, want: str) -> bool:
-    if app == "codex":
-        payload = rec.get("payload") or {}
-        if payload.get("type") == "item_completed":
-            item = payload.get("item") or {}
-            return item.get("type") == "UserMessage" and want in norm(_join_text(item.get("content")))
-        if payload.get("type") == "user_message":
-            return want in norm(payload.get("message") or "")
+    from agents import registry
+    try:
+        return registry.get(app).is_our_delivery(rec, want)
+    except Exception:
         return False
-    steered=_claude_steer_message(rec)
-    if steered:return want in norm(steered['text'])
-    if rec.get("type") == "queue-operation" and rec.get("operation") == "enqueue":
-        return want in norm(_join_text(rec.get("content")))
-    if rec.get("type") == "user":
-        return want in norm(_join_text((rec.get("message") or {}).get("content")))
-    return False
 
 
 def delivered(app: str, path: Path | None, offset: int, text: str) -> bool:
     if path is None or not path.exists():
         return False
+    from agents import registry
+    try:
+        agent = registry.get(app)
+    except Exception:
+        return False
     want = norm(text)[:40]
-    marker = (b"UserMessage", b"user_message") if app == "codex" else (b"enqueue", b'"user"', b'"queued_command"')
+    marker = agent.delivery_markers
     for raw in read_from(path, offset):
-        if not any(m in raw for m in marker):
+        if marker and not any(m in raw for m in marker):
             continue
         try:
             rec = json.loads(raw)
         except ValueError:
             continue
-        if _is_ours(app, rec, want):
+        if agent.is_our_delivery(rec, want):
             return True
     return False
 
@@ -2060,34 +2055,31 @@ class Desktop:
         """Open the conversation, put the text in, press Enter. Returns right after Enter; the phone then
         asks check() until the message shows up in the conversation file.
         replace: text in Claude's box that the phone was shown (DesktopDraft) and agreed may be replaced."""
+        from agents import registry
         text = clean_text(text)
         require_send_desktop()
         item = find(app, conv_id)
+        agent = registry.get(app)
         path = conv_path(item)
         offset = file_size(path)
         started = time.time()
-        name = "Codex" if app == "codex" else "Claude"
+        name = agent.manifest()["name"]["zh"]
         try:
-            if app == "codex":
-                self._send_codex(item, text)
-            else:
-                self._send_claude(item, text, images, replace)
+            agent.desktop_send(self, item, text, images, replace)
         except ChatError as exc:  # the phone shows it too, but a failed send should be in the log
             self.log(f"没发给 {name}「{item['title']}」（{time.time() - started:.1f} 秒）：{exc}"
                      + (f"；{exc.detail}" if getattr(exc, 'detail', '') else ''))
             raise
         self.log(f"发给 {name}「{item['title']}」：{one_line(text, 40)}（{time.time() - started:.1f} 秒提交）")
         return {"ok": True, "pressed": True, "offset": offset, "running": summary(item).get("status") == "running",
-                "text": "已提交，等待对话记录确认" if app=='claude' else "已按回车，等对话记录确认"}
+                "text": agent.desktop_send_text}
 
     @staticmethod
     def check(app: str, conv_id: str, offset: int, text: str) -> dict:
         """Has the message from send() reached the conversation file? (no window work: runs anywhere)"""
+        from agents import registry
         item = find(app, conv_id)
-        if app=='claude':
-            stage=claude_delivery_stage(conv_path(item),int(offset),clean_text(text))
-            return {'delivered':stage=='received','queued':stage=='queued','stage':stage}
-        return {"delivered": delivered(app, conv_path(item), int(offset), clean_text(text))}
+        return registry.get(app).desktop_check(item, int(offset), clean_text(text))
 
     def _send_codex(self, item: dict, text: str) -> None:
         encoded = quote(text, safe="")
@@ -2251,8 +2243,12 @@ class Desktop:
 
     def press_enter(self, app: str, conv_id: str) -> dict:
         """The 'press Enter once more' button: only when that app is in front."""
-        process = CODEX_PROCESS if app == "codex" else CLAUDE_PROCESS
-        if front_process() != process:
+        from agents import registry
+        try:
+            process = registry.get(app).desktop_process
+        except Exception:
+            process = ""
+        if not process or front_process() != process:
             raise ChatError("那个应用现在不在电脑最前面，没按")
         hwnd = app_window(process)
         with self.input_lock:
@@ -2260,12 +2256,9 @@ class Desktop:
         return {"ok": True, "text": "按了回车"}
 
     def open(self, app: str, conv_id: str) -> dict:
+        from agents import registry
         item = find(app, conv_id)
-        if app == "codex":
-            os.startfile(f"codex://threads/{item['id']}")
-            self._front(CODEX_PROCESS, 6.0)
-        else:
-            self._claude_open(item, [item["title"], conversation_title(item)])
+        registry.get(app).desktop_open(self, item)
         return {"ok": True, "text": f"电脑上已打开「{item['title']}」"}
 
     def new_codex(self, folder: str, text: str) -> dict:

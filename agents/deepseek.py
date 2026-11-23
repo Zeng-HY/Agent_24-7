@@ -400,5 +400,132 @@ class DeepSeekAgent(Agent):
             safe = svc._deepseek_receipt(rid) == "unknown"
         return False, safe
 
+    # -- lifecycle & HTTP action handlers (shared by /api/agents/deepseek/* and /api/deepseek/*)
+
+    def on_apps_rechecked(self, server, apps: list[str]) -> None:
+        import deepseek_control
+        deepseek = getattr(server, "deepseek", None)
+        if deepseek is not None and self.id in apps and deepseek_control.HOME.is_dir():
+            deepseek.events.start()
+
+    def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
+        return handler.server.codex.upload(tid, name, raw, self.id)
+
+    def _run_deepseek(self, handler, fn) -> None:
+        import codex_control
+        import deepseek_control
+        try:
+            result = fn(handler.server.deepseek)
+            if result is not None:
+                handler._json(result)
+        except (deepseek_control.DeepSeekError, codex_control.ControlError, chats.ChatError) as exc:
+            handler._json(
+                {"error": str(exc), "not_submitted": bool(getattr(exc, "not_submitted", False))},
+                getattr(exc, "status", 400),
+            )
+        except (ValueError, TypeError, KeyError):
+            handler._json({"error": "DeepSeek 请求或接口格式不兼容"}, 400)
+
+    def http_state(self, handler) -> None:
+        q = handler._query()
+        self._run_deepseek(handler, lambda bridge: bridge.state(q.get("id", "")))
+
+    def http_receipt(self, handler) -> None:
+        q = handler._query()
+        self._run_deepseek(handler, lambda bridge: bridge.receipt(q.get("request_id", "")))
+
+    def http_send(self, handler, body: dict) -> None:
+        import time
+        payload = {**body, "intent": "steer"} if body.get("intent") == "auto" else body
+        def run(bridge):
+            result = bridge.send(payload)
+            result["accepted_at"] = int(time.time() * 1000)
+            return result
+        self._run_deepseek(handler, run)
+
+    def http_stop(self, handler, body: dict) -> None:
+        turn = body.get("expected_turn") if "expected_turn" in body else body.get("turn_id")
+        self._run_deepseek(handler, lambda bridge: bridge.stop(body.get("id"), turn))
+
+    def http_queue(self, handler, body: dict) -> None:
+        item_id = body.get("item_id") if "item_id" in body else body.get("message_id")
+        action_map = {"promote": "steer", "delete": "remove"}
+        action = action_map.get(body.get("action"), body.get("action"))
+        self._run_deepseek(handler, lambda bridge: bridge.queue_action(body.get("id"), item_id, action))
+
+    def http_answer(self, handler, body: dict) -> None:
+        if "choice" in body:
+            self._run_deepseek(
+                handler,
+                lambda bridge: bridge.events.answer(body.get("id"), body.get("event_id"), body.get("choice"), "approval/request"),
+            )
+        else:
+            self._run_deepseek(handler, lambda bridge: bridge.answer(body))
+
+    def http_open(self, handler, body: dict) -> None:
+        import deepseek_control
+        import remote
+        try:
+            handler.server.deepseek.find(body.get("id"))
+            remote.os.startfile("dsh://open")
+            handler._json({"ok": True, "text": "已打开 DeepSeek；请在电脑侧选择对应对话"})
+        except (deepseek_control.DeepSeekError, OSError) as exc:
+            handler._json({"error": str(exc)}, 400)
+
+    def http_legacy_get(self, handler, sub: str) -> None:
+        import deepseek_control
+        if sub == "state":
+            self.http_state(handler)
+            return
+        if sub == "receipt":
+            self.http_receipt(handler)
+            return
+        q = handler._query()
+        def run(bridge):
+            if sub == "image":
+                raw, mime = bridge.image(q.get("id", ""), q.get("attachment", ""), q.get("thumb") == "1")
+                handler._send(200, raw, mime)
+                return None
+            if sub == "models":
+                return bridge.models()
+            if sub == "permissions":
+                return bridge.permissions(q.get("id", ""))
+            raise deepseek_control.DeepSeekError("没有这个接口", 404)
+        self._run_deepseek(handler, run)
+
+    def http_legacy_post(self, handler, sub: str, body: dict) -> None:
+        import deepseek_control
+        if sub == "send":
+            import time
+            def run(bridge):
+                result = bridge.send(body)
+                result["accepted_at"] = int(time.time() * 1000)
+                return result
+            self._run_deepseek(handler, run)
+        elif sub == "stop":
+            self._run_deepseek(handler, lambda bridge: bridge.stop(body.get("id"), body.get("expected_turn")))
+        elif sub == "queue":
+            self._run_deepseek(handler, lambda bridge: bridge.queue_action(body.get("id"), body.get("item_id"), body.get("action")))
+        elif sub == "answer":
+            self._run_deepseek(handler, lambda bridge: bridge.answer(body))
+        elif sub == "approval":
+            self._run_deepseek(
+                handler,
+                lambda bridge: bridge.events.answer(body.get("id"), body.get("event_id"), body.get("choice"), "approval/request"),
+            )
+        elif sub == "permission":
+            self._run_deepseek(
+                handler,
+                lambda bridge: bridge.set_permission(body.get("id"), body.get("preset"), body.get("confirmed") is True),
+            )
+        elif sub == "model":
+            self._run_deepseek(handler, lambda bridge: bridge.select_model(body.get("id"), body.get("settings", {})))
+        elif sub == "create":
+            self._run_deepseek(handler, lambda bridge: bridge.create(body))
+        else:
+            def _missing(_bridge):
+                raise deepseek_control.DeepSeekError("没有这个接口", 404)
+            self._run_deepseek(handler, _missing)
+
 
 AGENT = DeepSeekAgent

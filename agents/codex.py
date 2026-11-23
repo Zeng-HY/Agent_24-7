@@ -34,6 +34,9 @@ class CodexAgent(Agent):
     has_skills = True
     can_reset_usage = True
     archive_order = 10
+    desktop_process = chats.CODEX_PROCESS
+    desktop_send_text = "已按回车，等对话记录确认"
+    delivery_markers = (b"UserMessage", b"user_message")
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -599,6 +602,175 @@ class CodexAgent(Agent):
     def check_new_retry(self, svc, data: dict) -> None:
         if data.get("projectless") and not Path(data["folder"]).is_dir():
             raise chats.ChatError("无项目对话的文件夹已不在，请重新新建")
+
+    # -- desktop & delivery hooks
+
+    def is_our_delivery(self, rec: dict, want: str) -> bool:
+        payload = rec.get("payload") or {}
+        if payload.get("type") == "item_completed":
+            item = payload.get("item") or {}
+            return item.get("type") == "UserMessage" and want in chats.norm(chats._join_text(item.get("content")))
+        if payload.get("type") == "user_message":
+            return want in chats.norm(payload.get("message") or "")
+        return False
+
+    def desktop_send(self, desktop, item: dict, text: str, images=None, replace=None) -> None:
+        desktop._send_codex(item, text)
+
+    def desktop_open(self, desktop, item: dict) -> None:
+        import os
+        os.startfile(f"codex://threads/{item['id']}")
+        desktop._front(chats.CODEX_PROCESS, 6.0)
+
+    def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
+        return server.codex.delivery_locations(tid, ids)
+
+    def chat_send_with_references(self, handler, body: dict) -> dict:
+        raise chats.InputNotSubmitted("页面版本已过期，请刷新后通过 Codex 控制通道发送；草稿已保留")
+
+    def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
+        return handler.server.codex.upload(tid, name, raw, self.id)
+
+    # -- HTTP action handlers (shared by /api/agents/codex/* and /api/codex/*)
+
+    def _run_codex_get(self, handler, fn) -> None:
+        import codex_control
+        try:
+            fn()
+        except (codex_control.ControlError, chats.ChatError, OSError) as exc:
+            handler._json({"error": str(exc)}, getattr(exc, "status", 400))
+
+    def _run_codex_post(self, handler, body: dict, fn) -> None:
+        import traceback
+        import codex_control
+        bridge = handler.server.codex
+        try:
+            handler._json(fn(bridge))
+        except (codex_control.ControlError, chats.ChatError, OSError, ValueError, TypeError) as exc:
+            not_submitted = bool(getattr(exc, "not_submitted", False))
+            if isinstance(exc, codex_control.ControlError) and body.get("request_id"):
+                try:
+                    not_submitted = bridge.receipt(str(body.get("id", "")), str(body["request_id"]))["state"] in ("unknown", "rejected")
+                except Exception:
+                    pass
+            handler._json(
+                {"error": str(exc), "not_submitted": not_submitted, "code": getattr(exc, "code", None)},
+                getattr(exc, "status", 400),
+            )
+        except Exception:
+            handler.log.write(traceback.format_exc())
+            handler._json({"error": "Codex 操作结果未确认，请检查对话；不会自动重试"}, 500)
+
+    def http_state(self, handler) -> None:
+        q = handler._query()
+        def run():
+            data = handler.server.codex.status(q.get("id", ""), fresh=q.get("fresh") == "1")
+            if hasattr(handler.server, "tasks"):
+                handler.server.tasks.observe(q.get("id", ""), data)
+            handler._json(data)
+        self._run_codex_get(handler, run)
+
+    def http_receipt(self, handler) -> None:
+        q = handler._query()
+        self._run_codex_get(handler, lambda: handler._json(
+            handler.server.codex.receipt(q.get("id", ""), q.get("request_id", ""))
+        ))
+
+    def http_send(self, handler, body: dict) -> None:
+        import time
+        def run(bridge):
+            result = bridge.send(body)
+            result["accepted_at"] = int(time.time() * 1000)
+            return result
+        self._run_codex_post(handler, body, run)
+
+    def http_stop(self, handler, body: dict) -> None:
+        payload = body
+        if "turn_id" not in body and body.get("expected_turn"):
+            payload = {**body, "turn_id": body["expected_turn"]}
+        self._run_codex_post(handler, payload, lambda bridge: bridge.stop_turn(payload))
+
+    def http_queue(self, handler, body: dict) -> None:
+        payload = body
+        if "message_id" not in body and body.get("item_id"):
+            action_map = {"steer": "promote", "remove": "delete"}
+            payload = {
+                **body,
+                "message_id": body["item_id"],
+                "action": action_map.get(body.get("action"), body.get("action")),
+            }
+        self._run_codex_post(handler, payload, lambda bridge: bridge.queue_action(payload))
+
+    def http_answer(self, handler, body: dict) -> None:
+        self._run_codex_post(handler, body, lambda bridge: bridge.answer(body))
+
+    def http_open(self, handler, body: dict) -> None:
+        import traceback
+        import codex_control
+        tid = str(body.get("id", ""))
+        try:
+            handler.desktop.run(handler.desktop.open, self.id, tid, timeout=45)
+            result = handler.server.codex.confirm_open(tid)
+        except (chats.ChatError, codex_control.ControlError) as exc:
+            handler._json({"ok": False, "error": str(exc), "text": str(exc),
+                           "code": getattr(exc, "code", None) or None}, 400)
+            return
+        except TimeoutError:
+            handler._json({"ok": False, "error": "超过 45 秒没做完"}, 504)
+            return
+        except Exception as exc:
+            handler.log.write(traceback.format_exc())
+            text = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}"
+            handler._json({"ok": False, "error": text, "text": text}, 500)
+            return
+        handler._json(result if isinstance(result, dict) else {"ok": True, "result": result})
+
+    def http_legacy_get(self, handler, sub: str) -> None:
+        import codex_control
+        if sub == "state":
+            self.http_state(handler)
+            return
+        if sub == "receipt":
+            self.http_receipt(handler)
+            return
+        q = handler._query()
+        bridge = handler.server.codex
+        def run():
+            if sub == "image":
+                meta = bridge.attachment(q.get("id", ""))
+                file = bridge.data_root / meta["id"] / ("thumb.png" if q.get("thumb") == "1" else "image.png")
+                handler._send(200, file.read_bytes(), "image/png", {"X-Content-Type-Options": "nosniff"})
+            elif sub == "attachments":
+                items = []
+                for ident in q.get("ids", "").split(",")[:5]:
+                    try:
+                        items.append(bridge.public_attachment(bridge.attachment(ident, q.get("id", ""))))
+                    except codex_control.ControlError:
+                        continue
+                handler._json({"items": items})
+            else:
+                handler._json({"error": "没有这个接口"}, 404)
+        self._run_codex_get(handler, run)
+
+    def http_legacy_post(self, handler, sub: str, body: dict) -> None:
+        import codex_control
+        if sub == "send":
+            self.http_send(handler, body)
+        elif sub == "stop":
+            self.http_stop(handler, body)
+        elif sub == "answer":
+            self.http_answer(handler, body)
+        elif sub == "queue-action":
+            self._run_codex_post(handler, body, lambda bridge: bridge.queue_action(body))
+        elif sub == "remove-attachment":
+            self._run_codex_post(
+                handler, body,
+                lambda bridge: bridge.remove_attachment(str(body.get("id", "")), str(body.get("attachment", ""))),
+            )
+        else:
+            def _missing(_bridge):
+                raise codex_control.ControlError("没有这个接口", 404)
+            self._run_codex_post(handler, body, _missing)
 
 
 AGENT = CodexAgent

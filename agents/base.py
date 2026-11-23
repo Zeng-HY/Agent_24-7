@@ -121,6 +121,10 @@ class Agent:
     notify_uses_file = True      # notify watches transcript file by default
     new_requires_desktop = True  # new chat needs unlocked desktop unless API-driven
     new_folder_list_own_only = False  # context() searches only this agent's workspace list
+    new_managed = True           # /api/agents/<id>/create goes through NewConversations ledger
+    desktop_process = ""         # Windows desktop process name for press_enter
+    desktop_send_text = "已按回车，等对话记录确认"
+    delivery_markers: tuple[bytes, ...] = ()
 
     def __init__(self) -> None:
         self._manifest = self.build_manifest()
@@ -412,3 +416,215 @@ class Agent:
 
     def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
         raise Unsupported("这个助手还没有斜杠命令")
+
+    # -- desktop automation & delivery hooks used by chats.py
+    def is_our_delivery(self, rec: dict, want: str) -> bool:
+        return False
+
+    def desktop_send(self, desktop, item: dict, text: str, images=None, replace=None) -> None:
+        raise Unsupported("这个助手不支持桌面发送")
+
+    def desktop_check(self, item: dict, offset: int, text: str) -> dict:
+        import chats
+        return {"delivered": chats.delivered(self.id, chats.conv_path(item), int(offset), text)}
+
+    def desktop_open(self, desktop, item: dict) -> None:
+        raise Unsupported("这个助手不支持桌面打开")
+
+    # -- server lifecycle & request-resolution hooks used by remote.py
+    def on_apps_rechecked(self, server, apps: list[str]) -> None:
+        pass
+
+    def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
+        pass
+
+    def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
+        return {}
+
+    def chat_send_with_references(self, handler, body: dict) -> dict:
+        return self.send(body)
+
+    # -- unified HTTP handlers (/api/agents/<id>/...) & legacy prefix dispatch
+    def _http_error(self, handler, exc: Exception) -> None:
+        if isinstance(exc, Unsupported):
+            handler._json({"error": str(exc), "code": "unsupported"}, 400)
+        elif isinstance(exc, NotFound):
+            handler._json({"error": str(exc)}, 404)
+        else:
+            handler._json({"error": str(exc)}, getattr(exc, "status", 400))
+
+    def http_state(self, handler) -> None:
+        q = handler._query()
+        try:
+            handler._json(self.state(q.get("id", ""), fresh=q.get("fresh") == "1"))
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_receipt(self, handler) -> None:
+        q = handler._query()
+        try:
+            tid, rid = q.get("id", ""), q.get("request_id", "")
+            checked = self.check(tid, 0, "")
+            handler._json({"state": "accepted" if checked.get("delivered") else "unknown",
+                           "id": tid, "request_id": rid, **checked})
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_options(self, handler) -> None:
+        import chats
+        try:
+            handler._json(handler.server.new_chats.options(self.id))
+        except (chats.ChatError, AgentError) as exc:
+            self._http_error(handler, exc)
+
+    def http_commands(self, handler) -> None:
+        import chats
+        import composer_commands
+        import deepseek_control
+        q = handler._query()
+        tid = q.get("id", "")
+        if not self.can("slash_commands"):
+            handler._json({"error": "这个助手还没有斜杠命令", "code": "unsupported"}, 400)
+            return
+        try:
+            if self.home_list:
+                chats.find(self.id, tid)
+            handler._json(composer_commands.catalog(
+                self.id, tid, getattr(handler.server, "references", None),
+                getattr(handler.server, "deepseek", None),
+            ))
+        except (chats.ChatError, deepseek_control.DeepSeekError, AgentError, OSError, ValueError, TypeError) as exc:
+            self._http_error(handler, exc)
+
+    def http_usage(self, handler) -> None:
+        import usage_limits
+        live = handler._query().get("live") == "1"
+        try:
+            svc = getattr(handler.server, "usage", None)
+            if svc is not None:
+                handler._json(svc.read_agent(self.id, live=live))
+            else:
+                handler._json(self.usage(live=live))
+        except usage_limits.UsageError as exc:
+            handler._json({"error": str(exc), "code": exc.code}, exc.status)
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_send(self, handler, body: dict) -> None:
+        try:
+            handler._json(self.send(body))
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_stop(self, handler, body: dict) -> None:
+        try:
+            handler._json(self.stop(body))
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_queue(self, handler, body: dict) -> None:
+        try:
+            handler._json(self.queue(body))
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_answer(self, handler, body: dict) -> None:
+        try:
+            handler._json(self.answer(body))
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_open(self, handler, body: dict) -> None:
+        try:
+            handler._json(self.open(str(body.get("id", ""))))
+        except Exception as exc:
+            self._http_error(handler, exc)
+
+    def http_create(self, handler, body: dict) -> None:
+        import chats
+        try:
+            if self.new_managed and getattr(handler.server, "new_chats", None) is not None:
+                handler._json(handler.server.new_chats.submit({**body, "app": self.id}))
+            else:
+                handler._json(self.create(body))
+        except (chats.ChatError, OSError, ValueError, TypeError) as exc:
+            handler._json({"error": str(exc), "not_submitted": True}, 400)
+        except AgentError as exc:
+            self._http_error(handler, exc)
+
+    def http_create_state(self, handler) -> None:
+        import chats
+        rid = handler._query().get("request_id", "")
+        try:
+            if self.new_managed and getattr(handler.server, "new_chats", None) is not None:
+                res = handler.server.new_chats.status(rid)
+                if res.get("app") and res["app"] != self.id:
+                    handler._json({"error": "新建请求不属于这个助手"}, 400)
+                    return
+                handler._json(res)
+            else:
+                handler._json(self.create_status(rid))
+        except (chats.ChatError, OSError, ValueError, TypeError) as exc:
+            handler._json({"error": str(exc)}, 400)
+        except AgentError as exc:
+            self._http_error(handler, exc)
+
+    def http_upload(self, handler) -> None:
+        import chats
+        import codex_control
+        try:
+            size = int(handler.headers.get("Content-Length") or 0)
+            if not 0 < size <= 20 << 20:
+                handler.close_connection = True
+                raise codex_control.ControlError("单张图片不能超过 20 MB", 413)
+            q = handler._query()
+            raw = handler.rfile.read(size)
+            if len(raw) != size:
+                raise codex_control.ControlError("图片上传不完整", 400)
+            if q.get("draft"):
+                handler._json(handler.server.new_chats.upload(q["draft"], q.get("name", "图片"), raw))
+            else:
+                handler._json(self._upload_for_chat(handler, q.get("id", ""), q.get("name", "图片"), raw))
+        except (codex_control.ControlError, chats.ChatError, OSError, ValueError) as exc:
+            handler._json({"error": str(exc)}, getattr(exc, "status", 400))
+        except AgentError as exc:
+            self._http_error(handler, exc)
+
+    def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
+        return self.upload(tid, name, raw)
+
+    def http_get(self, handler, sub: str) -> None:
+        routes = {
+            "state": self.http_state,
+            "receipt": self.http_receipt,
+            "options": self.http_options,
+            "commands": self.http_commands,
+            "usage": self.http_usage,
+            "create/state": self.http_create_state,
+        }
+        fn = routes.get(sub)
+        if fn is None:
+            handler._json({"error": "没有这个接口"}, 404)
+            return
+        fn(handler)
+
+    def http_post(self, handler, sub: str, body: dict) -> None:
+        routes = {
+            "send": self.http_send,
+            "stop": self.http_stop,
+            "queue": self.http_queue,
+            "answer": self.http_answer,
+            "open": self.http_open,
+            "create": self.http_create,
+        }
+        fn = routes.get(sub)
+        if fn is None:
+            handler._json({"error": "没有这个接口"}, 404)
+            return
+        fn(handler, body)
+
+    def http_legacy_get(self, handler, sub: str) -> None:
+        handler._json({"error": "没有这个接口"}, 404)
+
+    def http_legacy_post(self, handler, sub: str, body: dict) -> None:
+        handler._json({"error": "没有这个接口"}, 404)
