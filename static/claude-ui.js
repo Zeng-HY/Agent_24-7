@@ -6,7 +6,8 @@ function initializeclaudeUI(){
   model.setAttribute('aria-label','选择 Claude 模型');effort.setAttribute('aria-label','选择 Claude 推理强度');modeButton.setAttribute('aria-label','选择 Claude 模式');controls.append(model,modeButton);$('cvBtn').before(controls);
   const sheet=el('div','sheet');sheet.id='claudeSettingSheet';sheet.setAttribute('aria-label','Claude 设置');sheet.innerHTML='<div class="box"><div class="sh-head"><b>Claude 设置</b><button class="icon-btn" aria-label="关闭">'+icon('close')+'</button></div><div class="sh-body"></div></div>';document.body.append(sheet);sheet.querySelector('button').onclick=()=>closeSheet(sheet.id);sheet.onclick=e=>{if(e.target===sheet)closeSheet(sheet.id);};
   const note=el('div','codex-control-note');note.id='claudeControlNote';note.hidden=true;const label=el('span'),open=el('button','','电脑上打开');note.append(label,open);$('runtimeBar').before(note);
-  const active=me=>cur?.app==='claude'&&cur.id===me.id;
+  const isClaude=me=>Agents.cardLayout(me?.app)==='claude.v1';
+  const active=me=>isClaude(cur)&&cur.id===me.id;
   const stop=el('button','stop-turn','停止这一轮');stop.hidden=true;document.querySelector('.cv-top .cv-title').after(stop);window.navigationUI?.tapTick?.(stop);
   // Like the desktop: a message sent while Claude is busy waits in Claude's queue, shown right above the
   // input box; the button next to it hands it to the running task at once.
@@ -79,7 +80,7 @@ function initializeclaudeUI(){
     const plan=data.mode_label?/^plan/i.test(data.mode_label):s.mode==='plan';if(data.mode_options?.length)keepModes(data.mode_options); // the desktop's own mode button first
     model.textContent=away?'电脑上打开':name?name+' · '+(EFFORT[s.effort]||s.effort||data.effort_label||'默认'):'模型';effort.textContent=EFFORT[s.effort]||s.effort||'强度';modeButton.textContent=plan?'计划模式':modeShown(data,s);modeButton.classList.toggle('is-plan',plan);
     note.hidden=true;
-    stop.hidden=!data.stop_token;stop.disabled=false;stop.onclick=()=>{stop.textContent='正在核对停止…';choose(me,{token:data.stop_token},stop);};if(!data.running)stop.textContent='停止这一轮';
+    stop.hidden=!Agents.can(me.app,'stop')||!data.stop_token;stop.disabled=false;stop.onclick=()=>{stop.textContent='正在核对停止…';choose(me,{token:data.stop_token},stop);};if(!data.running)stop.textContent='停止这一轮';
     renderQueue(me);document.querySelectorAll('#cvMsgs .task-card').forEach(markTask);
     if(data.runtime)renderRuntime(data.runtime);
     const sig=JSON.stringify([data.action_revision,data.actions,data.prompt]);if(sig===actionSig)return;actionSig=sig;
@@ -89,7 +90,7 @@ function initializeclaudeUI(){
   // A fresh read asked for while another read is under way runs right after it, rather than being dropped: after 电脑上打开
   // the timed read already under way came back with the old state, and the chip needed a second tap (10-12).
   let again=false;
-  async function refresh(me=cur,force=false){if(!me||window.newChatUI?.isPreview(me)||me.app!=='claude'||choosing||(!force&&!workspaceUI.canPoll()))return;if(loading){again=again||force;return;}loading=true;
+  async function refresh(me=cur,force=false){if(!me||window.newChatUI?.isPreview(me)||!isClaude(me)||choosing||(!force&&!workspaceUI.canPoll()))return;if(loading){again=again||force;return;}loading=true;
     try{const data=await api('/api/claude/state?id='+encodeURIComponent(me.id)+(force?'&fresh=1':''),undefined,20000);cache.set(me.id,data);paint(me,data);}catch(e){if(active(me)){note.hidden=false;label.textContent='Claude 状态读取失败：'+e.message;}}finally{loading=false;if(again){again=false;refresh(cur,true);}}}
   async function choose(me,choice,button,value){if(!active(me))return;button.disabled=true;
     try{const result=await api('/api/claude/choose',{id:me.id,token:choice.token,...(value!==undefined?{value}: {})});if(active(me)){if(overlays.some(o=>o.id===sheet.id))closeSheet(sheet.id);if(result.state)paint(me,result.state);toast(result.text||'已操作，正在核对');if(!result.state)await refresh(me,true);}}
@@ -153,7 +154,7 @@ function initializeclaudeUI(){
     catch(e){modeBusy=null;await refresh(me,true);renderModes(me,e.message);}}
   model.onclick=openModels;effort.onclick=openModels;modeButton.onclick=openModes;
   open.onclick=async()=>{const me=cur;try{await openOnPC();await refresh(me,true);}catch(e){toast(e.message,true);}};
-  function onOpen(me){actionSig='';currentData=null;ask=null;controls.hidden=me.app!=='claude';note.hidden=true;stop.hidden=true;queue.hidden=true;queue.dataset.sig='';if(me.app==='claude'){paint(me,cache.get(me.id)||{settings:{},available:true});refresh(me,true);}}
+  function onOpen(me){actionSig='';currentData=null;ask=null;controls.hidden=!isClaude(me);note.hidden=true;stop.hidden=true;queue.hidden=true;queue.dataset.sig='';if(isClaude(me)){paint(me,cache.get(me.id)||{settings:{},available:true});refresh(me,true);}}
   function closeMenu(){const target=menuTarget;menuTarget=null;if(target)api('/api/claude/close-menu',{id:target.id}).catch(()=>{});}
   // A button of Claude's next-step box (10-16), as if clicked on the PC: the same button pressed there, or, where the box
   // there takes no click, a reply's words sent as a message. Done, the buttons give way to what was done at once; the card

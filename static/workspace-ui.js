@@ -86,7 +86,7 @@
     if(hasText||hasImages||window.referencesUI?.count()){toast('当前有新草稿，请先处理；发送副本仍保留在卡片中',true);return;}
     input.value=item.originalText??item.text??'';editVersion++;saveDraft();autoGrow();
     if(item.references?.length)referencesUI.restore(cur,item.references);
-    if(['codex','claude','deepseek'].includes(item.app))await codexUI.restoreSubmission(item);
+    if(Agents.can(item.app,'attachments'))await codexUI.restoreSubmission(item);
     updateSendButton();input.focus();
   }
   // Only transport/source identity maps an outbox entry to a transcript row.
@@ -165,6 +165,7 @@
       try{let delivered=false;
         if(item.transport==='codex'){const r=await api('/api/codex/receipt?id='+encodeURIComponent(item.id)+'&request_id='+item.rid);delivered=r.state==='accepted';item.client_id=r.result?.client_id||item.client_id;item.source_id=r.result?.evidence?.message_id||item.source_id;if(['queued','cancelled','rejected'].includes(r.state)){item.state=r.state;item.note=r.result?.text||r.state;}}
         else if(item.transport==='deepseek'){const r=await api('/api/deepseek/receipt?request_id='+encodeURIComponent(item.rid));if(r.state==='accepted'){if(item.body?.intent!=='queue')delivered=true;else{item.state='queued';item.note='已排队';}}}
+        else if(item.transport==='agent'){const r=await api('/api/agents/'+encodeURIComponent(item.app)+'/receipt?id='+encodeURIComponent(item.id)+'&request_id='+encodeURIComponent(item.rid));delivered=r.state==='accepted';}
         else if(item.app!=='codex'&&item.offset!=null){const r=await api('/api/chat/check',{app:item.app,id:item.id,offset:item.offset,text:item.check_text||item.text});delivered=r.delivered;if(r.queued){item.state='queued';item.note='已进入 Claude 队列，等待读取';}}
         if(delivered){item.state='delivered';item.note=item.app==='codex'?'已交给 Codex':'已确认送达';received(item);const ticket=pendingSends.get(item.app+':'+item.id);if((ticket?.request_id||ticket?.rid)===item.rid){ticket.state='delivered';ticket.note=item.note;persistPending();}}
       }catch(e){errors++;}

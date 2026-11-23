@@ -5,8 +5,9 @@
   const uid = () => [...crypto.getRandomValues(new Uint8Array(16))].map(v=>v.toString(16).padStart(2,'0')).join('');
   const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
   const canonicalSettings = value => value ? {...value,service_tier:(!value.service_tier||value.service_tier==='default')?null:value.service_tier==='fast'?'priority':value.service_tier} : null;
+  const isCodex = me => Agents.cardLayout(me?.app) === 'codex.v1';
   const active = me => cur?.app === me.app && cur.id === me.id;
-  const current = () => ['codex','claude','deepseek'].includes(cur?.app) ? cur : null;
+  const current = () => cur && (isCodex(cur) || Agents.can(cur.app, 'attachments')) ? cur : null;
   const storageKey = id => 'lbr_codex_draft_'+id;
   const localGet = (key,fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch(e) { return fallback; } };
   function draft(id) {
@@ -79,15 +80,15 @@
   document.querySelector('.cv-row').before(codexQueue);
   const fileRefs=me=>window.referencesUI?.fileCount(me)||0,filesGoingUp=me=>window.referencesUI?.pendingCount(me)||0;
   async function queueAction(message,action){
-    const me=current(),s=states.get(me?.id);if(me?.app!=='codex')return false;
+    const me=current(),s=states.get(me?.id);if(!isCodex(me)||!Agents.can(me.app,'queue'))return false;
     const key='lbr_queue_action_'+me.id+':'+message.id+':'+action;
     let body=localGet(key,null)||{id:me.id,message_id:message.id,action,expected_turn:s?.active_turn_id,request_id:uid()};
     try{localStorage.setItem(key,JSON.stringify(body));const result=await api('/api/codex/queue-action',body);toast(result.text||'已处理');await refresh(me,true);await workspaceUI.pollReceipts();return true;}
     catch(e){toast('结果待核对：'+e.message,true);await refresh(me,true);return false;}
   }
   function paintQueue(me,s){
-    const codex=me?.app==='codex',native=codex?(s?.queued||[]).filter(q=>!window.workspaceUI?.delivered(q.id)):[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
-    if(codex)$('cvBtn').setAttribute('aria-label',s?.running?'发送并排队':'发送');
+    const codex=isCodex(me)&&Agents.can(me?.app,'queue'),native=codex?(s?.queued||[]).filter(q=>!window.workspaceUI?.delivered(q.id)):[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
+    if(isCodex(me))$('cvBtn').setAttribute('aria-label',s?.running?'发送并排队':'发送');
     // rebuilt only when it changes (this runs on every refresh): a tap on a button in it is not lost
     const sig=JSON.stringify([rows.map(q=>[q.id,q.text,q.status,!!q.local]),!!s?.running]);if(codexQueue.dataset.sig===sig)return;codexQueue.dataset.sig=sig;
     codexQueue.replaceChildren();codexQueue.hidden=!rows.length;
@@ -98,10 +99,10 @@
       row.append(now,x);window.navigationUI?.tapTick?.(now);window.navigationUI?.tapTick?.(x);codexQueue.append(row);}
   }
   function paintComposer(){
-    const me=current();$('codexComposerTools').hidden=me?.app!=='codex';$('attachmentPreviews').hidden=true;attachmentErrors.hidden=true;controlNote.hidden=true;
+    const me=current();$('codexComposerTools').hidden=!isCodex(me);$('attachmentPreviews').hidden=true;attachmentErrors.hidden=true;controlNote.hidden=true;
     paintQueue(me,states.get(me?.id));if(!me)return;
     const d=draft(me.id),s=states.get(me.id),settings=d.settings||s?.settings;
-    const away=me.app==='codex' && !!s && !s.available;
+    const away=isCodex(me) && !!s && !s.available;
     const modelName=s?.catalog?.models?.find(m=>m.id===settings?.model)?.name || modelLabel(settings?.model);
     $('modelChoice').querySelector('.composer-label').textContent=away ? '电脑上打开' : settings ? modelName + ' · '+(EFFORT[settings.effort]||settings.effort||'默认') : '模型';
     $('modelChoice').classList.toggle('is-away',away);$('modeChoice').hidden=away;
@@ -138,17 +139,18 @@
       }
       const file=image.file||await fileStore('get',image.localId);if(!file)throw Error('图片草稿不存在，请重新选择');
       image.file=file;if(!image.localUrl)image.localUrl=URL.createObjectURL(file);
-      const response=await fetch('/api/codex/upload?app='+encodeURIComponent(me.app)+'&id='+encodeURIComponent(me.id)+'&name='+encodeURIComponent(image.name),{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
+      const uploadUrl=Agents.isLegacy(me.app)?'/api/codex/upload?app='+encodeURIComponent(me.app)+'&id='+encodeURIComponent(me.id)+'&name='+encodeURIComponent(image.name):'/api/agents/'+encodeURIComponent(me.app)+'/upload?id='+encodeURIComponent(me.id)+'&name='+encodeURIComponent(image.name);
+      const response=await fetch(uploadUrl,{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Teleply-Protocol':'2'},body:file});
       const data=await response.json();if(!response.ok)throw Error(data.error||'上传失败');
-      if(!draft(me.id).images.includes(image)){await api('/api/codex/remove-attachment',{id:me.id,attachment:data.id});return;}
+      if(!draft(me.id).images.includes(image)){if(Agents.isLegacy(me.app))await api('/api/codex/remove-attachment',{id:me.id,attachment:data.id});return;}
       image.meta=data;image.status='ready';image.error='';
     }catch(e){image.status='failed';image.error=e.message;}
     finally{image.inflight=false;save(me.id);if(active(me))paintComposer();}
   }
-  async function removeImage(me,id){const d=draft(me.id),image=d.images.find(v=>v.localId===id);d.images=d.images.filter(v=>v.localId!==id);save(me.id);paintComposer();if(image?.localUrl)URL.revokeObjectURL(image.localUrl);fileStore('delete',id).catch(()=>{});if(image?.meta)try{await api('/api/codex/remove-attachment',{id:me.id,attachment:image.meta.id});}catch(e){toast('已从草稿移除；电脑临时文件将过期清理',true);}}
+  async function removeImage(me,id){const d=draft(me.id),image=d.images.find(v=>v.localId===id);d.images=d.images.filter(v=>v.localId!==id);save(me.id);paintComposer();if(image?.localUrl)URL.revokeObjectURL(image.localUrl);fileStore('delete',id).catch(()=>{});if(image?.meta&&Agents.isLegacy(me.app))try{await api('/api/codex/remove-attachment',{id:me.id,attachment:image.meta.id});}catch(e){toast('已从草稿移除；电脑临时文件将过期清理',true);}}
   async function refresh(me,force=false){
     if(window.newChatUI?.isPreview(me))return;
-    if(me.app!=='codex' || (!force && window.workspaceUI && !workspaceUI.canPoll()))return;if(requests.has(me.id)){if(!force)return requests.get(me.id);await requests.get(me.id);}
+    if(!isCodex(me) || (!force && window.workspaceUI && !workspaceUI.canPoll()))return;if(requests.has(me.id)){if(!force)return requests.get(me.id);await requests.get(me.id);}
     const task=(async()=>{try{
       const data=await api('/api/codex/state?id='+encodeURIComponent(me.id)+(force?'&fresh=1':''));states.set(me.id,data);
       window.activityUI?.onControl(me,data);
@@ -157,14 +159,14 @@
       catch(e){states.set(me.id,{available:false,reason:e.message});if(active(me))paintComposer();}finally{requests.delete(me.id);}})();requests.set(me.id,task);return task;
   }
   async function applyState(me,data){
-    if(me.app!=='codex'||!data)return;
+    if(!isCodex(me)||!data)return;
     states.set(me.id,data);window.activityUI?.onControl(me,data);
       const pending=pendingSends.get(chatKey(me));
       if(pending?.request_id && pending.state==='unconfirmed'){
         try{const receipt=await api('/api/codex/receipt?id='+encodeURIComponent(me.id)+'&request_id='+encodeURIComponent(pending.request_id));if(receipt.state==='accepted')settleReceipt(me,pending,receipt.result);}catch(e){}
       }
       if(active(me) && !document.hidden && !window.workspaceUI?.composing && states.get(me.id)===data){
-        if(data.available && typeof data.running==='boolean'){me.status=data.running?'running':'idle';$('cvMeta').textContent='Codex'+(me.folder?' · '+me.folder:'')+' · '+STATUS[me.status];}
+        if(data.available && typeof data.running==='boolean'){me.status=data.running?'running':'idle';$('cvMeta').textContent=Agents.name(me.app)+(me.folder?' · '+me.folder:'')+' · '+STATUS[me.status];}
         paintComposer();renderMsgs(currentMessages);renderAsk(me,data);
       }
   }
@@ -353,11 +355,11 @@
   window.showPending=()=>{if(ask&&cur?.app==='codex'&&cur.id===ask.me.id)openAsk();else showPendingBase?.();};
   async function onOpen(me){
     if(ask&&ask.me.id!==me.id){ask=null;if(askOpen())closeSheet(askSheet.id);}
-    $('codexComposerTools').hidden=me.app!=='codex';$('attachmentPreviews').hidden=true;attachmentErrors.hidden=true;controlNote.hidden=true;if(!['codex','claude','deepseek'].includes(me.app))return;
+    $('codexComposerTools').hidden=!isCodex(me);$('attachmentPreviews').hidden=true;attachmentErrors.hidden=true;controlNote.hidden=true;if(!isCodex(me)&&!Agents.can(me.app,'attachments'))return;
     const d=draft(me.id);paintComposer();
     for(const image of d.images)if(!image.meta)try{const f=await fileStore('get',image.localId);if(f){image.file=f;image.localUrl=URL.createObjectURL(f);}}catch(e){}
-    const ready=d.images.filter(v=>v.meta);if(ready.length)try{const data=await api('/api/codex/attachments?id='+encodeURIComponent(me.id)+'&ids='+ready.map(v=>v.meta.id).join(','));const valid=new Map(data.items.map(v=>[v.id,v]));for(const image of ready)if(!valid.has(image.meta.id)){image.meta=null;image.status='failed';image.error='图片已过期，请重试或重新选择';}save(me.id);}catch(e){}
-    if(active(me))paintComposer();await refresh(me,true);
+    const ready=d.images.filter(v=>v.meta);if(ready.length&&Agents.isLegacy(me.app))try{const data=await api('/api/codex/attachments?id='+encodeURIComponent(me.id)+'&ids='+ready.map(v=>v.meta.id).join(','));const valid=new Map(data.items.map(v=>[v.id,v]));for(const image of ready)if(!valid.has(image.meta.id)){image.meta=null;image.status='failed';image.error='图片已过期，请重试或重新选择';}save(me.id);}catch(e){}
+    if(active(me))paintComposer();if(isCodex(me))await refresh(me,true);
   }
   window.codexUI={onOpen,applyState,setClaudeImages(me,images){states.set(me.id,{images});},saveCurrentDraft(){if(current())save(cur.id);},
     async restoreSubmission(item){const d=draft(item.id);d.images=(item.images||[]).map(v=>({...v,status:'ready'}));d.settings=canonicalSettings(item.settings);d.base=canonicalSettings(item.base);save(item.id);if(current()?.id===item.id)await onOpen(cur);},
@@ -369,7 +371,7 @@
     attachmentCount(){return current()?draft(cur.id).images.length+fileRefs(cur):0;},
     // A running thread's images/settings cannot be submitted, but let Send explain why instead of looking frozen.
     blocked(){if(!current())return false;return draft(cur.id).images.some(v=>v.status!=='ready')||filesGoingUp(cur)>0;},
-    shouldSendEnhanced(){return current()?.app==='codex';},send,
+    shouldSendEnhanced(){return isCodex(current());},send,
     // files-ui.js: photos among the files picked on the phone; a picture on the computer the service read in (pc: where it is)
     addPhotos(me,files){return addFiles(files,me);},photoRoom(me){return 5-draft(me.id).images.length;},
     addImported(me,meta,pc){const d=draft(me.id);if(d.images.length>=5)return false;d.images.push({localId:uid(),name:meta.name||pc.name,size:meta.original_size||pc.size||0,meta,pc,status:'ready',error:''});save(me.id);if(active(me))paintComposer();updateSendButton();return true;}};

@@ -5,7 +5,8 @@
    to the turn now or dropped; a question or an approval is one strip above the box that opens a sheet. Before, a row of
    bare words (图片 / 模型 / 排队发送 / 停止) stood over the box and approvals were two buttons stuck together. */
 (() => {
-  const active=me=>cur?.app==='deepseek'&&cur.id===me.id;
+  const isDeepSeek=me=>Agents.cardLayout(me?.app)==='deepseek.v1';
+  const active=me=>isDeepSeek(cur)&&cur.id===me.id;
   const uid=()=>crypto.randomUUID();
   const questionDrafts=new Map();
   let state=null,busy=false,timer=null,askSig='',modelCatalog=null,asking=new Set();
@@ -116,7 +117,7 @@
     finally{tray.dataset.sig='';await refresh(me);}
   }
   function controls(){
-    const on=cur?.app==='deepseek';tools.hidden=!on;subBar.hidden=!on||!subs.length;stop.hidden=!on||!state?.running;
+    const on=isDeepSeek(cur);tools.hidden=!on;subBar.hidden=!on||!subs.length;stop.hidden=!on||!Agents.can(cur?.app,'stop')||!state?.running;
     if(!on){tray.hidden=runBar.hidden=true;return;}
     model.textContent=modelLabel(state?.settings);perm.textContent=state?.permission_name||PERMISSION[state?.permission]||'权限';perm.classList.toggle('is-full',state?.permission==='danger-full-access');
     perm.hidden=state?.permission_available===false;  // no permission service in this session: the desktop hides it too
