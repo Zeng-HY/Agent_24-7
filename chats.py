@@ -1189,7 +1189,7 @@ def summary_for(agent, item: dict) -> dict:
     while True:
         lines, first, end = read_tail_span(path, nbytes)
         at_start = first == 0
-        msgs, state = agent.parse_for_item(item, lines)
+        msgs, state = _parse(item["app"], lines)
         have_message=any(m["role"] in ("user", "assistant") for m in msgs)
         # 0.6.4: a running turn whose start record is farther back still needs its own start for the timer. Once
         # found it is kept by file, so a growing turn does not rescan tens of megabytes on every list poll.
@@ -1221,6 +1221,8 @@ def summary_for(agent, item: dict) -> dict:
             break
         nbytes = min(nbytes * 4, 64 << 20)
     last = next((m for m in reversed(msgs) if m["role"] in ("user", "assistant")), None)
+    if last and item.get("id") and str(last.get("source_thread_id") or "").lower() == str(item["id"]).lower():
+        last.pop("origin", None)
     prefix = "来自其他对话：" if last and last.get("origin") == "other_chat" else "你：" if last and last["role"] == "user" else ""
     last_body = one_line(plain(last["text"]), 90) if last else ""
     if last and not last_body and last.get("images"):
@@ -1336,11 +1338,16 @@ def conversation_for(agent, conv_id: str, n: int = 60) -> dict:
     nbytes, msgs, state = 1 << 20, [], {}
     while True:
         lines, at_start = read_tail(path, nbytes)
-        msgs, state = agent.parse_for_item(item, lines)
+        msgs, state = _parse(item["app"], lines)
         talk = sum(1 for m in msgs if m["role"] in ("user", "assistant"))
         if talk >= n // 2 or at_start or nbytes >= (32 << 20):
             break
         nbytes *= 4
+    if item.get("id"):
+        own_tid = str(item["id"]).lower()
+        for m in msgs:
+            if str(m.get("source_thread_id") or "").lower() == own_tid:
+                m.pop("origin", None)
     if state.get("title"):
         out["title"] = state["title"]
     duplicates: dict[str, int] = {}
