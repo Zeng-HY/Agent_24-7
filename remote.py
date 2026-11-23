@@ -560,8 +560,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/usage":  # 用量：限额、几点重置；live=1 时实时读（usage_limits.py）
             try:
-                self._json(self.server.usage.read(self._query().get("live") == "1",
-                                                  include_agents=self._client_protocol() >= 2))
+                live = self._query().get("live") == "1"
+                data = (self.server.usage.read(live, include_agents=True)
+                        if self._client_protocol() >= 2 else self.server.usage.read(live))
+                self._json(data)
             except usage_limits.UsageError as exc:
                 self._json({"error": str(exc), "code": exc.code}, exc.status)
             return

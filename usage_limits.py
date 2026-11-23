@@ -478,7 +478,7 @@ class Usage:
         apps = list(self.apps() or [])
         agent = next((a for a in registry.load() if a.can_reset_usage), None)
         if agent is None or agent.id not in apps:
-            label = agent.manifest()["name"]["zh"] if agent is not None else "Codex"
+            label = agent.manifest()["name"]["zh"] if agent is not None else "助手"
             code = f"no_{agent.id}" if agent is not None else "no_agent"
             raise UsageError(f"这台电脑没装 {label}", 409, code)
         return agent.redeem_usage(self, body)

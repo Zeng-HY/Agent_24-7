@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import tempfile
@@ -10,8 +11,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import archives
+import chat_history
 import remote
-from agents import registry
+import usage_limits
+from agents import claude as claude_agent, codex as codex_agent, deepseek as deepseek_agent, registry, testing
 from agents.base import UnknownAgent
 
 
@@ -78,6 +82,10 @@ class DetectionTests(unittest.TestCase):
 
 
 class TestingAgentTests(unittest.TestCase):
+    def setUp(self):
+        testing.reset()
+        self.addCleanup(testing.reset)
+
     def agent(self):
         return registry.get("testing", include_testing=True)
 
@@ -221,6 +229,193 @@ class EndpointTests(unittest.TestCase):
             handler, sent = self.handler("/api/agents?t=secret", ["codex", "testing"], protocol=2)
             handler.do_GET()
         self.assertEqual([a["id"] for a in json.loads(sent[0][1])["agents"]], ["codex", "testing"])
+
+
+class TestingAgentEndToEndTests(unittest.TestCase):
+    """Full-chain test for the fake assistant through remote.Handler and shared services."""
+
+    def setUp(self):
+        testing.reset()
+        self.addCleanup(testing.reset)
+
+    def _make_server(self):
+        apps = ["testing"]
+        history = chat_history.History()
+        arch = archives.Archives(history=history, apps=lambda: list(apps), log=lambda _msg: None)
+        usage = usage_limits.Usage(apps=lambda: list(apps), desktop=None, log=lambda _msg: None)
+        return SimpleNamespace(
+            machine={"name": "测试电脑", "apps": list(apps), "voice": False},
+            cfg={"token": "secret"},
+            history=history,
+            archives=arch,
+            usage=usage,
+            tasks=SimpleNamespace(apply_status=lambda items: items),
+            references=None,
+            deepseek=None,
+            new_chats=None,
+            log=SimpleNamespace(write=lambda _msg: None),
+        )
+
+    def _call(self, server, method: str, path: str, *, protocol=None, body=None, raw: bytes | None = None):
+        handler = object.__new__(remote.Handler)
+        sent = []
+        handler.path = path
+        handler.server = server
+        handler.close_connection = False
+        handler._responded = False
+        headers = {}
+        if protocol is not None:
+            headers["X-Teleply-Protocol"] = str(protocol)
+        if raw is not None:
+            headers["Content-Length"] = str(len(raw))
+            handler.rfile = io.BytesIO(raw)
+        elif body is not None:
+            encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            headers["Content-Length"] = str(len(encoded))
+            handler.rfile = io.BytesIO(encoded)
+        else:
+            headers["Content-Length"] = "0"
+            handler.rfile = io.BytesIO(b"")
+        handler.headers = headers
+        handler._send = lambda code, payload, ctype, extra=None: sent.append((code, json.loads(payload) if payload else None))
+        if method == "GET":
+            handler.do_GET()
+        else:
+            handler.do_POST()
+        self.assertEqual(len(sent), 1, f"expected one response for {method} {path}, got {sent}")
+        return sent[0]
+
+    def test_testing_agent_excluded_from_production_and_hidden_from_protocol_one(self):
+        self.assertNotIn("testing", registry.ids())
+        server = self._make_server()
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}), \
+             patch.object(codex_agent.CodexAgent, "catalog_entries", return_value=[]), \
+             patch.object(claude_agent.ClaudeAgent, "catalog_entries", return_value=[]), \
+             patch.object(deepseek_agent.DeepSeekAgent, "catalog_entries", return_value=[]):
+            code, _ = self._call(server, "GET", "/api/agents?t=secret")
+            self.assertEqual(code, 404)
+            code, body = self._call(server, "GET", "/api/chats?app=all&t=secret")
+            self.assertEqual(code, 200)
+            self.assertEqual(body["items"], [])
+            for method, path, payload in (
+                ("GET", "/api/chat?app=testing&id=test-running&t=secret", None),
+                ("GET", "/api/agents/testing/state?id=test-running&t=secret", None),
+                ("POST", "/api/agents/testing/send?t=secret", {"id": "test-running", "text": "hi"}),
+                ("POST", "/api/agents/testing/stop?t=secret", {"id": "test-running"}),
+                ("POST", "/api/agents/testing/answer?t=secret", {"id": "test-waiting", "choice": "A"}),
+                ("POST", "/api/chat/archive?t=secret", {"app": "testing", "id": "test-waiting"}),
+                ("POST", "/api/chat/unarchive?t=secret", {"app": "testing", "id": "test-waiting"}),
+                ("POST", "/api/chat/delete?t=secret", {"confirmed": True, "items": [{"app": "testing", "id": "test-waiting"}]}),
+            ):
+                code, _ = self._call(server, method, path, body=payload)
+                self.assertEqual(code, 404, f"protocol 1 should not reach {method} {path}")
+
+    def test_testing_agent_full_chain_protocol_two(self):
+        server = self._make_server()
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}), \
+             patch.object(codex_agent.CodexAgent, "catalog_entries", return_value=[]), \
+             patch.object(claude_agent.ClaudeAgent, "catalog_entries", return_value=[]), \
+             patch.object(deepseek_agent.DeepSeekAgent, "catalog_entries", return_value=[]):
+            # 1. Discover manifest
+            code, body = self._call(server, "GET", "/api/agents?t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual([a["id"] for a in body["agents"]], ["testing"])
+            self.assertFalse(body["agents"][0]["legacy"])
+            self.assertEqual(body["agents"][0]["min_protocol"], 2)
+
+            # 2. List and read
+            code, body = self._call(server, "GET", "/api/chats?app=testing&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual({row["id"] for row in body["items"]}, {"test-running", "test-waiting"})
+
+            code, body = self._call(server, "GET", "/api/chat?app=testing&id=test-running&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(len(body["messages"]), 2)
+
+            # 3. Send and verify persistence across separate registry.get("testing") calls
+            code, body = self._call(server, "POST", "/api/agents/testing/send?t=secret", protocol=2,
+                                    body={"id": "test-running", "text": "全链路验证", "request_id": "req-e2e"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["accepted"])
+
+            code, body = self._call(server, "GET", "/api/chat?app=testing&id=test-running&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["messages"][-1]["text"], "全链路验证")
+
+            # 4. Stop and check state
+            code, body = self._call(server, "POST", "/api/agents/testing/stop?t=secret", protocol=2,
+                                    body={"id": "test-running"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+
+            code, body = self._call(server, "GET", "/api/agents/testing/state?id=test-running&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["status"], "idle")
+            self.assertFalse(body["running"])
+
+            # 5. Approve / answer waiting conversation
+            code, body = self._call(server, "POST", "/api/agents/testing/answer?t=secret", protocol=2,
+                                    body={"id": "test-waiting", "choice": "A"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+
+            code, body = self._call(server, "GET", "/api/agents/testing/state?id=test-waiting&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["status"], "idle")
+
+            # 6. Archive -> listed in archived & hidden from catalog -> restore -> archive -> delete
+            code, body = self._call(server, "POST", "/api/chat/archive?t=secret", protocol=2,
+                                    body={"app": "testing", "id": "test-waiting"})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["archived"])
+
+            code, body = self._call(server, "GET", "/api/chats?app=testing&t=secret", protocol=2)
+            self.assertEqual([row["id"] for row in body["items"]], ["test-running"])
+
+            code, body = self._call(server, "GET", "/api/chat/archived?t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual([row["id"] for row in body["items"]], ["test-waiting"])
+
+            code, body = self._call(server, "POST", "/api/chat/unarchive?t=secret", protocol=2,
+                                    body={"app": "testing", "id": "test-waiting"})
+            self.assertEqual(code, 200)
+            self.assertFalse(body["archived"])
+
+            code, body = self._call(server, "GET", "/api/chats?app=testing&t=secret", protocol=2)
+            self.assertEqual({row["id"] for row in body["items"]}, {"test-running", "test-waiting"})
+
+            self._call(server, "POST", "/api/chat/archive?t=secret", protocol=2,
+                       body={"app": "testing", "id": "test-waiting"})
+            code, body = self._call(server, "POST", "/api/chat/delete?t=secret", protocol=2,
+                                    body={"confirmed": True, "items": [{"app": "testing", "id": "test-waiting"}]})
+            self.assertEqual(code, 200)
+            self.assertTrue(body["ok"])
+            code, body = self._call(server, "GET", "/api/chat/archived?t=secret", protocol=2)
+            self.assertEqual(body["items"], [])
+
+            # 7. Create + create/state + upload + commands + usage
+            code, body = self._call(server, "POST", "/api/agents/testing/create?t=secret", protocol=2,
+                                    body={"request_id": "new-1", "text": "新建测试对话"})
+            self.assertEqual(code, 200)
+            self.assertEqual(body["id"], "test-new-1")
+
+            code, body = self._call(server, "GET", "/api/agents/testing/create/state?request_id=new-1&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["id"], "test-new-1")
+
+            code, body = self._call(server, "POST", "/api/agents/testing/upload?id=test-running&name=demo.png&t=secret",
+                                    protocol=2, raw=b"\x89PNG\r\n")
+            self.assertEqual(code, 200)
+            self.assertEqual(body["app"], "testing")
+            self.assertEqual(body["name"], "demo.png")
+
+            code, body = self._call(server, "GET", "/api/agents/testing/commands?id=test-running&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["items"][0]["name"], "test")
+
+            code, body = self._call(server, "GET", "/api/agents/testing/usage?t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertTrue(body["available"])
 
 
 if __name__ == "__main__":

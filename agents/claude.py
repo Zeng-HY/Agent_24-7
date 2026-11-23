@@ -535,7 +535,22 @@ class ClaudeAgent(Agent):
         return {"delivered": stage == "received", "queued": stage == "queued", "stage": stage}
 
     def desktop_open(self, desktop, item: dict) -> None:
-        desktop._claude_open(item, [item["title"], chats.conversation_title(item)])
+        desktop._claude_open(item, [item["title"], self.conversation_title(item)])
+
+    def conversation_title(self, item: dict) -> str:
+        import json
+        import chats
+        path = chats.conv_path(item)
+        if path is None:
+            return ""
+        lines, _ = chats.read_tail(path, 256 << 10)
+        for raw in reversed(lines):
+            if b"custom-title" in raw[:80]:
+                try:
+                    return json.loads(raw).get("customTitle") or ""
+                except ValueError:
+                    continue
+        return ""
 
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
         import remote

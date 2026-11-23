@@ -2555,17 +2555,10 @@ class Desktop:
 
 
 def conversation_title(item: dict) -> str:
-    """The newest title written in a Claude transcript (renames land there before the index)."""
-    if item["app"] != "claude":
+    """The newest title written in a transcript when an assistant records renames there before the index."""
+    from agents import registry
+    try:
+        agent = registry.get(item.get("app", ""))
+    except Exception:
         return ""
-    path = conv_path(item)
-    if path is None:
-        return ""
-    lines, _ = read_tail(path, 256 << 10)
-    for raw in reversed(lines):
-        if b"custom-title" in raw[:80]:
-            try:
-                return json.loads(raw).get("customTitle") or ""
-            except ValueError:
-                continue
-    return ""
+    return agent.conversation_title(item)

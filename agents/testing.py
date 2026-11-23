@@ -12,6 +12,44 @@ import time
 from .base import Agent, NotFound, Unsupported, make_manifest
 
 
+def _initial_store() -> dict:
+    now = int(time.time() * 1000)
+    return {
+        "rows": [
+            {"app": "testing", "id": "test-running", "title": "测试对话 A", "folder": "C:\\测试\\项目",
+             "cwd": "C:\\测试\\项目", "updated": now, "created": now - 60_000, "pinned": False,
+             "status": "running", "preview": "正在跑测试", "turn_started": now // 1000,
+             "turn_ended": 0, "step": "run", "archived": False},
+            {"app": "testing", "id": "test-waiting", "title": "测试对话 B", "folder": "",
+             "cwd": "", "updated": now - 120_000, "created": now - 3600_000, "pinned": False,
+             "status": "waiting", "preview": "等你选择", "turn_started": now // 1000 - 60,
+             "turn_ended": 0, "step": "", "archived": False},
+        ],
+        "messages": {
+            "test-running": [
+                {"id": "m1", "role": "user", "time": now - 50_000, "text": "跑一下测试", "kind": ""},
+                {"id": "m2", "role": "assistant", "time": now - 40_000, "text": "正在跑", "kind": "text"},
+            ],
+            "test-waiting": [
+                {"id": "m3", "role": "user", "time": now - 120_000, "text": "选一个方案", "kind": ""},
+                {"id": "m4", "role": "assistant", "time": now - 110_000, "text": "请选择 A 或 B", "kind": "question"},
+            ],
+        },
+        "created": 0,
+        "created_by_rid": {},
+    }
+
+
+# Module-level state so separate registry.get("testing") calls across requests share one fake backend.
+_STORE = _initial_store()
+
+
+def reset() -> None:
+    """Restore the test assistant's in-memory conversations and messages."""
+    _STORE.clear()
+    _STORE.update(_initial_store())
+
+
 class TestingAgent(Agent):
     id = "testing"
     notify_uses_file = False
@@ -23,28 +61,26 @@ class TestingAgent(Agent):
 
     def __init__(self) -> None:
         super().__init__()
-        now = int(time.time() * 1000)
-        self._rows = [
-            {"app": self.id, "id": "test-running", "title": "测试对话 A", "folder": "C:\\测试\\项目",
-             "cwd": "C:\\测试\\项目", "updated": now, "created": now - 60_000, "pinned": False,
-             "status": "running", "preview": "正在跑测试", "turn_started": now // 1000,
-             "turn_ended": 0, "step": "run", "archived": False},
-            {"app": self.id, "id": "test-waiting", "title": "测试对话 B", "folder": "",
-             "cwd": "", "updated": now - 120_000, "created": now - 3600_000, "pinned": False,
-             "status": "waiting", "preview": "等你选择", "turn_started": now // 1000 - 60,
-             "turn_ended": 0, "step": "", "archived": False},
-        ]
-        self._messages = {
-            "test-running": [
-                {"id": "m1", "role": "user", "time": now - 50_000, "text": "跑一下测试", "kind": ""},
-                {"id": "m2", "role": "assistant", "time": now - 40_000, "text": "正在跑", "kind": "text"},
-            ],
-            "test-waiting": [
-                {"id": "m3", "role": "user", "time": now - 120_000, "text": "选一个方案", "kind": ""},
-                {"id": "m4", "role": "assistant", "time": now - 110_000, "text": "请选择 A 或 B", "kind": "question"},
-            ],
-        }
-        self._created = 0
+
+    @property
+    def _rows(self) -> list[dict]:
+        return _STORE["rows"]
+
+    @_rows.setter
+    def _rows(self, value: list[dict]) -> None:
+        _STORE["rows"] = value
+
+    @property
+    def _messages(self) -> dict[str, list[dict]]:
+        return _STORE["messages"]
+
+    @property
+    def _created(self) -> int:
+        return _STORE["created"]
+
+    @_created.setter
+    def _created(self, value: int) -> None:
+        _STORE["created"] = value
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -204,10 +240,17 @@ class TestingAgent(Agent):
                            "turn_ended": 0, "step": "", "archived": False})
         self._messages[ident] = [{"id": "m1", "role": "user", "time": now,
                                   "text": str(payload.get("text", "")), "kind": ""}]
-        return {"request_id": str(payload.get("request_id", "")), "state": "accepted",
-                "id": ident, "title": title, "message": "测试助手已建好"}
+        rid = str(payload.get("request_id", ""))
+        res = {"request_id": rid, "state": "accepted",
+               "id": ident, "title": title, "message": "测试助手已建好"}
+        if rid:
+            _STORE["created_by_rid"][rid] = dict(res)
+        return res
 
     def create_status(self, request_id: str) -> dict:
+        found = _STORE["created_by_rid"].get(request_id)
+        if found is not None:
+            return dict(found)
         return {"request_id": request_id, "state": "accepted", "id": "test-new-1", "title": "测试新对话"}
 
     def archive(self, conv_id: str) -> dict:

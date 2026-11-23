@@ -431,6 +431,9 @@ class Agent:
     def desktop_open(self, desktop, item: dict) -> None:
         raise Unsupported("这个助手不支持桌面打开")
 
+    def conversation_title(self, item: dict) -> str:
+        return ""
+
     # -- server lifecycle & request-resolution hooks used by remote.py
     def on_apps_rechecked(self, server, apps: list[str]) -> None:
         pass
