@@ -334,6 +334,14 @@ def main():
         try:
             import aiohttp,webview,win32crypt,win32security,comtypes,remote
             assert remote.chats is not None
+            from agents import registry as agent_registry
+            loaded = agent_registry.load()
+            loaded_ids = {agent.id for agent in loaded}
+            listed_ids = {name.rsplit('.', 1)[-1] for name in agent_registry.AGENT_MODULES}
+            assert len(loaded) == len(agent_registry.AGENT_MODULES)
+            assert loaded_ids == listed_ids
+            assert {'codex', 'claude', 'deepseek'} <= loaded_ids
+            assert 'testing' not in loaded_ids
             assert (ASSETS/'remote.html').is_file()
             from message_files import references
             assert references('[file](<D:/candidate/file (1).md>)')==['D:/candidate/file (1).md']

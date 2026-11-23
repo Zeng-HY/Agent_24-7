@@ -85,6 +85,12 @@ class TestingAgentTests(unittest.TestCase):
         self.assertNotIn("testing", registry.ids())
         self.assertIn("testing", registry.ids(include_testing=True))
 
+    def test_a_frozen_build_ignores_the_test_switch(self):
+        with patch.object(registry.sys, "frozen", True, create=True), \
+             patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
+            self.assertNotIn("testing", registry.ids())
+            self.assertEqual(registry.ids(), ["codex", "claude", "deepseek"])
+
     def test_catalog_reads_and_count(self):
         agent = self.agent()
         page = agent.catalog()

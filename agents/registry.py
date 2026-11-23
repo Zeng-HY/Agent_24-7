@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 from typing import Iterable
 
 from .base import Agent, UnknownAgent
@@ -20,19 +21,33 @@ AGENT_MODULES: tuple[str, ...] = (
     "agents.deepseek",
 )
 
-# Test-only module: never in the production list above.
+# Test-only module: never in the production list above, and never in the frozen build.
 TESTING_MODULE = "agents.testing"
+
+
+def _testing_requested(include_testing: bool) -> bool:
+    """The test-only assistant is for source tests; a packaged service ignores the switch."""
+    if include_testing:
+        return True
+    if getattr(sys, "frozen", False):
+        return False
+    return os.environ.get("TELEPLY_TEST_AGENTS") == "1"
 
 
 def load(include_testing: bool = False) -> list[Agent]:
     """Every registered module, in manifest order."""
     names = list(AGENT_MODULES)
-    if include_testing or os.environ.get("TELEPLY_TEST_AGENTS") == "1":
+    if _testing_requested(include_testing):
         names.append(TESTING_MODULE)
     found: list[Agent] = []
     seen: set[str] = set()
     for name in names:
-        module = importlib.import_module(name)
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError:
+            if name == TESTING_MODULE:
+                continue  # a frozen build has no test assistant: not an error
+            raise
         factory = getattr(module, "AGENT")
         agent: Agent = factory()
         if agent.id in seen:

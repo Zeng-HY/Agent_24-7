@@ -7,6 +7,9 @@ datas=[(str(root/'remote.html'),'.'),(str(root/'voice_tidy_prompt.txt'),'.'),
        (str(root/'windows-version.json'),'.'),(str(root/'windows-release-notes.json'),'.'),(str(root/'build/windows-build.json'),'.'),(str(root/'build/AgentRemote.Chrome.dll'),'.')]
 datas+=collect_data_files('webview')
 hidden=collect_submodules('comtypes',filter=lambda name:'.test' not in name)+collect_submodules('win32com',filter=lambda name:'.test' not in name)
+# Agents are loaded by name from registry.py, so PyInstaller's static analysis
+# cannot see them. Collect the package, but never the test-only assistant.
+hidden+=collect_submodules('agents',filter=lambda name:name!='agents.testing')
 # cryptography is in .venv for the relay's tests. Only the relay and publish.py use it; this program checks update signatures
 # with Windows' own CNG, and PyInstaller would otherwise follow the optional imports in relay_push and webview (10 MB).
 a=Analysis([str(root/'relay_desktop.py')],pathex=[str(root)],binaries=collect_dynamic_libs('uiautomation'),datas=datas,

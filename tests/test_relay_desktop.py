@@ -84,4 +84,9 @@ class DesktopTests(unittest.TestCase):
             finally:db.close()
 
 
+    def test_self_test_finds_every_listed_agent(self):
+        with patch.object(sys,'argv',['AgentRemote','--self-test']):
+            self.assertEqual(relay_desktop.main(),0)
+
+
 if __name__=='__main__':unittest.main()
