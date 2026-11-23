@@ -1,0 +1,1349 @@
+"""Codex 26.1117+ local app-tools named-pipe client, route selector, queue and image store.
+
+When Codex desktop removes \\\\.\\pipe\\codex-ipc (26.1117+), it still exposes a per-launch
+\\\\.\\pipe\\codex-app-tools-<uuid> JSON-RPC 2.0 pipe (4-byte little-endian length prefix +
+UTF-8 JSON, max 8 MB). This module:
+- Detects which Codex route is available on this machine (legacy / apptools / none), cached 2 s.
+- Verifies tools/list before first use; disables the new route with a plain Chinese reason if the
+  required tool schemas changed.
+- Sends messages (idle start or active steer), polls thread status (cross-checking the rollout
+  file so a premature idle reading is not trusted blindly), persists Teleply's own queue, and
+  stores phone images under <data_dir>/codex-images/<thread_id>/ for 7 days.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import struct
+import threading
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable
+
+from app_paths import DATA
+import chats
+import codex_control
+import composer_commands
+
+PIPE_DIR = "\\\\.\\pipe\\"
+LEGACY_PIPE = "codex-ipc"
+APPTOOLS_PREFIX = "codex-app-tools-"
+MAX_FRAME_BYTES = 8 << 20
+ROUTE_CACHE_TTL = 2.0
+IMAGE_RETENTION_SECONDS = 7 * 86400
+DEFAULT_WAKE_DELAY = 2.0
+STATUS_CACHE_TTL = 1.5
+
+INCOMPATIBLE_REASON = "电脑上的 Codex 升级了，遥应暂时不能从手机发给 Codex"
+NOT_RUNNING_REASON = "Codex 没在运行，请先在电脑上打开 Codex"
+WINDOW_NOT_READY_REASON = "Codex 窗口没准备好，请先在电脑上打开 Codex 窗口再试"
+
+_ROUTE_LOCK = threading.Lock()
+_ROUTE_CACHE: tuple[float, str, str | None] | None = None
+
+
+class AppToolsError(codex_control.ControlError):
+    """Error raised on the app-tools route; carries not_submitted so phone keeps draft safely."""
+
+    def __init__(self, message: str, status: int = 409, code: str = "", *, not_submitted: bool = False):
+        super().__init__(message, status=status, code=code)
+        self.not_submitted = not_submitted
+
+
+def _list_pipes() -> list[str]:
+    try:
+        return os.listdir(PIPE_DIR)
+    except OSError:
+        return []
+
+
+def reset_route_cache() -> None:
+    global _ROUTE_CACHE
+    with _ROUTE_LOCK:
+        _ROUTE_CACHE = None
+
+
+def detect_route(*, force: bool = False, clock: Callable[[], float] = time.monotonic) -> tuple[str, str | None]:
+    """Return (route, pipe_name): ('legacy', 'codex-ipc'), ('apptools', 'codex-app-tools-...'), or ('none', None)."""
+    global _ROUTE_CACHE
+    now = clock()
+    with _ROUTE_LOCK:
+        if not force and _ROUTE_CACHE is not None and now - _ROUTE_CACHE[0] < ROUTE_CACHE_TTL:
+            return _ROUTE_CACHE[1], _ROUTE_CACHE[2]
+    names = _list_pipes()
+    legacy = next((n for n in names if n.lower() == LEGACY_PIPE), None)
+    if legacy:
+        result: tuple[str, str | None] = ("legacy", legacy)
+    else:
+        apptools = sorted(n for n in names if n.lower().startswith(APPTOOLS_PREFIX))
+        if apptools:
+            result = ("apptools", apptools[0])
+        else:
+            result = ("none", None)
+    with _ROUTE_LOCK:
+        _ROUTE_CACHE = (clock(), result[0], result[1])
+    return result
+
+
+def current_route(*, force: bool = False) -> str:
+    return detect_route(force=force)[0]
+
+
+def translate_error(raw: str, *, default_not_submitted: bool = False) -> AppToolsError:
+    """Turn a raw Codex app-tools error string into plain Chinese for the phone."""
+    text = str(raw or "").strip()
+    low = text.lower()
+    if "no ready app window supports app tools" in low:
+        return AppToolsError(WINDOW_NOT_READY_REASON, 409, code="window_not_ready", not_submitted=True)
+    if any(k in low for k in ("thread not found", "unknown thread", "conversation not found", "not found")):
+        return AppToolsError("Codex 找不到这个对话，可能已删除或尚未加载", 404, code="thread_not_found", not_submitted=True)
+    if any(k in low for k in ("unauthorized", "not authorized", "permission denied", "access denied")):
+        return AppToolsError("电脑上的 Codex 拒绝了本机连接，遥应暂时无法发消息", 403, code="unauthorized", not_submitted=True)
+    if "timeout" in low or "timed out" in low:
+        return AppToolsError("Codex 响应超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
+    if any(k in low for k in ("pipe", "eof", "closed", "broken", "file not found")):
+        return AppToolsError(NOT_RUNNING_REASON, 409, code="codex_not_running", not_submitted=True)
+    short = text.splitlines()[0][:160] if text else "未知错误"
+    return AppToolsError("Codex 未完成操作：" + short, 409, code="apptools_error", not_submitted=default_not_submitted)
+
+
+def pack_frame(payload: dict) -> bytes:
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if len(raw) > MAX_FRAME_BYTES:
+        raise AppToolsError("请求过大，超过 8 MB 限制", 413, code="frame_too_large", not_submitted=True)
+    return struct.pack("<I", len(raw)) + raw
+
+
+def unpack_frame_size(header: bytes) -> int:
+    if len(header) != 4:
+        raise AppToolsError("Codex 管道连接已断开", 409, code="pipe_closed")
+    size = struct.unpack("<I", header)[0]
+    if not 0 < size <= MAX_FRAME_BYTES:
+        raise AppToolsError("Codex 返回的数据帧格式异常", 502, code="invalid_frame")
+    return size
+
+
+class WindowsPipeTransport:
+    """Overlapped Windows named-pipe transport for one JSON-RPC request/response cycle."""
+
+    def __init__(self, pipe_path: str, timeout: float = 30.0) -> None:
+        import pywintypes
+        import win32con
+        import win32event
+        import win32file
+
+        self._pywintypes = pywintypes
+        self._win32event = win32event
+        self._win32file = win32file
+        self.pipe_path = pipe_path
+        self.timeout = timeout
+        try:
+            self.handle = win32file.CreateFile(
+                pipe_path,
+                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                0,
+                None,
+                win32con.OPEN_EXISTING,
+                win32con.FILE_FLAG_OVERLAPPED,
+                None,
+            )
+        except Exception as exc:
+            raise AppToolsError(NOT_RUNNING_REASON, 409, code="pipe_open_failed", not_submitted=True) from exc
+
+    def _wait_overlapped(self, ov, timeout_ms: int, label: str) -> int:
+        rc = self._win32event.WaitForSingleObject(ov.hEvent, timeout_ms)
+        if rc == self._win32event.WAIT_TIMEOUT:
+            self.close()
+            raise AppToolsError(f"Codex {label}超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
+        return self._win32file.GetOverlappedResult(self.handle, ov, True)
+
+    def _write_all(self, data: bytes, timeout: float) -> None:
+        ov = self._pywintypes.OVERLAPPED()
+        ov.hEvent = self._win32event.CreateEvent(None, True, False, None)
+        try:
+            self._win32file.WriteFile(self.handle, data, ov)
+            self._wait_overlapped(ov, max(1000, int(timeout * 1000)), "请求发送")
+        finally:
+            ov.hEvent.Close()
+
+    def _read_exact(self, n: int, timeout: float) -> bytes:
+        buf = bytearray()
+        deadline = time.monotonic() + timeout
+        while len(buf) < n:
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                self.close()
+                raise AppToolsError("Codex 响应超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
+            ov = self._pywintypes.OVERLAPPED()
+            ov.hEvent = self._win32event.CreateEvent(None, True, False, None)
+            try:
+                _, chunk = self._win32file.ReadFile(self.handle, n - len(buf), ov)
+                got = self._wait_overlapped(ov, max(500, int(rem * 1000)), "响应读取")
+                if got <= 0:
+                    raise AppToolsError("Codex 管道连接已断开", 409, code="pipe_closed")
+                buf.extend(chunk[:got])
+            finally:
+                ov.hEvent.Close()
+        return bytes(buf)
+
+    def request(self, payload: dict, timeout: float = 30.0) -> dict:
+        frame = pack_frame(payload)
+        self._write_all(frame, min(timeout, 15.0))
+        size = unpack_frame_size(self._read_exact(4, timeout))
+        body = self._read_exact(size, timeout)
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeError) as exc:
+            raise AppToolsError("Codex 返回了无法解析的响应", 502, code="invalid_json") from exc
+        if not isinstance(data, dict):
+            raise AppToolsError("Codex 返回了格式异常的响应", 502, code="invalid_json")
+        return data
+
+    def close(self) -> None:
+        if getattr(self, "handle", None) is not None:
+            try:
+                import ctypes
+                ctypes.windll.kernel32.CancelIoEx(ctypes.c_void_p(int(self.handle)), None)
+            except Exception:
+                pass
+            try:
+                self._win32file.CloseHandle(self.handle)
+            except Exception:
+                pass
+            self.handle = None
+
+
+def verify_tools_schema(tools: Any) -> tuple[bool, str]:
+    """Check that send_message_to_thread and read_thread exist and their required inputs haven't changed."""
+    if not isinstance(tools, list):
+        return False, "tools/list 返回不是列表"
+    by_name: dict[str, dict] = {}
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        ns = item.get("namespace")
+        if ns not in (None, "", "codex_app"):
+            continue
+        name = item.get("name")
+        if isinstance(name, str):
+            by_name[name] = item
+
+    def check_tool(name: str, must_have: set[str], allowed_required: set[str]) -> str | None:
+        tool = by_name.get(name)
+        if tool is None:
+            return f"缺少工具 {name}"
+        schema = tool.get("inputSchema") or tool.get("input_schema")
+        if not isinstance(schema, dict):
+            return f"{name} 缺少参数定义"
+        req = schema.get("required")
+        if not isinstance(req, list) or not all(isinstance(v, str) for v in req):
+            return f"{name} 必填参数格式异常"
+        req_set = set(req)
+        if not must_have <= req_set:
+            return f"{name} 缺少必填项 {sorted(must_have - req_set)}"
+        extra = req_set - allowed_required
+        if extra:
+            return f"{name} 新增未知必填项 {sorted(extra)}"
+        return None
+
+    for name, must, allowed in (
+        ("send_message_to_thread", {"threadId", "prompt"}, {"threadId", "prompt", "hostId"}),
+        ("read_thread", {"threadId"}, {"threadId", "hostId"}),
+    ):
+        err = check_tool(name, must, allowed)
+        if err:
+            return False, err
+    return True, ""
+
+
+class AppToolsClient:
+    """JSON-RPC 2.0 client over Codex's codex-app-tools-<uuid> pipe."""
+
+    def __init__(
+        self,
+        *,
+        transport_factory: Callable[[str, float], Any] | None = None,
+        opener: Callable[[str], Any] | None = None,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        wake_delay: float = DEFAULT_WAKE_DELAY,
+        log: Callable[[str], None] | None = None,
+    ) -> None:
+        self._transport_factory = transport_factory or (lambda path, timeout: WindowsPipeTransport(path, timeout))
+        self._opener = opener or os.startfile
+        self._sleep = sleep_fn
+        self._wake_delay = wake_delay
+        self.log = log
+        self._lock = threading.RLock()
+        self._req_id = 0
+        self._verified_pipe: str | None = None
+        self._disabled_pipe: str | None = None
+        self._disabled_detail: str = ""
+
+    def _log(self, text: str) -> None:
+        if callable(self.log):
+            try:
+                self.log(text)
+            except Exception:
+                pass
+
+    def _next_id(self) -> int:
+        self._req_id += 1
+        return self._req_id
+
+    def _resolve_pipe(self, *, force: bool = False) -> str:
+        route, pipe_name = detect_route(force=force)
+        if route != "apptools" or not pipe_name:
+            raise AppToolsError(NOT_RUNNING_REASON, 409, code="codex_not_running", not_submitted=True)
+        return pipe_name
+
+    def _rpc_once(self, pipe_name: str, method: str, params: dict, timeout: float = 30.0) -> dict:
+        transport = self._transport_factory(PIPE_DIR + pipe_name, timeout)
+        try:
+            payload = {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params}
+            return transport.request(payload, timeout=timeout)
+        finally:
+            try:
+                transport.close()
+            except Exception:
+                pass
+
+    def ensure_verified(self, pipe_name: str) -> None:
+        if self._verified_pipe == pipe_name:
+            return
+        if self._disabled_pipe == pipe_name:
+            raise AppToolsError(INCOMPATIBLE_REASON, 409, code="protocol_incompatible", not_submitted=True)
+        resp = self._rpc_once(pipe_name, "tools/list", {"threadStartKind": "default"}, timeout=15.0)
+        if "error" in resp:
+            err = resp["error"]
+            msg = err.get("message") if isinstance(err, dict) else str(err)
+            raise translate_error(str(msg), default_not_submitted=True)
+        tools = (resp.get("result") or {}).get("tools")
+        ok, detail = verify_tools_schema(tools)
+        if not ok:
+            self._disabled_pipe = pipe_name
+            self._disabled_detail = detail
+            self._log(f"Codex app-tools 工具表校验未通过（{detail}），已停用新路线")
+            raise AppToolsError(INCOMPATIBLE_REASON, 409, code="protocol_incompatible", not_submitted=True)
+        self._verified_pipe = pipe_name
+        self._disabled_pipe = None
+        self._disabled_detail = ""
+
+    def _call_tool_raw(
+        self,
+        pipe_name: str,
+        tool: str,
+        arguments: dict,
+        thread_id: str,
+        turn_id: str,
+        timeout: float = 30.0,
+    ) -> dict:
+        params = {
+            "tool": tool,
+            "namespace": "codex_app",
+            "arguments": arguments,
+            "threadId": thread_id,
+            "callerSource": "codex",
+            "hostId": "local",
+            "callId": f"teleply-{uuid.uuid4()}",
+            "turnId": turn_id,
+        }
+        resp = self._rpc_once(pipe_name, "tools/call", params, timeout=timeout)
+        if "error" in resp:
+            err = resp["error"]
+            msg = err.get("message") if isinstance(err, dict) else str(err)
+            raise translate_error(str(msg), default_not_submitted=True)
+        result = resp.get("result")
+        if not isinstance(result, dict):
+            raise AppToolsError("Codex 返回了无效的工具响应", 502, code="invalid_result")
+        if result.get("success") is False:
+            texts = [str(i.get("text") or "") for i in result.get("contentItems") or [] if isinstance(i, dict)]
+            detail = " ".join(t for t in texts if t).strip() or str(result.get("error") or "调用失败")
+            raise translate_error(detail, default_not_submitted=True)
+        return result
+
+    def call_tool(
+        self,
+        tool: str,
+        arguments: dict,
+        *,
+        thread_id: str,
+        turn_id: str,
+        timeout: float = 30.0,
+        allow_wake: bool = True,
+    ) -> dict:
+        with self._lock:
+            pipe_name = self._resolve_pipe()
+            retried_pipe = False
+            woke_window = False
+            while True:
+                try:
+                    self.ensure_verified(pipe_name)
+                    return self._call_tool_raw(pipe_name, tool, arguments, thread_id, turn_id, timeout=timeout)
+                except AppToolsError as exc:
+                    if exc.code == "pipe_open_failed" and not retried_pipe:
+                        retried_pipe = True
+                        self._verified_pipe = None
+                        reset_route_cache()
+                        pipe_name = self._resolve_pipe(force=True)
+                        continue
+                    if exc.code == "window_not_ready" and allow_wake and not woke_window and thread_id:
+                        woke_window = True
+                        self._log(f"Codex 窗口未准备好，尝试用 codex://threads/{thread_id[:8]} 唤起窗口后重试")
+                        try:
+                            self._opener(f"codex://threads/{thread_id}")
+                        except Exception:
+                            raise exc
+                        self._sleep(self._wake_delay)
+                        continue
+                    raise
+
+    def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = False,
+        turn_id: str | None = None,
+        timeout: float = 15.0,
+    ) -> dict:
+        args: dict[str, Any] = {"threadId": thread_id, "hostId": "local", "includeTurns": bool(include_turns)}
+        result = self.call_tool(
+            "read_thread",
+            args,
+            thread_id=thread_id,
+            turn_id=turn_id or f"teleply-read-{uuid.uuid4()}",
+            timeout=timeout,
+        )
+        for item in result.get("contentItems") or []:
+            if isinstance(item, dict) and item.get("type") == "inputText" and isinstance(item.get("text"), str):
+                try:
+                    parsed = json.loads(item["text"])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except ValueError:
+                    continue
+        return {}
+
+    def send_message_to_thread(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        turn_id: str,
+        model: str | None = None,
+        thinking: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict:
+        args: dict[str, Any] = {"threadId": thread_id, "hostId": "local", "prompt": prompt}
+        if model:
+            args["model"] = model
+        if thinking:
+            args["thinking"] = thinking
+        return self.call_tool(
+            "send_message_to_thread",
+            args,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            timeout=timeout,
+        )
+
+
+# ---------------------------------------------------------------- transcript helpers
+
+
+def latest_turn_state(path: Path | None) -> dict[str, Any]:
+    """Read tail of a Codex rollout JSONL to find latest turn id, running status, timestamps and step."""
+    info: dict[str, Any] = {
+        "turn_id": None,
+        "running": None,
+        "turn_started": 0,
+        "turn_ended": 0,
+        "step": "",
+        "recent_turns": [],
+        "stale": False,
+    }
+    if path is None or not path.is_file():
+        return info
+    try:
+        st = path.stat()
+        lines, _ = chats.read_tail(path, 256 << 10)
+    except OSError:
+        return info
+
+    def unix(ts: str) -> int:
+        try:
+            return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+        except (ValueError, AttributeError, TypeError):
+            return 0
+
+    turns: dict[str, str] = {}
+    turn_order: list[str] = []
+    latest_ts = ""
+    for raw in lines:
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeError):
+            continue
+        ts = rec.get("timestamp") or ""
+        if ts:
+            latest_ts = ts
+        kind = rec.get("type")
+        payload = rec.get("payload") or {}
+        if kind == "turn_context":
+            tid = payload.get("turn_id")
+            if tid:
+                info["turn_id"] = tid
+        elif kind == "event_msg":
+            ev = payload.get("type")
+            tid = payload.get("turn_id")
+            if ev == "task_started":
+                if tid:
+                    info["turn_id"] = tid
+                    if tid not in turns:
+                        turn_order.append(tid)
+                    turns[tid] = "inProgress"
+                info["running"] = True
+                info["turn_started"] = unix(ts)
+                info["turn_ended"] = 0
+                info["step"] = ""
+            elif ev in ("task_complete", "turn_aborted"):
+                status = "interrupted" if ev == "turn_aborted" else "completed"
+                key = tid or info["turn_id"]
+                if key:
+                    info["turn_id"] = key
+                    if key not in turns:
+                        turn_order.append(key)
+                    turns[key] = status
+                info["running"] = False
+                info["turn_ended"] = unix(ts)
+                info["step"] = ""
+        elif kind == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
+            step = chats._step_of("codex", str(payload.get("name") or ""), str(payload.get("input") or ""))
+            if step:
+                info["step"] = step
+
+    if info["running"] is True:
+        last_at = unix(latest_ts) or int(st.st_mtime)
+        if time.time() - last_at >= chats.STALE_SECONDS:
+            info["stale"] = True
+    info["recent_turns"] = [{"id": tid, "status": turns[tid]} for tid in turn_order[-4:]]
+    return info
+
+
+def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> dict | None:
+    """Find a matching self-delegation entry in the transcript tail."""
+    if path is None or not path.is_file():
+        return None
+    want_raw = chats.norm(prompt)
+    cleaned_prompt, _ = chats._extract_codex_images(prompt)
+    want_clean = chats.norm(cleaned_prompt)
+    if not want_raw and not want_clean:
+        return None
+    try:
+        lines, _ = chats.read_tail(path, 2 << 20)
+    except OSError:
+        return None
+    for raw in reversed(lines):
+        if b"codex_delegation" not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeError):
+            continue
+        if rec.get("type") != "event_msg":
+            continue
+        payload = rec.get("payload") or {}
+        if payload.get("type") == "item_completed":
+            item = payload.get("item") or {}
+            delegated = chats._codex_delegation(item, thread_id=thread_id)
+            if delegated and not delegated.get("origin"):
+                raw_input = chats._codex_delegation_raw_text(item)
+                if (want_raw and raw_input and chats.norm(raw_input) == want_raw) or (
+                    want_clean and chats.norm(delegated.get("text") or "") == want_clean
+                ):
+                    return {
+                        "source": "conversation_record",
+                        "message_id": delegated.get("source_id"),
+                        "time": rec.get("timestamp"),
+                    }
+    return None
+
+
+# ---------------------------------------------------------------- Teleply local queue
+
+
+class LocalQueueStore:
+    """Per-thread JSON queue stored under <data_dir>/codex-queues/<tid>.json (atomic writes, survives restart)."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self._lock = threading.RLock()
+
+    def _file(self, tid: str) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", tid)
+        return self.root / f"{safe}.json"
+
+    def list_items(self, tid: str) -> list[dict]:
+        with self._lock:
+            path = self._file(tid)
+            if not path.is_file():
+                return []
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    return [v for v in data if isinstance(v, dict) and v.get("id")]
+            except (OSError, ValueError):
+                return []
+            return []
+
+    def _save(self, tid: str, items: list[dict]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self._file(tid)
+        if not items:
+            path.unlink(missing_ok=True)
+            return
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+
+    def enqueue(self, tid: str, entry: dict) -> dict:
+        with self._lock:
+            items = self.list_items(tid)
+            if any(v["id"] == entry["id"] for v in items):
+                return entry
+            items.append(entry)
+            self._save(tid, items)
+            return entry
+
+    def pop_first(self, tid: str) -> dict | None:
+        with self._lock:
+            items = self.list_items(tid)
+            if not items:
+                return None
+            first = items.pop(0)
+            self._save(tid, items)
+            return first
+
+    def remove(self, tid: str, mid: str) -> dict | None:
+        with self._lock:
+            items = self.list_items(tid)
+            target = next((v for v in items if v["id"] == mid), None)
+            if target is None:
+                return None
+            remaining = [v for v in items if v["id"] != mid]
+            self._save(tid, remaining)
+            return target
+
+    def has_any(self, tid: str) -> bool:
+        return bool(self.list_items(tid))
+
+    def queued_threads(self) -> list[str]:
+        with self._lock:
+            if not self.root.is_dir():
+                return []
+            out = []
+            for p in self.root.glob("*.json"):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    if isinstance(data, list) and data:
+                        tid = data[0].get("thread_id") or p.stem
+                        out.append(str(tid))
+                except (OSError, ValueError):
+                    continue
+            return out
+
+
+# ---------------------------------------------------------------- image file storage (7-day retention)
+
+
+def store_codex_image(images_root: Path, tid: str, meta: dict, *, now: float | None = None) -> Path:
+    """Copy an uploaded attachment PNG to <images_root>/<tid>/<id>.png and prune >7 day old files."""
+    cleanup_codex_images(images_root, now=now)
+    safe_tid = re.sub(r"[^A-Za-z0-9._-]", "_", tid)
+    dest_dir = Path(images_root) / safe_tid
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ident = str(meta.get("id") or uuid.uuid4().hex)
+    dest = dest_dir / f"{ident}.png"
+    src = Path(meta["path"])
+    if not dest.is_file():
+        tmp = dest.with_suffix(".tmp")
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dest)
+    return dest
+
+
+def cleanup_codex_images(images_root: Path, *, now: float | None = None) -> None:
+    """Remove image files older than 7 days under <data_dir>/codex-images."""
+    root = Path(images_root)
+    if not root.is_dir():
+        return
+    cutoff = (now if now is not None else time.time()) - IMAGE_RETENTION_SECONDS
+    for child in list(root.iterdir()):
+        if child.is_symlink() or not child.is_dir():
+            continue
+        for file in list(child.iterdir()):
+            if file.is_symlink() or not file.is_file():
+                continue
+            try:
+                if file.stat().st_mtime < cutoff:
+                    file.unlink(missing_ok=True)
+            except OSError:
+                continue
+        try:
+            if not any(child.iterdir()):
+                child.rmdir()
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------- new-route controller
+
+
+class AppToolsBridge:
+    """High-level new-route controller matching codex_control.Bridge's public shape (codex.v1)."""
+
+    def __init__(
+        self,
+        legacy_bridge: codex_control.Bridge,
+        *,
+        client: AppToolsClient | None = None,
+        data_dir: Path | None = None,
+        hooks: Any = None,
+        clock: Callable[[], float] = time.monotonic,
+        enable_background_drain: bool = True,
+    ) -> None:
+        self.legacy = legacy_bridge
+        self.client = client or AppToolsClient(log=getattr(legacy_bridge, "log", None))
+        self.data_dir = Path(data_dir) if data_dir is not None else DATA
+        self.queues = LocalQueueStore(self.data_dir / "codex-queues")
+        self.images_root = self.data_dir / "codex-images"
+        self.hooks = hooks
+        self._clock = clock
+        self._lock = threading.RLock()
+        self._status_cache: dict[str, tuple[float, dict]] = {}
+        self._stop = threading.Event()
+        self._drain_wake = threading.Event()
+        self._drain_thread: threading.Thread | None = None
+        self._enable_background_drain = enable_background_drain
+
+    def _log(self, text: str) -> None:
+        log = getattr(self.legacy, "log", None)
+        if callable(log):
+            try:
+                log(text)
+            except Exception:
+                pass
+
+    def _ensure_drainer(self) -> None:
+        if not self._enable_background_drain:
+            return
+        with self._lock:
+            if self._drain_thread is not None and self._drain_thread.is_alive():
+                self._drain_wake.set()
+                return
+            self._drain_thread = threading.Thread(
+                target=self._drain_loop, name="codex-apptools-queue-drain", daemon=True
+            )
+            self._drain_thread.start()
+            self._drain_wake.set()
+
+    def _drain_loop(self) -> None:
+        while not self._stop.is_set():
+            tids = self.queues.queued_threads()
+            if not tids:
+                self._drain_wake.wait(30.0)
+                self._drain_wake.clear()
+                continue
+            if self.hooks is not None and getattr(self.hooks, "is_trusted", lambda: False)():
+                # When hooks are active, Stop hook dispatches queued items immediately.
+                self._drain_wake.wait(5.0)
+                self._drain_wake.clear()
+                continue
+            for tid in tids:
+                if self._stop.is_set():
+                    break
+                try:
+                    self.drain_if_idle(tid)
+                except Exception:
+                    pass
+            self._stop.wait(2.5)
+
+    def close(self) -> None:
+        self._stop.set()
+        self._drain_wake.set()
+
+    def _thread_file(self, tid: str) -> Path | None:
+        try:
+            item = chats.find("codex", tid)
+        except Exception:
+            return None
+        path = Path(item["path"]) if item.get("path") else None
+        return path if path is not None and path.is_file() else None
+
+    def _read_settings(self, path: Path | None) -> dict:
+        model, effort = None, None
+        if path is not None and path.is_file():
+            try:
+                rt = chats.runtime_info("codex", path)
+                model = rt.get("model")
+                effort = rt.get("effort")
+            except Exception:
+                pass
+        models = codex_control.catalog().get("models") or []
+        if not model and models:
+            model = models[0]["id"]
+            effort = effort or models[0].get("default_effort")
+        return {"model": model, "effort": effort, "mode": "default", "service_tier": None}
+
+    def _validate_settings(self, wanted: dict | None, current: dict) -> dict:
+        if not wanted:
+            return dict(current)
+        desired = codex_control.normalize_settings({**current, **wanted})
+        models = codex_control.catalog().get("models") or []
+        if models and desired.get("model"):
+            model = next((m for m in models if m["id"] == desired["model"]), None)
+            if not model:
+                raise AppToolsError(
+                    f"电脑当前模型目录中没有 {desired['model']}，尚未发送消息；请刷新模型列表后重试",
+                    409,
+                    code="unknown_model",
+                    not_submitted=True,
+                )
+            if desired.get("effort") and model.get("efforts") and desired["effort"] not in model["efforts"]:
+                raise AppToolsError(
+                    f"{desired['model']} 不支持推理强度 {desired['effort']}，尚未发送消息；可选：{', '.join(model['efforts'])}",
+                    409,
+                    code="invalid_effort",
+                    not_submitted=True,
+                )
+        return desired
+
+    def _parse_pipe_status(self, thread_data: dict, file_state: dict) -> tuple[bool, list[str], str]:
+        """Combine read_thread status with rollout file state.
+
+        Returns (running, active_flags, kind) where kind is 'idle' | 'active' | 'unknown'.
+        Never trusts a single idle reading blindly if the rollout file's latest turn is still open.
+        """
+        thread = thread_data.get("thread") or {}
+        st = thread.get("status")
+        st_type = st.get("type") if isinstance(st, dict) else (st if isinstance(st, str) else "")
+        flags = list(st.get("activeFlags") or []) if isinstance(st, dict) else []
+        if st_type == "active":
+            return True, flags, "active"
+        if st_type == "systemError":
+            return False, [], "unknown"
+        if st_type in ("idle", "notLoaded"):
+            # Cross-check with rollout file: a premature idle (seen up to 40 s early in live tests)
+            # must not falsely report idle while the rollout's latest turn has not completed.
+            if file_state.get("running") is True and not file_state.get("stale"):
+                return True, flags, "active"
+            return False, [], "idle"
+        # Fallback to file state if status is missing
+        if file_state.get("running") is True and not file_state.get("stale"):
+            return True, flags, "active"
+        return False, [], "unknown"
+
+    def status(self, tid: str, fresh: bool = False) -> dict:
+        if self.hooks is not None:
+            try:
+                self.hooks.note_phone_viewing(tid)
+            except Exception:
+                pass
+        now = self._clock()
+        if not fresh:
+            cached = self._status_cache.get(tid)
+            if cached and now - cached[0] < STATUS_CACHE_TTL:
+                return dict(cached[1])
+        try:
+            item = chats.find("codex", tid)
+            path = Path(item["path"]) if item.get("path") else None
+            file_state = latest_turn_state(path)
+            thread_data = self.client.read_thread(tid, include_turns=False, turn_id=file_state.get("turn_id"))
+            running, active_flags, kind = self._parse_pipe_status(thread_data, file_state)
+
+            # Polling queue drain when hooks aren't handling Stop
+            if not running and self.queues.has_any(tid):
+                if self.hooks is None or not getattr(self.hooks, "is_trusted", lambda: False)():
+                    if self.drain_if_idle(tid, already_checked_idle=True):
+                        running = True
+                        kind = "active"
+
+            settings = self._read_settings(path)
+            active_turn_id = file_state.get("turn_id") if running else None
+            questions = self._build_questions(tid, active_turn_id, active_flags)
+            queued = [
+                {"id": v["id"], "text": v.get("text", ""), "status": v.get("status", "queued")}
+                for v in self.queues.list_items(tid)
+            ]
+            step = file_state.get("step", "") if running else ""
+            if self.hooks is not None and running:
+                hook_step = self.hooks.latest_progress_step(tid)
+                if hook_step:
+                    step = hook_step
+            hook_notice = self._hook_notice()
+            result: dict[str, Any] = {
+                "available": True,
+                "route": "apptools",
+                "settings": settings,
+                "running": running,
+                "status": "waiting" if any(q.get("status") == "pending" for q in questions) else ("running" if running else kind),
+                "active_turn_id": active_turn_id,
+                "turn_started": file_state.get("turn_started", 0),
+                "turn_ended": 0 if running else file_state.get("turn_ended", 0),
+                "step": step,
+                "compacting": False,
+                "compact_started": 0,
+                "recent_turns": file_state.get("recent_turns") or [],
+                "questions": questions,
+                "plan": None,
+                "catalog": codex_control.catalog(),
+                "queued": queued,
+                "queue_available": True,
+                "images": self.legacy.message_images(tid),
+                "observed_at": int(time.time() * 1000),
+            }
+            if hook_notice:
+                result["hook_notice"] = hook_notice
+                result["hook_status"] = self.hooks.trust_status() if self.hooks is not None else "not_installed"
+            elif self.hooks is not None:
+                result["hook_status"] = self.hooks.trust_status()
+            self._status_cache[tid] = (self._clock(), result)
+            return dict(result)
+        except (codex_control.ControlError, chats.ChatError, OSError) as exc:
+            return {
+                "available": False,
+                "route": "apptools",
+                "reason": str(exc),
+                "questions": [],
+                "plan": None,
+                "catalog": codex_control.catalog(),
+                "queued": [
+                    {"id": v["id"], "text": v.get("text", ""), "status": v.get("status", "queued")}
+                    for v in self.queues.list_items(tid)
+                ],
+                "queue_available": True,
+                "images": self.legacy.message_images(tid),
+            }
+
+    def _hook_notice(self) -> str:
+        if self.hooks is None:
+            return ""
+        status = self.hooks.trust_status()
+        if status == "pending_trust":
+            return "在 Codex 设置 → Hooks 里打开并信任 3 个遥应钩子，手机才能批准、停止、回答"
+        return ""
+
+    def _build_questions(self, tid: str, active_turn_id: str | None, active_flags: list[str]) -> list[dict]:
+        cards: list[dict] = []
+        if self.hooks is not None:
+            cards.extend(self.hooks.pending_cards(tid))
+        has_approval_card = any(c.get("kind") == "approval" and c.get("status") == "pending" for c in cards)
+        has_question_card = any(c.get("kind") == "native" and c.get("status") == "pending" for c in cards)
+        if "waitingOnApproval" in active_flags and not has_approval_card:
+            cards.append({
+                "id": f"approval:{active_turn_id or 'active'}:desktop",
+                "request_id": "desktop-approval",
+                "kind": "approval",
+                "turn_id": active_turn_id,
+                "status": "pending",
+                "approval_type": "other",
+                "reason": "",
+                "command": "",
+                "cwd": "",
+                "files": [],
+                "answerable": False,
+                "question": "在等你在电脑上批准",
+                "choices": [],
+            })
+        if "waitingOnUserInput" in active_flags and not has_question_card:
+            cards.append({
+                "id": f"native:{active_turn_id or 'active'}:desktop",
+                "request_id": "desktop-question",
+                "kind": "approval",
+                "turn_id": active_turn_id,
+                "status": "pending",
+                "approval_type": "other",
+                "reason": "",
+                "command": "",
+                "cwd": "",
+                "files": [],
+                "answerable": False,
+                "question": "在等你在电脑上回答",
+                "choices": [],
+            })
+        for q in cards:
+            q.setdefault(
+                "answer_revision",
+                hashlib.sha256(json.dumps(q.get("answers", {}), sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16],
+            )
+            q.setdefault("editable", False)
+        return cards
+
+    def _build_prompt(self, tid: str, text: str, image_metas: list[dict], references: list | None) -> str:
+        body_text = text
+        if references:
+            if self.legacy.references is None:
+                raise AppToolsError("引用服务不可用，请重新打开页面", 503, code="references_unavailable", not_submitted=True)
+            body_text, _ = self.legacy.references.compose("codex", tid, body_text, references, native_skills=False)
+        image_lines: list[str] = []
+        for meta in image_metas:
+            saved = store_codex_image(self.images_root, tid, meta)
+            image_lines.append(f"[附图] {saved}（请先用看图工具打开这张图片）")
+        if image_lines:
+            joined = "\n".join(image_lines)
+            body_text = f"{body_text}\n\n{joined}".strip() if body_text else joined
+        return body_text
+
+    def send(self, body: dict, timing=None) -> dict:
+        tid = str(body.get("id", ""))
+        rid = str(body.get("request_id", ""))
+        text = str(body.get("text", "")).strip()
+        ids = body.get("attachments") or []
+        references = body.get("references") or []
+
+        command = composer_commands.parse(text)
+        if command and command[0] == "/compact" and not ids and not references and not body.get("plan_id"):
+            raise AppToolsError(
+                "新版 Codex 暂不支持从手机执行 /compact，请等它自动压缩或在电脑上输入 /compact",
+                400,
+                code="unsupported_on_route",
+                not_submitted=True,
+            )
+
+        if not isinstance(ids, list) or len(ids) > 5 or len(set(ids)) != len(ids):
+            raise AppToolsError("每条消息最多 5 张不同图片", 400, code="invalid_attachments", not_submitted=True)
+        files = any(isinstance(v, dict) and v.get("kind") in ("file", "folder") for v in references)
+        if (not text and not ids and not files) or len(text) > chats.MAX_TEXT:
+            raise AppToolsError("请填写消息或添加图片，文字不能超过 20000 字", 400, code="invalid_text", not_submitted=True)
+
+        intent = body.get("intent", "auto")
+        if intent not in ("auto", "steer", "queue"):
+            raise AppToolsError("无效的发送方式", 400, code="invalid_intent", not_submitted=True)
+
+        with self._lock:
+            prior = self.receipt(tid, rid)
+            if prior["state"] != "unknown":
+                return self.legacy._begin(rid, tid, body)
+
+            item = chats.find("codex", tid)
+            path = Path(item["path"]) if item.get("path") else None
+            file_state = latest_turn_state(path)
+            thread_data = self.client.read_thread(tid, include_turns=False, turn_id=file_state.get("turn_id"))
+            running, _, _ = self._parse_pipe_status(thread_data, file_state)
+
+            current_settings = self._read_settings(path)
+            desired = self._validate_settings(body.get("settings"), current_settings)
+
+            images = [self.legacy.attachment(ident, tid) for ident in ids]
+            if sum(v["original_size"] for v in images) > 50 << 20:
+                raise AppToolsError("图片合计不能超过 50 MB", 413, code="images_too_large", not_submitted=True)
+
+            prompt = self._build_prompt(tid, text, images, references)
+            if not prompt:
+                raise AppToolsError("请填写消息或添加图片", 400, code="empty_prompt", not_submitted=True)
+
+            # Only send model/thinking when explicitly selected or known
+            wanted = body.get("settings") or {}
+            send_model = desired.get("model") if wanted.get("model") else None
+            send_thinking = desired.get("effort") if wanted.get("effort") else None
+
+            self.legacy._begin(rid, tid, body)
+            for v in images:
+                v["used"] = True
+                self.legacy._write_meta(v)
+
+            if intent == "queue" and running:
+                entry = {
+                    "id": rid,
+                    "thread_id": tid,
+                    "text": text or (f"{len(images)} 张图片" if images else "附带的内容"),
+                    "prompt": prompt,
+                    "model": send_model,
+                    "thinking": send_thinking,
+                    "attachments": list(ids),
+                    "created_at": int(time.time() * 1000),
+                    "status": "queued",
+                }
+                self.queues.enqueue(tid, entry)
+                result = {
+                    "ok": True,
+                    "accepted": True,
+                    "delivery_state": "queued",
+                    "request_id": rid,
+                    "queue_message_id": rid,
+                    "intent": "queue",
+                    "text": "已排队",
+                    "compiled_prompt": prompt,
+                    "evidence": {"source": "teleply_queue"},
+                }
+                self.legacy._finish(rid, result)
+                self._status_cache.pop(tid, None)
+                self._ensure_drainer()
+                return result
+
+            turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+            try:
+                self.client.send_message_to_thread(
+                    tid, prompt, turn_id=turn_id, model=send_model, thinking=send_thinking
+                )
+            except AppToolsError as exc:
+                if exc.not_submitted:
+                    self.legacy._finish(
+                        rid,
+                        {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)},
+                    )
+                raise
+
+            if self.hooks is not None:
+                try:
+                    self.hooks.note_phone_turn(tid)
+                except Exception:
+                    pass
+
+            actual_intent = "steer" if running else "start"
+            response = {
+                "ok": True,
+                "accepted": True,
+                "delivery_state": "accepted",
+                "intent": actual_intent,
+                "request_id": rid,
+                "text": "已交给 Codex",
+                "settings": desired,
+                "compiled_prompt": prompt,
+                "evidence": {"source": "app_tools_ack"},
+            }
+            self.legacy._finish(rid, response)
+            self._status_cache.pop(tid, None)
+            return response
+
+    def drain_if_idle(self, tid: str, *, already_checked_idle: bool = False) -> bool:
+        """If thread is confirmed idle and has queued items, dispatch the first item via app-tools."""
+        with self._lock:
+            items = self.queues.list_items(tid)
+            if not items:
+                return False
+            path = self._thread_file(tid)
+            file_state = latest_turn_state(path)
+            if not already_checked_idle:
+                thread_data = self.client.read_thread(tid, include_turns=False, turn_id=file_state.get("turn_id"))
+                running, _, kind = self._parse_pipe_status(thread_data, file_state)
+                if running or kind != "idle":
+                    return False
+            first = self.queues.pop_first(tid)
+            if first is None:
+                return False
+            turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+            try:
+                self.client.send_message_to_thread(
+                    tid,
+                    first["prompt"],
+                    turn_id=turn_id,
+                    model=first.get("model"),
+                    thinking=first.get("thinking"),
+                )
+            except Exception:
+                # Re-insert at front so nothing is lost on transient error
+                rest = self.queues.list_items(tid)
+                self.queues._save(tid, [first] + rest)
+                return False
+            if self.hooks is not None:
+                try:
+                    self.hooks.note_phone_turn(tid)
+                except Exception:
+                    pass
+            self.legacy._finish(
+                first["id"],
+                {
+                    "ok": True,
+                    "accepted": True,
+                    "delivery_state": "accepted",
+                    "intent": "start",
+                    "request_id": first["id"],
+                    "text": "已交给 Codex",
+                    "evidence": {"source": "app_tools_queue_dispatch"},
+                },
+            )
+            self._status_cache.pop(tid, None)
+            return True
+
+    def pop_queued_for_stop_hook(self, tid: str) -> dict | None:
+        """Called by the Stop hook to hand off the next queued prompt directly into the continuing turn."""
+        with self._lock:
+            first = self.queues.pop_first(tid)
+            if first is None:
+                return None
+            self.legacy._finish(
+                first["id"],
+                {
+                    "ok": True,
+                    "accepted": True,
+                    "delivery_state": "accepted",
+                    "intent": "queue_hook",
+                    "request_id": first["id"],
+                    "text": "已交给 Codex",
+                    "evidence": {"source": "stop_hook_handoff"},
+                },
+            )
+            self._status_cache.pop(tid, None)
+            return first
+
+    def queue_action(self, body: dict) -> dict:
+        tid = str(body.get("id", ""))
+        rid = str(body.get("request_id", ""))
+        mid = str(body.get("message_id", "") or body.get("item_id", ""))
+        raw_action = body.get("action")
+        action_map = {"steer": "promote", "remove": "cancel", "delete": "cancel"}
+        action = action_map.get(raw_action, raw_action)
+        if action not in ("promote", "cancel"):
+            raise AppToolsError("无效队列操作", 400, code="invalid_queue_action", not_submitted=True)
+
+        with self._lock:
+            if rid and self.receipt(tid, rid)["state"] != "unknown":
+                return self.legacy._begin(rid, tid, body)
+            removed = self.queues.remove(tid, mid)
+            if removed is None:
+                raise AppToolsError("消息已离开队列或正在发送，请刷新核对", 409, code="queue_item_missing", not_submitted=True)
+            if rid:
+                self.legacy._begin(rid, tid, body)
+            cancelled = {"ok": True, "delivery_state": "cancelled", "request_id": mid, "text": "已取消排队"}
+            if action == "cancel":
+                self.legacy._finish(mid, cancelled)
+                result = {**cancelled, "request_id": rid or mid, "queue_message_id": mid}
+                if rid:
+                    self.legacy._finish(rid, result)
+                self._status_cache.pop(tid, None)
+                return result
+
+            # promote -> send immediately (steers if active, starts turn if idle)
+            path = self._thread_file(tid)
+            file_state = latest_turn_state(path)
+            turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+            try:
+                self.client.send_message_to_thread(
+                    tid,
+                    removed["prompt"],
+                    turn_id=turn_id,
+                    model=removed.get("model"),
+                    thinking=removed.get("thinking"),
+                )
+            except AppToolsError as exc:
+                if exc.not_submitted:
+                    # Put back at front of queue so user doesn't lose the message
+                    rest = self.queues.list_items(tid)
+                    self.queues._save(tid, [removed] + rest)
+                    if rid:
+                        self.legacy._finish(rid, {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)})
+                raise
+            result = {
+                "ok": True,
+                "accepted": True,
+                "delivery_state": "accepted",
+                "request_id": rid or mid,
+                "client_id": mid,
+                "intent": "steer",
+                "text": "已交给 Codex",
+                "evidence": {"source": "app_tools_promote"},
+            }
+            self.legacy._finish(mid, {**result, "request_id": mid})
+            if rid and rid != mid:
+                self.legacy._finish(rid, result)
+            self._status_cache.pop(tid, None)
+            return result
+
+    def stop_turn(self, body: dict) -> dict:
+        tid = str(body.get("id", ""))
+        if self.hooks is None or not getattr(self.hooks, "is_trusted", lambda: False)():
+            raise AppToolsError(
+                "请在电脑上停止（在 Codex 设置 → Hooks 信任遥应钩子后，才能从手机停止）",
+                409,
+                code="hooks_not_trusted",
+                not_submitted=True,
+            )
+        return self.hooks.request_stop(tid, turn_id=str(body.get("turn_id") or body.get("expected_turn") or ""))
+
+    def answer(self, body: dict) -> dict:
+        tid = str(body.get("id", ""))
+        if self.hooks is None or not getattr(self.hooks, "is_trusted", lambda: False)():
+            raise AppToolsError(
+                "请在电脑上批准或回答（在 Codex 设置 → Hooks 信任遥应钩子后，才能从手机处理）",
+                409,
+                code="hooks_not_trusted",
+                not_submitted=True,
+            )
+        return self.hooks.submit_answer(tid, body)
+
+    def confirm_open(self, tid: str, seconds: float = 5.0, step: float = 0.5) -> dict:
+        deadline = self._clock() + seconds
+        last_exc: Exception | None = None
+        while True:
+            try:
+                self.client.read_thread(tid, include_turns=False)
+                title = chats.find("codex", tid)["title"]
+                return {"ok": True, "text": f"电脑上已打开「{title}」，可以发了"}
+            except Exception as exc:
+                last_exc = exc
+                if self._clock() >= deadline:
+                    break
+                time.sleep(step)
+        raise codex_control.CodexNotTaken(str(last_exc or WINDOW_NOT_READY_REASON))
+
+    def receipt(self, tid: str, rid: str) -> dict:
+        if not (self.legacy.data_root / "delivery.sqlite").exists():
+            return {"state": "unknown"}
+        with self.legacy._db() as con:
+            row = con.execute(
+                "SELECT state,result,data,created FROM deliveries WHERE id=? AND thread=?", (rid, tid)
+            ).fetchone()
+        if not row:
+            return {"state": "unknown"}
+        status, raw_result, raw_data, _ = row
+        result = json.loads(raw_result or "{}")
+        body = json.loads(raw_data or "{}")
+
+        if status == "queued":
+            still_queued = any(v["id"] == rid for v in self.queues.list_items(tid))
+            if still_queued:
+                return {"state": "queued", "request_id": rid, "result": result}
+
+        # Check rollout transcript for matching self-delegation / hook_prompt to upgrade ack -> delivered
+        prompt = result.get("compiled_prompt") or body.get("text") or ""
+        if status in ("dispatching", "accepted", "queued") and prompt and not (result.get("evidence") or {}).get("message_id"):
+            evidence = find_delegation_delivery(self._thread_file(tid), tid, prompt)
+            if evidence:
+                result = {
+                    **result,
+                    "ok": True,
+                    "accepted": True,
+                    "delivery_state": "accepted",
+                    "request_id": rid,
+                    "text": "已送达",
+                    "evidence": evidence,
+                }
+                self.legacy._finish(rid, result)
+                status = "accepted"
+
+        if status == "accepted" and not body.get("question_id"):
+            result["submission"] = {k: body.get(k) for k in ("text", "attachments", "settings", "plan_id", "references")}
+        return {"state": status, "request_id": rid, "result": result}
+
+    def delivery_locations(self, tid: str, request_ids: list[str]) -> dict:
+        out = self.legacy.delivery_locations(tid, request_ids)
+        # Reconcile unresolved new-route items against transcript self-delegation
+        for rid in request_ids:
+            entry = out.get(rid)
+            if entry and entry.get("message_id"):
+                continue
+            rec = self.receipt(tid, rid)
+            ev = (rec.get("result") or {}).get("evidence") or {}
+            if ev.get("message_id"):
+                out[rid] = {
+                    "state": rec["state"],
+                    "client_id": (rec.get("result") or {}).get("client_id"),
+                    "message_id": ev["message_id"],
+                }
+        return out

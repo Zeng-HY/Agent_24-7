@@ -580,6 +580,9 @@ def build() -> dict:
             out[name] = {"result": res, "calls": list(calls)}
 
         with ExitStack() as stack:
+            import codex_apptools
+            codex_apptools.reset_route_cache()
+            stack.enter_context(patch("codex_apptools._list_pipes", return_value=["codex-ipc"]))
             stack.enter_context(patch("time.time", return_value=FIXED_NOW))
             stack.enter_context(patch("chats.codex_db", return_value=codex_db))
             stack.enter_context(patch("chats.HOME", home))

@@ -36,20 +36,18 @@ class CodexAgent(Agent):
     archive_order = 10
     desktop_process = chats.CODEX_PROCESS
     desktop_send_text = "已按回车，等对话记录确认"
-    delivery_markers = (b"UserMessage", b"user_message")
+    delivery_markers = (b"UserMessage", b"user_message", b"codex_delegation")
+
+    def _route_state(self) -> tuple[str, bool]:
+        """Return (route, hooks_trusted) for dynamic capability calculation."""
+        import codex_apptools
+        route = codex_apptools.current_route()
+        return route, False
 
     def build_manifest(self) -> dict:
-        return make_manifest(
-            ident="codex",
-            zh="Codex",
-            en="Codex",
-            order=10,
-            color="#1E222A",
-            color_dark="#FFFFFF",
-            icon={"kind": "builtin", "key": "codex"},
-            legacy=True,
-            min_protocol=1,
-            capabilities={
+        route, hooks_trusted = self._route_state()
+        if route == "legacy":
+            caps = {
                 "list": True,
                 "read": True,
                 "search": True,
@@ -72,11 +70,86 @@ class CodexAgent(Agent):
                 "settings": ["model", "effort"],
                 "send_modes": ["send", "steer", "queue"],
                 "statuses": ["running", "waiting", "idle", "unknown"],
-            },
+            }
+            sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "ipc", "live": "pipe+file"}
+        elif route == "apptools":
+            caps = {
+                "list": True,
+                "read": True,
+                "search": True,
+                "open": True,
+                "stop": bool(hooks_trusted),
+                "queue": True,
+                "steer": True,
+                "approve": bool(hooks_trusted),
+                "answer": bool(hooks_trusted),
+                "new": True,
+                "new_projectless": True,
+                "new_permission": False,
+                "archive": True,
+                "restore": True,
+                "delete": True,
+                "usage": True,
+                "waiting": True,
+                "attachments": True,
+                "slash_commands": False,
+                "settings": ["model", "effort"],
+                "send_modes": ["send", "steer", "queue"],
+                "statuses": ["running", "waiting", "idle", "unknown"],
+            }
+            sources = {
+                "catalog": "sqlite",
+                "transcript": "jsonl",
+                "control": "app-tools+hook" if hooks_trusted else "app-tools",
+                "live": "hook+file" if hooks_trusted else "poll+file",
+            }
+        else:
+            caps = {
+                "list": True,
+                "read": True,
+                "search": True,
+                "open": True,
+                "stop": False,
+                "queue": False,
+                "steer": False,
+                "approve": False,
+                "answer": False,
+                "new": True,
+                "new_projectless": True,
+                "new_permission": False,
+                "archive": True,
+                "restore": True,
+                "delete": True,
+                "usage": True,
+                "waiting": False,
+                "attachments": False,
+                "slash_commands": False,
+                "settings": [],
+                "send_modes": [],
+                "statuses": ["running", "waiting", "idle", "unknown"],
+            }
+            sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "none", "live": "file-poll"}
+        return make_manifest(
+            ident="codex",
+            zh="Codex",
+            en="Codex",
+            order=10,
+            color="#1E222A",
+            color_dark="#FFFFFF",
+            icon={"kind": "builtin", "key": "codex"},
+            legacy=True,
+            min_protocol=1,
+            capabilities=caps,
             params={"refresh_ms": 2500},
             ui={"card_layout": "codex.v1", "waiting_text": "等你处理"},
-            sources={"catalog": "sqlite", "transcript": "jsonl", "control": "ipc", "live": "pipe+file"},
+            sources=sources,
         )
+
+    def manifest(self) -> dict:
+        return self.build_manifest()
+
+    def can(self, capability: str) -> bool:
+        return bool(self.manifest()["capabilities"].get(capability))
 
     def find(self, conv_id: str) -> dict:
         item = chats.codex_thread(conv_id)
@@ -90,6 +163,9 @@ class CodexAgent(Agent):
 
     def parse_lines(self, lines, context=None, parsed=None):
         return chats.parse_codex(lines, context, parsed)
+
+    def parse_for_item(self, item: dict, lines: list[bytes]) -> tuple[list[dict], dict]:
+        return chats.parse_codex(lines, thread_id=str(item.get("id") or ""))
 
     def skip_record(self, raw: bytes) -> bool:
         return (b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]
@@ -276,14 +352,53 @@ class CodexAgent(Agent):
         roots = chat_projects.codex_layout()[0].get(group["key"], {}).get("roots") or []
         return roots[0] if roots else ""
 
+    def _apptools_for(self, bridge):
+        import codex_apptools
+        existing = getattr(bridge, "_apptools_bridge", None)
+        if existing is None:
+            existing = codex_apptools.AppToolsBridge(bridge)
+            try:
+                bridge._apptools_bridge = existing
+            except Exception:
+                pass
+        return existing
+
+    def _backend(self, bridge, *, force_route: bool = False):
+        import codex_apptools
+        route = codex_apptools.current_route(force=force_route)
+        if route == "legacy":
+            return "legacy", bridge
+        if route == "apptools":
+            return "apptools", self._apptools_for(bridge)
+        return "none", bridge
+
     def watch(self, bridge, tid: str):
+        route, _ = self._backend(bridge)
+        if route != "legacy":
+            return None
         try:
             return bridge.watch(tid)
         except Exception:
             return None
 
     def control(self, bridge, tid: str):
-        return bridge.status(tid)
+        route, backend = self._backend(bridge)
+        if route == "none":
+            return self._not_running_state(bridge, tid)
+        return backend.status(tid)
+
+    def _not_running_state(self, bridge, tid: str) -> dict:
+        import codex_apptools
+        import codex_control
+        return {
+            "available": False,
+            "route": "none",
+            "reason": codex_apptools.NOT_RUNNING_REASON,
+            "questions": [],
+            "plan": None,
+            "catalog": codex_control.catalog(),
+            "images": bridge.message_images(tid),
+        }
 
     def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False):
         import live_events
@@ -301,7 +416,10 @@ class CodexAgent(Agent):
     # -- commands, references, usage, archives
 
     def commands(self, conv_id: str, *, references=None, deepseek=None) -> list:
+        import codex_apptools
         import composer_commands
+        if codex_apptools.current_route() != "legacy":
+            return []
         return [composer_commands.item(**v) for v in composer_commands.CODEX]
 
     def skill_roots(self, home, cwd: str, read_config, warnings: list, warn_fn) -> tuple[list, set]:
@@ -351,10 +469,13 @@ class CodexAgent(Agent):
                 roots.insert(0, (parent / name, "项目技能 · " + parent.name, False))
         return roots, disabled
 
-    def format_skills(self, skills: list[dict]) -> tuple[str, list[dict]]:
+    def format_skills(self, skills: list[dict], *, native: bool = True) -> tuple[str, list[dict]]:
+        if not native:
+            lines = [f"请使用以下技能：{s['name']}（说明文件：{s['path']}）" for s in skills]
+            return "\n".join(lines), []
         names = " ".join("$" + s["name"] for s in skills)
-        native = [{"type": "skill", "name": s["name"], "path": s["path"]} for s in skills]
-        return names, native
+        native_items = [{"type": "skill", "name": s["name"], "path": s["path"]} for s in skills]
+        return names, native_items
 
     def read_usage(self, svc, live: bool = False) -> dict:
         return svc._codex(bool(live))
@@ -532,11 +653,57 @@ class CodexAgent(Agent):
             data["folder"] = svc._projectless_folder()
 
     def run_new(self, svc, rid: str, data: dict, trace) -> None:
+        import codex_apptools
         import new_conversations
+        route = codex_apptools.current_route()
+        if route == "none":
+            raise new_conversations.chats.SendNotSubmitted(codex_apptools.NOT_RUNNING_REASON)
         if not data.get("id"):
             svc._empty_codex(rid, data)
         svc._save(rid, "prepared", data, {"message": "正在连接桌面端的新对话…"})
         trace.phase("desktop_open", "在桌面打开新对话")
+        if route == "apptools":
+            new_conversations.os.startfile("codex://threads/" + data["id"])
+            apptools = self._apptools_for(svc.bridge)
+            trace.phase("desktop_owner", "等待新版 Codex 接管对话")
+            deadline = new_conversations.time.monotonic() + new_conversations.TAKEOVER_SECONDS
+            reopen = new_conversations.time.monotonic() + new_conversations.REOPEN_SECONDS
+            while True:
+                try:
+                    apptools.client.read_thread(data["id"], include_turns=False)
+                    break
+                except Exception:
+                    now = new_conversations.time.monotonic()
+                    if now >= deadline:
+                        raise new_conversations.chats.InputNotSubmitted(
+                            f"新对话已创建，桌面端 {new_conversations.TAKEOVER_SECONDS} 秒内没有接管；请打开该对话后发送保留的草稿"
+                        )
+                    if now >= reopen:
+                        trace.phase("desktop_reopen", "再次在桌面打开新对话")
+                        new_conversations.os.startfile("codex://threads/" + data["id"])
+                        reopen = now + new_conversations.REOPEN_SECONDS
+                    new_conversations.time.sleep(0.5)
+            settings = {}
+            if data.get("settings"):
+                settings = svc._picked({"model": data.get("default_model"), "effort": data.get("default_effort"),
+                                        "mode": "default", "service_tier": None}, data["settings"])
+            trace.phase("bind", "准备首条消息与附件")
+            svc._bind(rid, data)
+            svc._save(rid, "dispatching", data, {"message": "正在提交首条消息…"})
+            answer = apptools.send(
+                {
+                    "id": data["id"],
+                    "request_id": rid,
+                    "text": data["text"],
+                    "attachments": data["attachments"],
+                    "references": data["references"],
+                    "settings": settings or None,
+                },
+                timing=trace.phase,
+            )
+            if not (answer.get("accepted") or answer.get("delivered")):
+                raise new_conversations.chats.ChatError(answer.get("text") or answer.get("message") or "首条消息结果尚未确认")
+            return
         new_conversations.chats.require_send_desktop()
         new_conversations.os.startfile("codex://threads/" + data["id"])
         trace.phase("desktop_owner", "等待桌面接管对话")
@@ -609,7 +776,12 @@ class CodexAgent(Agent):
         payload = rec.get("payload") or {}
         if payload.get("type") == "item_completed":
             item = payload.get("item") or {}
-            return item.get("type") == "UserMessage" and want in chats.norm(chats._join_text(item.get("content")))
+            if item.get("type") == "UserMessage":
+                return want in chats.norm(chats._join_text(item.get("content")))
+            if item.get("type") == "FunctionCallOutput":
+                raw_text = chats._codex_delegation_raw_text(item)
+                if raw_text and want in chats.norm(raw_text):
+                    return True
         if payload.get("type") == "user_message":
             return want in chats.norm(payload.get("message") or "")
         return False
@@ -623,6 +795,9 @@ class CodexAgent(Agent):
         desktop._front(chats.CODEX_PROCESS, 6.0)
 
     def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
+        route, backend = self._backend(server.codex)
+        if route == "apptools":
+            return backend.delivery_locations(tid, ids)
         return server.codex.delivery_locations(tid, ids)
 
     def chat_send_with_references(self, handler, body: dict) -> dict:
@@ -640,17 +815,22 @@ class CodexAgent(Agent):
         except (codex_control.ControlError, chats.ChatError, OSError) as exc:
             handler._json({"error": str(exc)}, getattr(exc, "status", 400))
 
-    def _run_codex_post(self, handler, body: dict, fn) -> None:
+    def _run_codex_post(self, handler, body: dict, fn, *, require_running: bool = True) -> None:
         import traceback
+        import codex_apptools
         import codex_control
-        bridge = handler.server.codex
+        route, backend = self._backend(handler.server.codex)
         try:
-            handler._json(fn(bridge))
+            if require_running and route == "none":
+                raise codex_apptools.AppToolsError(
+                    codex_apptools.NOT_RUNNING_REASON, 409, code="codex_not_running", not_submitted=True
+                )
+            handler._json(fn(backend))
         except (codex_control.ControlError, chats.ChatError, OSError, ValueError, TypeError) as exc:
             not_submitted = bool(getattr(exc, "not_submitted", False))
             if isinstance(exc, codex_control.ControlError) and body.get("request_id"):
                 try:
-                    not_submitted = bridge.receipt(str(body.get("id", "")), str(body["request_id"]))["state"] in ("unknown", "rejected")
+                    not_submitted = backend.receipt(str(body.get("id", "")), str(body["request_id"]))["state"] in ("unknown", "rejected")
                 except Exception:
                     pass
             handler._json(
@@ -664,17 +844,27 @@ class CodexAgent(Agent):
     def http_state(self, handler) -> None:
         q = handler._query()
         def run():
-            data = handler.server.codex.status(q.get("id", ""), fresh=q.get("fresh") == "1")
+            tid = q.get("id", "")
+            route, backend = self._backend(handler.server.codex)
+            if route == "none":
+                data = self._not_running_state(handler.server.codex, tid)
+            else:
+                data = backend.status(tid, fresh=q.get("fresh") == "1")
             if hasattr(handler.server, "tasks"):
-                handler.server.tasks.observe(q.get("id", ""), data)
+                handler.server.tasks.observe(tid, data)
             handler._json(data)
         self._run_codex_get(handler, run)
 
     def http_receipt(self, handler) -> None:
         q = handler._query()
-        self._run_codex_get(handler, lambda: handler._json(
-            handler.server.codex.receipt(q.get("id", ""), q.get("request_id", ""))
-        ))
+        def run():
+            tid, rid = q.get("id", ""), q.get("request_id", "")
+            route, backend = self._backend(handler.server.codex)
+            if route == "apptools":
+                handler._json(backend.receipt(tid, rid))
+            else:
+                handler._json(handler.server.codex.receipt(tid, rid))
+        self._run_codex_get(handler, run)
 
     def http_send(self, handler, body: dict) -> None:
         import time
@@ -710,7 +900,11 @@ class CodexAgent(Agent):
         tid = str(body.get("id", ""))
         try:
             handler.desktop.run(handler.desktop.open, self.id, tid, timeout=45)
-            result = handler.server.codex.confirm_open(tid)
+            route, backend = self._backend(handler.server.codex, force_route=True)
+            if route == "apptools":
+                result = backend.confirm_open(tid)
+            else:
+                result = handler.server.codex.confirm_open(tid)
         except (chats.ChatError, codex_control.ControlError) as exc:
             handler._json({"ok": False, "error": str(exc), "text": str(exc),
                            "code": getattr(exc, "code", None) or None}, 400)
@@ -765,12 +959,13 @@ class CodexAgent(Agent):
         elif sub == "remove-attachment":
             self._run_codex_post(
                 handler, body,
-                lambda bridge: bridge.remove_attachment(str(body.get("id", "")), str(body.get("attachment", ""))),
+                lambda _bridge: handler.server.codex.remove_attachment(str(body.get("id", "")), str(body.get("attachment", ""))),
+                require_running=False,
             )
         else:
             def _missing(_bridge):
                 raise codex_control.ControlError("没有这个接口", 404)
-            self._run_codex_post(handler, body, _missing)
+            self._run_codex_post(handler, body, _missing, require_running=False)
 
 
 AGENT = CodexAgent
