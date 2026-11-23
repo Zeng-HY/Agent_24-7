@@ -284,5 +284,56 @@ class TestingAgent(Agent):
         import composer_commands
         return [composer_commands.item("test", "测试命令", "只用于测试")]
 
+    def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
+        rows = [dict(r) for r in self._rows if not r["archived"]]
+        rows.sort(key=lambda r: (-r["updated"], r["id"]))
+        return rows[:limit], rows
+
+    def notify_poll(self, notifier, found, item: dict) -> bool:
+        from datetime import datetime
+        conv = (self.id, item["id"])
+        status = item.get("status", "unknown")
+        if status == "running":
+            notifier.waiting.pop(conv, None)
+            ts = int(item.get("turn_started") or 0)
+            started_iso = datetime.fromtimestamp(ts).isoformat() if ts else ""
+            step = item.get("step", "")
+            notifier._running(item, {"started": started_iso, "key": str(ts), "action": step})
+            if step:
+                notifier._step(item, {"action": step}, notifier.relay_on())
+            return True
+        if status == "waiting":
+            notifier.running.pop(conv, None)
+            started = int(item.get("turn_started") or notifier.clock())
+            notifier.waiting[conv] = {"since": started, "title": item.get("title", ""), "item": item}
+            key = f"waiting:{item['id']}:{item.get('updated', 0)}"
+            if notifier.ended.get(conv) != key:
+                notifier.ended[conv] = key
+                notifier._tell(found, item, {
+                    "state": "done", "key": key, "time": "", "asks": True,
+                    "text": item.get("preview", ""), "started": started,
+                    "ended": int(notifier.clock()),
+                    "started_source": "记录" if item.get("turn_started") else "不知道",
+                })
+            return True
+        previous = notifier.running.pop(conv, None) or {}
+        notifier.waiting.pop(conv, None)
+        notifier.reported_running.discard(conv)
+        raw_ended = item.get("turn_ended") or 0
+        if raw_ended:
+            ended_s = int(raw_ended // 1000 if raw_ended > 10**11 else raw_ended)
+            key = f"done:{item['id']}:{raw_ended}"
+            if notifier.ended.get(conv) != key:
+                notifier.ended[conv] = key
+                if notifier.since is None or ended_s >= notifier.since:
+                    started = int(item.get("turn_started") or previous.get("since") or ended_s)
+                    notifier._tell(found, item, {
+                        "state": "done", "key": key, "time": "",
+                        "text": item.get("preview", ""), "started": started,
+                        "ended": ended_s,
+                        "started_source": "记录" if item.get("turn_started") else "不知道",
+                    })
+        return True
+
 
 AGENT = TestingAgent

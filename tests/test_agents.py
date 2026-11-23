@@ -6,6 +6,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 import archives
 import chat_history
+import notify
 import remote
 import usage_limits
 from agents import claude as claude_agent, codex as codex_agent, deepseek as deepseek_agent, registry, testing
@@ -416,6 +418,108 @@ class TestingAgentEndToEndTests(unittest.TestCase):
             code, body = self._call(server, "GET", "/api/agents/testing/usage?t=secret", protocol=2)
             self.assertEqual(code, 200)
             self.assertTrue(body["available"])
+
+    def test_testing_agent_full_chain_to_relay_push_without_extra_fields(self):
+        """Step 7 full chain: /api/agents -> /api/chats -> actions -> relay push events.
+
+        Verifies:
+        - Production registry excludes testing and never emits testing push events.
+        - Protocol 1 hides testing everywhere.
+        - Protocol 2 flows through /api/agents, /api/chats, send/stop and notify.Notifier -> relay.
+        - Relay push events carry zero new fields (no app_name, min_protocol, app_color, app_icon).
+        """
+        forbidden_fields = {"app_name", "min_protocol", "app_color", "app_icon"}
+        now_box = [time.time()]
+
+        def make_notifier():
+            n = notify.Notifier(
+                cfg={},
+                name="测试电脑",
+                log=lambda _msg: None,
+                save=lambda: None,
+                clock=lambda: now_box[0],
+                page_url=lambda: "",
+            )
+            n.relay.listening = 1
+            n.since = now_box[0] - 60
+            return n
+
+        def relay_events(n):
+            return [m for _, m in sorted((*n.relay.messages, *n.relay.fresh), key=lambda pair: pair[0])]
+
+        # 1. Production list has no testing and emits zero testing events
+        self.assertNotIn("testing", registry.ids())
+        with patch.object(codex_agent.CodexAgent, "notify_conversations", return_value=([], [])), \
+             patch.object(claude_agent.ClaudeAgent, "notify_conversations", return_value=([], [])), \
+             patch.object(deepseek_agent.DeepSeekAgent, "notify_conversations", return_value=([], [])):
+            prod_notifier = make_notifier()
+            prod_notifier.look()
+            for ev in relay_events(prod_notifier):
+                self.assertNotEqual(ev.get("app"), "testing")
+                for snap_item in ev.get("items", []):
+                    self.assertNotEqual(snap_item.get("app"), "testing")
+
+        # 2. Full chain under TELEPLY_TEST_AGENTS=1: protocol 1 hidden, protocol 2 -> relay push
+        server = self._make_server()
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}), \
+             patch.object(codex_agent.CodexAgent, "catalog_entries", return_value=[]), \
+             patch.object(claude_agent.ClaudeAgent, "catalog_entries", return_value=[]), \
+             patch.object(deepseek_agent.DeepSeekAgent, "catalog_entries", return_value=[]), \
+             patch.object(codex_agent.CodexAgent, "notify_conversations", return_value=([], [])), \
+             patch.object(claude_agent.ClaudeAgent, "notify_conversations", return_value=([], [])), \
+             patch.object(deepseek_agent.DeepSeekAgent, "notify_conversations", return_value=([], [])):
+            # Protocol 1 cannot see testing
+            code, _ = self._call(server, "GET", "/api/agents?t=secret")
+            self.assertEqual(code, 404)
+            code, chats_p1 = self._call(server, "GET", "/api/chats?app=all&t=secret")
+            self.assertEqual(code, 200)
+            self.assertEqual(chats_p1["items"], [])
+
+            # Protocol 2 discovers manifest and lists conversations
+            code, agents_body = self._call(server, "GET", "/api/agents?t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual([a["id"] for a in agents_body["agents"]], ["testing"])
+
+            code, chats_p2 = self._call(server, "GET", "/api/chats?app=all&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual({row["id"] for row in chats_p2["items"]}, {"test-running", "test-waiting"})
+
+            # Send a message then poll notify -> running, step, waiting, snapshot reach relay
+            code, send_body = self._call(server, "POST", "/api/agents/testing/send?t=secret", protocol=2,
+                                         body={"id": "test-running", "text": "推进推送验证", "request_id": "req-push"})
+            self.assertEqual(code, 200)
+            self.assertTrue(send_body["accepted"])
+
+            notifier = make_notifier()
+            notifier.look()
+            first_batch = relay_events(notifier)
+            first_kinds = {ev.get("kind") for ev in first_batch}
+            self.assertTrue({"running", "step", "waiting", "snapshot"} <= first_kinds, first_batch)
+            self.assertTrue(any(ev.get("kind") == "running" and ev.get("app") == "testing"
+                                and ev.get("chat") == "test-running" for ev in first_batch))
+            self.assertTrue(any(ev.get("kind") == "waiting" and ev.get("app") == "testing"
+                                and ev.get("chat") == "test-waiting" for ev in first_batch))
+
+            # Stop the running conversation then poll notify -> done event reaches relay
+            code, stop_body = self._call(server, "POST", "/api/agents/testing/stop?t=secret", protocol=2,
+                                         body={"id": "test-running"})
+            self.assertEqual(code, 200)
+            self.assertTrue(stop_body["ok"])
+            now_box[0] += 5.0
+            notifier.look()
+
+            all_events = relay_events(notifier)
+            self.assertTrue(any(ev.get("kind") == "done" and ev.get("app") == "testing"
+                                and ev.get("chat") == "test-running" for ev in all_events))
+
+            # Verify zero new fields (app_name / min_protocol / app_color / app_icon) added to any push event
+            for ev in all_events:
+                self.assertEqual(forbidden_fields & set(ev.keys()), set(), f"unexpected fields in push event: {ev}")
+                for snap_item in ev.get("items", []):
+                    self.assertEqual(
+                        forbidden_fields & set(snap_item.keys()), set(),
+                        f"unexpected fields in snapshot item: {snap_item}",
+                    )
 
 
 if __name__ == "__main__":
