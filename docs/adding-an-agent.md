@@ -207,8 +207,8 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
    ```powershell
    python -m pytest tests/test_agents.py tests/test_unified_routes.py tests/test_relay_protocol_headers.py tests/test_web_agents.py
    ```
-   - `tests/test_agents.py` 会自动对 `registry.load()` 里的每个助手检查说明书字段、`order` 唯一性、JSON 可序列化、`detect()` 行为，并用假测试助手验证 `/api/agents` → `/api/chats` → 动作 → 中转推送事件全链路以及协议 1 隐藏。
-   - 请为新助手额外补充 `detect()` 测试和假数据下的读/动作单测。
+   - `tests/test_agents.py` 会自动对 `registry.load()` 里的每个助手检查说明书字段、`order` 唯一性、JSON 可序列化、`detect()` 行为，并用假测试助手验证 `/api/agents` → `/api/chats` → 动作 → 中转推送事件的完整流程以及协议 1 隐藏。
+   - 注意：`tests/test_agents.py` 的 `ManifestTests` 里目前有三条针对现有三家的断言（正式名单顺序、全部为 `legacy=True`、以及 `name.zh == name.en`）；正式加入第 4 家助手时按新助手实际情况更新这几条断言，并额外补充它的 `detect()` 测试和假数据读写/动作单测。
 2. **公共代码写死名字检查**：
    ```powershell
    python -m pytest tests/test_no_hardcoded_agents.py
