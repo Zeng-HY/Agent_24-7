@@ -531,7 +531,59 @@ def _codex_command(item: dict) -> str:
     return one_line(str(cmd or "命令"), 120)
 
 
-def _codex_delegation(item: dict) -> dict | None:
+_CODEX_IMAGE_LINE = re.compile(r"^\s*\[附图\]\s+(.+?)\s*(?:（[^）]*）|\([^)]*\))\s*$")
+
+
+def _extract_codex_images(text: str) -> tuple[str, list[dict]]:
+    """Turn '[附图] <path>（…）' lines pointing into codex-images into image attachment dicts."""
+    if "[附图]" not in (text or ""):
+        return text, []
+    kept_lines: list[str] = []
+    images: list[dict] = []
+    for line in (text or "").splitlines():
+        m = _CODEX_IMAGE_LINE.match(line)
+        if m:
+            raw_path = m.group(1).strip().strip('"').strip("'")
+            parts = [p.lower() for p in Path(raw_path).parts]
+            if "codex-images" in parts:
+                p = Path(raw_path)
+                stem = p.stem
+                if re.fullmatch(r"[a-f0-9]{32}", stem):
+                    images.append({
+                        "id": stem,
+                        "name": p.name,
+                        "url": "/api/codex/image?id=" + stem,
+                        "thumbnail": "/api/codex/image?thumb=1&id=" + stem,
+                        "path": raw_path,
+                    })
+                else:
+                    ident = hashlib.sha256(raw_path.encode("utf-8")).hexdigest()[:32]
+                    images.append({"id": ident, "name": p.name, "path": raw_path})
+                continue
+        kept_lines.append(line)
+    if not images:
+        return text, []
+    return "\n".join(kept_lines).strip(), images
+
+
+def _codex_delegation_raw_text(item: dict) -> str:
+    """Raw unescaped <input> text from a codex_delegation FunctionCallOutput, or ''."""
+    if (item.get("type") != "FunctionCallOutput" or item.get("namespace") != "codex_app"
+            or item.get("name") not in ("create_thread", "send_message_to_thread")):
+        return ""
+    output = item.get("output")
+    if not isinstance(output, str):
+        return ""
+    match = re.fullmatch(
+        r"\s*<codex_delegation>\s*<source_thread_id>\s*"
+        r"([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})"
+        r"\s*</source_thread_id>\s*<input>([\s\S]*?)</input>\s*</codex_delegation>\s*", output)
+    if not match:
+        return ""
+    return match[2].strip().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+def _codex_delegation(item: dict, thread_id: str = "") -> dict | None:
     """The desktop displays this narrow tool envelope as an incoming message."""
     if (item.get("type") != "FunctionCallOutput" or item.get("namespace") != "codex_app"
             or item.get("name") not in ("create_thread", "send_message_to_thread")):
@@ -549,8 +601,13 @@ def _codex_delegation(item: dict) -> dict | None:
     text = match[2].strip().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
     if not text:
         return None
-    return {"role": "user", "text": text, "source_id": item.get("id"),
-            "origin": "other_chat", "source_thread_id": match[1]}
+    cleaned, images = _extract_codex_images(text)
+    msg: dict = {"role": "user", "text": cleaned, "source_id": item.get("id"), "source_thread_id": match[1]}
+    if images:
+        msg["images"] = images
+    if not (thread_id and match[1].lower() == thread_id.lower()):
+        msg["origin"] = "other_chat"
+    return msg
 
 
 def _step_of(app: str, name: str, argument: str = '') -> str:
@@ -563,15 +620,17 @@ def _step_of(app: str, name: str, argument: str = '') -> str:
 
 
 def parse_codex(lines: list[bytes], context: dict | None = None,
-                parsed: dict | None = None) -> tuple[list[dict], dict]:
+                parsed: dict | None = None, *, thread_id: str = "") -> tuple[list[dict], dict]:
     """context: as parse_claude's; with one, the state returned is only what these lines set (empty values too).
     parsed: filled with the last record parsed here, so a caller need not read the same line again (11-16)."""
     msgs: list[dict] = []
     state = _LineState({"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}) \
         if context is not None else {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
+    tid = thread_id or (str(context.get("thread_id") or "") if isinstance(context, dict) else "")
     saw_items = False
     for raw in lines:
-        if b"event_msg" not in raw[:160] and b"response_item" not in raw[:160] and b'"compacted"' not in raw[:160]:
+        if (b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]
+                and b'"compacted"' not in raw[:160] and b"session_meta" not in raw[:160]):
             continue  # response items, token records, turn context: not shown
         try:
             rec = json.loads(raw)
@@ -582,6 +641,12 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
         payload = rec.get("payload") or {}
         kind = payload.get("type")
         ts = rec.get("timestamp") or ""
+        if rec.get("type") == "session_meta":
+            if payload.get("id") and not tid:
+                tid = str(payload["id"])
+                if isinstance(context, dict):
+                    context["thread_id"] = tid
+            continue
         if rec.get("type") == "compacted":  # 0.6.6: /compact, or Codex out of room; the divider Claude's has
             msgs.append({"role": "event", "text": "对话已压缩", "time": ts})
             continue
@@ -600,8 +665,12 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
             t = item.get("type")
             if t == "UserMessage":
                 saw_items = True
-                msgs.append({"role": "user", "text": clean_codex_user(_join_text(item.get("content"))), "time": ts,
-                             "client_request_id": item.get("client_id"), "source_id": item.get("id")})
+                cleaned, images = _extract_codex_images(clean_codex_user(_join_text(item.get("content"))))
+                row = {"role": "user", "text": cleaned, "time": ts,
+                       "client_request_id": item.get("client_id"), "source_id": item.get("id")}
+                if images:
+                    row["images"] = images
+                msgs.append(row)
             elif t == "AgentMessage":
                 saw_items = True
                 text = codex_answer(_join_text(item.get("content")).strip())
@@ -610,7 +679,7 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
             elif t == 'Plan' and isinstance(item.get('text'),str):
                 msgs.append({'role':'assistant','phase':'final_answer','text':item['text'],'time':ts,'source_id':item.get('id'),'native_plan':True})
             elif t == "FunctionCallOutput":
-                delegated = _codex_delegation(item)
+                delegated = _codex_delegation(item, thread_id=tid)
                 if delegated:
                     saw_items = True
                     msgs.append({**delegated, "time": ts})
@@ -629,8 +698,12 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
             state.update(running=False, turn_time=ts, turn_ended=ts, step='')
             if payload.get('turn_id'):state['current_turn_id']=payload['turn_id']
         elif kind == "user_message":  # older Codex versions
-            msgs.append({"role": "user", "text": clean_codex_user(payload.get("message") or ""), "time": ts, "legacy": True,
-                         "source_id": payload.get("id"), "client_request_id": payload.get("client_id")})
+            cleaned, images = _extract_codex_images(clean_codex_user(payload.get("message") or ""))
+            row = {"role": "user", "text": cleaned, "time": ts, "legacy": True,
+                   "source_id": payload.get("id"), "client_request_id": payload.get("client_id")}
+            if images:
+                row["images"] = images
+            msgs.append(row)
         elif kind == "agent_message":
             if payload.get("phase") in (None, "commentary", "final_answer"):
                 msgs.append({"role": "assistant", "text": codex_answer(payload.get("message") or ""), "time": ts, "legacy": True,
@@ -1116,7 +1189,7 @@ def summary_for(agent, item: dict) -> dict:
     while True:
         lines, first, end = read_tail_span(path, nbytes)
         at_start = first == 0
-        msgs, state = _parse(agent.id, lines)
+        msgs, state = agent.parse_for_item(item, lines)
         have_message=any(m["role"] in ("user", "assistant") for m in msgs)
         # 0.6.4: a running turn whose start record is farther back still needs its own start for the timer. Once
         # found it is kept by file, so a growing turn does not rescan tens of megabytes on every list poll.
@@ -1149,9 +1222,12 @@ def summary_for(agent, item: dict) -> dict:
         nbytes = min(nbytes * 4, 64 << 20)
     last = next((m for m in reversed(msgs) if m["role"] in ("user", "assistant")), None)
     prefix = "来自其他对话：" if last and last.get("origin") == "other_chat" else "你：" if last and last["role"] == "user" else ""
+    last_body = one_line(plain(last["text"]), 90) if last else ""
+    if last and not last_body and last.get("images"):
+        last_body = "[图片]"
     status = _status(state, st.st_mtime)
     out = {"status": status, "modified": int(st.st_mtime * 1000),
-           "preview": prefix + one_line(plain(last["text"]), 90) if last else "",
+           "preview": prefix + last_body if last else "",
            # 0.6.4: the turn's own start and end, Unix seconds, for the phone's timer. 0 when the record has none.
            "turn_started": unix(state.get("turn_started")), "turn_ended": unix(state.get("turn_ended")),
            "step": state.get("step", "") if status == "running" else ""}
@@ -1260,7 +1336,7 @@ def conversation_for(agent, conv_id: str, n: int = 60) -> dict:
     nbytes, msgs, state = 1 << 20, [], {}
     while True:
         lines, at_start = read_tail(path, nbytes)
-        msgs, state = _parse(agent.id, lines)
+        msgs, state = agent.parse_for_item(item, lines)
         talk = sum(1 for m in msgs if m["role"] in ("user", "assistant"))
         if talk >= n // 2 or at_start or nbytes >= (32 << 20):
             break

@@ -25,18 +25,18 @@ def decode(value):
     except Exception:raise HistoryError('分页位置无效，请刷新') from None
 
 class Transcript:
-    def __init__(self,path,app,cwd=''):
+    def __init__(self,path,app,cwd='',tid=''):
         from agents import registry
         self.agent=app if hasattr(app,'manifest') else registry.get(app)
-        self.path=path;self.app=self.agent.id;self.cwd=cwd;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
-        self.context={}  # what a line needs to know of earlier ones (Claude's next-step boxes, 10-16)
+        self.path=path;self.app=self.agent.id;self.cwd=cwd;self.tid=tid;self.offset=0;self.inode=None;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.lock=threading.RLock();self.size=0;self.mtime=0
+        self.context={'thread_id':tid} if tid else {}  # what a line needs to know of earlier ones (Claude's next-step boxes, 10-16)
         # 11-16: Codex writes each answer twice; the final answers by turn, so a big file is not scanned for each.
         self.final_answers={}
     def refresh(self):
         with self.lock:
             st=self.path.stat()
             if self.inode is not None and (st.st_ino!=self.inode or st.st_size<self.offset or (st.st_size==self.offset and st.st_mtime_ns!=self.mtime)):
-                self.offset=0;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.context={};self.final_answers={}
+                self.offset=0;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.context={'thread_id':self.tid} if self.tid else {};self.final_answers={}
             self.inode=st.st_ino
             if st.st_size==self.offset:self.size=st.st_size;self.mtime=st.st_mtime_ns;return self
             with self.path.open('rb') as f:
@@ -114,7 +114,7 @@ class History:
         key=(app,tid,str(path))
         with self.lock:
             entry=self.entries.get(key)
-            if entry is None:entry=Transcript(path,agent,item.get('cwd') or '');self.entries[key]=entry
+            if entry is None:entry=Transcript(path,agent,item.get('cwd') or '',tid=tid);self.entries[key]=entry
             self.entries.move_to_end(key)
             entry.refresh()  # its size decides how much of the cache it takes
             while len(self.entries)>MAX_TRANSCRIPTS or sum(v.size for v in self.entries.values())>MAX_TRANSCRIPT_BYTES:

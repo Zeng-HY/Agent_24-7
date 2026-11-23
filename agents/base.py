@@ -159,6 +159,9 @@ class Agent:
                     parsed: dict | None = None) -> tuple[list[dict], dict]:
         raise Unsupported("这个助手还不能解析记录")
 
+    def parse_for_item(self, item: dict, lines: list[bytes]) -> tuple[list[dict], dict]:
+        return self.parse_lines(lines)
+
     def parse_record(self, raw: bytes, context: dict | None = None,
                      parsed: dict | None = None) -> tuple[list[dict], dict]:
         return self.parse_lines([raw], context, parsed)
@@ -404,7 +407,7 @@ class Agent:
     def skill_roots(self, home, cwd: str, read_config, warnings: list, warn_fn) -> tuple[list, set]:
         return [], set()
 
-    def format_skills(self, skills: list[dict]) -> tuple[str, list[dict]]:
+    def format_skills(self, skills: list[dict], *, native: bool = True) -> tuple[str, list[dict]]:
         text = "请使用以下选定技能完成本条请求：\n" + "\n".join(
             "[" + s["name"] + "](<" + s["path"] + ">)" for s in skills
         )
