@@ -13,8 +13,8 @@
     try { history.replaceState(history.state, '', location.pathname + (rest ? '?' + rest : '') + location.hash); } catch (e) {}
     const at = target.indexOf(':'), app = target.slice(0, at), id = target.slice(at + 1);
     const go = async () => {
-      if (!['codex', 'claude'].includes(app) || !id || (cur && cur.app === app && cur.id === id)) return;
-      try { openConv(await api('/api/chat?app=' + app + '&id=' + encodeURIComponent(id) + '&n=60')); }
+      if (!Agents.validId(app) || !id || (cur && cur.app === app && cur.id === id)) return;
+      try { openConv(await api('/api/chat?app=' + encodeURIComponent(app) + '&id=' + encodeURIComponent(id) + '&n=60')); }
       catch (e) { toast('没能打开这个对话：' + e.message, true); }
     };
     if (document.readyState === 'complete') go(); else addEventListener('load', go, {once: true});

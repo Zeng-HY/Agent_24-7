@@ -324,10 +324,6 @@ html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:fo
 <section data-mode="chat" class="conversation-home">
   <div class="chips">
     <button class="chip on" data-app="all" onclick="setConvApp('all')">全部</button>
-    <button class="chip" data-app="codex" onclick="setConvApp('codex')">Codex</button>
-    <button class="chip" data-app="claude" onclick="setConvApp('claude')">Claude</button>
-    <button class="chip" data-app="deepseek" onclick="setConvApp('deepseek')">DeepSeek</button>
-
   </div>
   <div id="convList" style="margin-top:8px"><div class="hint">读取中…</div></div>
   <div class="hint" id="convHint"></div>
@@ -380,7 +376,7 @@ html[data-input="pointer"] button:focus,html[data-input="pointer"] [tabindex]:fo
   <div id="computerList" class="sh-body"></div>
 </div></div>
 <div id="convMenu" class="sheet popover" aria-label="对话菜单"><div class="box">
-  <div class="sh-body"><button class="menu-row" onclick="closeSheet('convMenu'); openOnPC()"><span data-icon="window"></span>电脑上打开</button><button class="menu-row" onclick="closeSheet('convMenu'); setTimeout(openRuntime, 180)"><span data-icon="box"></span>会话状态</button><div id="convFolder" class="hint"></div></div>
+  <div class="sh-body"><button id="convOpenBtn" class="menu-row" onclick="closeSheet('convMenu'); openOnPC()"><span data-icon="window"></span>电脑上打开</button><button class="menu-row" onclick="closeSheet('convMenu'); setTimeout(openRuntime, 180)"><span data-icon="box"></span>会话状态</button><div id="convFolder" class="hint"></div></div>
 </div></div>
 <div id="runtimeSheet" class="sheet" aria-label="会话状态"><div class="box">
   <div class="sh-head"><b>会话状态</b><button class="icon-btn" aria-label="关闭状态" onclick="closeSheet('runtimeSheet')" data-icon="close"></button></div>
@@ -440,7 +436,7 @@ async function api(path, body, timeout) {
 // the title opens the list of the other computers (found through Tailscale, machines.py); tapping one opens that
 // computer's own page, which lets in a phone on the same Tailscale account without a token (remote.py, 10-20).
 const MACHINE = window.MACHINE || {};
-function hasApp(app) { return !Array.isArray(MACHINE.apps) || MACHINE.apps.includes(app); }
+function hasApp(app) { return window.Agents.has(app); }
 async function openComputers(anchor) {
   const list = $('computerList'); list.replaceChildren(el('p', 'hint', '正在找别的电脑…'));
   openSheet('computerMenu', anchor);
@@ -455,12 +451,21 @@ async function openComputers(anchor) {
   if (!(j.others || []).length) list.append(el('p', 'hint', '还没有别的电脑。别的电脑装好、开着时会出现在这里。'));
 }
 if (MACHINE.name) { document.title = 'Teleply'; $('appSubtitle').disabled = false; }
-// Only the desktop apps this computer has (MACHINE.apps, looked at again each time the page opens): a chip for each, and no
-// row at all with one app, where 全部 says nothing more (10-20; it used to look only for Claude, so a DeepSeek chip stood
-// on a computer without DeepSeek). With none found the list says so.
-for (const chip of document.querySelectorAll('.conversation-home .chip[data-app]')) if (chip.dataset.app !== 'all' && !hasApp(chip.dataset.app)) chip.style.display = 'none';
-if (Array.isArray(MACHINE.apps) && MACHINE.apps.length < 2) document.querySelector('.conversation-home .chips').style.display = 'none';
-const NO_APPS = Array.isArray(MACHINE.apps) && !MACHINE.apps.length
+// Only the desktop apps this computer has (Agents.list() from MACHINE.agents / MACHINE.apps): a chip for each, and no
+// row at all with one app, where 全部 says nothing more. With none found the list says so.
+(() => {
+  const chips = document.querySelector('.conversation-home .chips');
+  if (!chips) return;
+  for (const agent of Agents.list()) {
+    const b = el('button', 'chip', Agents.name(agent.id));
+    b.dataset.app = agent.id;
+    b.onclick = () => setConvApp(agent.id);
+    chips.appendChild(b);
+  }
+  if (Array.isArray(MACHINE.apps) && MACHINE.apps.length < 2) chips.style.display = 'none';
+  else if (Array.isArray(MACHINE.agents) && Agents.list().length < 2) chips.style.display = 'none';
+})();
+const NO_APPS = (Array.isArray(MACHINE.apps) && !MACHINE.apps.length)
   ? '这台电脑上没找到 Codex、Claude 或 DeepSeek Harness 桌面版。装好后刷新这个页面；也可以在 remote_config.json 里用 "apps" 指定。' : '';
 // Appearance settings remain available without voice support.
 
@@ -540,7 +545,12 @@ async function moreChildren(c) {
 function convRow(c, child = false) {
   const row = el('div', 'conv' + (child ? ' conv-child' : c.group ? ' conv-group' : ''));
   const l1 = el('div', 'c1');
-  if (!child) l1.appendChild(el('span', 'badge ' + c.app, c.app === 'deepseek' ? 'DeepSeek' : (c.app === 'codex' ? 'Codex' : 'Claude')));
+  if (!child) {
+    const badge = el('span', 'badge ' + c.app, Agents.name(c.app));
+    const bg = Agents.badgeColor(c.app);
+    if (bg) badge.style.background = bg;
+    l1.appendChild(badge);
+  }
   l1.appendChild(el('span', 'ct', c.title));
   l1.appendChild(el('span', 'cm', ago(c.updated)));
   const l2 = el('div', 'c2');
@@ -648,7 +658,8 @@ function openConv(c, fromHistory = false) {
   cur = {app: c.app, id: c.id, title: c.title, folder: c.folder, status: c.status, updated: c.updated};
   curSig = ''; optsSig = ''; pendingText = ''; lastRuntime = null; currentMessages = []; $('newMessages').hidden = true;
   $('cvTitle').textContent = c.title;
-  $('cvMeta').textContent = (c.app === 'deepseek' ? 'DeepSeek' : (c.app === 'codex' ? 'Codex' : 'Claude')) + (c.folder ? ' · ' + c.folder : '');
+  $('cvMeta').textContent = Agents.name(c.app) + (c.folder ? ' · ' + c.folder : '');
+  if ($('convOpenBtn')) $('convOpenBtn').hidden = !Agents.can(c.app, 'open');
   if(!c.keepPreview)$('cvMsgs').innerHTML = '<div class="hint" style="text-align:center">读取中…</div>'; delete $('cvMsgs').dataset.ready;
   $('cvOpts').innerHTML = ''; hideNote();
   $('convView').style.display = 'flex'; document.body.style.overflow = 'hidden'; fitView();
@@ -705,7 +716,7 @@ async function loadConv(force) {
       if (cur !== me) return;
     }
     $('cvTitle').textContent = me.title;
-    $('cvMeta').textContent = (me.app === 'deepseek' ? 'DeepSeek' : (me.app === 'codex' ? 'Codex' : 'Claude')) + (j.folder ? ' · ' + j.folder : '') + ' · ' + (STATUS[j.status] || '');
+    $('cvMeta').textContent = Agents.name(me.app) + (j.folder ? ' · ' + j.folder : '') + ' · ' + (STATUS[j.status] || '');
     const sig = j.size + ':' + j.messages.length + ':' + j.status + ':' + (pendingSends.get(chatKey(me))?.state || '');
     if (force || sig !== curSig) { curSig = sig; renderMsgs(j.messages, j.note); }
   } catch (e) { if (cur === me) { chatReadError = '读不到这个对话：' + e.message; updateConnection(); } }
@@ -971,8 +982,13 @@ async function pressEnterAgain() {
 }
 async function openOnPC() {
   if (!cur) return;
-  try { const j = await api('/api/chat/open', {app: cur.app, id: cur.id}); toast(j.text); } catch (e) { toast(e.message, true); }
-  if (cur && cur.app === 'claude') { optsSig = ''; loadOpts(false); }
+  try {
+    const j = Agents.isLegacy(cur.app)
+      ? await api('/api/chat/open', {app: cur.app, id: cur.id})
+      : await api('/api/agents/' + encodeURIComponent(cur.app) + '/open', {id: cur.id});
+    toast(j.text);
+  } catch (e) { toast(e.message, true); }
+  if (cur && Agents.cardLayout(cur.app) === 'claude.v1') { optsSig = ''; loadOpts(false); }
 }
 
 // Claude: buttons and choices on the PC around its message box (permission prompts, questions, Stop)
@@ -1213,7 +1229,7 @@ function updateConnection() {
 // and deepseek-ui.js open the question from it). It named Claude for every app but Codex until 10-20.
 function updatePending() {
   const waiting=!!cur && !!$('cvOpts').querySelector('.optbox');
-  $('cvPending').hidden=!waiting; $('cvPending').textContent=({codex:'Codex',deepseek:'DeepSeek'}[cur?.app]||'Claude')+' 有待处理操作 · 查看';
+  $('cvPending').hidden=!waiting; $('cvPending').textContent=Agents.name(cur?.app)+' 有待处理操作 · 查看';
 }
 function showPending() { $('cvOpts').scrollIntoView({block:'nearest'}); }
 new MutationObserver(updatePending).observe($('cvOpts'),{childList:true,subtree:true});

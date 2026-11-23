@@ -8,7 +8,8 @@
    confirmation, for good. DeepSeek has no delete, so its rows only restore. The main list never deletes. */
 (() => {
   const list = $('convList');
-  const APPS = ['codex', 'deepseek', ...(window.MACHINE?.claude_archive ? ['claude'] : [])], NAMES = {codex: 'Codex', claude: 'Claude', deepseek: 'DeepSeek'};
+  const canArchive = app => Agents.can(app, 'archive');
+  const isClaudeLayout = app => Agents.cardLayout(app) === 'claude.v1';
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
   const EASE = 'cubic-bezier(.32,.72,0,1)';
   const BUTTON = 88, HOLD = 30, GIVE = 0.3, GAP = 20;  // 归档 opens this wide; past it the finger goes HOLD px while the row goes GIVE of that
@@ -48,7 +49,7 @@
   function itemOf(row) {
     if (!row || !row.dataset.key || row.matches('.conv-child,.conv-group,.conv-fold,.conv-more')) return null;
     const item = convItems.find(v => convKey(v) === row.dataset.key);
-    return item && !item.group && !item.kind && APPS.includes(item.app) ? item : null;
+    return item && !item.group && !item.kind && canArchive(item.app) ? item : null;
   }
   // A refresh brings back what the server still lists for a moment: rows archived here stay off until 撤销. While a row
   // is out of place (under the finger, open on 归档, gliding, leaving) the list is not rebuilt, or the 10 s refresh would
@@ -226,8 +227,8 @@
     const key = convKey(item);
     const job = api('/api/chat/archive', {app: item.app, id: item.id}, 60000);
     pending.set(key, job);  // the bar comes up once the row is off (leave)
-    try { await job; pending.delete(key); if (item.app === 'claude' && barItem === item) showBar(item, index); window.sidebarUI?.load?.(true); }
-    catch (e) { comeBack(item, index); hideBar(item); toast((item.app === 'claude' ? 'Claude：' : '没归档：') + e.message, true); }
+    try { await job; pending.delete(key); if (isClaudeLayout(item.app) && barItem === item) showBar(item, index); window.sidebarUI?.load?.(true); }
+    catch (e) { comeBack(item, index); hideBar(item); toast((isClaudeLayout(item.app) ? Agents.name(item.app) + '：' : '没归档：') + e.message, true); }
     finally { if (pending.get(key) === job) pending.delete(key); }
   }
   function comeBack(item, index) {
@@ -242,14 +243,14 @@
     comeBack(item, index);  // back on the list at once; the computer follows
     if (job) { try { await job; } catch (e) { return; } }  // still archiving: wait; it failed: it is back already
     try { await api('/api/chat/unarchive', {app: item.app, id: item.id}, 90000); window.sidebarUI?.load?.(true); toast('已恢复'); }
-    catch (e) { hidden.add(key); convItems = convItems.filter(v => convKey(v) !== key); renderConvs(); toast((item.app === 'claude' ? 'Claude：' : '没恢复：') + e.message, true); }
+    catch (e) { hidden.add(key); convItems = convItems.filter(v => convKey(v) !== key); renderConvs(); toast((isClaudeLayout(item.app) ? Agents.name(item.app) + '：' : '没恢复：') + e.message, true); }
   }
   const bar = el('div', 'undo-bar'); bar.id = 'archiveUndo'; bar.setAttribute('role', 'status'); bar.setAttribute('aria-live', 'polite');
   const barText = el('div', 'undo-text'), barButton = el('button', '', '撤销'); barButton.type = 'button';
   bar.append(barText, barButton); document.body.append(bar);
   let barItem = null, barTimer = 0;
   function showBar(item, index) {
-    const waiting = item.app === 'claude' && pending.has(convKey(item));
+    const waiting = isClaudeLayout(item.app) && pending.has(convKey(item));
     barItem = item; barText.replaceChildren(document.createTextNode(waiting ? '正在归档…' : '对话已归档'), el('small', '', item.title || ''));
     barButton.disabled = waiting;
     barButton.onclick = () => undo(item, index); bar.classList.add('show'); clearTimeout(barTimer);
@@ -279,14 +280,16 @@
   function paintArchived() {
     const box = $('arcList'), data = archivedData; box.replaceChildren();
     const apps = data?.apps || [], deletable = new Set(data?.deletable || []);
+    const extraNotes = apps.filter(a => !['codex', 'deepseek', 'claude'].includes(a)).map(a =>
+      Agents.name(a) + (deletable.has(a) ? ' 可以恢复或勾选后删除。' : ' 可以恢复，暂不支持删除。'));
     $('arcNote').textContent = !data ? '' : [apps.includes('codex') ? 'Codex 的可以恢复，也可以勾选后删除；删除后电脑上也找不回来。' : '',
-      apps.includes('deepseek') ? 'DeepSeek 没有删除对话的功能，只能恢复。' : '', hasApp('claude') ? (apps.includes('claude') ? 'Claude 可以归档和恢复，需电脑解锁；有工作副本的会话请在电脑上归档。暂不支持删除。' : '此服务尚未启用 Claude 归档。') : ''].filter(Boolean).join('');
+      apps.includes('deepseek') ? 'DeepSeek 没有删除对话的功能，只能恢复。' : '', hasApp('claude') ? (apps.includes('claude') ? 'Claude 可以归档和恢复，需电脑解锁；有工作副本的会话请在电脑上归档。暂不支持删除。' : '此服务尚未启用 Claude 归档。') : '', ...extraNotes].filter(Boolean).join('');
     if (!data) { box.append(el('div', 'arc-empty', '读取中…')); paintFoot(); return; }
     for (const p of data.problems || []) box.append(el('div', 'arc-empty', '读不到 ' + p));
     if (!data.items.length && !(data.problems || []).length) box.append(el('div', 'arc-empty', '没有已归档的对话。\n在对话列表里把一行往左滑，就能归档。'));
     let app = '';
     for (const v of data.items) {
-      if (v.app !== app) { app = v.app; box.append(el('div', 'arc-head', NAMES[app] || app)); }
+      if (v.app !== app) { app = v.app; box.append(el('div', 'arc-head', Agents.name(app))); }
       const row = el('div', 'arc-row'), pick = el('button', 'arc-pick'), main = el('div', 'arc-main'), restore = el('button', 'arc-restore', '恢复');
       pick.type = restore.type = 'button'; pick.innerHTML = '<span>' + icon('check') + '</span>';
       const can = deletable.has(v.app) && v.can_delete; pick.disabled = !can || busy; pick.setAttribute('aria-pressed', String(picked.has(pickKey(v))));
@@ -318,7 +321,7 @@
   async function restoreOne(v) {
     if (busy) return; busy = true; paintArchived();
     try { await api('/api/chat/unarchive', {app: v.app, id: v.id}, 90000); toast('已恢复，回到对话列表里了'); hidden.delete(pickKey(v)); window.sidebarUI?.load?.(true); loadConvs(); }
-    catch (e) { toast((v.app === 'claude' ? 'Claude：' : '没恢复：') + e.message, true); }
+    catch (e) { toast((isClaudeLayout(v.app) ? Agents.name(v.app) + '：' : '没恢复：') + e.message, true); }
     busy = false; await openArchivedRefresh();
   }
   async function openArchivedRefresh() {

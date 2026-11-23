@@ -35,7 +35,7 @@
   function merge(items,prepend=false){loaded=messageProjection.merge(loaded,items.map(m=>{const full=expanded.get(m.id);return full&&full.length>=(m.length||m.text.length)&&!m.streaming?{...m,text:full.text,truncated:false}:m;}),prepend);}
   function reconcileLive(ids){loaded=messageProjection.reconcileLive(loaded,ids);}
   function render(){if(!cur||!me||chatKey(cur)!==chatKey(me))return;renderMsgs(loaded);painted=true;older.hidden=!hasMore;latest.hidden=!historyWindow;}
-  function applyMeta(j){if(!cur)return;window.interactionUI?.meta(j);chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=(cur.app==='deepseek'?'DeepSeek':cur.app==='codex'?'Codex':'Claude')+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
+  function applyMeta(j){if(!cur)return;window.interactionUI?.meta(j);chatReadError='';updateConnection();cur.status=j.status||cur.status;cur.title=j.title||cur.title;$('cvTitle').textContent=cur.title;$('cvMeta').textContent=Agents.name(cur.app)+(cur.folder?' · '+cur.folder:'')+' · '+(STATUS[cur.status]||'');if(j.runtime!==undefined)renderRuntime(j.runtime);}
   function onOpen(original,current){closeMenu(true);pauseStream();loadGeneration++;fetching=null;me=current;loaded=[];expanded.clear();cursor=null;hasMore=false;historyWindow=!!original.has_newer;initialPage=Array.isArray(original.messages)?original:null;streamSeq=0;flows.clear();cancelAnimationFrame(frame);frame=0;keysSeen=null;painted=false;}
   async function loadConversation(force=false){
     if(window.newChatUI?.isPreview(cur))return;
@@ -322,9 +322,9 @@
     else{applyMeta(data.meta||{});if(!historyWindow){merge(data.messages||[]);reconcileLive(data.streaming_ids);render();}else if(data.messages?.length)$('newMessages').hidden=false;}if(data.control)codexUI?.applyState(cur,data.control);}
   function resumeStream(){
     if(window.newChatUI?.isPreview(cur))return;
-    if(source||!cur||document.hidden||window.workspaceUI?.paused)return;const target={...cur},generation=++streamGeneration;const s=new EventSource('/api/events?app='+target.app+'&id='+encodeURIComponent(target.id));source=s;streamSeq=0;
+    if(source||!cur||document.hidden||window.workspaceUI?.paused)return;const target={...cur},generation=++streamGeneration;const s=new EventSource('/api/events?app='+encodeURIComponent(target.app)+'&id='+encodeURIComponent(target.id)+'&protocol=2');source=s;streamSeq=0;
     s.addEventListener('update',e=>{if(generation!==streamGeneration||!cur||chatKey(cur)!==chatKey(target))return;try{const data=JSON.parse(e.data);if(data.protocol!==1)throw Error('protocol');if(data.type!=='snapshot'&&data.seq!==streamSeq+1)throw Error('sequence');streamSeq=data.seq;streamActive=true;if(window.workspaceUI?.composing){bufferedEvent=data;return;}applyEvent(data);}catch(err){pauseStream();retryTimer=setTimeout(()=>{loadConversation(false);resumeStream();},3000);}});
-    s.onerror=()=>{if(generation!==streamGeneration)return;pauseStream();retryTimer=setTimeout(resumeStream,target.app==='deepseek'?1000:8000);};
+    s.onerror=()=>{if(generation!==streamGeneration)return;pauseStream();retryTimer=setTimeout(resumeStream,Agents.cardLayout(target.app)==='deepseek.v1'?1000:8000);};
   }
   $('cvText').addEventListener('compositionend',()=>{if(bufferedEvent){bufferedEvent=null;pauseStream();resumeStream();}});
   $('newMessages').onclick=()=>{if(historyWindow)loadConversation(true);else jumpToLatest();};
