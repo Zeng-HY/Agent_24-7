@@ -153,22 +153,13 @@ def funnel_on(config: dict, port: int) -> bool:
 
 
 def installed_apps() -> list[str]:
-    """The desktop apps on this computer: Codex (Store package or not), Claude (Store package or installer) and
-    DeepSeek Harness (its desktop app's own folder: ~/.dsh alone may be only the command-line dsh, which the phone
-    cannot drive). A few folder checks; remote.py looks again each time the page opens."""
-    packages = LOCALAPPDATA / "Packages"
+    """The desktop apps on this computer, as the agent registry finds them.
 
-    def package(prefix: str) -> bool:
-        return packages.is_dir() and any(packages.glob(prefix + "_*"))
-
-    apps = []
-    if package("OpenAI.Codex") or (LOCALAPPDATA / "OpenAI" / "Codex").is_dir():
-        apps.append("codex")
-    if package("Claude") or (LOCALAPPDATA / "AnthropicClaude").is_dir() or (APPDATA / "Claude").is_dir():
-        apps.append("claude")
-    if (APPDATA / "@deepseek-ai" / "dsh-desktop").is_dir():
-        apps.append("deepseek")
-    return apps
+    Each assistant answers detect() in its own file (agents/<id>.py); this
+    function only asks the list. remote.py looks again each time the page opens.
+    """
+    from agents import registry
+    return [agent.id for agent in registry.installed()]
 
 
 def hello(url: str, timeout: float = PROBE_SECONDS) -> dict | None:

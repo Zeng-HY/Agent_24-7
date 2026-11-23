@@ -76,6 +76,7 @@ import voice  # the microphone button: recordings from the phone turned into tex
 import voice_local  # the same button, recognised on this PC while the user talks (SenseVoice + Qwen3-ASR)
 import voice_terms  # the voice dictionary: words to listen for and how to spell them
 import machines  # this computer's name and apps, and the other computers the page can switch to
+from agents import registry as agent_registry  # the list of desktop assistants, one module each
 import notify  # a notification on the phone (Bark, ntfy) when a conversation is done
 import ntfy_feed  # the ntfy app on an Android phone subscribes to this service for them
 import re
@@ -494,12 +495,17 @@ class Handler(BaseHTTPRequestHandler):
                 page = stamp_page(page)  # each script's URL carries this version; the file itself holds none
                 # version: the page compares it with what /api/status says later, and reloads itself after an update
                 capabilities = {"claude_archive": True} if "claude" in self.server.machine["apps"] else {}
-                facts = json.dumps({**self.server.machine, "version": VERSION, **capabilities}, ensure_ascii=False).replace("<", "\\u003c")
+                agents = agent_registry.manifests_for(self.server.machine["apps"])
+                facts = json.dumps({**self.server.machine, "version": VERSION, "agents": agents, **capabilities}, ensure_ascii=False).replace("<", "\\u003c")
                 page = page.replace(b"<!--machine-->", f"<script>window.MACHINE={facts};</script>".encode("utf-8"), 1)
             self._send(200, page, "text/html; charset=utf-8", extra)
             return
         if not self._authorized():
             self._refuse()
+            return
+        if path == "/api/agents":  # the assistants this computer has, each with its manifest
+            self._json({"schema": 1, "protocol": 2,
+                        "agents": agent_registry.manifests_for(self.server.machine["apps"])})
             return
         if path == "/api/hello":  # the other computers ask it to find this one (machines.py), through tailscale serve
             # with their account on the request: let in as the page is (10-20; it used to answer anyone)

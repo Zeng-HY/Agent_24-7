@@ -125,8 +125,15 @@ class PageTests(unittest.TestCase):
     def test_the_page_knows_which_computer_it_is_on(self):
         handler,sent=self.handler('/?t=secret');handler.do_GET()
         page=sent[0][1].decode('utf-8')
-        self.assertIn('<script>window.MACHINE={"name": "公司电脑", "apps": ["codex"], "voice": false, "version": "'+remote.VERSION+'"};</script>',page)
         self.assertNotIn('<!--machine-->',page)
+        import re
+        match=re.search(r'<script>window\.MACHINE=(.*?);</script>',page)
+        self.assertIsNotNone(match)
+        facts=json.loads(match.group(1))
+        self.assertEqual((facts['name'],facts['apps'],facts['voice'],facts['version']),
+                         ('公司电脑',['codex'],False,remote.VERSION))
+        self.assertEqual([a['id'] for a in facts['agents']],['codex'])
+        self.assertEqual(facts['agents'][0]['name']['zh'],'Codex')
     def test_without_the_token_the_page_says_how_to_get_it(self):
         handler,sent=self.handler('/');handler.do_GET()
         self.assertEqual(sent[0][0],403);self.assertIn('手机链接.cmd',sent[0][1].decode('utf-8'))
