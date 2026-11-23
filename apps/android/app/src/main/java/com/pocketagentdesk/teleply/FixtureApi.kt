@@ -22,6 +22,8 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
 
     override suspend fun control(device: String, chat: String, fresh: Boolean): Control { net(); return world.control(source, chat, fresh) }
 
+    override suspend fun agents(device: String): List<AgentInfo>? { net(); return world.agentsOf(device) }
+
     override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject { net(); return reply(device, route, query, body).also { if (body != null) lost() } }
 
     /** 示例网络 回复丢失 (10-27): the demo computer has done what it was asked, and its reply never reaches the phone. */
@@ -181,7 +183,14 @@ class FixtureWorld {
     @Volatile var network = FixtureNetwork.Instant
     /** The desktop apps each demo computer has (remote.py machine apps); 测试电脑 B has no Claude, like a tester's (0.9.1). */
     val apps = mutableMapOf("b".repeat(32) to listOf("codex", "deepseek"))
-    fun appsOf(device: String) = apps[device] ?: listOf("codex", "claude", "deepseek")
+    /** When true, /api/agents returns null (simulating a legacy host returning 404). */
+    var legacyAgents404 = false
+    fun appsOf(device: String) = apps[device] ?: listOf("codex", "claude", "deepseek", "testing")
+    fun agentsOf(device: String): List<AgentInfo>? {
+        if (legacyAgents404) return null
+        val has = appsOf(device).toSet()
+        return (AgentCatalogSnapshot.BuiltinAgents + TESTING_AGENT).filter { it.id in has }
+    }
     /** Signed in to the demo service (登录 with anything, 进入示例); its computers can be renamed or removed. */
     var signedIn = false
     val devices = mutableListOf(Computer("a".repeat(32), "测试电脑 A", true), Computer("b".repeat(32), "测试电脑 B", true), Computer("c".repeat(32), "离线电脑", false))
@@ -239,6 +248,8 @@ class FixtureWorld {
         Chat("claude-demo", "Claude 选项示例", "测试项目", if (claudeStep < 2) "请选择发布说明的格式" else "已选好格式", if (claudeStep < 2) "waiting" else "idle", "claude", NOW - 600_000),
         Chat("deepseek-demo", "DeepSeek 批准示例", "固定测试项目", if (!deepseekDecided) "批准这一步吗？" else "已处理批准", if (!deepseekDecided) "waiting" else "running", "deepseek", NOW - 1_800_000,
             children = DEEPSEEK_CHILDREN.take(2), childCount = DEEPSEEK_CHILDREN.size, childRunning = 1),
+        Chat("test-running", "测试对话 A", "测试项目", "正在跑测试", if (running["testing"] == false) "idle" else "running", "testing", NOW - 2_400_000),
+        Chat("test-waiting", "测试对话 B", "", "等你选择", "waiting", "testing", NOW - 3_000_000),
         Chat("question", "只读问题记录", "测试项目", "问题卡在时间线里作答", "waiting", "codex", NOW - 7_200_000),
         Chat("claude-next", "Claude 下一步示例", "测试项目", "下一步按钮和任务卡片", "idle", "claude", NOW - 9_000_000),
         Chat("plan-demo", "Codex 计划示例", "测试项目", if (planDone) "已按计划开始" else "计划待确认", if (planDone && running["codex"] == true) "running" else "idle", "codex", NOW - 10_800_000),
@@ -398,6 +409,13 @@ class FixtureWorld {
                 if (deepseekDecided) raw.put("interactions", JSONArray())
                 Control(true, run, turn, true, queued, turnMap, !deepseekDecided, raw.toString())
             }
+            "testing" -> {
+                val testRunning = if (chat == "test-running") running["testing"] != false else run
+                val raw = JSONObject().put("available", true).put("running", testRunning).put("status", if (testRunning) "running" else if (chat == "test-waiting") "waiting" else "idle")
+                    .put("turn_id", if (testRunning) "turn-1" else "").put("settings", JSONObject()).put("questions", JSONArray())
+                    .put("queued", JSONArray()).put("queue_available", true).put("stop_token", "stop-1")
+                Control(true, testRunning, if (testRunning) "turn-1" else "", true, queued, turnMap, chat == "test-waiting", raw.toString())
+            }
             else -> {
                 val raw = JSONObject(CODEX_STATE)
                 if (chat == "plan-demo") {
@@ -531,32 +549,37 @@ class FixtureWorld {
         return JSONObject().put("ok", true).put("app", app).put("id", id).put("archived", false)
     }
     fun archived(): JSONObject {
-        val rows = all().filter { "${it.app}:${it.id}" in archivedKeys && "${it.app}:${it.id}" !in deleted }.sortedBy { listOf("codex", "deepseek", "claude").indexOf(it.app) }
-        return JSONObject().put("items", JSONArray(rows.map { JSONObject().put("app", it.app).put("id", it.id).put("title", it.title).put("folder", it.folder).put("archived_at", NOW / 1000 - 120).put("can_delete", it.app == "codex") }))
-            .put("problems", JSONArray()).put("apps", JSONArray(listOf("codex", "deepseek", "claude"))).put("deletable", JSONArray(listOf("codex")))
+        val rows = all().filter { "${it.app}:${it.id}" in archivedKeys && "${it.app}:${it.id}" !in deleted }.sortedBy { listOf("codex", "deepseek", "claude", "testing").indexOf(it.app) }
+        return JSONObject().put("items", JSONArray(rows.map { JSONObject().put("app", it.app).put("id", it.id).put("title", it.title).put("folder", it.folder).put("archived_at", NOW / 1000 - 120).put("can_delete", it.app == "codex" || it.app == "testing") }))
+            .put("problems", JSONArray()).put("apps", JSONArray(listOf("codex", "deepseek", "claude", "testing"))).put("deletable", JSONArray(listOf("codex", "testing")))
     }
     fun delete(body: JSONObject): JSONObject {
         require(body.optBoolean("confirmed")) { "删除要先在手机上确认" }
         val results = body.rows("items") { v ->
             val key = v.string("app") + ":" + v.string("id")
-            if (v.string("app") == "codex" && key in archivedKeys) { deleted += key; archivedKeys -= key; JSONObject().put("app", v.string("app")).put("id", v.string("id")).put("ok", true) }
+            if (v.string("app") in setOf("codex", "testing") && key in archivedKeys) { deleted += key; archivedKeys -= key; JSONObject().put("app", v.string("app")).put("id", v.string("id")).put("ok", true) }
             else JSONObject().put("app", v.string("app")).put("id", v.string("id")).put("ok", false).put("error", "这种对话还不能删除")
         }
         return JSONObject().put("ok", results.all { it.optBoolean("ok") }).put("results", JSONArray(results)).put("deleted", results.count { it.optBoolean("ok") })
     }
 
-    /** 用量 (11-17): Codex read live with one reset credit, Claude's one limit from its window. */
+    /** 用量 (11-17): Codex read live with one reset credit, Claude's one limit from its window, plus protocol-2 agents map. */
     private var codexResetUsed = false
 
     fun usage(): JSONObject {
         val now = System.currentTimeMillis()
-        return JSONObject().put("codex", codexUsage(now))
-            .put("claude", JSONObject().put("available", true).put("source", "window").put("as_of", now)
-                .put("text", "Usage: 35% of 5-hour limit, Resets at 12:20 PM")
-                .put("windows", JSONArray().put(JSONObject().put("kind", "5h").put("label", "5-hour limit")
-                    .put("name", "5 小时").put("used_percent", 35).put("resets_at", JSONObject.NULL)
-                    .put("resets_text", "12:20")))
-                .put("minimized", false))
+        val codex = codexUsage(now)
+        val claude = JSONObject().put("available", true).put("source", "window").put("as_of", now)
+            .put("text", "Usage: 35% of 5-hour limit, Resets at 12:20 PM")
+            .put("windows", JSONArray().put(JSONObject().put("kind", "5h").put("label", "5-hour limit")
+                .put("name", "5 小时").put("used_percent", 35).put("resets_at", JSONObject.NULL)
+                .put("resets_text", "12:20")))
+            .put("minimized", false)
+        val testing = JSONObject().put("available", true).put("source", "testing").put("as_of", now)
+            .put("windows", JSONArray().put(JSONObject().put("label", "测试额度").put("used_percent", 10).put("resets_at", now + 3_600_000L)))
+        return JSONObject().put("codex", codex)
+            .put("claude", claude)
+            .put("agents", JSONObject().put("codex", codex).put("claude", claude).put("testing", testing))
             .put("now", now)
     }
 
@@ -640,6 +663,14 @@ class FixtureWorld {
             Message("d2", "assistant", "需要运行一个命令删除构建目录，等你批准。", phase = "commentary"),
             Message("subagent:sa-1", "subagent", "子智能体：检查日志", details = """{"child":"sa-1","label":"检查日志","status":"running"}"""),
         )
+        app == "testing" && chat == "test-waiting" -> listOf(
+            Message("t3", "user", "选一个方案"),
+            Message("t4", "assistant", "请选择 A 或 B", kind = "question"),
+        )
+        app == "testing" -> listOf(
+            Message("t1", "user", "跑一下测试"),
+            Message("t2", "assistant", "正在跑"),
+        )
         chat == "plan-demo" -> listOf(
             // Sent from the phone with three pictures: Codex keeps the send's request id on the message.
             Message("p1", "user", "先给我一个计划，确认后再改。", request = "fixture-send-plan"),
@@ -670,7 +701,8 @@ class FixtureWorld {
             JSONArray()
                 .put(JSONObject().put("app", "codex").put("name", "Codex").put("count", codexItems.length()).put("projects", JSONArray().put(project("p-test", "测试项目", codexItems, codexItems.length())).put(project("p-none", "其他对话", JSONArray(), 0, true))))
                 .put(JSONObject().put("app", "claude").put("name", "Claude").put("count", only("claude").length()).put("projects", JSONArray().put(project("p-claude", "测试项目", only("claude"), only("claude").length()))))
-                .put(JSONObject().put("app", "deepseek").put("name", "DeepSeek").put("count", only("deepseek").length()).put("projects", JSONArray().put(project("p-deepseek", "固定测试项目", only("deepseek"), only("deepseek").length())))),
+                .put(JSONObject().put("app", "deepseek").put("name", "DeepSeek").put("count", only("deepseek").length()).put("projects", JSONArray().put(project("p-deepseek", "固定测试项目", only("deepseek"), only("deepseek").length()))))
+                .put(JSONObject().put("app", "testing").put("name", "测试助手").put("count", only("testing").length()).put("projects", JSONArray().put(project("p-testing", "测试项目", only("testing"), only("testing").length())))),
         ).also { tree ->
             // Only the apps this computer has, even with none of their conversations (remote.py filters the same way).
             val all = tree.getJSONArray("apps"); val has = appsOf(device)
@@ -683,6 +715,30 @@ class FixtureWorld {
     companion object {
         /** Fixed clock so the demo reads the same every time (2026-10-24 12:00 UTC). */
         const val NOW = 1_792_843_200_000L
+        /** Fake testing helper (plan §6.5 / §7.2, matches agents/testing.py); demo & tests only. */
+        val TESTING_AGENT = AgentInfo(
+            id = "testing",
+            name = AgentName("测试助手", "Test Helper"),
+            order = 99,
+            color = "#7C3AED",
+            colorDark = "#A78BFA",
+            badgeColor = "#7C3AED",
+            icon = AgentIcon("builtin", "generic"),
+            legacy = false,
+            minProtocol = 2,
+            caps = AgentCapabilities(
+                list = true, read = true, search = true, open = true,
+                stop = true, queue = true, steer = true, approve = true, answer = true,
+                new = true, newProjectless = true, newPermission = true,
+                archive = true, restore = true, delete = true, usage = true,
+                waiting = true, attachments = true, slashCommands = true,
+                settings = listOf("model", "effort"),
+                sendModes = listOf("send", "steer", "queue"),
+                statuses = listOf("running", "waiting", "idle", "unknown"),
+            ),
+            params = AgentParams(stateTimeoutS = 2, sendTimeoutS = 5, refreshMs = 1_000),
+            ui = AgentUi(cardLayout = "generic.v1", waitingText = "等待你处理"),
+        )
         const val UNGROUPED = "ungrouped"
         const val AWAY_CODEX = "codex-away"
         const val AWAY_CODEX_STUCK = "codex-away-stuck"

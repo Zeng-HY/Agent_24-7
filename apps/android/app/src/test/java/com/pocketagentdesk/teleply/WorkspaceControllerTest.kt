@@ -489,4 +489,57 @@ class WorkspaceControllerTest {
         third.loadChoices(model="opus")
         assertTrue(JSONObject(third.state.value.choices).getJSONObject("source_catalog").optBoolean("borrowed"))
     }
+    @Test fun createObeysCatalogProjectlessAndPermissionCapabilities()=runTest {
+        val strict=FixtureWorld.TESTING_AGENT.copy(
+            id="strict_bot",
+            name=AgentName("严格助手","Strict Bot"),
+            caps=FixtureWorld.TESTING_AGENT.caps.copy(newProjectless=false,newPermission=true),
+        )
+        val flexible=FixtureWorld.TESTING_AGENT.copy(
+            id="flex_bot",
+            name=AgentName("自由助手","Flex Bot"),
+            caps=FixtureWorld.TESTING_AGENT.caps.copy(newProjectless=true,newPermission=false),
+        )
+        val snapshot=AgentCatalogSnapshot.fromServer(AgentCatalogSnapshot.BuiltinAgents+strict+flexible)
+        val made=mutableListOf<NewJob>()
+        val api=WorkspaceApi()
+        val c=WorkspaceController(backgroundScope,WorkspaceStore()).apply { catalog={ snapshot };created={ made+=it } }
+        // strict_bot requires a workspace folder when newProjectless=false.
+        c.bind(key.copy(app="strict_bot",chat="@new"),api,false);runCurrent()
+        c.edit("first_message","hello");runCurrent()
+        c.create();runCurrent()
+        assertTrue(made.isEmpty())
+        assertTrue(c.state.value.error!!.contains("要选一个工作区"))
+        c.edit("folder","D:/ws");c.edit("new_permission","workspace");runCurrent()
+        c.create();runCurrent()
+        assertEquals(1,made.size)
+        val strictBody=JSONObject(made.last().body)
+        assertEquals("strict_bot",strictBody.string("app"))
+        assertEquals("workspace",strictBody.string("permission"))
+        assertFalse(strictBody.optBoolean("projectless"))
+        // flex_bot allows projectless creation and omits permission when newPermission=false.
+        c.bind(key.copy(app="flex_bot",chat="@new"),api,false);runCurrent()
+        c.edit("first_message","hello flex");c.edit("new_permission","full");runCurrent()
+        c.create();runCurrent()
+        assertEquals(2,made.size)
+        val flexBody=JSONObject(made.last().body)
+        assertEquals("flex_bot",flexBody.string("app"))
+        assertTrue(flexBody.optBoolean("projectless"))
+        assertFalse(flexBody.has("permission"))
+    }
+    @Test fun unknownOrGenericAgentDoesNotQueryClaudeOrDeepSeekChoices()=runTest {
+        val routes=mutableListOf<String>()
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject {
+                routes+=route;return JSONObject()
+            }
+        }
+        val snapshot=AgentCatalogSnapshot.fromServer(AgentCatalogSnapshot.BuiltinAgents+FixtureWorld.TESTING_AGENT)
+        val c=WorkspaceController(backgroundScope,WorkspaceStore()).apply { catalog={ snapshot } }
+        for(app in listOf("testing","mystery_bot")) {
+            c.bind(key.copy(app=app),api,false);runCurrent()
+            c.loadChoices(fresh=true,model="m1");runCurrent()
+        }
+        assertTrue(routes.isEmpty())
+    }
 }

@@ -117,4 +117,30 @@ class AgentCatalogTest {
         assertEquals(2, callsA)
         assertEquals(listOf("codex", "claude", "deepseek", "testing"), updated.order)
     }
+
+    @Test fun brandMarkCardsAndArchiveExplainNeverImpersonateCodexForUnknownOrTesting() {
+        val snap = AgentCatalogSnapshot.fromServer(AgentCatalogSnapshot.BuiltinAgents + FixtureWorld.TESTING_AGENT)
+        assertSame(TeleplyBrand.Codex, sourceMarkVector(snap.info("codex")))
+        assertSame(TeleplyBrand.Claude, sourceMarkVector(snap.info("claude")))
+        assertSame(TeleplyBrand.DeepSeek, sourceMarkVector(snap.info("deepseek")))
+        assertSame(TeleplyBrand.Generic, sourceMarkVector(snap.info("testing")))
+        assertSame(TeleplyBrand.Generic, sourceMarkVector(snap.info("mystery_bot")))
+        assertEquals(Color(0xFF7C3AED), snap.badgeColor("testing"))
+        assertEquals(AgentCatalogSnapshot.NeutralLight, snap.badgeColor("mystery_bot"))
+        // Pending cards & chips: read-only unknown returns no cards; generic agent with approve/answer uses its own name (never Codex).
+        val raw = JSONObject("""{"available":false,"settings":{"model":"m-test","mode":"auto"},"questions":[{"status":"pending","kind":"approval"}]}""")
+        assertEquals(listOf(PendingCard("approval", "${snap.name("testing")} 等你批准")), pendingCards("testing", raw, snap))
+        assertTrue(pendingCards("mystery_bot", raw, snap).isEmpty())
+        assertEquals(Triple("m-test", "auto", false), chipLabels("testing", raw, JSONObject(), snap))
+        assertFalse(chipAway("testing", raw, snap))
+        assertFalse(chipAway("mystery_bot", raw, snap))
+        assertFalse(sendsWhileAway("testing", snap))
+        assertFalse(sendsWhileAway("mystery_bot", snap))
+        // Archive explanation keeps built-in copy and handles testing by capabilities.
+        val explain = archiveExplain(listOf("codex", "claude", "deepseek", "testing"), snap)
+        assertTrue(explain.contains("Codex 的可以恢复"))
+        assertTrue(explain.contains("删除后电脑上也找不回来"))
+        assertTrue(explain.contains("DeepSeek 没有删除对话的功能"))
+        assertTrue(explain.contains("测试助手") || explain.contains("Test Helper"))
+    }
 }

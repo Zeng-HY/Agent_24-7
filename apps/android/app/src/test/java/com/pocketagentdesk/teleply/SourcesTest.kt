@@ -21,17 +21,25 @@ private class SourceStore(var prefs: Preferences = Preferences()) : ReaderStore 
 /** Two computers: A has all three apps, B only Codex and DeepSeek (like a tester's). The tree can be slow or fail. */
 private class SourceApi : TestApi() {
     val apps = mutableMapOf(a.id to listOf("codex", "claude", "deepseek"), b.id to listOf("codex", "deepseek"))
+    val manifests = mutableMapOf<String, List<AgentInfo>?>()
+    var statusVersion = "0.27.0-dev.43"
+    var agentsReads = 0
     var treeFails = false
     var treeDelay = 0L
     var treeReads = 0
     val listed = mutableListOf<Pair<String, String>>()
+    override suspend fun agents(device: String): List<AgentInfo>? {
+        agentsReads++
+        return if (device in manifests) manifests[device] else null
+    }
     override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject {
+        if (route == "status") return JSONObject().put("ok", true).put("ui_version", statusVersion)
         if (route != "chat/projects") return JSONObject()
         treeReads++
         if (treeDelay > 0) delay(treeDelay)
         if (treeFails) throw java.io.IOException("offline")
         // An app with no conversations is still a group (chat_projects.tree); an app not installed is not (remote.py).
-        return JSONObject().put("apps", JSONArray(apps[device].orEmpty().map { JSONObject().put("app", it).put("name", sourceName(it)).put("projects", JSONArray()) }))
+        return JSONObject().put("apps", JSONArray(apps[device].orEmpty().map { JSONObject().put("app", it).put("name", manifests[device]?.find { m -> m.id == it }?.displayName() ?: sourceName(it)).put("projects", JSONArray()) }))
     }
     override suspend fun chatList(device: String, app: String, query: String, cursor: String?, sort: String, status: String): Page<Chat> {
         listed += device to app
@@ -143,5 +151,60 @@ class SourcesTest {
         assertEquals("codex", vm.state.value.pendingNew?.app)
         advanceUntilIdle()
         assertEquals(reads, api.treeReads)
+    }
+
+    @Test fun fakeHelperAppearsInListAndCatalogWithManifestOrder() = runTest(dispatcher) {
+        val api = SourceApi()
+        api.apps[api.a.id] = listOf("testing", "codex", "claude", "deepseek")
+        api.manifests[api.a.id] = AgentCatalogSnapshot.BuiltinAgents + FixtureWorld.TESTING_AGENT
+        val vm = signedIn(api)
+        vm.select(api.a); advanceUntilIdle()
+        // Ordered by manifest order (10, 20, 30, 99), not raw tree order.
+        assertEquals(listOf("codex", "claude", "deepseek", "testing"), vm.state.value.knownApps())
+        assertEquals("测试助手", vm.state.value.catalog.name("testing", java.util.Locale.CHINA))
+        assertEquals("Test Helper", vm.state.value.catalog.name("testing", java.util.Locale.US))
+        assertTrue(vm.state.value.chats.any { it.app == "testing" })
+        // Can filter to the fake helper directly.
+        vm.listDisplay(source = "testing"); advanceUntilIdle()
+        assertEquals("testing", vm.state.value.listSource)
+        assertTrue(vm.state.value.chats.isNotEmpty() && vm.state.value.chats.all { it.app == "testing" })
+    }
+
+    @Test fun unknownAssistantDoesNotImpersonateBuiltinsAndStaysReadOnly() = runTest(dispatcher) {
+        val api = SourceApi()
+        api.apps[api.a.id] = listOf("codex", "mystery_bot")
+        api.manifests[api.a.id] = null // legacy /api/agents 404
+        val vm = signedIn(api)
+        vm.select(api.a); advanceUntilIdle()
+        assertEquals(listOf("codex", "mystery_bot"), vm.state.value.knownApps())
+        val catalog = vm.state.value.catalog
+        assertEquals("mystery_bot", catalog.name("mystery_bot"))
+        assertEquals("generic", catalog.icon("mystery_bot").key)
+        assertEquals(AgentCatalogSnapshot.NeutralLight, catalog.badgeColor("mystery_bot"))
+        assertFalse(catalog.can("mystery_bot") { it.new })
+        assertFalse(catalog.can("mystery_bot") { it.stop })
+        assertFalse(catalog.can("mystery_bot") { it.archive })
+        assertTrue(catalog.sendModes("mystery_bot").isEmpty())
+        // New conversation skips read-only unknown assistant.
+        assertEquals(listOf("codex"), vm.state.value.newableApps())
+    }
+
+    @Test fun legacyComputerFallsBackOn404AndRefreshesWhenStatusVersionChanges() = runTest(dispatcher) {
+        val api = SourceApi()
+        api.manifests[api.a.id] = null // starts as old host (404)
+        val vm = signedIn(api)
+        vm.select(api.a); advanceUntilIdle()
+        assertFalse(vm.state.value.catalog.fromServer)
+        assertEquals(listOf("codex", "claude", "deepseek"), vm.state.value.catalog.order)
+        // First status call records the old host version without re-fetching.
+        vm.deviceCall("status"); advanceUntilIdle()
+        val readsBefore = api.agentsReads
+        // Host upgrades -> status returns a new version and /api/agents now returns testing.
+        api.statusVersion = "0.27.0-dev.44"
+        api.manifests[api.a.id] = AgentCatalogSnapshot.BuiltinAgents + FixtureWorld.TESTING_AGENT
+        vm.deviceCall("status"); advanceUntilIdle()
+        assertTrue(api.agentsReads > readsBefore)
+        assertTrue(vm.state.value.catalog.fromServer)
+        assertTrue("testing" in vm.state.value.catalog)
     }
 }

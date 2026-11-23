@@ -174,4 +174,32 @@ class UsageTest {
             assertFalse(code, attempt.keepsId(ServiceFailure(409, code)))
         }
     }
+
+    @Test fun protocolTwoAgentsUsageParsesTestingAndUnknownAgents() {
+        val resetMs = moment(11, 17, 13, 34)
+        val usage = parseUsage(JSONObject("""
+            {"codex":{"available":true,"source":"live","as_of":$now,"windows":[]},
+             "claude":{"available":false,"reason":"未安装"},
+             "agents":{
+               "codex":{"available":true,"source":"live","as_of":$now,"windows":[]},
+               "testing":{"available":true,"source":"testing","as_of":$now,
+                 "windows":[{"label":"测试额度","used_percent":10,"resets_at":$resetMs}]},
+               "mystery_bot":{"available":true,"source":"api","as_of":$now,
+                 "windows":[{"name":"每日","used_percent":42,"resets_at":null,"resets_text":"明天 00:00"}]}
+             },
+             "now":$now}
+        """.trimIndent()))
+        assertEquals(setOf("codex", "testing", "mystery_bot"), usage.agents.keys)
+        val testWin = usage.agents.getValue("testing").windows.single()
+        assertEquals("测试额度", testWin.name)
+        assertEquals(10, testWin.usedPercent)
+        assertEquals("今天 13:34 重置（还有 3 小时 12 分）", resetLine(testWin, "testing", now, zone))
+        val mysteryWin = usage.agents.getValue("mystery_bot").windows.single()
+        assertEquals("每日", mysteryWin.name)
+        assertEquals(42, mysteryWin.usedPercent)
+        assertEquals("明天 00:00", mysteryWin.resetsText)
+        // Legacy payload without "agents" still parses cleanly.
+        val legacy = parseUsage(JSONObject("""{"codex":{"available":false},"claude":{"available":false},"now":$now}"""))
+        assertTrue(legacy.agents.isEmpty())
+    }
 }

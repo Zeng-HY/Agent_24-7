@@ -787,7 +787,7 @@ abstract class ReaderUiScenarios {
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()
         listRow("加载更多对话").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==11 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==13 }
         listRow("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy }
         compose.onNodeWithContentDescription("返回").assertHasClickAction().performClick()
@@ -796,7 +796,7 @@ abstract class ReaderUiScenarios {
     }
     @Test fun sourceChipsFilterTheMixedList() {
         launch();fixtureList()
-        compose.runOnIdle { org.junit.Assert.assertEquals(setOf("codex","claude","deepseek"),vm.state.value.chats.map { it.app }.toSet()) }
+        compose.runOnIdle { org.junit.Assert.assertEquals(setOf("codex","claude","deepseek","testing"),vm.state.value.chats.map { it.app }.toSet()) }
         compose.onNode(hasText("Claude") and isSelectable()).performClick()
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="claude" }
         compose.runOnIdle { org.junit.Assert.assertTrue(vm.state.value.chats.isNotEmpty() && vm.state.value.chats.all { it.app=="claude" }) }
@@ -806,7 +806,7 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="running" }
         compose.onNodeWithText("没有找到对话").assertIsDisplayed()
         compose.onNodeWithText("清除筛选").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==10 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==12 }
     }
     /** 11-02: 已结束 asked for done, which the computer refuses: 状态筛选无效 instead of the rows. */
     @Test fun theEndedStateShowsTheFinishedRows() {
@@ -861,5 +861,37 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("发送",substring=false).assertDoesNotExist()
         compose.onNodeWithText("批准",substring=false).assertDoesNotExist()
         compose.onNodeWithText("新建会话",substring=false).assertDoesNotExist()
+    }
+    @Test fun fakeHelperAppearsInDemoChipsAndOpensWithoutError() {
+        launch();fixtureList()
+        val helperName=vm.state.value.catalog.name("testing")
+        chip(helperName).assertExists().performClick()
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="testing" }
+        listRow("测试对话 A").performClick()
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy && vm.state.value.app=="testing" }
+        compose.onNodeWithText("正在跑").assertExists()
+        compose.onNodeWithTag("composer").assertExists()
+    }
+    @Test fun unknownAssistantRendersWithGenericStyleAndReadOnlyComposer() {
+        val dev=Computer("a".repeat(32),"测试电脑 A",true)
+        val unknownChat=Chat("u1","未知助手对话","项目","只读内容","idle","mystery_bot")
+        compose.setContent {
+            val model=remember { ReaderViewModel(UiMemoryStore()) { FixtureApi() } }
+            TeleplyTheme {
+                ReaderApp(
+                    ReaderState(
+                        screen=Screen.Chats,
+                        device=dev,
+                        app="mystery_bot",
+                        chats=listOf(unknownChat),
+                        sources=SourceInfo(dev.id,listOf("codex","mystery_bot")),
+                        catalog=AgentCatalogSnapshot.Builtin,
+                    ),
+                    model,
+                )
+            }
+        }
+        compose.onNodeWithText("未知助手对话").assertIsDisplayed()
+        chip("mystery_bot").assertExists()
     }
 }
