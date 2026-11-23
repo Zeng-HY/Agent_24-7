@@ -499,6 +499,23 @@ def build() -> dict:
         fake_history = FakeHistory()
         fake_files = FakeFiles()
         fake_refs = composer_references.References(fake_history, home=home, files=fake_files)
+        # Keep skill/command discovery strictly inside the temporary sandbox so parent directories
+        # (e.g. a worktree's .claude or the user's real home directory) never leak into golden output.
+        _orig_roots = fake_refs._roots
+        _sandbox_root = root.resolve()
+
+        def _sandboxed_roots(app, cwd, warnings):
+            roots, disabled = _orig_roots(app, cwd, warnings)
+            kept = []
+            for entry in roots:
+                try:
+                    Path(entry[0]).resolve().relative_to(_sandbox_root)
+                except ValueError:
+                    continue
+                kept.append(entry)
+            return kept, disabled
+
+        fake_refs._roots = _sandboxed_roots
 
         archive_server_cls = _make_fake_server_cls(calls)
         archive_svc = archives.Archives(
@@ -565,7 +582,9 @@ def build() -> dict:
         with ExitStack() as stack:
             stack.enter_context(patch("time.time", return_value=FIXED_NOW))
             stack.enter_context(patch("chats.codex_db", return_value=codex_db))
+            stack.enter_context(patch("chats.HOME", home))
             stack.enter_context(patch("chats.CODEX_HOME", home / ".codex"))
+            stack.enter_context(patch("new_conversations.CODEX_PROJECTLESS", home / "Documents" / "Codex"))
             stack.enter_context(patch("chats.find", side_effect=lambda app, tid: conv_items[(app, tid)] if (app, tid) in conv_items else (_ for _ in ()).throw(chats.ChatError(f"找不到 {app}:{tid}"))))
             stack.enter_context(patch("chats.claude_transcript", return_value=claude_log))
             stack.enter_context(patch("chats.claude_sessions", return_value=[conv_items[("claude", "cl-1")]]))
