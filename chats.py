@@ -1329,7 +1329,12 @@ def list_conversations(app: str = "all", limit: int = 40) -> list[dict]:
 
 def conversation(app: str, conv_id: str, n: int = 60) -> dict:
     from agents import registry
-    return registry.get(app).read(conv_id, limit=n)
+    agent = registry.get(app)
+    if not agent.home_list:  # an interface-based assistant has no record file; keep the old note
+        item = agent.find(conv_id)
+        return public(item) | {"messages": [], "status": "unknown", "size": 0, "runtime": None,
+                               "note": "没找到这个对话的记录文件"}
+    return agent.read(conv_id, limit=n)
 
 
 def conversation_for(agent, conv_id: str, n: int = 60) -> dict:
