@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
+import difflib
+import json
+import re
 
 import chats
 
 from .base import Agent, NotFound, make_manifest
+
+CODEX_STEPS = {
+    "exec": "run",
+    "shell": "run",
+    "exec_command": "run",
+    "apply_patch": "edit",
+    "web_search": "search",
+    "search": "search",
+    "js": "run",
+}
 
 
 class CodexAgent(Agent):
@@ -16,6 +30,7 @@ class CodexAgent(Agent):
     dedupe_twins = True
     assign_turn_id = True
     final_answer_plan = True
+    desktop_tasks = True
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -74,8 +89,150 @@ class CodexAgent(Agent):
         return (b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]
                 and b'"compacted"' not in raw[:160])
 
+    def step_of(self, name: str, argument: str = "") -> str:
+        action = CODEX_STEPS.get((name or "").rsplit(".", 1)[-1])
+        if name == "exec":
+            text = (argument or "").lower()
+            if "apply_patch" in text or "*** begin patch" in text:
+                return "edit"
+            if "web_search" in text or "search_query" in text or "web.run" in text:
+                return "search"
+        return action or ""
+
     def tail_step(self, path, started: int = 0) -> str:
-        return chats.tail_step("codex", path, started)
+        try:
+            lines, _ = chats.read_tail(path, 256 << 10)
+        except OSError:
+            return ""
+        action = ""
+        for raw in lines:
+            try:
+                rec = json.loads(raw)
+            except (ValueError, UnicodeError):
+                continue
+            ts = rec.get("timestamp") or ""
+            try:
+                at = int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+            except (ValueError, AttributeError):
+                at = 0
+            if started and at and at < started:
+                continue
+            payload = rec.get("payload") or {}
+            event = payload.get("type") if rec.get("type") == "event_msg" else None
+            if event == "task_started":
+                action = ""
+            elif rec.get("type") == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
+                step = self.step_of(str(payload.get("name") or ""), str(payload.get("input") or ""))
+                if step:
+                    action = step
+        return action
+
+    def parse_runtime(self, lines: list[bytes]) -> dict:
+        out = super().parse_runtime(lines)
+        for raw in lines:
+            try:
+                rec = json.loads(raw)
+            except (ValueError, UnicodeError):
+                continue
+            ts, kind = rec.get("timestamp"), rec.get("type")
+            payload = rec.get("payload") or {}
+            event = payload.get("type") if kind == "event_msg" else None
+            if event == "task_started":
+                out["turn_time"] = ts
+            if kind == "turn_context":
+                settings = (payload.get("collaboration_mode") or {}).get("settings") or {}
+                model = payload.get("model") or settings.get("model")
+                if out["model"] and model != out["model"]:
+                    out.update(used_tokens=None, context_window=None, percent=None, usage_time=None,
+                               context_state="waiting")
+                out.update(model=model, effort=payload.get("effort") or payload.get("reasoning_effort")
+                           or settings.get("reasoning_effort"), model_time=ts, model_turn_id=payload.get("turn_id"))
+            if kind == "compacted" or event == "context_compacted":
+                out.update(used_tokens=None, context_window=None, percent=None, usage_time=None,
+                           context_state="waiting")
+            if event == "token_count":
+                info = payload.get("info") or {}
+                used = (info.get("last_token_usage") or {}).get("total_tokens")
+                window = info.get("model_context_window")
+                if isinstance(used, int) and not isinstance(used, bool) and used >= 0 and isinstance(window, int) and window > 0:
+                    out.update(used_tokens=used, context_window=window, percent=round(used / window * 100, 1),
+                               usage_time=ts, context_state="available")
+        return out
+
+    def runtime_complete(self, out: dict) -> bool:
+        return bool(out.get("model") and out.get("context_state") != "unavailable")
+
+    def enrich_activity(self, record: dict, messages: list[dict], context: dict, ts: str):
+        import activity_records
+        p = record.get("payload") or {}
+        kind = p.get("type")
+        current = context.get("activity_turn")
+        if record.get("type") == "response_item" and current:
+            timing = context.get("activity_turns", {}).get(current, {})
+            if kind == "function_call" and str(p.get("name", "")).split(".")[-1] == "request_user_input":
+                context.setdefault("activity_waits", {})[p.get("call_id")] = current
+                timing.setdefault("paused_at", activity_records.milliseconds(ts))
+            elif kind == "function_call_output":
+                waiting = context.setdefault("activity_waits", {}).pop(p.get("call_id"), None)
+                if waiting:
+                    clock = context["activity_turns"][waiting]
+                    start = clock.pop("paused_at", None)
+                    end = activity_records.milliseconds(ts)
+                    if start is not None and end is not None:
+                        clock["paused_ms"] = clock.get("paused_ms", 0) + max(0, end - start)
+                        clock.setdefault("pauses", []).append([start, end])
+            return None
+        if kind == "task_started":
+            context["activity_turn"] = p.get("turn_id") or "start:" + ts
+            context.setdefault("activity_turns", {})[context["activity_turn"]] = {
+                "status": "running", "started_at": activity_records.milliseconds(ts), "pauses": []}
+        turn = context.get("activity_turn")
+        if kind in ("task_complete", "turn_aborted") and turn:
+            context["activity_turns"][turn].update(
+                status="stopped" if kind == "turn_aborted" else "completed",
+                ended_at=activity_records.milliseconds(ts))
+        item = p.get("item") or {}
+        if kind == "item_completed" and item.get("type") in ("FileChange", "fileChange"):
+            changes = []
+            source_changes = item.get("changes") or []
+            if isinstance(source_changes, dict):
+                source_changes = [dict(value, path=path) for path, value in source_changes.items() if isinstance(value, dict)]
+            for row in source_changes:
+                if not isinstance(row, dict):
+                    continue
+                k = row.get("kind", "modify")
+                k = k.get("type", "modify") if isinstance(k, dict) else row.get("type", k)
+                patch = row.get("diff") or row.get("unified_diff")
+                if k in ("add", "delete") and isinstance(row.get("content"), str):
+                    content = row["content"].splitlines()
+                    patch = "\n".join(difflib.unified_diff(
+                        [] if k == "add" else content, content if k == "add" else [],
+                        fromfile="/dev/null" if k == "add" else row["path"],
+                        tofile=row["path"] if k == "add" else "/dev/null", lineterm=""))
+                c = activity_records.change(row.get("path"), patch, k)
+                if c and isinstance(row.get("move_path"), str):
+                    c.update(kind="rename", destination=row["move_path"])
+                if c:
+                    changes.append(c)
+            succeeded = str(item.get("status", "")).lower() in ("completed", "success", "succeeded")
+            messages.append({
+                "role": "tool", "text": "修改文件", "time": ts, "source_id": item.get("id"),
+                "tool_status": "completed" if succeeded else "failed" if item.get("status") == "failed" else "unknown",
+                "_changes": changes,
+            })
+        if kind == "item_completed" and item.get("type") == "CommandExecution":
+            for m in messages:
+                if m["role"] == "tool":
+                    command = item.get("command")
+                    m["detail"] = (command if isinstance(command, str) else json.dumps(command, ensure_ascii=False))[:16000]
+                    m["result"] = str(item.get("aggregated_output") or "")[:16000]
+                    m["tool_status"] = "failed" if item.get("exit_code", item.get("exitCode", 0)) not in (0, None) else "completed"
+                    if (item.get("exit_code", item.get("exitCode")) == 1 and isinstance(command, str)
+                            and re.match(r"^\s*(?:rg|ripgrep)\s", command)
+                            and not re.search(r"[;&|<>\r\n`]", command) and not m["result"].strip()):
+                        m["tool_status"] = "no_matches"
+                        m["result"] = "搜索完成，没有匹配项"
+        return turn
 
     def runtime(self, path) -> dict:
         return chats.runtime_info("codex", path)

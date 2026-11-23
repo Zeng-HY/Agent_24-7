@@ -6,10 +6,32 @@ import chats
 
 from .base import Agent, NotFound, Unsupported, make_manifest
 
+DEEPSEEK_STEPS = {
+    "pwsh": "run",
+    "shell": "run",
+    "bash": "run",
+    "terminal": "run",
+    "exec": "run",
+    "apply_patch": "edit",
+    "edit": "edit",
+    "write": "edit",
+    "write_file": "edit",
+    "read": "read",
+    "read_file": "read",
+    "grep": "read",
+    "glob": "read",
+    "web_search": "search",
+    "web_fetch": "search",
+    "fetch": "search",
+}
+
 
 class DeepSeekAgent(Agent):
     id = "deepseek"
     home_list = False
+
+    def step_of(self, name: str, argument: str = "") -> str:
+        return DEEPSEEK_STEPS.get((name or "").rsplit(".", 1)[-1]) or ""
 
     def build_manifest(self) -> dict:
         return make_manifest(

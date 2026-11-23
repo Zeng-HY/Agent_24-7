@@ -114,6 +114,7 @@ class Agent:
     mark_next_open = False       # mark the next-step box seen after reading (Claude)
     assign_turn_id = False       # put the current turn id on every message (Codex)
     final_answer_plan = False    # Codex's plan is a final answer; Claude's is a separate message
+    desktop_tasks = False        # desktop IPC task summary tracking (Codex)
 
     def __init__(self) -> None:
         self._manifest = self.build_manifest()
@@ -160,8 +161,23 @@ class Agent:
         """Whether this line carries nothing the phone shows."""
         return False
 
+    def step_of(self, name: str, argument: str = "") -> str:
+        """edit | run | search | read for a recorded tool call, or ''."""
+        return ""
+
     def tail_step(self, path, started: int = 0) -> str:
         return ""
+
+    def parse_runtime(self, lines: list[bytes]) -> dict:
+        return {"model": None, "effort": None, "model_time": None, "usage_time": None,
+                "used_tokens": None, "context_window": None, "percent": None,
+                "context_state": "unavailable", "turn_time": None, "model_turn_id": None}
+
+    def runtime_complete(self, out: dict) -> bool:
+        return bool(out.get("model"))
+
+    def enrich_activity(self, record: dict, messages: list[dict], context: dict, ts: str):
+        return None
 
     def runtime(self, path) -> dict:
         return {}

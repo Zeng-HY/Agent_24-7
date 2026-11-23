@@ -5,6 +5,14 @@ import chats
 from codex_control import native_questions,native_approvals,latest_plan,ordered_turns,is_running,async_questions
 from pathlib import Path
 
+def _uses_desktop_tasks(app):
+    from agents import registry
+    try:
+        return bool(registry.get(app).desktop_tasks)
+    except Exception:
+        return False
+
+
 class TaskCenter:
     def __init__(self,bridge):
         self.bridge=bridge;self.rows=[];self.lock=threading.Lock();self.stop=threading.Event();self.started=False;self.live={};self.checked={};self.last_catalog=0;self.last_client=0
@@ -22,7 +30,7 @@ class TaskCenter:
                     rows=chats.list_conversations('all',100)
                     with self.lock:self.rows=rows;self.last_catalog=now
                 recent={r['id'] for r in self.rows[:20]}
-                candidates=[r for r in self.rows if r['app']=='codex' and (r['id'] in recent or r['status'] in ('running','unknown') or r['id'] in self.bridge.cache or (self.live.get(r['id']) or {}).get('pending'))]
+                candidates=[r for r in self.rows if _uses_desktop_tasks(r['app']) and (r['id'] in recent or r['status'] in ('running','unknown') or r['id'] in self.bridge.cache or (self.live.get(r['id']) or {}).get('pending'))]
                 candidates.sort(key=lambda r:self.checked.get(r['id'],0))
                 for row in candidates[:1]:
                     tid=row['id']
@@ -46,7 +54,7 @@ class TaskCenter:
         with self.lock:rows=copy.deepcopy(self.rows);updated=self.last_catalog
         out=[];counts={'pending':0,'running':0,'completed':0,'unverified':0}
         for row in rows:
-            live=self.live.get(row['id']) if row['app']=='codex' else None
+            live=self.live.get(row['id']) if _uses_desktop_tasks(row['app']) else None
             fresh=bool(live and time.time()*1000-live['observed_at']<45000)
             if fresh and live.get('source')=='desktop':
                 state='pending' if live['pending'] else 'running' if live['running'] else 'completed'
@@ -62,7 +70,7 @@ class TaskCenter:
         """Use already-observed live state without blocking the conversation list on IPC."""
         now=time.time()*1000
         for row in rows:
-            live=self.live.get(row['id']) if row['app']=='codex' else None
+            live=self.live.get(row['id']) if _uses_desktop_tasks(row['app']) else None
             if live and live.get('source')=='desktop' and now-live['observed_at']<45000:
                 row['status']='waiting' if live.get('pending') else 'running' if live['running'] else 'idle'
                 row['status_source']='desktop'

@@ -553,29 +553,13 @@ def _codex_delegation(item: dict) -> dict | None:
             "origin": "other_chat", "source_thread_id": match[1]}
 
 
-_STEPS = {
-    'claude': {'Bash': 'run', 'PowerShell': 'run', 'Edit': 'edit', 'Write': 'edit', 'MultiEdit': 'edit',
-               'NotebookEdit': 'edit', 'Read': 'read', 'Grep': 'read', 'Glob': 'read',
-               'WebSearch': 'search', 'WebFetch': 'search'},
-    'codex': {'exec': 'run', 'shell': 'run', 'exec_command': 'run', 'apply_patch': 'edit',
-              'web_search': 'search', 'search': 'search', 'js': 'run'},
-    'deepseek': {'pwsh': 'run', 'shell': 'run', 'bash': 'run', 'terminal': 'run', 'exec': 'run',
-                 'apply_patch': 'edit', 'edit': 'edit', 'write': 'edit', 'write_file': 'edit',
-                 'read': 'read', 'read_file': 'read', 'grep': 'read', 'glob': 'read',
-                 'web_search': 'search', 'web_fetch': 'search', 'fetch': 'search'},
-}
-
-
 def _step_of(app: str, name: str, argument: str = '') -> str:
     """edit | run | search | read for a recorded tool call, from its name only (0.6.4). '' for anything else."""
-    action = _STEPS.get(app, {}).get((name or '').rsplit('.', 1)[-1])
-    if app == 'codex' and name == 'exec':
-        text = (argument or '').lower()
-        if 'apply_patch' in text or '*** begin patch' in text:
-            return 'edit'
-        if 'web_search' in text or 'search_query' in text or 'web.run' in text:
-            return 'search'
-    return action or ''
+    from agents import registry
+    try:
+        return registry.get(app).step_of(name, argument)
+    except Exception:
+        return ''
 
 
 def parse_codex(lines: list[bytes], context: dict | None = None,
@@ -1178,46 +1162,11 @@ def summary_for(agent, item: dict) -> dict:
 def tail_step(app: str, path: Path, started: int = 0) -> str:
     """The latest tool action of the turn that began at [started] (0.6.5): a new turn starts with no action, even when
     the last 256 KB still holds the previous turn's last tool call."""
+    from agents import registry
     try:
-        lines, _ = read_tail(path, 256 << 10)
-    except OSError:
+        return registry.get(app).tail_step(path, started)
+    except Exception:
         return ''
-    action = ''
-    for raw in lines:
-        try:
-            rec = json.loads(raw)
-        except (ValueError, UnicodeError):
-            continue
-        ts = rec.get('timestamp') or ''
-        try:
-            at = int(datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp())
-        except (ValueError, AttributeError):
-            at = 0
-        if started and at and at < started:
-            continue
-        payload = rec.get('payload') or {}
-        if app == 'codex':
-            event = payload.get('type') if rec.get('type') == 'event_msg' else None
-            if event == 'task_started':
-                action = ''
-            elif rec.get('type') == 'response_item' and payload.get('type') in ('function_call', 'custom_tool_call'):
-                step = _step_of('codex', str(payload.get('name') or ''), str(payload.get('input') or ''))
-                if step:
-                    action = step
-        else:
-            content = (rec.get('message') or {}).get('content')
-            blocks = content if isinstance(content, list) else []
-            if rec.get('type') == 'user' and not rec.get('isSidechain') and not rec.get('isMeta'):
-                text = _join_text(content).strip()
-                if text and not any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in blocks):
-                    action = ''
-            elif rec.get('type') == 'assistant':
-                for block in blocks:
-                    if isinstance(block, dict) and block.get('type') == 'tool_use':
-                        step = _step_of('claude', str(block.get('name') or ''))
-                        if step:
-                            action = step
-    return action
 
 
 def public(item: dict) -> dict:
@@ -1226,54 +1175,13 @@ def public(item: dict) -> dict:
 
 def parse_runtime(app: str, lines: list[bytes]) -> dict:
     """Only expose recorded settings and a single usage snapshot, never cumulative usage."""
-    out = {"model": None, "effort": None, "model_time": None, "usage_time": None,
-           "used_tokens": None, "context_window": None, "percent": None,
-           "context_state": "unavailable", "turn_time": None, "model_turn_id": None}
-    for raw in lines:
-        try:
-            rec = json.loads(raw)
-        except (ValueError, UnicodeError):
-            continue
-        ts, kind = rec.get("timestamp"), rec.get("type")
-        payload = rec.get("payload") or {}
-        if app == "claude":
-            if kind == "assistant" and not rec.get("isSidechain") and not rec.get("isMeta"):
-                model = (rec.get("message") or {}).get("model")
-                if model and model != "<synthetic>":
-                    out.update(model=model, model_time=ts)
-                    usage=(rec.get('message') or {}).get('usage') or {}
-                    parts=[usage.get(k,0) for k in ('input_tokens','cache_read_input_tokens','cache_creation_input_tokens')]
-                    if all(isinstance(v,(int,float)) and not isinstance(v,bool) and v>=0 for v in parts) and any(parts):
-                        out.update(used_tokens=sum(parts),usage_time=ts,context_state='partial',source='last_request')
-            elif kind=='system' and rec.get('subtype')=='compact_boundary':
-                # 0.6.6: Claude writes what the context came down to, so the ring moves before the next answer
-                after=(rec.get('compactMetadata') or {}).get('postTokens')
-                if isinstance(after,int) and not isinstance(after,bool) and after>=0:
-                    out.update(used_tokens=after,usage_time=ts,context_state='partial',source='compact')
-                else:out.update(used_tokens=None,usage_time=ts,context_state='waiting')
-            continue
-        event = payload.get("type") if kind == "event_msg" else None
-        if event == "task_started":
-            out["turn_time"] = ts
-        if kind == "turn_context":
-            settings = (payload.get("collaboration_mode") or {}).get("settings") or {}
-            model = payload.get("model") or settings.get("model")
-            if out["model"] and model != out["model"]:
-                out.update(used_tokens=None, context_window=None, percent=None, usage_time=None,
-                           context_state="waiting")
-            out.update(model=model, effort=payload.get("effort") or payload.get("reasoning_effort")
-                       or settings.get("reasoning_effort"), model_time=ts, model_turn_id=payload.get("turn_id"))
-        if kind == "compacted" or event == "context_compacted":
-            out.update(used_tokens=None, context_window=None, percent=None, usage_time=None,
-                       context_state="waiting")
-        if event == "token_count":
-            info = payload.get("info") or {}
-            used = (info.get("last_token_usage") or {}).get("total_tokens")
-            window = info.get("model_context_window")
-            if isinstance(used, int) and not isinstance(used, bool) and used >= 0 and isinstance(window, int) and window > 0:
-                out.update(used_tokens=used, context_window=window, percent=round(used / window * 100, 1),
-                           usage_time=ts, context_state="available")
-    return out
+    from agents import registry
+    try:
+        return registry.get(app).parse_runtime(lines)
+    except Exception:
+        return {"model": None, "effort": None, "model_time": None, "usage_time": None,
+                "used_tokens": None, "context_window": None, "percent": None,
+                "context_state": "unavailable", "turn_time": None, "model_turn_id": None}
 
 
 _runtime_cache: dict[tuple, dict] = {}
@@ -1281,17 +1189,21 @@ _runtime_lock = threading.Lock()
 
 
 def runtime_info(app: str, path: Path) -> dict:
+    from agents import registry
     st = path.stat()
     key = (app, str(path), st.st_size, st.st_mtime_ns)
     with _runtime_lock:
         if key in _runtime_cache:
             return dict(_runtime_cache[key])
+    try:
+        agent = registry.get(app)
+    except Exception:
+        agent = None
     nbytes = 1 << 20
     while True:
         lines, at_start = read_tail(path, nbytes)
-        out = parse_runtime(app, lines)
-        if at_start or nbytes >= (32 << 20) or (out["model"] and
-                (app == "claude" or out["context_state"] != "unavailable")):
+        out = agent.parse_runtime(lines) if agent is not None else parse_runtime(app, lines)
+        if at_start or nbytes >= (32 << 20) or (agent is not None and agent.runtime_complete(out)):
             break
         nbytes = min(nbytes * 4, 32 << 20)
     with _runtime_lock:
