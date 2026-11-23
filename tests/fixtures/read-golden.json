@@ -1,0 +1,306 @@
+{
+  "parse_codex": [
+    [
+      {
+        "role": "user",
+        "text": "你好",
+        "time": "2026-01-02T03:04:05Z",
+        "client_request_id": null,
+        "source_id": "user-1"
+      },
+      {
+        "role": "assistant",
+        "text": "你好，我在",
+        "time": "2026-01-02T03:04:05Z",
+        "phase": "final_answer",
+        "source_id": "answer-1"
+      }
+    ],
+    {
+      "running": false,
+      "turn_time": "2026-01-02T03:04:06Z",
+      "turn_started": "2026-01-02T03:04:05Z",
+      "turn_ended": "2026-01-02T03:04:06Z",
+      "step": "",
+      "latest_event_time": "2026-01-02T03:04:06Z",
+      "current_turn_id": "turn-1"
+    }
+  ],
+  "parse_claude": [
+    [
+      {
+        "role": "user",
+        "text": "帮我看看",
+        "time": "2026-01-02T03:04:05Z"
+      },
+      {
+        "role": "assistant",
+        "text": "好的",
+        "time": "2026-01-02T03:04:06Z"
+      }
+    ],
+    {
+      "running": true,
+      "title": "",
+      "turn_started": "2026-01-02T03:04:05Z",
+      "turn_ended": "",
+      "step": "",
+      "latest_event_time": "2026-01-02T03:04:06Z"
+    }
+  ],
+  "summary": {
+    "codex": {
+      "status": "idle",
+      "modified": 0,
+      "preview": "你好，我在",
+      "turn_started": 1767323045,
+      "turn_ended": 1767323046,
+      "step": ""
+    },
+    "claude": {
+      "status": "running",
+      "modified": 0,
+      "preview": "好的",
+      "turn_started": 1767323045,
+      "turn_ended": 0,
+      "step": ""
+    },
+    "deepseek": {
+      "status": "waiting",
+      "preview": "等你选择",
+      "turn_started": 0,
+      "turn_ended": 0,
+      "step": ""
+    }
+  },
+  "transcript": {
+    "codex": {
+      "messages": [
+        {
+          "role": "user",
+          "text": "你好",
+          "time": "2026-01-02T03:04:05Z",
+          "client_request_id": null,
+          "source_id": "user-1",
+          "activity_turn": "turn-1",
+          "id": "user-1",
+          "order": 297,
+          "turn_id": "turn-1"
+        },
+        {
+          "role": "assistant",
+          "text": "你好，我在",
+          "time": "2026-01-02T03:04:05Z",
+          "phase": "final_answer",
+          "source_id": "answer-1",
+          "activity_turn": "turn-1",
+          "id": "answer-1",
+          "order": 514,
+          "turn_id": "turn-1"
+        }
+      ],
+      "state": {
+        "current_turn_id": "turn-1",
+        "running": false,
+        "turn_ended": "2026-01-02T03:04:06Z",
+        "turn_time": "2026-01-02T03:04:06Z",
+        "latest_event_time": "2026-01-02T03:04:06Z",
+        "turn_started": "2026-01-02T03:04:05Z",
+        "step": ""
+      }
+    },
+    "claude": {
+      "messages": [
+        {
+          "role": "user",
+          "text": "帮我看看",
+          "time": "2026-01-02T03:04:05Z",
+          "activity_turn": "user:u-1",
+          "id": "fc0e51a39db86903b3a894fb:1",
+          "order": 153
+        },
+        {
+          "role": "assistant",
+          "text": "好的",
+          "time": "2026-01-02T03:04:06Z",
+          "activity_turn": "user:u-1",
+          "id": "dad874aaec1e3568751a9ce1:1",
+          "order": 385
+        }
+      ],
+      "state": {
+        "running": true,
+        "turn_ended": "",
+        "latest_event_time": "2026-01-02T03:04:06Z",
+        "turn_started": "2026-01-02T03:04:05Z",
+        "step": ""
+      }
+    }
+  },
+  "list_conversations": [
+    {
+      "app": "claude",
+      "id": "claude-1",
+      "title": "测试对话 B",
+      "folder": "另一个",
+      "cwd": "C:\\测试\\另一个",
+      "updated": 0,
+      "created": 1767323041000,
+      "pinned": false,
+      "status": "running",
+      "preview": "好的",
+      "turn_started": 1767323045,
+      "turn_ended": 0,
+      "step": ""
+    },
+    {
+      "app": "codex",
+      "id": "codex-1",
+      "title": "测试对话 A",
+      "folder": "项目",
+      "cwd": "C:\\测试\\项目",
+      "updated": 0,
+      "created": 1767323040000,
+      "pinned": false,
+      "status": "idle",
+      "preview": "你好，我在",
+      "turn_started": 1767323045,
+      "turn_ended": 1767323046,
+      "step": ""
+    }
+  ],
+  "tree": {
+    "apps": [
+      {
+        "app": "codex",
+        "name": "Codex",
+        "count": 1,
+        "projects": [
+          {
+            "key": "other",
+            "name": "其他对话",
+            "count": 1,
+            "updated": 1767323045000,
+            "folder": "",
+            "projectless": true,
+            "items": [
+              {
+                "app": "codex",
+                "id": "codex-1",
+                "title": "测试对话 A",
+                "folder": "项目",
+                "cwd": "C:\\测试\\项目",
+                "updated": 1767323045000,
+                "place": "项目",
+                "status": "idle"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "app": "claude",
+        "name": "Claude",
+        "count": 1,
+        "projects": [
+          {
+            "key": "f:另一个",
+            "name": "另一个",
+            "count": 1,
+            "updated": 1767323046000,
+            "folder": "C:\\测试\\另一个",
+            "projectless": false,
+            "items": [
+              {
+                "app": "claude",
+                "id": "claude-1",
+                "title": "测试对话 B",
+                "folder": "另一个",
+                "cwd": "C:\\测试\\另一个",
+                "updated": 1767323046000,
+                "status": "idle"
+              }
+            ]
+          },
+          {
+            "key": "other",
+            "name": "其他对话",
+            "count": 0,
+            "updated": null,
+            "folder": "",
+            "projectless": true,
+            "items": []
+          }
+        ]
+      },
+      {
+        "app": "deepseek",
+        "name": "DeepSeek",
+        "count": 1,
+        "projects": [
+          {
+            "key": "w:w1",
+            "name": "工作区",
+            "count": 1,
+            "updated": 1767323047000,
+            "folder": "C:\\测试\\工作区",
+            "projectless": false,
+            "items": [
+              {
+                "app": "deepseek",
+                "id": "deepseek-1",
+                "title": "测试对话 C",
+                "folder": "工作区",
+                "cwd": "C:\\测试\\工作区",
+                "updated": 1767323047000,
+                "status": "idle"
+              }
+            ]
+          },
+          {
+            "key": "other",
+            "name": "其他对话",
+            "count": 0,
+            "updated": null,
+            "folder": "",
+            "projectless": true,
+            "items": []
+          }
+        ]
+      }
+    ],
+    "now": 0
+  },
+  "live": {
+    "messages": [
+      {
+        "id": "answer-1",
+        "role": "assistant",
+        "phase": "final_answer",
+        "text": "旧回答",
+        "turn_id": "turn-1",
+        "order": 10,
+        "time": "2026-01-02T03:04:05Z"
+      },
+      {
+        "id": "live-1",
+        "source_id": "live-1",
+        "role": "assistant",
+        "phase": "commentary",
+        "turn_id": "turn-1",
+        "order": 10.5,
+        "source_sequence": 0,
+        "after_id": null,
+        "before_id": null,
+        "time": "1970-01-01T00:00:01+00:00",
+        "text": "正在做",
+        "length": 3,
+        "truncated": false,
+        "streaming": true
+      }
+    ],
+    "live_ids": [
+      "live-1"
+    ]
+  }
+}
