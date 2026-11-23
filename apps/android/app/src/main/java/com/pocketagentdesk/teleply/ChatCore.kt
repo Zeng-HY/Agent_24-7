@@ -13,7 +13,7 @@ fun mergeControl(previous:Control,incoming:Control):Control {
 }
 fun parseControl(j: JSONObject) = Control(j.optBoolean("available"), j.optBoolean("running"), j.string("active_turn_id").ifBlank { j.string("turn_id") }, j.optBoolean("queue_available"), j.rows("queued") { Queued(it.string("id"),it.string("text"),it.string("status")) }, j.rows("recent_turns") { it.getString("id") to it.string("status") }.toMap(), j.rows("questions") { it }.isNotEmpty() || j.optJSONObject("prompt")!=null || j.rows("interactions") { it }.isNotEmpty(),j.toString())
 data class LiveFrame(val seq: Long, val snapshot: Boolean, val messages: List<Message>, val control: Control?)
-class StreamReducer(private val chat: String,private val app:String="codex") {
+class StreamReducer(private val chat: String,private val app:String="codex",private val hasLiveControl:Boolean=false) {
     private var seq = 0L
     fun accept(j: JSONObject): LiveFrame? {
         require(j.optInt("protocol") == 1 && j.string("app") == app && j.string("id") == chat) { "实时协议或会话身份不匹配" }
@@ -23,7 +23,12 @@ class StreamReducer(private val chat: String,private val app:String="codex") {
         require(if(seq==0L) snapshot && n==1L else !snapshot && j.string("type")=="update" && n==seq+1) { "实时序号不连续" }
         val page=if(snapshot) j.getJSONObject("chat") else j
         if(snapshot) require(page.string("id")==chat && page.string("app")==app)
-        val frame=LiveFrame(n,snapshot,page.rows("messages",::parseMessage),if(app=="codex" && j.has("control")) j.optJSONObject("control")?.let(::parseControl) ?: Control() else null)
+        val control=when {
+            j.optJSONObject("control")!=null -> parseControl(j.getJSONObject("control"))
+            hasLiveControl && j.has("control") -> Control()
+            else -> null
+        }
+        val frame=LiveFrame(n,snapshot,page.rows("messages",::parseMessage),control)
         seq=n
         return frame
     }

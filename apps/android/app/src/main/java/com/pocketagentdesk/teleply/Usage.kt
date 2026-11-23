@@ -52,17 +52,52 @@ data class ClaudeUsage(
     val minimized: Boolean = false,
 )
 
+/** Usage of any assistant reported under protocol 2 `agents.<id>` (plan §3.3). */
+data class AgentUsage(
+    val id: String,
+    val available: Boolean = false,
+    val reason: String = "",
+    val source: String = "",
+    val asOf: Long = 0,
+    val text: String = "",
+    val windows: List<UsageWindow> = emptyList(),
+)
+
 /** GET /api/usage whole; [now] is the computer's clock, so "a minute ago" does not depend on the phone's. */
 data class UsageReport(
     val codex: CodexUsage = CodexUsage(),
     val claude: ClaudeUsage = ClaudeUsage(),
     val now: Long = 0,
+    val agents: Map<String, AgentUsage> = emptyMap(),
 )
 
-fun parseUsage(json: JSONObject) = UsageReport(
-    codex = parseCodexUsage(json.optJSONObject("codex") ?: JSONObject()),
-    claude = parseClaudeUsage(json.optJSONObject("claude") ?: JSONObject()),
-    now = json.optLong("now"),
+fun parseUsage(json: JSONObject): UsageReport {
+    val agentsObj = json.optJSONObject("agents")
+    val parsedAgents = linkedMapOf<String, AgentUsage>()
+    if (agentsObj != null) {
+        agentsObj.keys().forEach { id ->
+            val obj = agentsObj.optJSONObject(id)
+            if (isValidAgentId(id) && obj != null) {
+                parsedAgents[id] = parseAgentUsage(id, obj)
+            }
+        }
+    }
+    return UsageReport(
+        codex = parseCodexUsage(json.optJSONObject("codex") ?: JSONObject()),
+        claude = parseClaudeUsage(json.optJSONObject("claude") ?: JSONObject()),
+        now = json.optLong("now"),
+        agents = parsedAgents,
+    )
+}
+
+fun parseAgentUsage(id: String, json: JSONObject) = AgentUsage(
+    id = id,
+    available = json.optBoolean("available"),
+    reason = json.string("reason"),
+    source = json.string("source"),
+    asOf = json.optLong("as_of"),
+    text = json.string("text"),
+    windows = parseWindows(json.optJSONArray("windows")),
 )
 
 fun parseCodexUsage(json: JSONObject): CodexUsage {
@@ -94,7 +129,7 @@ private fun parseWindows(array: JSONArray?): List<UsageWindow> = (0 until (array
     array!!.optJSONObject(index)?.let { window ->
         UsageWindow(
             kind = window.string("kind"),
-            name = window.string("name"),
+            name = window.string("name").ifBlank { window.string("label") },
             usedPercent = window.optInt("used_percent").coerceIn(0, 100),
             resetsAt = if (window.has("resets_at") && !window.isNull("resets_at")) window.optLong("resets_at") else null,
             resetsText = window.string("resets_text"),
@@ -119,9 +154,10 @@ private fun at(millis: Long, zone: ZoneId) = Instant.ofEpochMilli(millis).atZone
 /** 今天 20:54 重置（还有 1 天 10 小时）; an hour already gone says so instead, and the records add when they catch up. */
 fun resetLine(window: UsageWindow, source: String, nowMs: Long, zone: ZoneId): String {
     val resetsAt = window.resetsAt ?: return ""
-    val left = resetsAt * 1000 - nowMs
+    val resetsMs = if (resetsAt > 10_000_000_000L) resetsAt else resetsAt * 1000
+    val left = resetsMs - nowMs
     if (left <= 0) return "已过重置时间" + if (source == "records") "，等电脑上 Codex 下一次回话就会更新" else ""
-    return dayLabel(resetsAt * 1000, nowMs, zone) + " " + at(resetsAt * 1000, zone).format(ClockText) + " 重置" + remainingText(left)
+    return dayLabel(resetsMs, nowMs, zone) + " " + at(resetsMs, zone).format(ClockText) + " 重置" + remainingText(left)
 }
 
 private fun dayLabel(millis: Long, nowMs: Long, zone: ZoneId): String {

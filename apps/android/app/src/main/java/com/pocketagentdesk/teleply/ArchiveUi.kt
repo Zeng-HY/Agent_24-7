@@ -245,6 +245,27 @@ fun NoticeToast(text: String?, onDone: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
+/** Builds the archive/restore/delete explanation from each assistant's capabilities (plan §6.1), keeping the three built-ins' exact wording. */
+fun archiveExplain(apps: List<String>, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): String {
+    val lines = mutableListOf<String>()
+    apps.distinct().forEach { app ->
+        when (catalog.cardLayout(app)) {
+            "codex.v1" -> lines += "Codex 的可以恢复，也可以勾选后删除；删除后电脑上也找不回来。"
+            "deepseek.v1" -> lines += "DeepSeek 没有删除对话的功能，只能恢复。"
+            "claude.v1" -> lines += "Claude 可以归档和恢复，需电脑解锁；有工作副本的会话请在电脑上归档。暂不支持删除。"
+            else -> {
+                val info = catalog.info(app)
+                val label = info.displayName()
+                when {
+                    info.caps.delete -> lines += "${label} 的可以恢复，也可以勾选后删除；删除后电脑上也找不回来。"
+                    info.caps.restore || info.caps.archive -> lines += "${label} 可以恢复，暂不支持删除。"
+                }
+            }
+        }
+    }
+    return lines.joinToString("")
+}
+
 /**
  * 设置 → 已归档对话 (web archivedSheet): by source; 恢复 brings one back. Codex ones can be ticked and deleted for good
  * after a confirmation; DeepSeek has no delete, so its rows only restore; Claude's restore when the computer has it.
@@ -252,6 +273,7 @@ fun NoticeToast(text: String?, onDone: () -> Unit, modifier: Modifier = Modifier
 @Composable
 fun ArchivedSheet(vm: ReaderViewModel, onDismiss: () -> Unit) {
     val p = LocalTeleply.current
+    val catalog = LocalAgentCatalog.current
     val scope = rememberCoroutineScope()
     var data by remember { mutableStateOf<JSONObject?>(null) }
     var picked by remember { mutableStateOf(setOf<String>()) }
@@ -270,11 +292,7 @@ fun ArchivedSheet(vm: ReaderViewModel, onDismiss: () -> Unit) {
     val canDelete = items.filter { it.optBoolean("can_delete") && it.string("app") in deletable }
     TeleplySheet("已归档对话", onDismiss) {
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = p.accent, trackColor = p.line)
-        val explain = listOfNotNull(
-            "Codex 的可以恢复，也可以勾选后删除；删除后电脑上也找不回来。".takeIf { "codex" in apps },
-            "DeepSeek 没有删除对话的功能，只能恢复。".takeIf { "deepseek" in apps },
-            "Claude 可以归档和恢复，需电脑解锁；有工作副本的会话请在电脑上归档。暂不支持删除。".takeIf { "claude" in apps },
-        ).joinToString("")
+        val explain = archiveExplain(apps, catalog)
         if (explain.isNotBlank()) Text(explain, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = p.muted)
         note?.let { Text(it, style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
         val d = data
@@ -286,7 +304,7 @@ fun ArchivedSheet(vm: ReaderViewModel, onDismiss: () -> Unit) {
                 var app = ""
                 CardSectionOrNothing(items.isNotEmpty()) {
                     items.forEachIndexed { index, v ->
-                        if (v.string("app") != app) { app = v.string("app"); Text(sourceName(app), style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold), color = p.muted, modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp)) }
+                        if (v.string("app") != app) { app = v.string("app"); Text(sourceName(app, catalog), style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold), color = p.muted, modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 4.dp)) }
                         else if (index > 0) CardDivider()
                         val k = v.string("app") + ":" + v.string("id")
                         val can = v.optBoolean("can_delete") && v.string("app") in deletable
@@ -294,7 +312,7 @@ fun ArchivedSheet(vm: ReaderViewModel, onDismiss: () -> Unit) {
                             busy = true
                             scope.launch {
                                 try { vm.deviceCall("chat/unarchive", body = JSONObject().put("app", v.string("app")).put("id", v.string("id"))); note = "已恢复，回到对话列表里了"; vm.restored(v.string("app"), v.string("id")) }
-                                catch (e: Exception) { note = (if (v.string("app") == "claude") "Claude：" else "没恢复：") + (e.message ?: "") }
+                                catch (e: Exception) { note = "没恢复：" + (e.message ?: "") }
                                 busy = false; load()
                             }
                         }

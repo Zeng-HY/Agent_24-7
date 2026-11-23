@@ -25,6 +25,8 @@ private val Unsettled=listOf("提交中","送达状态待确认","已接收","�
 const val RemovedLabel="已移除"
 
 class ChatController(private val scope:CoroutineScope,private val persistent:ReaderStore) {
+    /** Active computer's assistant catalog (plan §6.1), wired from ReaderViewModel. */
+    var catalog:()->AgentCatalogSnapshot = { AgentCatalogSnapshot.Builtin }
     var extras:()->JSONObject = { JSONObject() }
     /** The settings bound to the next message (Codex), without attachments: what a plan is carried out with. */
     var boundSettings:()->JSONObject = { JSONObject() }
@@ -34,6 +36,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     var pollPaused:()->Boolean = { false }
     /** The conversation's state was read from the computer (entering, a poll, after a send, an action's reply). */
     var seen:(ChatKey)->Unit = {}
+    private fun isClaudeLayout(app:String)=catalog().cardLayout(app)=="claude.v1"
+    private fun isCodexLayout(app:String)=catalog().cardLayout(app)=="codex.v1"
     private val mutable=MutableStateFlow(ComposerState())
     val state=mutable.asStateFlow()
     private var key:ChatKey?=null
@@ -77,11 +81,10 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                         // Recovery reads receipts only. No mutation is replayed.
                         state.value.submissions.filter { it.label in Unsettled || it.action=="stop" }.forEach { reconcile(it,service,synthetic) }
                         coroutineScope {
-                            // As the web: Claude every 5 s and DeepSeek every 2.5 s, from the computer's last read when it is
-                            // under 4 s old (no fresh=1, which made the computer read Claude's window on every poll); a
-                            // fresh read is only taken on entering and after an action. None while a tap waits there.
-                            val every=if(next.app=="claude") 5000L else 2500L
-                            val polling=if(next.app!="codex" && !synthetic) launch {
+                            // As the web: poll interval comes from the manifest (Claude 5 s, DeepSeek 2.5 s), from the
+                            // computer's last read when under 4 s old; none while a tap waits there.
+                            val every=catalog().params(next.app).refreshMs
+                            val polling=if(!isCodexLayout(next.app) && !synthetic) launch {
                                 while(isActive) {
                                     delay(every)
                                     if(pollPaused()) continue
@@ -89,7 +92,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                                     // The same state as before changes nothing on the page (StateFlow keeps an equal value).
                                     if(t==token) { update(next) { it.copy(control=mergeControl(it.control,fresh)) };seen(next) }
                                     // Claude has no receipts: its queued and unconfirmed sends are looked for in its record (web pollReceipts).
-                                    if(next.app=="claude") claudePending(next).forEach { runCatching { reconcile(it,service,synthetic) } }
+                                    if(isClaudeLayout(next.app)) claudePending(next).forEach { runCatching { reconcile(it,service,synthetic) } }
                                 }
                             } else null
                             try { service.events(next.device,next.chat).collect { frame ->
@@ -120,7 +123,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     }
     /** Claude sends of the last half hour still queued or unconfirmed, newest eight. */
     private fun claudePending(k:ChatKey)=state.value.submissions.filter { r ->
-        r.app=="claude" && r.chat==k.chat && r.action=="send" && r.label in listOf("已排队","送达状态待确认") && r.request !in confirming &&
+        isClaudeLayout(r.app) && r.chat==k.chat && r.action=="send" && r.label in listOf("已排队","送达状态待确认") && r.request !in confirming &&
             System.currentTimeMillis()-r.created<30*60_000 && runCatching { JSONObject(r.body).has(ClaudeOffset) }.getOrDefault(false)
     }.take(8)
     fun edit(text:String) {
@@ -202,7 +205,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         val k=key ?: return;val service=api ?: return
         val old=runCatching { JSONObject(record.body) }.getOrNull() ?: return
         val draft=old.string(DesktopDraftKey)
-        if(k.app!="claude" || k!=ChatKey(record.scope,record.device,record.chat,record.app) || draft.isBlank() || record.label!="未接收") return
+        if(!isClaudeLayout(k.app) || k!=ChatKey(record.scope,record.device,record.chat,record.app) || draft.isBlank() || record.label!="未接收") return
         if(!foreground || !state.value.ready || !state.value.control.available || !inFlight.add(k)) return
         val rid=UUID.randomUUID().toString()
         val body=JSONObject(old.toString()).apply { LocalKeys.forEach { remove(it) } }.put("request_id",rid).put("replace_draft",draft.take(2000))
@@ -223,10 +226,12 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         }
         val extra=try { if(action=="send" && !planned) extras() else JSONObject() } catch(e:Exception) { update(k) { it.copy(error=e.message) };return }
         val hasExtras=extra.optJSONArray("attachments")?.length()?.let { it>0 }==true || extra.optJSONArray("references")?.length()?.let { it>0 }==true
+        val snap=catalog();val info=snap.info(k.app);val caps=info.caps
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
-        val reachable=s.control.available || action=="send" && !planned && !promote && sendsWhileAway(k.app)
+        val reachable=s.control.available || action=="send" && !planned && !promote && sendsWhileAway(k.app,snap)
         if(!foreground || !s.ready || !reachable || !inFlight.add(k)) return
-        if(action=="send" && !planned && ((s.draft.isBlank() && !hasExtras) || s.draft.trim().length>20000 || queue && !s.control.queueAvailable) || action=="stop" && !s.control.running || promote && !s.control.running || planned && (k.app!="codex" || s.control.running)) { inFlight.remove(k);return }
+        val canSendNow=if(queue) ("queue" in caps.sendModes && caps.queue && s.control.queueAvailable) else if(s.control.running) ("steer" in caps.sendModes || "send" in caps.sendModes) else ("send" in caps.sendModes)
+        if(action=="send" && !planned && (!canSendNow || (s.draft.isBlank() && !hasExtras) || s.draft.trim().length>info.params.maxText) || action=="stop" && (!caps.stop || !s.control.running) || promote && (!s.control.running || (!caps.steer && "steer" !in caps.sendModes)) || planned && (!isCodexLayout(k.app) || s.control.running)) { inFlight.remove(k);return }
         // 11-16: the page follows the bottom again as soon as you send (the bubble comes once its copy is written).
         if(action=="send") update(k) { it.copy(sent=it.sent+1) }
         val rid=UUID.randomUUID().toString()
@@ -272,8 +277,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                 it.copy(draft=if(clear) "" else it.draft,draftReset=it.draftReset+if(clear) 1 else 0,submissions=listOf(record)+it.submissions)
             }
             val result=service.command(k.device,action,body)
-            if(action!="stop" && k.app=="codex") { require(result.string("request_id")==record.request) { "回执身份不匹配" } }
-            if(action=="send" && k.app=="claude" && result.optBoolean("pressed")) {
+            if(action!="stop" && isCodexLayout(k.app)) { require(result.string("request_id")==record.request) { "回执身份不匹配" } }
+            if(action=="send" && isClaudeLayout(k.app) && result.optBoolean("pressed")) {
                 // The computer pressed Enter in Claude's box. Whether Claude read it is then looked for in its record (web chat/check).
                 val pressed=record.copy(label="已接收",body=JSONObject(record.body).put(ClaudeOffset,result.optLong("offset")).put(ClaudeCheckText,result.string("check_text").ifBlank { body.string("text") }).toString())
                 save(pressed,synthetic)
@@ -312,7 +317,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     private suspend fun claudeCheck(record:Submission,service:ReadApi):JSONObject? {
         val body=JSONObject(record.body)
         if(!body.has(ClaudeOffset)) return null
-        return service.detail(record.device,"chat/check",body=JSONObject().put("app","claude").put("id",record.chat).put("offset",body.optLong(ClaudeOffset)).put("text",body.string(ClaudeCheckText)))
+        return service.detail(record.device,"chat/check",body=JSONObject().put("app",record.app).put("id",record.chat).put("offset",body.optLong(ClaudeOffset)).put("text",body.string(ClaudeCheckText)))
     }
     private suspend fun save(record:Submission,synthetic:Boolean) {
         try {
@@ -326,7 +331,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         scope.launch { try { reconcile(record,service,synthetic) } catch(_:Exception) { update(ChatKey(record.scope,record.device,record.chat,record.app)) { it.copy(error="核对失败，原提交仍保留；不会自动重发。") } } }
     }
     private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean) {
-        if(record.app=="claude" && record.action=="send") {
+        if(isClaudeLayout(record.app) && record.action=="send") {
             // No receipts for Claude: what its record shows decides, and nothing is sent again.
             val r=claudeCheck(record,service) ?: return
             val label=when { r.optBoolean("delivered") -> "已送达";r.optBoolean("queued") -> "已排队";else -> record.label }

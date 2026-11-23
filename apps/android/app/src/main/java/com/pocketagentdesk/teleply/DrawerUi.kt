@@ -80,7 +80,7 @@ fun WorkspaceDrawer(s: ReaderState, vm: ReaderViewModel, onClose: () -> Unit, wi
                 val appKey = "app:$app"
                 val appOpen = appKey !in folds
                 item(key = appKey) {
-                    Arrive(n + 1, serial, Modifier.drawerItem(this)) { TreeApp(app, group.string("name").ifBlank { sourceName(app) }, appOpen) { toggle(appKey) } }
+                    Arrive(n + 1, serial, Modifier.drawerItem(this)) { TreeApp(app, group.string("name").ifBlank { sourceName(app, s.catalog) }, appOpen) { toggle(appKey) } }
                 }
                 if (appOpen) {
                     val projects = group.rows("projects") { it }
@@ -92,10 +92,10 @@ fun WorkspaceDrawer(s: ReaderState, vm: ReaderViewModel, onClose: () -> Unit, wi
                         val name = project.string("name")
                         val projectless = project.optBoolean("projectless")
                         item(key = key) {
-                            TreeProject(name, projectless, open, Modifier.drawerItem(this), onAdd = if (project.string("folder").isNotBlank() || projectless) ({
+                            TreeProject(name, projectless, open, Modifier.drawerItem(this), onAdd = if (s.catalog.can(app) { it.new } && (project.string("folder").isNotBlank() || projectless)) ({
                                 onClose()
                                 vm.startNew(app, if (projectless) "" else project.string("folder"), projectless)
-                            }) else null, addLabel = if (projectless) "新建不在项目里的${sourceName(app)}对话" else "在「$name」新建对话") { toggle("open:$key") }
+                            }) else null, addLabel = if (projectless) "新建不在项目里的${sourceName(app, s.catalog)}对话" else "在「$name」新建对话") { toggle("open:$key") }
                         }
                         if (open) {
                             val items = project.rows("items") { it }

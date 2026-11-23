@@ -119,8 +119,8 @@ fun InputArea(s: ReaderState, vm: ReaderViewModel, chat: ComposerState, ws: Work
             val saved = remember(ws.saved) { json(ws.saved) }
             // Only the bars above the card animate their height: the animation clips, and would cut the card's shadow.
             Column(Modifier.fillMaxWidth().animateContentSize()) {
-                AskBar(s.app, cards, saved, chat, vm, onAsk)
-                QueueTray(s.app, chat, raw, vm, ws)
+                AskBar(s.app, s.catalog, cards, saved, chat, vm, onAsk)
+                QueueTray(s.app, s.catalog, chat, raw, vm, ws)
                 val last = chat.submissions.firstOrNull { it.label != RemovedLabel }
                 if (last != null && last.action == "send" && last.label == "未接收") RejectedBar(last, chat, vm)
                 if (last != null && last.label == "送达状态待确认") {
@@ -165,14 +165,15 @@ private fun RejectedBar(record: Submission, chat: ComposerState, vm: ReaderViewM
  * A tap scrolls to the first open card in the timeline. After Codex got an answer: "答案已提交，等 Codex 接着做".
  */
 @Composable
-private fun AskBar(app: String, cards: List<PendingCard>, saved: JSONObject, chat: ComposerState, vm: ReaderViewModel, onAsk: () -> Unit) {
+private fun AskBar(app: String, catalog: AgentCatalogSnapshot, cards: List<PendingCard>, saved: JSONObject, chat: ComposerState, vm: ReaderViewModel, onAsk: () -> Unit) {
     val p = LocalTeleply.current
     val first = cards.firstOrNull() ?: return
-    val codexSent = app == "codex" && saved.optJSONObject("pending_action")?.let { it.string("route") == "codex/answer" && it.string("status") == "done" } == true
+    val layout = catalog.cardLayout(app)
+    val codexSent = layout == "codex.v1" && saved.optJSONObject("pending_action")?.let { it.string("route") == "codex/answer" && it.string("status") == "done" } == true
     val (summary, go, action) = when {
         codexSent -> Triple("答案已提交，等 Codex 接着做", "刷新 ›", { vm.composer.refreshControl() })
-        app == "deepseek" -> Triple(first.summary + if (first.count > 1) "（共 ${first.count} 项）" else "", "去处理 ›", onAsk)
-        app == "claude" -> Triple(first.summary + if (first.progress.isNotBlank()) "（${first.progress}）" else "", "去选择 ›", onAsk)
+        layout == "deepseek.v1" -> Triple(first.summary + if (first.count > 1) "（共 ${first.count} 项）" else "", "去处理 ›", onAsk)
+        layout == "claude.v1" -> Triple(first.summary + if (first.progress.isNotBlank()) "（${first.progress}）" else "", "去选择 ›", onAsk)
         first.kind == "approval" -> Triple(first.summary, "去处理 ›", onAsk)
         else -> Triple(first.summary, "去选择 ›", onAsk)
     }
@@ -196,13 +197,17 @@ private fun AskBar(app: String, cards: List<PendingCard>, saved: JSONObject, cha
 
 /** Queued messages right above the input card; each can be handed to the running turn now (立即补充) or withdrawn. */
 @Composable
-private fun QueueTray(app: String, chat: ComposerState, raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
+private fun QueueTray(app: String, catalog: AgentCatalogSnapshot, chat: ComposerState, raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
     val p = LocalTeleply.current
     val menus = LocalMenuHost.current
+    val info = catalog.info(app)
+    val caps = info.caps
+    val layout = info.ui.cardLayout
     data class Row3(val id: String, val text: String, val token: String)
-    val rows = if (app == "claude") raw.rows("queued") { Row3(it.string("id"), it.string("text"), it.string("token")) }
+    val rows = if (layout == "claude.v1") raw.rows("queued") { Row3(it.string("id"), it.string("text"), it.string("token")) }
     else chat.control.queued.map { Row3(it.id, it.text, "") }
     if (rows.isEmpty()) return
+    val canPromote = caps.steer || "steer" in caps.sendModes
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(TeleplyShape.Tray).background(p.tray).padding(vertical = 4.dp)) {
         rows.forEach { row ->
             val anchor = remember(row.id) { MenuAnchor() }
@@ -211,15 +216,17 @@ private fun QueueTray(app: String, chat: ComposerState, raw: JSONObject, vm: Rea
                 Spacer(Modifier.width(8.dp))
                 Text(row.text, style = MaterialTheme.typography.bodyMedium, color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(vertical = 8.dp))
                 val running = chat.control.running
-                PillButton(
-                    "立即补充",
-                    { if (app == "claude") vm.workspace.action("claude/choose", JSONObject().put("token", row.token), local = claudePress("steer", row.id)) else vm.composer.promote(row.id) },
-                    style = PillStyle.Text,
-                    minHeight = 36.dp,
-                    enabled = running && !chat.submitting && !ws.busy && (app != "claude" || row.token.isNotBlank()),
-                    description = "立即补充：${row.text}",
-                )
-                if (app != "claude") TeleplyIconButton(TeleplyIcons.More, "这条排队消息的更多操作", {
+                if (canPromote) {
+                    PillButton(
+                        "立即补充",
+                        { if (layout == "claude.v1") vm.workspace.action("claude/choose", JSONObject().put("token", row.token), local = claudePress("steer", row.id)) else vm.composer.promote(row.id) },
+                        style = PillStyle.Text,
+                        minHeight = 36.dp,
+                        enabled = running && !chat.submitting && !ws.busy && (layout != "claude.v1" || row.token.isNotBlank()),
+                        description = "立即补充：${row.text}",
+                    )
+                }
+                if (layout != "claude.v1" && caps.queue) TeleplyIconButton(TeleplyIcons.More, "这条排队消息的更多操作", {
                     menus?.show(MenuRequest(anchor.bounds, MenuPlacement.BelowEnd, "排队消息", width = 220.dp) {
                         MenuRow("撤回这条", { vm.composer.cancel(row.id) }, enabled = chat.control.queueAvailable && !chat.submitting, danger = true)
                     })
@@ -254,7 +261,7 @@ internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Bool
  * nothing to say. A source action whose result is unknown offers 核对.
  */
 @Composable
-private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObject, local: String, vm: ReaderViewModel, away: String?, pill: VoicePill? = null) {
+private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObject, local: String, vm: ReaderViewModel, away: String?, pill: VoicePill? = null, canOpen: Boolean = true) {
     val p = LocalTeleply.current
     if (pill != null) {
         // Voice says what it is doing, with the one thing that can be done about it (web .voice-pill).
@@ -281,7 +288,7 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
             modifier = Modifier.weight(1f).padding(vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
         )
         if (unknown) PillButton("核对上次操作", vm.workspace::checkAction, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy && !ws.checking)
-        else if (opens) PillButton("电脑上打开", vm.workspace::openOnComputer, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy)
+        else if (opens && canOpen) PillButton("电脑上打开", vm.workspace::openOnComputer, style = PillStyle.Text, minHeight = 32.dp, enabled = !ws.busy)
     }
 }
 
@@ -319,10 +326,14 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     LaunchedEffect(chat.focus) { if (chat.focus > 0) runCatching { requester.requestFocus(); keyboard?.show() } }
     val lift by animateFloatAsState(if (focused) 1f else 0f, label = "composer-focus")
-    val queue = chat.control.running && chat.control.queueAvailable
+    val info = s.catalog.info(s.app)
+    val caps = info.caps
+    val layout = info.ui.cardLayout
+    val queue = chat.control.running && "queue" in caps.sendModes && caps.queue && chat.control.queueAvailable
+    val sendAllowed = if (queue) true else if (chat.control.running) ("steer" in caps.sendModes || "send" in caps.sendModes) else ("send" in caps.sendModes)
     // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
-    val reachable = chat.control.available || sendsWhileAway(s.app)
-    val canSend = chat.ready && reachable && !chat.submitting && input.composition == null && (chat.draft.isNotBlank() || hasExtras) && chat.draft.trim().length <= 20000
+    val reachable = chat.control.available || sendsWhileAway(s.app, s.catalog)
+    val canSend = chat.ready && sendAllowed && reachable && !chat.submitting && input.composition == null && (chat.draft.isNotBlank() || hasExtras) && chat.draft.trim().length <= info.params.maxText
     val send = { if (canSend) controller.send(queue) }
     val narrow = LocalConfiguration.current.screenWidthDp < 370
     val shape = TeleplyShape.Composer
@@ -336,7 +347,7 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     }
     val maxField = (LocalConfiguration.current.screenHeightDp * 0.3f).dp
     Column(Modifier.fillMaxWidth().then(surface).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
-        StatusLine(chat, ws, saved, note, vm, awayReason(s.app, raw), voice.pill)
+        StatusLine(chat, ws, saved, note, vm, awayReason(s.app, raw, s.catalog), voice.pill, canOpen = caps.open)
         if (!voice.active) Attachments(saved, vm)
         // While recording, the card shows what is heard in place of the text box (web: the box becomes the recorder).
         if (voice.active) VoiceLive(voice, Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
@@ -362,23 +373,31 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
             // A new conversation's page (0.8, web): words only, sent once the conversation exists; no files or chips yet.
             else if (newPage) Spacer(Modifier.weight(1f))
             else {
-            TeleplyIconButton(TeleplyIcons.Plus, "添加附件或引用", {
-                menus?.show(MenuRequest(plus.bounds, MenuPlacement.BelowStart, "添加附件或引用", width = 240.dp) { AttachMenu(s.app, ws.ready, pickers, vm) })
-            }, modifier = Modifier.menuAnchor(plus), style = IconButtonStyle.Plain, tint = p.muted, enabled = ws.ready)
+            if (caps.attachments || caps.slashCommands) {
+                TeleplyIconButton(TeleplyIcons.Plus, "添加附件或引用", {
+                    menus?.show(MenuRequest(plus.bounds, MenuPlacement.BelowStart, "添加附件或引用", width = 240.dp) { AttachMenu(s.app, ws.ready, pickers, vm, s.catalog) })
+                }, modifier = Modifier.menuAnchor(plus), style = IconButtonStyle.Plain, tint = p.muted, enabled = ws.ready)
+            }
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (chipAway(s.app, raw)) {
+                if (chipAway(s.app, raw, s.catalog)) {
                     // Not open on the computer: the chip opens it there, as its menus would act on another conversation
                     // (web codex-ui.js, claude-ui.js "away"); the mode chip waits until then.
-                    ComposerChip("电脑上打开", vm.workspace::openOnComputer, narrow, description = "电脑上打开这个对话", away = true, enabled = !ws.busy)
+                    if (caps.open) ComposerChip("电脑上打开", vm.workspace::openOnComputer, narrow, description = "电脑上打开这个对话", away = true, enabled = !ws.busy)
                 } else {
-                    val (model, mode, plan) = chipLabels(s.app, raw, saved)
-                    val modeName = if (s.app == "deepseek") "权限" else "模式"
-                    ComposerChip(model, {
-                        menus?.show(MenuRequest(modelAnchor.bounds, MenuPlacement.BelowStart, "模型", width = 300.dp, scrolls = false, maxHeight = 480.dp) { ModelMenu(vm) })
-                    }, narrow, description = "模型：$model", modifier = Modifier.menuAnchor(modelAnchor))
-                    ComposerChip(mode, {
-                        menus?.show(MenuRequest(modeAnchor.bounds, MenuPlacement.BelowStart, modeName, width = 280.dp) { ModeMenu(vm) { confirm = it } })
-                    }, narrow, selected = plan, description = "$modeName：$mode", modifier = Modifier.menuAnchor(modeAnchor))
+                    val (model, mode, plan) = chipLabels(s.app, raw, saved, s.catalog)
+                    val showModel = "model" in caps.settings
+                    val showMode = "mode" in caps.settings || "permission" in caps.settings || layout == "codex.v1"
+                    val modeName = if ("permission" in caps.settings && "mode" !in caps.settings) "权限" else "模式"
+                    if (showModel) {
+                        ComposerChip(model, {
+                            menus?.show(MenuRequest(modelAnchor.bounds, MenuPlacement.BelowStart, "模型", width = 300.dp, scrolls = false, maxHeight = 480.dp) { ModelMenu(vm) })
+                        }, narrow, description = "模型：$model", modifier = Modifier.menuAnchor(modelAnchor))
+                    }
+                    if (showMode) {
+                        ComposerChip(mode, {
+                            menus?.show(MenuRequest(modeAnchor.bounds, MenuPlacement.BelowStart, modeName, width = 280.dp) { ModeMenu(vm) { confirm = it } })
+                        }, narrow, selected = plan, description = "$modeName：$mode", modifier = Modifier.menuAnchor(modeAnchor))
+                    }
                 }
             }
             }
@@ -432,10 +451,10 @@ private val ClaudeModes = mapOf("auto" to "Auto", "default" to "Manual", "accept
  * model, else its id; the recorded effort, else the desktop's; the desktop's mode, else the recorded one. So a
  * conversation the computer is not showing reads "Opus 5.5 · 高" and "Auto", not its bare id and 默认 (10-27).
  */
-fun chipLabels(app: String, raw: JSONObject, saved: JSONObject): Triple<String, String, Boolean> {
+fun chipLabels(app: String, raw: JSONObject, saved: JSONObject, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): Triple<String, String, Boolean> {
     val settings = raw.optJSONObject("settings") ?: JSONObject()
-    return when (app) {
-        "claude" -> {
+    return when (catalog.cardLayout(app)) {
+        "claude.v1" -> {
             val name = listOf(raw.string("model_label"), raw.string("recorded_label"), settings.string("model")).firstOrNull { it.isNotBlank() }
             val recorded = settings.string("effort")
             val effort = if (recorded.isNotBlank()) effortName(recorded) else raw.string("effort_label")
@@ -444,18 +463,23 @@ fun chipLabels(app: String, raw: JSONObject, saved: JSONObject): Triple<String, 
             val mode = if (plan) "计划模式" else shown.ifBlank { ClaudeModes[settings.string("mode")] ?: "普通执行" }
             Triple(if (name == null) "模型" else "$name · ${effort.ifBlank { "默认" }}", mode, plan)
         }
-        "deepseek" -> {
+        "deepseek.v1" -> {
             val model = settings.string("model").ifBlank { "模型" }
             val effort = effortName(settings.string("reasoningEffort"))
             Triple(if (effort.isNotBlank()) "$model · $effort" else model, raw.string("permission_name").ifBlank { "权限" }, false)
         }
-        else -> {
+        "codex.v1" -> {
             val chosen = saved.optJSONObject("settings") ?: settings
             val id = chosen.string("model")
             val name = raw.optJSONObject("catalog")?.rows("models") { it }?.firstOrNull { it.string("id") == id }?.string("name")?.ifBlank { null } ?: id.ifBlank { "模型" }
             val effort = effortName(chosen.string("effort"))
             val plan = chosen.string("mode") == "plan"
             Triple(if (effort.isNotBlank()) "$name · $effort" else name, if (plan) "计划" else "普通执行", plan)
+        }
+        else -> {
+            val model = listOf(raw.string("model_label"), settings.string("model")).firstOrNull { it.isNotBlank() } ?: "模型"
+            val mode = listOf(raw.string("mode_label"), raw.string("permission_name"), settings.string("mode")).firstOrNull { it.isNotBlank() } ?: "模式"
+            Triple(model, mode, false)
         }
     }
 }
@@ -468,11 +492,11 @@ private fun notOnComputer(raw: JSONObject) = raw.has("available") && !raw.optBoo
  * claude-ui.js "away"): Codex not open on the computer; Claude not shown there with nothing recorded, since a pick in a
  * recorded Claude conversation switches the computer to it by itself.
  */
-fun chipAway(app: String, raw: JSONObject): Boolean {
+fun chipAway(app: String, raw: JSONObject, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): Boolean {
     if (!notOnComputer(raw)) return false
-    return when (app) {
-        "codex" -> true
-        "claude" -> (raw.optJSONObject("settings") ?: JSONObject()).string("model").isBlank()
+    return when (catalog.cardLayout(app)) {
+        "codex.v1" -> true
+        "claude.v1" -> (raw.optJSONObject("settings") ?: JSONObject()).string("model").isBlank()
         else -> false
     }
 }
@@ -482,16 +506,17 @@ fun chipAway(app: String, raw: JSONObject): Boolean {
  * stays grey with no word on why (10-27). Claude's messages go all the same (the computer opens the conversation
  * itself, as on the web), so only its away chip says why there.
  */
-fun awayReason(app: String, raw: JSONObject): String? {
-    if (!notOnComputer(raw) || app == "claude" && !chipAway(app, raw)) return null
-    return raw.string("reason").ifBlank { if (app == "deepseek") null else "电脑上没有打开这个对话；点「电脑上打开」后再发" }
+fun awayReason(app: String, raw: JSONObject, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): String? {
+    val layout = catalog.cardLayout(app)
+    if (!notOnComputer(raw) || layout == "claude.v1" && !chipAway(app, raw, catalog)) return null
+    return raw.string("reason").ifBlank { if (layout == "deepseek.v1" || !catalog.can(app) { it.open }) null else "电脑上没有打开这个对话；点「电脑上打开」后再发" }
 }
 
 /**
  * Whether a message can go while the computer shows another conversation: Claude's can (web sendConv; the computer
  * opens it, Windows 0.27.0-dev.19 and later), the others' cannot.
  */
-fun sendsWhileAway(app: String) = app == "claude"
+fun sendsWhileAway(app: String, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin) = catalog.cardLayout(app) == "claude.v1"
 
 /**
  * Claude's effort choices in the model menu. The desktop shows them as named levels (Low, Medium, High…) or as one
@@ -565,7 +590,9 @@ internal fun MenuScope.ChoiceList(efforts: List<Pair<String, String>>, effort: S
 private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
     val chat by vm.composer.state.collectAsStateWithLifecycle()
     val ws by vm.workspace.state.collectAsStateWithLifecycle()
+    val reader by vm.state.collectAsStateWithLifecycle()
     val app = ws.key?.app ?: return
+    val layout = reader.catalog.cardLayout(app)
     val c = vm.workspace
     val raw = remember(chat.control.raw) { json(chat.control.raw) }
     val saved = remember(ws.saved) { json(ws.saved) }
@@ -573,10 +600,10 @@ private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
     val current = raw.optJSONObject("settings") ?: JSONObject()
     LaunchedEffect(app, ws.key) { c.loadChoices(model = current.string("model")) }
     // A menu the computer opened for a pick is closed again with the phone's (web closeMenu).
-    DisposableEffect(app, ws.key) { onDispose { if (app == "claude") c.closeClaudeMenu() } }
+    DisposableEffect(app, ws.key, layout) { onDispose { if (layout == "claude.v1") c.closeClaudeMenu() } }
     val idle = !ws.busy
-    when (app) {
-        "codex" -> {
+    when (layout) {
+        "codex.v1" -> {
             val chosen = saved.optJSONObject("settings") ?: current
             val models = raw.optJSONObject("catalog")?.rows("models") { it }.orEmpty()
             val model = models.find { it.string("id") == chosen.string("model") }
@@ -593,7 +620,7 @@ private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
                 }
             }
         }
-        "claude" -> {
+        "claude.v1" -> {
             val catalog = choices.optJSONObject("source_catalog")
             if (catalog == null) {
                 // Only a conversation never read before waits here: the computer opens Claude's menus once.
@@ -628,7 +655,7 @@ private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
                 }
             }
         }
-        else -> {
+        "deepseek.v1" -> {
             val catalog = choices.optJSONObject("source_catalog")
             if (catalog == null) {
                 ws.choicesError?.let { MenuHint(it) } ?: MenuLoading("正在读取电脑上的模型…")
@@ -652,6 +679,7 @@ private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
                 }
             }
         }
+        else -> MenuHint("电脑没有给出可选的模型")
     }
 }
 
@@ -660,21 +688,23 @@ private fun MenuScope.ModelMenu(vm: ReaderViewModel) {
 private fun MenuScope.ModeMenu(vm: ReaderViewModel, onConfirm: (JSONObject) -> Unit) {
     val chat by vm.composer.state.collectAsStateWithLifecycle()
     val ws by vm.workspace.state.collectAsStateWithLifecycle()
+    val reader by vm.state.collectAsStateWithLifecycle()
     val app = ws.key?.app ?: return
+    val layout = reader.catalog.cardLayout(app)
     val c = vm.workspace
     val raw = remember(chat.control.raw) { json(chat.control.raw) }
     val saved = remember(ws.saved) { json(ws.saved) }
     val idle = !ws.busy
     val current = raw.optJSONObject("settings") ?: JSONObject()
-    when (app) {
-        "codex" -> {
+    when (layout) {
+        "codex.v1" -> {
             val chosen = saved.optJSONObject("settings") ?: current
             val mode = chosen.string("mode").ifBlank { "default" }
             listOf(Triple("default", "普通执行", null), Triple("plan", "计划", "先出计划，你确认后再执行")).forEach { (value, label, detail) ->
                 MenuRow(label, { if (mode != value) c.selectSettings(JSONObject(chosen.toString()).put("mode", value), current) }, detail = detail, trailing = check(mode == value), enabled = idle)
             }
         }
-        "claude" -> {
+        "claude.v1" -> {
             val options = raw.rows("mode_options") { it }
             if (options.isEmpty()) MenuHint("电脑没有给出可选的模式")
             options.forEach { option ->
@@ -684,7 +714,7 @@ private fun MenuScope.ModeMenu(vm: ReaderViewModel, onConfirm: (JSONObject) -> U
                 }, trailing = check(on), enabled = idle)
             }
         }
-        else -> {
+        "deepseek.v1" -> {
             LaunchedEffect(ws.key) { c.loadChoices() }
             val permissions = remember(ws.choices) { json(ws.choices).optJSONObject("permissions") }
             if (permissions == null) {
@@ -701,6 +731,7 @@ private fun MenuScope.ModeMenu(vm: ReaderViewModel, onConfirm: (JSONObject) -> U
                 }, detail = option.string("description").ifBlank { null }, trailing = check(on), enabled = idle)
             }
         }
+        else -> MenuHint("电脑没有给出可选的设置")
     }
 }
 
@@ -742,13 +773,17 @@ fun rememberAttachPickers(vm: ReaderViewModel, onNote: (String) -> Unit): Attach
 
 /** ＋ (web newAddMenu, spec 4.3 and 4.4): the camera, the phone's photos and files, the computer's files, references. */
 @Composable
-fun MenuScope.AttachMenu(app: String, ready: Boolean, pickers: AttachPickers, vm: ReaderViewModel) {
-    MenuRow("拍照", pickers::camera, icon = TeleplyIcons.Camera, enabled = ready)
-    MenuRow("手机照片", pickers::photo, icon = TeleplyIcons.Image, enabled = ready)
-    MenuRow("手机文件", pickers::file, icon = TeleplyIcons.File, enabled = ready)
-    MenuRow("从电脑选择文件", { vm.workspace.panel("remote") }, icon = TeleplyIcons.Window, enabled = ready)
-    MenuRow("引用对话", { vm.workspace.panel("chat") }, icon = TeleplyIcons.Chat, enabled = ready)
-    if (app != "deepseek") MenuRow("引用技能", { vm.workspace.panel("skill") }, icon = TeleplyIcons.Skill, enabled = ready)
+fun MenuScope.AttachMenu(app: String, ready: Boolean, pickers: AttachPickers, vm: ReaderViewModel, catalog: AgentCatalogSnapshot = LocalAgentCatalog.current) {
+    val caps = catalog.info(app).caps
+    val layout = catalog.cardLayout(app)
+    if (caps.attachments) {
+        MenuRow("拍照", pickers::camera, icon = TeleplyIcons.Camera, enabled = ready)
+        MenuRow("手机照片", pickers::photo, icon = TeleplyIcons.Image, enabled = ready)
+        MenuRow("手机文件", pickers::file, icon = TeleplyIcons.File, enabled = ready)
+        MenuRow("从电脑选择文件", { vm.workspace.panel("remote") }, icon = TeleplyIcons.Window, enabled = ready)
+        MenuRow("引用对话", { vm.workspace.panel("chat") }, icon = TeleplyIcons.Chat, enabled = ready)
+    }
+    if (caps.slashCommands && layout != "deepseek.v1") MenuRow("引用技能", { vm.workspace.panel("skill") }, icon = TeleplyIcons.Skill, enabled = ready)
 }
 
 /**

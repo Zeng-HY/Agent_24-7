@@ -91,6 +91,8 @@ data class ReaderState(
     val jobSheet: String? = null,
     /** Which desktop apps the computer in use has (0.9.1): what the list chips, ⋯ 来源 and 新建对话 offer. */
     val sources: SourceInfo = SourceInfo(),
+    /** Assistant manifests for the computer in use (plan §6.1); defaults to the three built-ins. */
+    val catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin,
 )
 
 /**
@@ -102,17 +104,29 @@ data class ReaderState(
  */
 data class SourceInfo(val device: String = "", val apps: List<String>? = null, val loading: Boolean = false, val failed: String? = null, val cached: Boolean = false)
 
-/** The desktop apps, in the order the web and the sidebar show them. */
-val SourceOrder = listOf("codex", "claude", "deepseek")
+/** The desktop apps, in the order the web and the sidebar show them (from the active catalog's defaults). */
+val SourceOrder: List<String> get() = AgentCatalogSnapshot.Builtin.order
 
 /** What the computer in use offers; null while not known (never another computer's list). */
 fun ReaderState.knownApps(): List<String>? = sources.apps?.takeIf { device != null && sources.device == device.id }
 
-/** Where a new conversation starts: [wanted] when this computer has it, otherwise the first app it has. */
-fun ReaderState.newApp(wanted: String): String = knownApps()?.let { apps -> if (wanted in apps) wanted else apps.firstOrNull() ?: wanted } ?: wanted
+/** Apps on this computer that support starting a new conversation (`capabilities.new`). */
+fun ReaderState.newableApps(): List<String>? = knownApps()?.filter { catalog.can(it) { c -> c.new } }
 
-/** The apps of a sidebar tree (/api/chat/projects), each group one app this computer has. */
-fun treeApps(tree: org.json.JSONObject): List<String> = tree.rows("apps") { it.string("app") }.filter { it in SourceOrder }.distinct().sortedBy { SourceOrder.indexOf(it) }
+/** Where a new conversation starts: [wanted] when this computer has it, otherwise the first app it has. */
+fun ReaderState.newApp(wanted: String): String =
+    newableApps()?.let { apps -> if (wanted in apps) wanted else apps.firstOrNull() }
+        ?: knownApps()?.let { apps -> if (wanted in apps) wanted else apps.firstOrNull() ?: wanted }
+        ?: wanted
+
+/** The apps of a sidebar tree (/api/chat/projects), ordered by [catalog] with unknown valid ids kept at the end. */
+fun treeApps(tree: org.json.JSONObject, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): List<String> {
+    val order = catalog.order
+    val seen = linkedSetOf<String>()
+    val ids = tree.rows("apps") { it.string("app").trim() }.filter { isValidAgentId(it) && seen.add(it) }
+    val indexed = ids.withIndex()
+    return indexed.sortedWith(compareBy({ val pos = order.indexOf(it.value); if (pos >= 0) pos else Int.MAX_VALUE }, { it.index })).map { it.value }
+}
 data class NewHandoff(val app: String, val id: String, val text: String)
 /**
  * Where a conversation's page stood (B09): its first item on screen ([item]; [message] when that is a message) and how
@@ -144,10 +158,13 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     private var api: ReadApi? = null
     /** The local demo's computer, for tests: what it was asked. */
     internal val fixtureWorld get() = (api as? FixtureApi)?.world
+    internal val agentCatalog = AgentCatalog()
     val composer=ChatController(viewModelScope,store)
     val workspace=WorkspaceController(viewModelScope,store)
     val jobs=NewChatJobs(viewModelScope,store)
     init {
+        composer.catalog={ state.value.catalog }
+        workspace.catalog={ state.value.catalog }
         composer.extras={workspace.sendExtras()};composer.boundSettings={workspace.boundSettings()};composer.sentExtras={k,extra -> workspace.clearSent(k,extra)};composer.restoreExtras={k,extra -> workspace.restoreSent(k,extra)};workspace.changed={ composer.refreshControl() }
         // No state poll while a tap waits on the computer (web claude-ui.js `choosing`).
         composer.pollPaused={ workspace.state.value.busy || workspace.state.value.pressing || composer.state.value.submitting }
@@ -160,7 +177,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     }
     fun switchSource(app:String) = operation { g ->
         pendingNotification=null
-        require(app in SourceOrder)
+        require(isValidAgentId(app)) { "来源应用无效" }
         api=api?.forSource(app)
         if(!state.value.fixture) store.source(app)
         commit(g) { it.copy(app=app,chat=null,messages=emptyList(),chats=emptyList(),anchor=null,screen=if(it.device!=null) Screen.Chats else it.screen,query="",listCursor=null,listMore=false) }
@@ -178,8 +195,9 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         store.source(key.app)
         val known=if(s.sources.device==device.id) s.sources.apps else cachedSources(s.scope,device.id)
         commit(g) { ReaderState(origin=s.origin,scope=s.scope,app=key.app,account=account,device=device,screen=Screen.Chats,theme=s.theme,dynamic=s.dynamic,serverVersion=s.serverVersion,busy=true,
-            sources=SourceInfo(device.id,known,loading=true,cached=known!=null)) }
+            sources=SourceInfo(device.id,known,loading=true,cached=known!=null),catalog=agentCatalog.forDevice(device.id)) }
         service.select(device.id)
+        loadCatalog(device.id)
         loadTree(true)
         readChat(g,Chat(key.chat,"通知对应会话"))
         pendingNotification=null
@@ -269,7 +287,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         if (device != null && device.connectable) {
             service.select(device.id)
             val known = cachedSources(scope, device.id)
-            commit(g) { it.copy(device=device,screen=Screen.Chats,sources=SourceInfo(device.id,known,loading=true,cached=known!=null)) }
+            commit(g) { it.copy(device=device,screen=Screen.Chats,sources=SourceInfo(device.id,known,loading=true,cached=known!=null),catalog=agentCatalog.forDevice(device.id)) }
+            loadCatalog(device.id)
             loadTree(true)
             if (device.id == p?.device && !p.chat.isNullOrBlank()) readChat(g, Chat(p.chat,p.title.ifBlank { "对话" })) else loadChats(g)
             if (device.id != p?.device) persistSelection(scope,device.id,"","")
@@ -376,7 +395,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             commit(g) { it.copy(account=account,device=verified,expired=false,screen=if(it.chat != null) Screen.Reading else Screen.Chats) }
             if(previous.messages.isEmpty() && verified.connectable) {
                 service.select(verified.id)
-                if(state.value.sources.device!=verified.id) { val known=cachedSources(scope,verified.id);commit(g) { it.copy(sources=SourceInfo(verified.id,known,loading=true,cached=known!=null)) } }
+                if(state.value.sources.device!=verified.id) { val known=cachedSources(scope,verified.id);commit(g) { it.copy(sources=SourceInfo(verified.id,known,loading=true,cached=known!=null),catalog=agentCatalog.forDevice(verified.id)) } }
+                loadCatalog(verified.id)
                 if(state.value.knownApps()==null || state.value.sources.failed!=null) loadTree(true)
                 if(previous.chat!=null) readChat(g,previous.chat) else loadChats(g)
             }
@@ -406,11 +426,12 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         val filter=if(s.listSource=="all" || known?.contains(s.listSource)==true) s.listSource else "all"
         // Drop old displayed content before selecting, even if the new selection fails.
         commit(g) { it.copy(device=null,chat=null,messages=emptyList(),chats=emptyList(),hits=emptyList(),anchor=null,query="",cursor=null,listCursor=null,older=false,listMore=false,tree="{}",treeError=null,runtime="{}",
-            listSource=filter,sources=SourceInfo(device.id,known,loading=true,cached=known!=null && !same)) }
-        treeJob?.cancel();treeMore.clear();treeAt=0L
+            listSource=filter,sources=SourceInfo(device.id,known,loading=true,cached=known!=null && !same),catalog=agentCatalog.forDevice(device.id)) }
+        treeJob?.cancel();catalogJob?.cancel();treeMore.clear();treeAt=0L
         requireNotNull(api).select(device.id)
         currentCoroutineContext().ensureActive()
         commit(g) { it.copy(device=device,screen=Screen.Chats) }
+        loadCatalog(device.id)
         loadTree(true)
         persistSelection(state.value.scope,device.id,"","")
         loadChats(g)
@@ -427,10 +448,15 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     private suspend fun cachedSources(scope:String,device:String):List<String>? {
         if(state.value.fixture || scope.isBlank()) return null
         val saved=try { store.detail(sourcesKey(scope,device),"sources") } catch(e:CancellationException) { throw e } catch(_:Exception) { null } ?: return null
-        return saved.split(',').filter { it in SourceOrder }
+        return saved.split(',').filter { isValidAgentId(it) }
     }
     /** Asks the computer again (the chips' and the sheet's 重试). */
-    fun retrySources() { mutable.update { if(it.device!=null && it.sources.device==it.device.id) it.copy(sources=it.sources.copy(loading=true,failed=null)) else it };loadTree(true) }
+    fun retrySources() {
+        val deviceId=state.value.device?.id
+        mutable.update { if(it.device!=null && it.sources.device==it.device.id) it.copy(sources=it.sources.copy(loading=true,failed=null)) else it }
+        if(deviceId!=null) loadCatalog(deviceId,force=true)
+        loadTree(true)
+    }
     /**
      * The computer answered with its apps: a list filter on one it does not have goes back to 全部 (the list is read
      * again when it shows), instead of an empty list under a chip that is no longer there.
@@ -482,13 +508,13 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
      */
     private fun pointSource(app:String):Boolean {
         if(app.isBlank() || app==state.value.app) return false
-        require(app in SourceOrder) { "来源应用无效" }
+        require(isValidAgentId(app)) { "来源应用无效" }
         api=api?.forSource(app)
         mutable.update { it.copy(app=app,chat=null,messages=emptyList(),anchor=null,runtime="{}") }
         return true
     }
     fun listDisplay(source:String=state.value.listSource,sort:String=state.value.listSort,status:String=state.value.listStatus,group:String=state.value.listGroup) = operation { g ->
-        require(source=="all" || source in setOf("codex","claude","deepseek"))
+        require(source=="all" || isValidAgentId(source)) { "来源应用无效" }
         val reload=source!=state.value.listSource || sort!=state.value.listSort || status!=state.value.listStatus
         commit(g) { it.copy(listSource=source,listSort=sort,listStatus=status,listGroup=group,chats=if(reload) emptyList() else it.chats,listCursor=if(reload) null else it.listCursor,listMore=if(reload) false else it.listMore) }
         if(reload) loadChats(g)
@@ -621,10 +647,10 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     private var undoSerial = 0L
     fun archive(chat:Chat) {
         val s=state.value;val device=s.device ?: return;val service=api ?: return
-        if(chat.group || chat.kind.isNotBlank() || chat.app !in setOf("codex","claude","deepseek")) return
+        if(chat.group || chat.kind.isNotBlank() || !s.catalog.can(chat.app) { it.archive }) return
         if(chat.status=="running") { notice("这个对话正在运行，先停止这一轮再归档");return }
         val key=chatKey(chat);val index=s.chats.indexOfFirst { chatKey(it)==key }.coerceAtLeast(0);val serial=++undoSerial
-        mutable.update { it.copy(hidden=it.hidden+key,chats=it.chats.filter { c -> chatKey(c)!=key },undo=ArchiveUndo(chat,index,chat.app=="claude",serial)) }
+        mutable.update { it.copy(hidden=it.hidden+key,chats=it.chats.filter { c -> chatKey(c)!=key },undo=ArchiveUndo(chat,index,s.catalog.cardLayout(chat.app)=="claude.v1",serial)) }
         val job=viewModelScope.async {
             try {
                 service.detail(device.id,"chat/archive",body=org.json.JSONObject().put("app",chat.app).put("id",chat.id))
@@ -633,7 +659,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             } catch(e:CancellationException) { throw e }
             catch(e:Exception) {
                 comeBack(chat,index)
-                mutable.update { it.copy(undo=if(it.undo?.serial==serial) null else it.undo,notice=(if(chat.app=="claude") "Claude：" else "没归档：")+(e.message ?: "电脑没有回应")) };false
+                mutable.update { it.copy(undo=if(it.undo?.serial==serial) null else it.undo,notice="没归档："+(e.message ?: "电脑没有回应")) };false
             } finally { archiving.remove(key) }
         }
         archiving[key]=job
@@ -653,7 +679,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             if(archiving[key]?.await()==false) return@launch
             try { service.detail(device.id,"chat/unarchive",body=org.json.JSONObject().put("app",u.chat.app).put("id",u.chat.id));loadTree(true);notice("已恢复") }
             catch(e:CancellationException) { throw e }
-            catch(e:Exception) { mutable.update { it.copy(hidden=it.hidden+key,chats=it.chats.filter { c -> chatKey(c)!=key },notice=(if(u.chat.app=="claude") "Claude：" else "没恢复：")+(e.message ?: "电脑没有回应")) } }
+            catch(e:Exception) { mutable.update { it.copy(hidden=it.hidden+key,chats=it.chats.filter { c -> chatKey(c)!=key },notice="没恢复："+(e.message ?: "电脑没有回应")) } }
         }
     }
     fun dropUndo(serial:Long) { mutable.update { if(it.undo?.serial==serial && !it.undo.waiting) it.copy(undo=null) else it } }
@@ -684,7 +710,31 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     /** A request to the selected computer from a settings page or a menu: notifications, voice, archived conversations. */
     suspend fun deviceCall(route:String,query:Map<String,String?> = emptyMap(),body:org.json.JSONObject?=null):org.json.JSONObject {
         val device=state.value.device ?: throw IllegalStateException("先选择一台电脑");val service=api ?: throw IllegalStateException("服务未连接")
-        return service.detail(device.id,route,query,body)
+        val result=service.detail(device.id,route,query,body)
+        if(route=="status") {
+            val ver=result.string("ui_version").ifBlank { result.string("version") }
+            if(ver.isNotBlank() && agentCatalog.updateVersion(device.id,ver)) loadCatalog(device.id,statusVersion=ver,force=true)
+        }
+        return result
+    }
+    private var catalogJob: Job? = null
+    /** Loads `/api/agents` for [deviceId] (cached per computer; re-fetched on version change or [force]). */
+    fun loadCatalog(deviceId:String,statusVersion:String="",force:Boolean=false) {
+        val s=state.value;val service=api ?: return
+        val owner=Triple(s.origin,s.scope,deviceId)
+        catalogJob?.cancel()
+        catalogJob=viewModelScope.launch {
+            try {
+                val snap=agentCatalog.load(deviceId,service,statusVersion,force)
+                mutable.update {
+                    if(Triple(it.origin,it.scope,it.device?.id)==owner) {
+                        val merged=if(it.tree!="{}") runCatching { snap.withTreeNames(org.json.JSONObject(it.tree)) }.getOrDefault(snap) else snap
+                        it.copy(catalog=merged)
+                    } else it
+                }
+            } catch(e:CancellationException) { throw e }
+            catch(_:Exception) { /* keep cached or built-in fallback */ }
+        }
     }
     suspend fun voiceCall(route:String,query:Map<String,String?> = emptyMap(),bytes:ByteArray?=null,type:String="application/octet-stream"):org.json.JSONObject {
         val device=state.value.device ?: throw IllegalStateException("先选择一台电脑");val service=api ?: throw IllegalStateException("服务未连接")
@@ -717,10 +767,11 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
             try {
                 val more=org.json.JSONArray(treeMore.map { (k,n) -> org.json.JSONArray().put(k.first).put(k.second).put(n) }).toString()
                 val tree=service.detail(device.id,"chat/projects",mapOf("more" to more))
-                val apps=treeApps(tree)
+                val baseCatalog=agentCatalog.forDevice(device.id).withTreeNames(tree)
+                val apps=treeApps(tree,baseCatalog)
                 treeAt=System.currentTimeMillis()
                 var mine=false
-                mutable.update { if(Triple(it.origin,it.scope,it.device?.id)==owner) { mine=true;it.copy(tree=tree.toString(),treeError=null,sources=SourceInfo(device.id,apps)) } else it }
+                mutable.update { if(Triple(it.origin,it.scope,it.device?.id)==owner) { mine=true;it.copy(tree=tree.toString(),treeError=null,sources=SourceInfo(device.id,apps),catalog=it.catalog.withTreeNames(tree)) } else it }
                 if(mine) {
                     fitSources(apps)
                     if(!synthetic) try { store.detail(sourcesKey(owner.second,device.id),"sources",apps.joinToString(",")) } catch(e:CancellationException) { throw e } catch(_:Exception) { }
@@ -818,7 +869,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     }
     fun retry() { when(state.value.screen) { Screen.Devices -> computers(); Screen.Chats -> searchChats(state.value.query); Screen.Reading -> state.value.chat?.let(::open); Screen.Login -> if(state.value.account==null && !state.value.fixture) relaunch(); else -> Unit } }
     fun fixture() {
-        api?.close(); work?.cancel(); generation++
+        api?.close(); work?.cancel(); catalogJob?.cancel(); agentCatalog.clear(); generation++
         // 11-16: a test may hand in a demo that also streams frames; the app's own is the fixed one.
         api=fixtureApi()
         mutable.value=ReaderState(screen=Screen.Login,origin="fixture://local",scope="fixture",theme=state.value.theme,dynamic=state.value.dynamic,fixture=true)

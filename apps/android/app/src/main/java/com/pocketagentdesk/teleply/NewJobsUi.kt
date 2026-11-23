@@ -41,7 +41,7 @@ fun NewJobDock(s: ReaderState, vm: ReaderViewModel) {
                     .clickable(role = Role.Button) { vm.openJob(job) }.padding(horizontal = 14.dp, vertical = 10.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text(newJobDock(job), style = MaterialTheme.typography.bodySmall, color = if (job.problem) p.error else p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(newJobDock(job, s.catalog), style = MaterialTheme.typography.bodySmall, color = if (job.problem) p.error else p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -83,7 +83,7 @@ fun NewJobSheet(s: ReaderState, vm: ReaderViewModel) {
             return@TeleplySheet
         }
         val place = if (job.projectless) "无项目" else job.label.ifBlank { job.folder.substringAfterLast('/').substringAfterLast('\\') }
-        Text(listOf(sourceName(job.app), place, job.text.replace(Regex("\\s+"), " ").trim().take(40).ifBlank { "只有图片或引用" }).filter { it.isNotBlank() }.joinToString(" · "),
+        Text(listOf(sourceName(job.app, s.catalog), place, job.text.replace(Regex("\\s+"), " ").trim().take(40).ifBlank { "只有图片或引用" }).filter { it.isNotBlank() }.joinToString(" · "),
             style = MaterialTheme.typography.note, color = p.muted)
         Text(newJobProgress(job), style = MaterialTheme.typography.bodyMedium, color = p.text, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         val pending = job.pendingJson()

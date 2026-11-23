@@ -48,7 +48,7 @@ class WatchManager(private val context:Context,private val store:ReaderStore,pri
     @Volatile var foreground:ChatKey?=null
     private fun readTarget():WatchTarget?=runCatching {
         val j=JSONObject(prefs.getString("target",null) ?: error("No target"))
-        val app=j.getString("app");require(app in setOf("codex","claude","deepseek"))
+        val app=j.getString("app");require(isValidAgentId(app))
         WatchTarget(serviceOrigin(j.getString("origin")).toString(),ChatKey(j.getString("scope"),j.getString("device"),j.getString("chat"),app),j.getString("nonce"))
     }.getOrNull()
     fun allowed()=(Build.VERSION.SDK_INT<33 || ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED) && NotificationManagerCompat.from(context).areNotificationsEnabled() && context.getSystemService(NotificationManager::class.java).getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE

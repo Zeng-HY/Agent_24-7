@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
     // A file an answer links to opens its page (Markdown fileLink, 10-27); any other link goes to the system as before.
     val system=LocalUriHandler.current
     val links=remember(system,vm) { object:UriHandler { override fun openUri(uri:String) { val path=fileLinkPath(uri);if(path!=null) vm.workspace.openLinkedFile(path) else system.openUri(uri) } } }
-    CompositionLocalProvider(LocalUriHandler provides links) { ReaderScreens(s,vm) }
+    CompositionLocalProvider(LocalUriHandler provides links, LocalAgentCatalog provides s.catalog) { ReaderScreens(s,vm) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -187,7 +187,7 @@ class MainActivity : ComponentActivity() {
         val key=ws.key ?: return@LaunchedEffect
         if(key.app==target.app && key.chat=="@new" && ws.ready) {
             target.restore?.let { vm.workspace.restoreNew(it) }
-            if(target.folder.isNotBlank() || target.projectless) vm.workspace.chooseFolder(target.folder,target.projectless && target.app!="deepseek")
+            if(target.folder.isNotBlank() || target.projectless) vm.workspace.chooseFolder(target.folder,target.projectless && s.catalog.can(target.app) { it.newProjectless })
             if(target.text.isNotBlank()) {
                 val draft=runCatching { org.json.JSONObject(vm.workspace.state.value.saved).string("first_message") }.getOrDefault("")
                 vm.workspace.edit("first_message",if(draft.isBlank()) target.text else draft.trimEnd()+"\n"+target.text)

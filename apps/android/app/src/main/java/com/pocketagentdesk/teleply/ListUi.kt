@@ -126,17 +126,14 @@ fun agoLabel(ms: Long, now: Long = System.currentTimeMillis()): String {
     }
 }
 
-/** Source badge colours: each app's own brand colour (web .badge). */
-fun badgeColor(app: String) = when (app) {
-    "claude" -> Color(0xFFD97757)
-    "deepseek" -> Color(0xFF4D6BFE)
-    else -> Color(0xFF111111)
-}
+/** Source badge colours: each app's own brand colour from [catalog], neutral grey for unknown (plan §6.1). */
+fun badgeColor(app: String, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): Color = catalog.badgeColor(app)
 
 @Composable
 fun SourceBadge(app: String) {
-    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(badgeColor(app)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-        Text(sourceName(app), style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold), color = Color.White)
+    val catalog = LocalAgentCatalog.current
+    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(badgeColor(app, catalog)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+        Text(sourceName(app, catalog), style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold), color = Color.White)
     }
 }
 
@@ -242,8 +239,8 @@ private fun ListTopBar(s: ReaderState, vm: ReaderViewModel, onMenu: () -> Unit) 
                     .padding(vertical = 2.dp),
             )
         }
-        // A computer with none of the apps has nothing to start a conversation in; a list being read does not hold it.
-        val noApps = s.knownApps()?.isEmpty() == true
+        // A computer with none of the apps (or none that can start a new chat) has nothing to start a conversation in.
+        val noApps = s.newableApps()?.isEmpty() == true
         TeleplyIconButton(TeleplyIcons.New, "新建对话", { vm.startNew(if (s.listSource == "all") s.app else s.listSource) }, enabled = s.device != null && !noApps,
             disabledReason = if (noApps) "这台电脑上没有找到可用的桌面应用" else null)
     }
@@ -260,7 +257,7 @@ private fun SourceChips(s: ReaderState, vm: ReaderViewModel) {
     val menus = LocalMenuHost.current
     val anchor = remember { MenuAnchor() }
     val known = s.knownApps()
-    val options = listOf("all" to "全部") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it) }
+    val options = listOf("all" to "全部") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it, s.catalog) }
     val scroll = rememberScrollState()
     // Where each chip sits in the row: the chosen one is scrolled fully into view, clear of the faded edge, also when it
     // was only partly showing. Only this row scrolls; the list around it never moves for it.
@@ -369,10 +366,11 @@ private fun MenuScope.ListDisplayMenu(s: ReaderState, vm: ReaderViewModel) {
     var page by remember { mutableStateOf<String?>(null) }
     val groups = listOf("none" to "不分组", "project" to "按项目", "app" to "按来源应用")
     val sorts = listOf("updated" to "最近活动", "created" to "创建时间")
-    val states = ListStates
+    val allowedStatuses = if (s.listSource == "all") null else s.catalog.info(s.listSource).caps.statuses.toSet()
+    val states = if (allowedStatuses == null) ListStates else ListStates.filter { (v, _) -> v == "all" || v in allowedStatuses }
     // The same apps as the chips (0.9.1): this computer's, or while not known only a filter already chosen.
     val known = s.knownApps()
-    val sources = listOf("all" to "全部应用") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it) }
+    val sources = listOf("all" to "全部应用") + (known ?: listOf(s.listSource).filter { it != "all" }).map { it to sourceName(it, s.catalog) }
     fun label(options: List<Pair<String, String>>, value: String) = options.firstOrNull { it.first == value }?.second ?: value
     when (page) {
         null -> {
@@ -434,9 +432,6 @@ private fun SearchLine(value: String, onValue: (String) -> Unit, onSearch: () ->
     }
 }
 
-/** Sources whose conversations can be archived from the list (web: Codex, DeepSeek, and Claude where the computer has it). */
-private val Archivable = setOf("codex", "claude", "deepseek")
-
 private fun LazyListScope.chatRows(s: ReaderState, vm: ReaderViewModel, query: String, clearQuery: () -> Unit, folds: Set<String>, toggleFold: (String) -> Unit, swipe: SwipeState) {
     if (s.chats.isEmpty()) {
         if (!s.busy) item(key = "empty") { EmptyList(s, vm, query.isNotBlank(), clearQuery) }
@@ -444,7 +439,7 @@ private fun LazyListScope.chatRows(s: ReaderState, vm: ReaderViewModel, query: S
     }
     val groupName: (Chat) -> String = when (s.listGroup) {
         "project" -> { c -> c.folder.ifBlank { "未分组" } }
-        "app" -> { c -> sourceName(c.app) }
+        "app" -> { c -> sourceName(c.app, s.catalog) }
         else -> { _ -> "" }
     }
     val rows = if (s.listGroup == "none") s.chats else s.chats.sortedBy(groupName)
@@ -465,7 +460,7 @@ private fun LazyListScope.chatRows(s: ReaderState, vm: ReaderViewModel, query: S
                 // A search hit that is a child: it says whose it is, and a subagent opens the conversation that shows its card.
                 chat.kind.isNotBlank() -> ChatRow(chat, first = index == 0, enabled = !s.busy, modifier = Modifier.animateItem()) { vm.openChild(chat, null) }
                 else -> Box(Modifier.animateItem()) {
-                    SwipeArchive(key, swipe, chat.status == "running", !s.busy && chat.app in Archivable, { vm.archive(chat) }, { vm.notice("这个对话正在运行，先停止这一轮再归档") }) {
+                    SwipeArchive(key, swipe, chat.status == "running", !s.busy && s.catalog.can(chat.app) { it.archive }, { vm.archive(chat) }, { vm.notice("这个对话正在运行，先停止这一轮再归档") }) {
                         ChatRow(chat, first = index == 0, enabled = !s.busy) { vm.open(chat) }
                     }
                 }
@@ -596,7 +591,7 @@ private fun EmptyList(s: ReaderState, vm: ReaderViewModel, searching: Boolean, c
     Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(if (s.error == null) "没有找到对话" else "暂时无法读取对话", style = MaterialTheme.typography.titleMedium, color = p.text)
         val conditions = buildList {
-            if (s.listSource != "all") add("来源：${sourceName(s.listSource)}")
+            if (s.listSource != "all") add("来源：${sourceName(s.listSource, s.catalog)}")
             if (s.listStatus != "all") add("状态：" + ListStates.toMap()[s.listStatus].orEmpty())
             if (searching) add("搜索：${s.query}")
         }

@@ -341,7 +341,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         return response
     }
     override fun events(device: String, chat: String) = kotlinx.coroutines.flow.callbackFlow {
-        val reducer=StreamReducer(chat,app)
+        val reducer=StreamReducer(chat,app,catalog.forDevice(device).cardLayout(app)=="codex.v1")
         val url=root.newBuilder().encodedPath(devicePath(device,"/api/events")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("lite","1").withProtocolQuery().build()
         val request=Request.Builder().url(url).header("Accept","text/event-stream").withProtocolHeaders()
         vault.read(key)?.let { Cookie.parse(root,it)?.takeIf { c -> c.expiresAt>System.currentTimeMillis() }?.let { c -> request.header("Cookie","${c.name}=${c.value}") } }

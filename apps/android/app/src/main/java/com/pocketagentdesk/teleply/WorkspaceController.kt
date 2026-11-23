@@ -85,6 +85,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     var created:(NewJob)->Unit = {}
     /** A first message 0.7 left under way in the sheet: followed as a job, without opening it. */
     var adopted:(NewJob)->Unit = {}
+    /** Active computer's assistant manifest snapshot (plan §6.1). */
+    var catalog:()->AgentCatalogSnapshot = { AgentCatalogSnapshot.Builtin }
     private fun launchSafe(block:suspend ()->Unit):Job {
         val owner=key
         return scope.launch { try { block() } catch(e:CancellationException) { throw e } catch(e:Exception) { owner?.let { k -> update(k) { it.copy(ready=false,busy=false,error=e.message ?: "本地保存失败，操作已暂停") } } } }
@@ -112,7 +114,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 // The sheet's lists of last time, so it opens with them (0.8); the computer's come in behind.
                 val kept=if(next.chat=="@new" && lists[next]==null && !synthetic) store.detail(next,"new_lists")?.let { runCatching { JSONObject(it) }.getOrNull() } else null
                 // Claude's model lists of last time, this conversation's and the computer's latest, for the model menu.
-                if(next.app=="claude" && !synthetic) listOf(catalogKey(next) to next,lastCatalogKey(next) to lastCatalog(next)).forEach { (name,owner) ->
+                if(catalog().cardLayout(next.app)=="claude.v1" && !synthetic) listOf(catalogKey(next) to next,lastCatalogKey(next) to lastCatalog(next)).forEach { (name,owner) ->
                     if(catalogs[name]==null) store.detail(owner,"claude_catalog")?.let { runCatching { JSONObject(it) }.getOrNull() }?.let { catalogs[name]=it }
                 }
                 if(g==generation) { cache[next]=j.toString();kept?.let { lists[next]=it };update(next) { it.copy(saved=j.toString(),ready=true,newData=(lists[next] ?: JSONObject()).toString()) } }
@@ -205,7 +207,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      */
     fun loadChoices(fresh:Boolean=false,model:String="") {
         val k=key ?: return;val service=api ?: return
-        if(k.app=="codex") return
+        val layout=catalog().cardLayout(k.app)
+        if(layout!="claude.v1" && layout!="deepseek.v1") return
         choiceRead?.cancel()
         val synthetic=fixture
         val shown=remembered(k,model).apply { if(fresh) put("refreshing",true) }
@@ -213,11 +216,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         choiceRead=launchSafe {
             try {
                 val data=JSONObject(shown.toString()).apply { remove("refreshing") }
-                if(k.app=="claude") {
+                if(layout=="claude.v1") {
                     val catalog=service.detail(k.device,"claude/catalog",body=JSONObject().put("id",k.chat).put("fresh",fresh))
                     keepCatalog(k,catalog,synthetic);data.put("source_catalog",catalog)
                 }
-                if(k.app=="deepseek") {
+                if(layout=="deepseek.v1") {
                     val models=service.detail(k.device,"deepseek/models");catalogs["deepseek-models|${k.device}"]=models
                     val permissions=service.detail(k.device,"deepseek/permissions",mapOf("app" to k.app,"id" to k.chat));catalogs["deepseek-permissions|${k.device}|${k.chat}"]=permissions
                     data.put("source_catalog",models).put("permissions",permissions)
@@ -232,7 +235,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     private fun lastCatalog(k:ChatKey)=ChatKey(k.scope,k.device,"@catalog","claude")
     /** What the menus showed last (web savedCatalog): this conversation's, or the latest on the same model, its picks unknown. */
     private fun remembered(k:ChatKey,model:String):JSONObject = JSONObject().apply {
-        if(k.app=="claude") {
+        val layout=catalog().cardLayout(k.app)
+        if(layout=="claude.v1") {
             val own=catalogs[catalogKey(k)]
             val last=catalogs[lastCatalogKey(k)]?.takeIf { own==null && model.isNotBlank() && it.string("model_id")==model }
             when {
@@ -244,7 +248,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 })
             }
         }
-        if(k.app=="deepseek") {
+        if(layout=="deepseek.v1") {
             catalogs["deepseek-models|${k.device}"]?.let { put("source_catalog",it) }
             catalogs["deepseek-permissions|${k.device}|${k.chat}"]?.let { put("permissions",it) }
         }
@@ -260,7 +264,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      */
     fun claudeSetting(kind:String,name:String,value:Any?=null,expected:String="") {
         val k=key ?: return;val service=api ?: return
-        if(k.app!="claude" || state.value.busy || !active.add(k)) return
+        if(catalog().cardLayout(k.app)!="claude.v1" || state.value.busy || !active.add(k)) return
         val synthetic=fixture
         update(k) { it.copy(busy=true,error=null,result="") }
         launchSafe {
@@ -283,7 +287,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     /** Leaves no menu open on the computer once the phone's model menu closed (web claude-ui.js closeMenu). */
     fun closeClaudeMenu() {
         val k=key ?: return;val service=api ?: return
-        if(k.app!="claude" || k.chat=="@new") return
+        if(catalog().cardLayout(k.app)!="claude.v1" || k.chat=="@new") return
         scope.launch { try { service.detail(k.device,"claude/close-menu",body=JSONObject().put("id",k.chat)) } catch(e:CancellationException) { throw e } catch(_:Exception) { } }
     }
     fun addReference(reference:JSONObject) {
@@ -347,12 +351,13 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             val temp=java.io.File.createTempFile("selected-",".upload",context.cacheDir)
             try {
                 val name=withContext(Dispatchers.IO) { context.contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use { if(it.moveToFirst()) it.getString(0) else null } ?: "文件" }
+                val params=catalog().params(k.app)
                 val before=saved(k);val uploads=before.rows("uploads") { it }
-                require(!image || uploads.count { it.optBoolean("image") }<5) { "最多5张图片" }
+                require(!image || uploads.count { it.optBoolean("image") }<params.maxImages) { "最多${params.maxImages}张图片" }
                 persist(k,before.put("uploads",JSONArray(uploads+JSONObject().put("local",local).put("name",name).put("image",image).put("status","uploading"))),synthetic)
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)?.use { input ->
-                        val limit=if(image) 20L*1024*1024 else 100L*1024*1024
+                        val limit=if(image) params.maxImageBytes else 100L*1024*1024
                         temp.outputStream().use { out -> val buffer=ByteArray(65536);var count=0L
                             while(true) { currentCoroutineContext().ensureActive();val n=input.read(buffer);if(n<0) break;count+=n;require(count<=limit) { "文件超过上传上限" };out.write(buffer,0,n) }
                         }
@@ -400,14 +405,15 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 val references=extras.optJSONArray("references") ?: JSONArray()
                 val images=j.rows("uploads") { it }.filter { it.optBoolean("image") }.mapNotNull { it.optJSONObject("meta") }
                 require(text.isNotBlank() || images.isNotEmpty() || references.length()>0) { "请输入首条消息" }
-                // No folder is 无项目, as the sheet shows it; DeepSeek always needs one of its workspaces.
-                val folder=j.string("folder");val projectless=k.app!="deepseek" && (j.string("projectless")=="1" || folder.isBlank())
-                require(folder.isNotBlank() || projectless) { "DeepSeek 要选一个工作区" }
+                // No folder is 无项目, as the sheet shows it; sources without new_projectless need a workspace.
+                val snap=catalog();val caps=snap.info(k.app).caps
+                val folder=j.string("folder");val projectless=caps.newProjectless && (j.string("projectless")=="1" || folder.isBlank())
+                require(folder.isNotBlank() || projectless) { "${snap.name(k.app)} 要选一个工作区" }
                 val body=JSONObject().put("request_id",rid).put("app",k.app).put("folder",if(projectless) "" else folder).put("text",text)
                     .put("attachments",extras.optJSONArray("attachments") ?: JSONArray()).put("references",references)
                 if(projectless) body.put("projectless",true)
                 val model=j.string("new_model");if(model.isNotBlank()) body.put("settings",JSONObject().put("model",model).put("effort",j.string("new_effort").ifBlank { null } ?: JSONObject.NULL))
-                if(k.app=="deepseek" && j.string("new_permission").isNotBlank()) body.put("permission",j.string("new_permission")).put("permission_confirmed",j.optBoolean("permission_confirmed"))
+                if(caps.newPermission && j.string("new_permission").isNotBlank()) body.put("permission",j.string("new_permission")).put("permission_confirmed",j.optBoolean("permission_confirmed"))
                 val name=JSONObject(state.value.newData).optJSONObject("folders")?.rows("items") { it }?.find { it.string("path")==folder }?.string("name")
                 val job=NewJob(rid,k.app,if(projectless) "" else folder,projectless,if(projectless) "" else name?.ifBlank { null } ?: folder.substringAfterLast('/').substringAfterLast('\\'),text,
                     references=references.toString(),images=JSONArray(images).toString(),body=body.toString(),pending=JSONObject().put("state","creating").put("message","正在创建对话…").toString())
@@ -507,7 +513,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      * settled quietly and its line goes (10-27: 「上次操作的结果还没确认」 stayed for ever). Nothing is sent again.
      */
     fun claudeStateRead(k:ChatKey) {
-        if(!valid(k) || k.app!="claude" || !state.value.ready || state.value.checking || k in active) return
+        if(!valid(k) || catalog().cardLayout(k.app)!="claude.v1" || !state.value.ready || state.value.checking || k in active) return
         val pending=saved(k).optJSONObject("pending_action")?.takeIf { it.string("route")=="claude/choose" && it.string("status")=="unknown" } ?: return
         val at=pending.optLong("at")
         if(at>0 && System.currentTimeMillis()-at<ClaudePressLife) return
@@ -577,7 +583,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      */
     fun claudeButton(card:String,route:String,body:JSONObject,label:String) {
         val k=key ?: return;val service=api ?: return
-        if(k.app!="claude" || route !in setOf("claude/next","claude/task") || state.value.pressing) return
+        if(catalog().cardLayout(k.app)!="claude.v1" || route !in setOf("claude/next","claude/task") || state.value.pressing) return
         update(k) { it.copy(cards=it.cards+(card to "pressing:$label"),error=null) }
         launchSafe {
             try {

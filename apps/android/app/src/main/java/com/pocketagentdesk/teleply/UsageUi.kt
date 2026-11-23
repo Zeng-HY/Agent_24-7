@@ -114,12 +114,16 @@ fun UsageSheet(vm: ReaderViewModel, onClose: () -> Unit) {
         })
         if (sending) Text("正在用…", style = MaterialTheme.typography.note, color = p.muted)
         if (unconfirmed) PillButton("再试一次（不会多用）", { use(picked) }, enabled = !sending, modifier = Modifier.fillMaxWidth())
+        val catalog = LocalAgentCatalog.current
         report?.let { data ->
             CodexBlock(data.codex, data.now, sending, zone) { credit ->
                 picked = credit
                 asking = true
             }
             ClaudeBlock(data.claude)
+            data.agents.values
+                .filter { catalog.cardLayout(it.id) !in setOf("codex.v1", "claude.v1") }
+                .forEach { extra -> GenericUsageBlock(sourceName(extra.id, catalog), extra, data.now, zone) }
         }
     }
     if (asking) AlertDialog(
@@ -194,6 +198,28 @@ private fun ClaudeBlock(claude: ClaudeUsage) {
         "读自电脑上的 Claude 窗口。Claude 只显示最紧的那一档。" + if (claude.minimized) "Claude 窗口最小化了，数字可能是旧的。" else "",
         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = p.muted,
     )
+}
+
+@Composable
+private fun GenericUsageBlock(title: String, usage: AgentUsage, now: Long, zone: ZoneId) {
+    val p = LocalTeleply.current
+    Text(title, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = p.muted)
+    if (!usage.available) {
+        Text(usage.reason.ifBlank { "读不到 $title 的用量" }, style = MaterialTheme.typography.note, color = p.muted)
+        return
+    }
+    if (usage.windows.isEmpty()) {
+        if (usage.text.isNotBlank()) Text(usage.text, style = MaterialTheme.typography.bodyMedium, color = p.text)
+    } else {
+        usage.windows.forEach { window ->
+            val line = when {
+                window.resetsAt != null -> resetLine(window, usage.source, now, zone)
+                window.resetsText.isNotBlank() -> "${window.resetsText} 重置"
+                else -> ""
+            }
+            WindowRow(window, line)
+        }
+    }
 }
 
 /** One limit: its name and how much is used, a bar, and the line under it (when it resets, or nothing). */

@@ -140,7 +140,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     val currentMessages by rememberUpdatedState(s.messages)
     val raw = remember(chat.control.raw) { runCatching { JSONObject(chat.control.raw) }.getOrDefault(JSONObject()) }
     val saved = remember(workspace.saved) { runCatching { JSONObject(workspace.saved) }.getOrDefault(JSONObject()) }
-    val cards = remember(raw, s.app) { pendingCards(s.app, raw) }
+    val cards = remember(raw, s.app, s.catalog) { pendingCards(s.app, raw, s.catalog) }
     // 11-16: sends whose bubble the record does not show yet (the page's own 提交中 copy).
     val outbox = remember(chat.submissions, s.messages) {
         chat.submissions.filter { it.action == "send" && it.label == "提交中" && s.messages.none { m -> m.request == it.request } }
@@ -262,7 +262,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
     // conversation on the iPhone). The few rows that act on the state (next step, task, Codex plan) read it themselves.
     val rows = remember(s.messages) { timelineRows(s.messages) }
     val receipts = remember(chat.submissions) { chat.submissions.filter { it.request.isNotBlank() }.associateBy({ it.request }, { it.label }) }
-    val plan = remember(raw, s.app) { if (s.app == "codex") codexPlan(raw) else null }
+    val plan = remember(raw, s.app, s.catalog) { if (s.catalog.cardLayout(s.app) == "codex.v1") codexPlan(raw) else null }
     val planRow = remember(plan, s.messages) { plan?.let { found -> s.messages.firstOrNull { codexPlanIs(found, it) }?.id } }
     val rawState = rememberUpdatedState(raw)
     val live = remember(chatState, workspaceState, rawState) { TimelineLive(chatState, workspaceState, rawState) }
@@ -309,7 +309,7 @@ fun ChatScreen(s: ReaderState, vm: ReaderViewModel, onBack: (() -> Unit)?) {
                 item(key = "interactions") {
                     Reading {
                         Column(Modifier.fillMaxWidth().padding(top = if (cards.isEmpty()) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            InlineCards(s.app, raw, saved, vm, workspace)
+                            InlineCards(s.app, s.catalog, raw, saved, vm, workspace)
                         }
                     }
                 }
@@ -413,7 +413,7 @@ private fun ChatTopBar(s: ReaderState, vm: ReaderViewModel, chat: ComposerState,
     val more = remember { MenuAnchor() }
     val runtime = runtimeOf(s, raw)
     val percent = runtime?.takeIf { it.string("context_state") == "available" && it.has("percent") }?.optDouble("percent")?.let { Math.round(it).toInt() }
-    val meta = listOf(s.chat?.folder.orEmpty().ifBlank { JSONObject(s.runtime.ifBlank { "{}" }).string("folder") }, sourceName(s.app)).filter { it.isNotBlank() }.joinToString(" · ")
+    val meta = listOf(s.chat?.folder.orEmpty().ifBlank { JSONObject(s.runtime.ifBlank { "{}" }).string("folder") }, sourceName(s.app, s.catalog)).filter { it.isNotBlank() }.joinToString(" · ")
     Row(
         Modifier.fillMaxWidth()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
@@ -427,11 +427,12 @@ private fun ChatTopBar(s: ReaderState, vm: ReaderViewModel, chat: ComposerState,
         }
         // A new conversation's page has nothing to stop and no menu yet (web .new-provisional).
         if (isNewPage(s.chat)) return@Row
-        val claudeStop = raw.string("stop_token")
-        val canStop = chat.control.running && (s.app != "claude" || claudeStop.isNotBlank())
+        val stopToken = raw.string("stop_token")
+        val usesDesktopStop = s.catalog.cardLayout(s.app) == "claude.v1"
+        val canStop = s.catalog.can(s.app) { it.stop } && chat.control.running && (!usesDesktopStop || stopToken.isNotBlank())
         if (canStop) {
             StopPill("停止这一轮", enabled = chat.control.available && !chat.submitting, disabledReason = "暂时不能控制这个来源") {
-                if (s.app == "claude") vm.workspace.action("claude/choose", JSONObject().put("token", claudeStop), local = claudePress("stop")) else vm.composer.stop()
+                if (usesDesktopStop) vm.workspace.action("claude/choose", JSONObject().put("token", stopToken), local = claudePress("stop")) else vm.composer.stop()
             }
             Spacer(Modifier.width(8.dp))
         }
@@ -449,10 +450,10 @@ private fun ChatTopBar(s: ReaderState, vm: ReaderViewModel, chat: ComposerState,
 @Composable
 private fun MenuScope.ChatMenu(s: ReaderState, vm: ReaderViewModel, chat: ComposerState, sheets: ChatSheets, onRuntime: () -> Unit) {
     val unconfirmed = chat.submissions.count { it.label in listOf("提交中", "送达状态待确认") }
-    MenuRow("电脑上打开", { vm.workspace.openOnComputer() }, icon = TeleplyIcons.Open)
+    if (s.catalog.can(s.app) { it.open }) MenuRow("电脑上打开", { vm.workspace.openOnComputer() }, icon = TeleplyIcons.Open)
     MenuRow("会话状态", onRuntime, icon = TeleplyIcons.Info)
-    if (s.app != "deepseek") MenuRow("用量", { sheets.usage = true }, icon = TeleplyIcons.Clock)
-    MenuRow("查找消息", { sheets.search = true }, icon = TeleplyIcons.Search)
+    if (s.catalog.can(s.app) { it.usage }) MenuRow("用量", { sheets.usage = true }, icon = TeleplyIcons.Clock)
+    if (s.catalog.can(s.app) { it.search }) MenuRow("查找消息", { sheets.search = true }, icon = TeleplyIcons.Search)
     MenuRow("对话文件", { vm.workspace.panel("files") }, icon = TeleplyIcons.File)
     MenuRow("常用提示语", { sheets.prompts = true }, icon = TeleplyIcons.Text)
     if (unconfirmed > 0) MenuRow("待核对发送记录", { sheets.pending = true }, icon = TeleplyIcons.Clock, count = unconfirmed)
@@ -497,7 +498,7 @@ private fun MenuScope.WatchRow(s: ReaderState) {
 fun runtimeOf(s: ReaderState, raw: JSONObject): JSONObject? {
     // Claude's model and context come from the desktop (raw.runtime); the others from the session record (page meta).
     val fromControl = raw.optJSONObject("runtime")
-    if (s.app == "claude" && fromControl != null) return fromControl
+    if (s.catalog.cardLayout(s.app) == "claude.v1" && fromControl != null) return fromControl
     return runCatching { JSONObject(s.runtime.ifBlank { "{}" }).optJSONObject("runtime") }.getOrNull() ?: fromControl
 }
 
@@ -836,8 +837,8 @@ fun claudeTakesOther(prompt: JSONObject): Boolean = prompt.optJSONObject("other"
 /** The computer's 下一题 and 提交, by the names it gives them (claude_hooks.py NAV), drawn strong as on the web. */
 private val ClaudeGoOn = setOf("Next", "Submit")
 
-fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
-    "claude" -> {
+fun pendingCards(app: String, raw: JSONObject, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): List<PendingCard> = when (catalog.cardLayout(app)) {
+    "claude.v1" -> {
         val prompt = raw.optJSONObject("prompt")
         when {
             prompt != null && claudeAsks(raw) -> listOf(PendingCard("choice", prompt.string("title"), prompt.string("progress")))
@@ -845,7 +846,7 @@ fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
             else -> emptyList()
         }
     }
-    "deepseek" -> {
+    "deepseek.v1" -> {
         val approvals = raw.rows("interactions") { it }.filter { it.string("event") == "approval/request" }
         val questions = raw.rows("questions") { it } + raw.rows("interactions") { it }.filter { it.string("event") == "user-questions/request" }.mapNotNull { it.optJSONObject("request") }
         val total = approvals.size + questions.distinctBy { it.string("callId") }.size
@@ -855,7 +856,7 @@ fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
             else -> listOf(PendingCard("question", questions.first().rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "有问题要回答" }, count = total))
         }
     }
-    else -> raw.rows("questions") { it }.filter { it.string("status") == "pending" }.map { card ->
+    "codex.v1" -> raw.rows("questions") { it }.filter { it.string("status") == "pending" }.map { card ->
         // 11-16: Codex's approval requests come as their own card, with 允许一次 and 拒绝.
         if (card.string("kind") == "approval") {
             PendingCard("approval", if (!card.optBoolean("answerable")) "Codex 在电脑上等你处理" else if (card.string("approval_type") == "file") "Codex 想改文件" else "Codex 想运行命令")
@@ -863,14 +864,19 @@ fun pendingCards(app: String, raw: JSONObject): List<PendingCard> = when (app) {
             PendingCard("question", card.rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "Codex 有问题要问你" })
         }
     }
+    else -> if (!catalog.can(app) { it.approve || it.answer }) emptyList() else raw.rows("questions") { it }.filter { it.string("status") == "pending" }.map { card ->
+        if (card.string("kind") == "approval") PendingCard("approval", "${catalog.name(app)} 等你批准")
+        else PendingCard("question", card.rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "${catalog.name(app)} 有问题要问你" })
+    }
 }
 
 @Composable
-private fun InlineCards(app: String, raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
-    when (app) {
-        "claude" -> ClaudeCards(raw, vm, ws)
-        "deepseek" -> DeepSeekCards(raw, saved, vm, ws)
-        else -> CodexCards(raw, saved, vm, ws)
+private fun InlineCards(app: String, catalog: AgentCatalogSnapshot, raw: JSONObject, saved: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
+    when (catalog.cardLayout(app)) {
+        "claude.v1" -> ClaudeCards(raw, vm, ws)
+        "deepseek.v1" -> DeepSeekCards(raw, saved, vm, ws)
+        "codex.v1" -> CodexCards(raw, saved, vm, ws)
+        else -> Unit
     }
 }
 
@@ -1180,7 +1186,7 @@ private fun MenuScope.RuntimePanel(vm: ReaderViewModel) {
         }
         Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val effort = runtime.string("effort")
-            RuntimeTile("模型", modelLabel(s.app, raw, runtime.string("model")), null, Modifier.weight(1f))
+            RuntimeTile("模型", modelLabel(s.app, raw, runtime.string("model"), s.catalog), null, Modifier.weight(1f))
             RuntimeTile("推理强度", if (effort.isBlank()) "暂无" else effortName(effort), effort.takeIf { effortName(it) != it }, Modifier.weight(1f))
         }
         val seconds = maxOf(runtime.optLong("model_time"), runtime.optLong("usage_time"))
@@ -1191,7 +1197,7 @@ private fun MenuScope.RuntimePanel(vm: ReaderViewModel) {
             ago.endsWith("前") -> "${ago}更新"
             else -> "$ago 更新"
         }
-        val footer = listOfNotNull(if (s.app == "claude") "来自电脑上的 Claude" else "来自会话记录", fresh, if (percent != null) "比例是估算值" else null).joinToString(" · ")
+        val footer = listOfNotNull(if (s.catalog.cardLayout(s.app) == "claude.v1") "来自电脑上的 Claude" else "来自会话记录", fresh, if (percent != null) "比例是估算值" else null).joinToString(" · ")
         Text(footer, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), color = p.muted, modifier = Modifier.padding(top = 12.dp))
     }
 }
@@ -1203,8 +1209,8 @@ private fun contextText(state: String) = when (state) {
 }
 
 /** The model's display name: Claude's desktop label, Codex's catalog name, otherwise the id. */
-private fun modelLabel(app: String, raw: JSONObject, id: String): String {
-    if (app == "claude") raw.string("model_label").takeIf { it.isNotBlank() }?.let { return it }
+private fun modelLabel(app: String, raw: JSONObject, id: String, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin): String {
+    if (catalog.cardLayout(app) == "claude.v1") raw.string("model_label").takeIf { it.isNotBlank() }?.let { return it }
     val named = raw.optJSONObject("catalog")?.rows("models") { it }?.firstOrNull { it.string("id") == id }?.string("name")
     return named?.ifBlank { null } ?: id.ifBlank { "暂无" }
 }
@@ -1233,7 +1239,7 @@ private fun SearchSheet(s: ReaderState, vm: ReaderViewModel, onDismiss: () -> Un
             else CardSection {
                 s.hits.forEachIndexed { index, hit ->
                     if (index > 0) CardDivider()
-                    CardRow(hit.text, { onDismiss(); vm.jump(hit) }, detail = if (hit.role == "user") "你" else sourceName(s.app))
+                    CardRow(hit.text, { onDismiss(); vm.jump(hit) }, detail = if (hit.role == "user") "你" else sourceName(s.app, s.catalog))
                 }
             }
             if (s.hitMore) PillButton("更多结果", { vm.searchHistory(s.searchQuery, true) }, enabled = !s.busy, style = PillStyle.Text)

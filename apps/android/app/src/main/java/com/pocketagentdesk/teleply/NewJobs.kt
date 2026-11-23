@@ -65,7 +65,7 @@ fun newJobProgress(job: NewJob): String {
     }
 }
 /** A row above the list for a job not on screen (web dockText). */
-fun newJobDock(job: NewJob) = sourceName(job.app) + " · " + newJobState(job) + " · " + job.text.replace(Regex("\\s+"), " ").trim().take(60).ifBlank { "新对话" }
+fun newJobDock(job: NewJob, catalog: AgentCatalogSnapshot = AgentCatalogSnapshot.Builtin) = sourceName(job.app, catalog) + " · " + newJobState(job) + " · " + job.text.replace(Regex("\\s+"), " ").trim().take(60).ifBlank { "新对话" }
 
 /**
  * The jobs of one computer, kept on this phone until they are opened or removed (a day for one that went through).

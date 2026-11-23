@@ -46,7 +46,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 fun operationLabel(value:String)=when(value) { "pending" -> "待回答";"answered" -> "已回答";"draft" -> "草稿";"submitting","creating","dispatching" -> "正在提交，结果可核对";"unconfirmed","unknown" -> "结果待确认";"accepted" -> "已接收";"failed" -> "失败";"current" -> "当前版本";"updated" -> "文件已更新";"missing" -> "文件缺失";else -> value }
-fun sourceName(app:String)=when(app) { "codex" -> "Codex";"claude" -> "Claude";"deepseek" -> "DeepSeek";else -> app }
+fun sourceName(app:String,catalog:AgentCatalogSnapshot=AgentCatalogSnapshot.Builtin)=catalog.name(app)
 fun JSONObject.strings(name:String)=optJSONArray(name)?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
 
 /**
@@ -98,13 +98,13 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
  */
 @Composable private fun NewChatSheet(vm:ReaderViewModel,s:WorkspaceState,reader:ReaderState) {
     val c=vm.workspace
+    val catalog=reader.catalog
     val target=reader.pendingNew
     val k=s.key
     val app=target?.app ?: k?.app ?: reader.app
-    // Only the apps this computer has (0.9.1), as read when it was entered: nothing is read here while the sheet moves,
-    // and while they are not known the sheet offers the source it opened with, not all three.
-    val known=reader.knownApps()
-    val apps=known ?: listOf(app)
+    // Only the apps this computer has and can start new chats for (0.9.1 / §6.1), as read when it was entered.
+    val known=reader.newableApps()
+    val apps=known?.takeIf { it.isNotEmpty() } ?: listOf(app)
     val ready=k!=null && k.chat=="@new" && k.app==app && s.ready && s.pane=="new"
     // A source the computer turns out not to have (chosen on another computer, or gone there): its first app instead,
     // with the words typed so far.
@@ -120,7 +120,7 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
         // While another source binds, the sheet keeps its shape with the carried text and nothing to press.
         val j=remember(s.saved,ready,target) { if(ready) JSONObject(s.saved) else JSONObject().put("first_message",target?.text.orEmpty()) }
         val data=remember(s.newData,ready) { if(ready) JSONObject(s.newData) else JSONObject() }
-        if(apps.size>1) SegmentedChoice(apps.map { it to sourceName(it) },app,{ next ->
+        if(apps.size>1) SegmentedChoice(apps.map { it to sourceName(it,catalog) },app,{ next ->
             if(next!=app && ready) {
                 val text=j.string("first_message")
                 if(text.isNotBlank()) c.edit("first_message","")
@@ -129,18 +129,19 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
         })
         if(known==null) {
             val failed=reader.sources.failed!=null && !reader.sources.loading
-            Text(if(failed) "读不到这台电脑上有哪些应用，先用 ${sourceName(app)}。点这里重试" else "正在读取这台电脑上的应用，先用 ${sourceName(app)}",style=MaterialTheme.typography.note,
+            Text(if(failed) "读不到这台电脑上有哪些应用，先用 ${sourceName(app,catalog)}。点这里重试" else "正在读取这台电脑上的应用，先用 ${sourceName(app,catalog)}",style=MaterialTheme.typography.note,
                 color=if(failed) LocalTeleply.current.accent else LocalTeleply.current.muted,
                 modifier=if(failed) Modifier.clip(RoundedCornerShape(8.dp)).clickable(role=Role.Button,onClick=vm::retrySources) else Modifier)
         }
         // A first message under way no longer holds the sheet (0.8, web 10-16): it is followed on its own page.
         if(ready) { s.error?.let { Text(it,style=MaterialTheme.typography.note,color=LocalTeleply.current.error) } }
-        NewChat(vm,app,data,j,s,ready,reader.fixture)
+        NewChat(vm,app,catalog,data,j,s,ready,reader.fixture)
     }
 }
 
-@Composable private fun ColumnScope.NewChat(vm:ReaderViewModel,app:String,data:JSONObject,j:JSONObject,s:WorkspaceState,ready:Boolean,fixture:Boolean) {
+@Composable private fun ColumnScope.NewChat(vm:ReaderViewModel,app:String,catalog:AgentCatalogSnapshot,data:JSONObject,j:JSONObject,s:WorkspaceState,ready:Boolean,fixture:Boolean) {
     val c=vm.workspace;val p=LocalTeleply.current;val context=LocalContext.current
+    val info=catalog.info(app);val caps=info.caps;val layout=info.ui.cardLayout
     var note by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<JSONObject?>(null) }
     val pickers=rememberAttachPickers(vm) { note=it }
@@ -150,32 +151,34 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
     LaunchedEffect(folders,ready) { if(ready && folder.isBlank() && !projectless && folders.isNotEmpty()) c.chooseFolder(folders.first().string("path"),false) }
     val extras=j.rows("uploads") { it }.size+j.rows("references") { it }.size
     val uploading=j.rows("uploads") { it }.any { it.string("status")!="ready" }
-    val canCreate=ready && !s.busy && (j.string("first_message").isNotBlank() || extras>0) && !uploading && (app!="deepseek" || folder.isNotBlank())
-    NewComposer(vm,app,j,ready,s.busy,pickers,canCreate) { if(!fixture) rememberFolder(context,app,folder);c.create() }
+    val canCreate=ready && !s.busy && (j.string("first_message").isNotBlank() || extras>0) && !uploading && (caps.newProjectless || folder.isNotBlank())
+    NewComposer(vm,app,catalog,j,ready,s.busy,pickers,canCreate) { if(!fixture) rememberFolder(context,app,folder);c.create() }
     if(note.isNotBlank()) Text(note,style=MaterialTheme.typography.note,color=p.muted)
     s.newNote?.let { Text(it,style=MaterialTheme.typography.note,color=p.muted) }
     Column(Modifier.fillMaxWidth()) {
         val current=folders.find { it.string("path")==folder }
         val folderName=when {
-            folder.isBlank() && app!="deepseek" -> "无项目"
+            folder.isBlank() && caps.newProjectless -> "无项目"
             current!=null -> current.string("name").ifBlank { folder }
             folder.isNotBlank() -> folder.substringAfterLast('/').substringAfterLast('\\')
             else -> "选择工作区"
         }
         val folderDetail=when {
-            folder.isBlank() && app!="deepseek" -> "不放进任何项目"
+            folder.isBlank() && caps.newProjectless -> "不放进任何项目"
             folder.isNotBlank() -> folder
-            data.has("folders") -> "DeepSeek 的工作区"
+            data.has("folders") -> "${sourceName(app,catalog)} 的工作区"
             else -> "读取电脑上的项目…"
         }
-        NewChoiceRow(if(folder.isBlank() && app!="deepseek") TeleplyIcons.Loose else TeleplyIcons.Project,folderName,folderDetail,"项目",ready,"项目文件夹",420.dp,scrolls=false) { FolderMenu(vm) }
-        val models=data.json("models").rows("models") { it }
-        val modelId=j.string("new_model");val effortId=j.string("new_effort")
-        val model=models.find { it.string("id")==modelId }
-        val effortLabel=model?.rows("efforts") { it }?.find { it.string("id")==effortId }?.let { e -> if(app=="codex") effortName(e.string("id")) else e.string("label") }
-        val modelName=if(modelId.isBlank()) "默认模型" else (model?.string("label")?.ifBlank { null } ?: j.string("new_model_label").ifBlank { modelId })+(effortLabel?.let { " · $it" } ?: "")
-        NewChoiceRow(TeleplyIcons.Spark,modelName,if(modelId.isBlank()) "跟电脑当前设置走" else "新对话用这个模型","模型与推理强度",ready,"模型与推理强度",480.dp,scrolls=false) { NewModelMenu(vm) }
-        if(app=="deepseek") {
+        NewChoiceRow(if(folder.isBlank() && caps.newProjectless) TeleplyIcons.Loose else TeleplyIcons.Project,folderName,folderDetail,"项目",ready,"项目文件夹",420.dp,scrolls=false) { FolderMenu(vm) }
+        if("model" in caps.settings || "effort" in caps.settings) {
+            val models=data.json("models").rows("models") { it }
+            val modelId=j.string("new_model");val effortId=j.string("new_effort")
+            val model=models.find { it.string("id")==modelId }
+            val effortLabel=model?.rows("efforts") { it }?.find { it.string("id")==effortId }?.let { e -> if(layout=="codex.v1") effortName(e.string("id")) else e.string("label") }
+            val modelName=if(modelId.isBlank()) "默认模型" else (model?.string("label")?.ifBlank { null } ?: j.string("new_model_label").ifBlank { modelId })+(effortLabel?.let { " · $it" } ?: "")
+            NewChoiceRow(TeleplyIcons.Spark,modelName,if(modelId.isBlank()) "跟电脑当前设置走" else "新对话用这个模型","模型与推理强度",ready,"模型与推理强度",480.dp,scrolls=false) { NewModelMenu(vm) }
+        }
+        if(caps.newPermission) {
             val options=data.json("permissions").rows("options") { it }
             val chosen=options.find { it.string("value")==j.string("new_permission") && j.string("new_permission").isNotBlank() }
             NewChoiceRow(TeleplyIcons.Settings,chosen?.string("name") ?: j.string("new_permission_name").ifBlank { "默认权限" },"首条消息发送前设置并核对","权限",ready,"权限",420.dp) { NewPermissionMenu(vm) { confirm=it } }
@@ -185,8 +188,9 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
 }
 
 /** The first message (web .new-composer): attachment tiles, the text, then ＋ and the round 创建并发送 button. */
-@Composable private fun NewComposer(vm:ReaderViewModel,app:String,j:JSONObject,ready:Boolean,busy:Boolean,pickers:AttachPickers,canCreate:Boolean,onCreate:()->Unit) {
+@Composable private fun NewComposer(vm:ReaderViewModel,app:String,catalog:AgentCatalogSnapshot,j:JSONObject,ready:Boolean,busy:Boolean,pickers:AttachPickers,canCreate:Boolean,onCreate:()->Unit) {
     val p=LocalTeleply.current;val menus=LocalMenuHost.current;val plus=remember { MenuAnchor() }
+    val caps=catalog.info(app).caps
     val shape=RoundedCornerShape(20.dp)
     val text=j.string("first_message")
     val maxField=(LocalConfiguration.current.screenHeightDp*0.28f).dp
@@ -204,9 +208,11 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
             )
         }
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-            TeleplyIconButton(TeleplyIcons.Plus,"添加附件或引用",{
-                menus?.show(MenuRequest(plus.bounds,MenuPlacement.BelowStart,"添加附件或引用",width=240.dp) { AttachMenu(app,ready,pickers,vm) })
-            },modifier=Modifier.menuAnchor(plus),style=IconButtonStyle.Plain,tint=p.muted,enabled=ready)
+            if(caps.attachments || caps.slashCommands) {
+                TeleplyIconButton(TeleplyIcons.Plus,"添加附件或引用",{
+                    menus?.show(MenuRequest(plus.bounds,MenuPlacement.BelowStart,"添加附件或引用",width=240.dp) { AttachMenu(app,ready,pickers,vm,catalog) })
+                },modifier=Modifier.menuAnchor(plus),style=IconButtonStyle.Plain,tint=p.muted,enabled=ready)
+            }
             Spacer(Modifier.weight(1f))
             SendButton("创建并发送",canCreate,busy,onCreate)
         }
@@ -247,6 +253,7 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
 @Composable private fun MenuScope.FolderMenu(vm:ReaderViewModel) {
     val ws by vm.workspace.state.collectAsStateWithLifecycle()
     val k=ws.key ?: return
+    val catalog=LocalAgentCatalog.current;val caps=catalog.info(k.app).caps;val layout=catalog.cardLayout(k.app)
     val c=vm.workspace;val context=LocalContext.current
     // The list of last time at once; the computer's comes in behind and replaces it (0.8: it used to read first).
     LaunchedEffect(Unit) { c.loadNewFolders() }
@@ -258,8 +265,13 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
     Column(Modifier.fillMaxWidth()) {
         if(folders.size>8) MenuSearch(query,{ query=it },"搜索项目名称或路径")
         Column(Modifier.weight(1f,fill=false).verticalScroll(rememberScrollState())) {
-            if(k.app!="deepseek" && (query.isBlank() || "无项目".contains(query.trim()))) {
-                MenuRow("无项目",{ c.chooseFolder("",true) },detail=if(k.app=="claude") "Claude 不选文件夹，电脑上显示 No folder" else "在「文档\\Codex」下新建一个文件夹",trailing=if(projectless) MenuTrailing.Checked else MenuTrailing.None)
+            if(caps.newProjectless && (query.isBlank() || "无项目".contains(query.trim()))) {
+                val detail=when(layout) {
+                    "claude.v1" -> "Claude 不选文件夹，电脑上显示 No folder"
+                    "codex.v1" -> "在「文档\\Codex」下新建一个文件夹"
+                    else -> "不放进任何项目"
+                }
+                MenuRow("无项目",{ c.chooseFolder("",true) },detail=detail,trailing=if(projectless) MenuTrailing.Checked else MenuTrailing.None)
             }
             val words=query.trim()
             val hits=folders.filter { f -> words.isBlank() || (f.string("name")+" "+f.string("path")+" "+f.strings("sources").joinToString(" ")).contains(words,ignoreCase=true) }
@@ -270,7 +282,7 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
             when {
                 !data.has("folders") -> MenuLoading("首次读取电脑上的项目…")
                 hits.isEmpty() && words.isNotBlank() -> MenuHint("没有匹配的项目文件夹")
-                folders.isEmpty() -> MenuHint(if(k.app=="deepseek") "电脑上的 DeepSeek 还没有工作区" else "电脑上还没有项目文件夹")
+                folders.isEmpty() -> MenuHint(if(!caps.newProjectless) "电脑上的 ${sourceName(k.app,catalog)} 还没有工作区" else "电脑上还没有项目文件夹")
             }
         }
     }
@@ -280,6 +292,7 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
 @Composable private fun MenuScope.NewModelMenu(vm:ReaderViewModel) {
     val ws by vm.workspace.state.collectAsStateWithLifecycle()
     val k=ws.key ?: return
+    val layout=LocalAgentCatalog.current.cardLayout(k.app)
     val c=vm.workspace
     // The models of last time at once; the computer's list (from what its menus showed before) comes in behind.
     LaunchedEffect(Unit) { c.loadNewModels() }
@@ -289,7 +302,7 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
     val models=options.rows("models") { it }
     val modelId=j.string("new_model")
     val model=models.find { it.string("id")==modelId }
-    val efforts=model?.rows("efforts") { it }.orEmpty().map { e -> e.string("id") to if(k.app=="codex") effortName(e.string("id")) else e.string("label").ifBlank { e.string("id") } }
+    val efforts=model?.rows("efforts") { it }.orEmpty().map { e -> e.string("id") to if(layout=="codex.v1") effortName(e.string("id")) else e.string("label").ifBlank { e.string("id") } }
     ChoiceList(if(efforts.isEmpty()) emptyList() else listOf("" to "默认")+efforts,j.string("new_effort"),true,{ e -> c.edit("new_effort",e) }) {
         MenuRow("默认（电脑当前设置）",{ c.edit("new_model","");c.edit("new_model_label","");c.edit("new_effort","") },trailing=if(modelId.isBlank()) MenuTrailing.Checked else MenuTrailing.None)
         models.forEach { m ->
@@ -307,12 +320,14 @@ private fun JSONObject.json(name:String)=optJSONObject(name) ?: JSONObject()
 /** DeepSeek 权限 menu for the new conversation; options that need it are confirmed first. */
 @Composable private fun MenuScope.NewPermissionMenu(vm:ReaderViewModel,onConfirm:(JSONObject)->Unit) {
     val ws by vm.workspace.state.collectAsStateWithLifecycle()
+    val catalog=LocalAgentCatalog.current
+    val appName=ws.key?.let { sourceName(it.app,catalog) } ?: "DeepSeek"
     val c=vm.workspace
     LaunchedEffect(Unit) { c.loadNewPermissions() }
     val data=remember(ws.newData) { runCatching { JSONObject(ws.newData) }.getOrDefault(JSONObject()) }
     val j=remember(ws.saved) { runCatching { JSONObject(ws.saved) }.getOrDefault(JSONObject()) }
     val current=j.string("new_permission")
-    MenuRow("默认权限",{ c.setNewPermission(JSONObject()) },detail="用 DeepSeek 当前的设置",trailing=if(current.isBlank()) MenuTrailing.Checked else MenuTrailing.None)
+    MenuRow("默认权限",{ c.setNewPermission(JSONObject()) },detail="用 $appName 当前的设置",trailing=if(current.isBlank()) MenuTrailing.Checked else MenuTrailing.None)
     data.json("permissions").rows("options") { it }.forEach { option ->
         val on=current==option.string("value")
         MenuRow(option.string("name"),{ if(!on) { if(option.optBoolean("confirm")) onConfirm(option) else c.setNewPermission(option) } },detail=option.string("description").ifBlank { null },trailing=if(on) MenuTrailing.Checked else MenuTrailing.None)
