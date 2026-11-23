@@ -430,5 +430,175 @@ class CodexAgent(Agent):
                     svc.log(f"手机上删除了 Codex 对话 {r['id']}")
         return results
 
+    # -- notify hooks
+
+    def notify_turn_end(self, lines: list[bytes]) -> dict | None:
+        states = {"task_started": "running", "task_complete": "done", "turn_aborted": "stopped"}
+        end = None
+        for raw in lines:
+            if b"event_msg" not in raw[:160]:
+                continue
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            payload = rec.get("payload") or {}
+            state = states.get(payload.get("type"))
+            if state:
+                ts = rec.get("timestamp") or ""
+                end = {
+                    "state": state,
+                    "key": payload.get("turn_id") or ts,
+                    "time": ts,
+                    "text": chats.codex_answer(payload.get("last_agent_message") or ""),
+                }
+        return end
+
+    def notify_step(self, name: str, argument: str = "") -> str | None:
+        name = (name or "").strip()
+        action = CODEX_STEPS.get(name)
+        if name == "exec":
+            text = (argument or "").lower()
+            if "apply_patch" in text or "*** begin patch" in text:
+                return "edit"
+            if "web_search" in text or "search_query" in text or "web.run" in text:
+                return "search"
+            return "run"
+        return action
+
+    def notify_scan_record(self, scan: dict, rec: dict) -> None:
+        kind = rec.get("type")
+        payload = rec.get("payload") or {}
+        ts = rec.get("timestamp") or ""
+        if ts:
+            scan["latest"] = ts
+        event = payload.get("type") if kind == "event_msg" else None
+        if event == "task_started":
+            scan.update(state="running", started=ts, ended="", key=payload.get("turn_id") or ts, text="", action="")
+        elif event in ("task_complete", "turn_aborted"):
+            scan.update(
+                state="stopped" if event == "turn_aborted" else "done",
+                ended=ts,
+                key=payload.get("turn_id") or scan["key"] or ts,
+                text=chats.codex_answer(payload.get("last_agent_message") or "") if event == "task_complete" else scan["text"],
+                action="",
+            )
+        elif kind == "response_item":
+            ptype = payload.get("type")
+            if ptype in ("function_call", "custom_tool_call"):
+                step = self.notify_step(str(payload.get("name") or ""), str(payload.get("input") or ""))
+                if step:
+                    scan["action"] = step
+            elif ptype == "item_completed" and (payload.get("item") or {}).get("type") == "CommandExecution":
+                scan["action"] = "run"
+
+    def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
+        import sqlite3
+        import notify
+        try:
+            rows = notify.chats._codex_rows(notify.CODEX_WHERE, (), limit)
+        except sqlite3.Error:
+            try:
+                rows = notify.chats.codex_threads(limit)
+            except sqlite3.Error:
+                rows = []
+        return rows, []
+
+    def notify_check_approvals(self, notifier, item: dict, conv: tuple, title: str, found) -> bool:
+        return notifier._codex_approvals(item, conv, title, found)
+
+    # -- new conversation hooks
+
+    def new_options(self, svc) -> dict:
+        import new_conversations
+        return {
+            "models": [
+                {
+                    "id": m["id"],
+                    "label": m["name"],
+                    "efforts": [{"id": e, "label": e} for e in m["efforts"]],
+                    "default_effort": m.get("default_effort"),
+                }
+                for m in new_conversations.codex_control.catalog()["models"]
+            ],
+            "note": "",
+        }
+
+    def prepare_new_submission(self, svc, rid: str, data: dict, body: dict) -> None:
+        if data.get("projectless"):
+            data["folder"] = svc._projectless_folder()
+
+    def run_new(self, svc, rid: str, data: dict, trace) -> None:
+        import new_conversations
+        if not data.get("id"):
+            svc._empty_codex(rid, data)
+        svc._save(rid, "prepared", data, {"message": "正在连接桌面端的新对话…"})
+        trace.phase("desktop_open", "在桌面打开新对话")
+        new_conversations.chats.require_send_desktop()
+        new_conversations.os.startfile("codex://threads/" + data["id"])
+        trace.phase("desktop_owner", "等待桌面接管对话")
+        deadline = new_conversations.time.monotonic() + new_conversations.TAKEOVER_SECONDS
+        reopen = new_conversations.time.monotonic() + new_conversations.REOPEN_SECONDS
+        while True:
+            try:
+                owner, snapshot = svc.bridge._pipe().snapshot(data["id"], 5, timing=trace.phase)
+                if snapshot.get("id") == data["id"]:
+                    break
+            except Exception:
+                now = new_conversations.time.monotonic()
+                if now >= deadline:
+                    raise new_conversations.chats.InputNotSubmitted(
+                        f"新对话已创建，桌面端 {new_conversations.TAKEOVER_SECONDS} 秒内没有接管；请打开该对话后发送保留的草稿"
+                    )
+                if now >= reopen:
+                    trace.phase("desktop_reopen", "再次在桌面打开新对话")
+                    new_conversations.chats.require_send_desktop()
+                    new_conversations.os.startfile("codex://threads/" + data["id"])
+                    reopen = now + new_conversations.REOPEN_SECONDS
+                new_conversations.time.sleep(0.5)
+        settings = svc._desktop_settings(data, snapshot, trace)
+        if data.get("settings"):
+            settings = svc._picked(settings, data["settings"])
+        trace.phase("bind", "准备首条消息与附件")
+        svc._bind(rid, data)
+        svc._save(rid, "dispatching", data, {"message": "正在提交首条消息…"})
+        answer = svc.bridge.send(
+            {
+                "id": data["id"],
+                "request_id": rid,
+                "text": data["text"],
+                "attachments": data["attachments"],
+                "references": data["references"],
+                "settings": settings,
+            },
+            timing=trace.phase,
+        )
+        if not (answer.get("accepted") or answer.get("delivered")):
+            raise new_conversations.chats.ChatError(answer.get("text") or answer.get("message") or "首条消息结果尚未确认")
+
+    def reconcile_new_status(self, svc, rid: str, state: str, data: dict, result: dict) -> tuple[str, dict]:
+        if data.get("id") and state in ("dispatching", "unconfirmed") and svc._codex_accepted(rid, data):
+            state, result = "accepted", {"message": "首条消息已送达"}
+            svc._save(rid, state, data, result)
+        return state, result
+
+    def handle_new_error(self, svc, rid: str, state: str, data: dict, trace, exc: Exception) -> tuple[bool, bool]:
+        if state == "dispatching" and data.get("id") and svc._late_receipt(rid, data, trace):
+            trace.finish()
+            svc._save(rid, "accepted", data, {"message": "首条消息已送达"})
+            svc._log(data, trace, f"送达（Codex 先回了「{str(exc)[:80]}」，记录里随后有了这条消息）")
+            return True, False
+        safe = isinstance(exc, chats.SendNotSubmitted) and state != "dispatching"
+        if state == "dispatching" and data.get("id"):
+            try:
+                safe = svc.bridge.receipt(data["id"], rid).get("state") == "unknown"
+            except Exception:
+                pass
+        return False, safe
+
+    def check_new_retry(self, svc, data: dict) -> None:
+        if data.get("projectless") and not Path(data["folder"]).is_dir():
+            raise chats.ChatError("无项目对话的文件夹已不在，请重新新建")
+
 
 AGENT = CodexAgent

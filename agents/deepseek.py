@@ -31,6 +31,9 @@ class DeepSeekAgent(Agent):
     home_list = False
     has_skills = False
     archive_order = 20
+    notify_uses_file = False
+    new_requires_desktop = False
+    new_folder_list_own_only = True
 
     def step_of(self, name: str, argument: str = "") -> str:
         return DEEPSEEK_STEPS.get((name or "").rsplit(".", 1)[-1]) or ""
@@ -231,6 +234,171 @@ class DeepSeekAgent(Agent):
     def archived_list(self, svc) -> list[dict]:
         import archives
         return [dict(v, can_delete=False) for v in archives.deepseek_archived(svc.deepseek())]
+
+    # -- notify hooks
+
+    def notify_step(self, name: str, argument: str = "") -> str | None:
+        return DEEPSEEK_STEPS.get((name or "").strip().rsplit(".", 1)[-1])
+
+    def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
+        import deepseek_control
+        catalog = deepseek_control.catalog()
+        return catalog[:limit], catalog
+
+    def notify_poll(self, notifier, found, item: dict) -> bool:
+        from datetime import datetime
+        import time
+        import deepseek_control
+        import notify
+        if item.get("status") == "unknown":
+            return True
+        bridge = deepseek_control.bridge()
+        conv = (self.id, item["id"])
+        initial = conv not in notifier.ended
+        if initial:
+            notifier.ended[conv] = "observed"
+        now = int(getattr(notifier, "clock", time.time)())
+        previous = (getattr(notifier, "running", {}) or {}).get(conv, {})
+        events = []
+        try:
+            page, _ = bridge.records(item["id"], limit=100)
+            events = [v.get("event") for v in page.get("records", []) if v.get("event")]
+        except deepseek_control.DeepSeekError:
+            pass
+        starts = [e.get("time", 0) / 1000 for e in events if e.get("type") == "turn/start" and e.get("time")]
+        starts = [int(v) for v in starts if v > 0]
+        ends = [e for e in events if e.get("type") == "turn/end"]
+        action = ""
+        last_start = next((e for e in reversed(events) if e.get("type") == "turn/start"), None)
+        turn_id = (last_start.get("data") or {}).get("turn") if last_start else None
+        for event in reversed(events):
+            if event.get("type") == "tool/call":
+                data = event.get("data") or {}
+                if turn_id is not None and data.get("turn") != turn_id:
+                    continue
+                name = data.get("name") or ""
+                action = self.notify_step(str(name)) or action
+                if action:
+                    break
+        interactions = bridge.events.for_session(item["id"])
+        questions = (item.get("_values", {}).get("userQuestions") or {}).get("active", [])
+        waiting = getattr(notifier, "waiting", None)
+        if interactions or questions:
+            notifier.running.pop(conv, None)
+            ids = [v["eventId"] for v in interactions] + [q["callId"] for q in questions]
+            key = "pending:" + ",".join(sorted(ids))
+            text = "DeepSeek 有待处理的提问或批准，请打开对话查看。"
+            asks = True
+            started = notify.turn_start(previous.get("since"), starts, now)
+            if waiting is not None:
+                waiting[conv] = {"since": started, "title": chats.one_line(item.get("title") or "", 60)}
+            end = dict(key=key, state="done", text=text, asks=asks, started=started, ended=now,
+                       started_source="记录" if starts else "不知道")
+        elif item.get("_running"):
+            if waiting is not None:
+                waiting.pop(conv, None)
+            started = notify.turn_start(previous.get("since"), starts, now) or None
+            notifier._running(item, {"started": datetime.fromtimestamp(started).isoformat() if started else "",
+                                     "key": str(starts[-1]) if starts else "", "action": action})
+            if action and hasattr(notifier, "_step"):
+                notifier._step(item, {"action": action}, notifier.relay_on())
+            return True
+        else:
+            notifier.running.pop(conv, None)
+            if waiting is not None:
+                waiting.pop(conv, None)
+            if not ends:
+                return True
+            end_event = ends[-1]
+            ended = int(end_event.get("time", 0) / 1000) if end_event.get("time") else now
+            if ended < notifier.since or (end_event.get("data", {}).get("reason", {}).get("kind") != "completed"):
+                return True
+            key = str(end_event.get("seq"))
+            text = item.get("preview", "")
+            asks = False
+            started = notify.turn_start(previous.get("since"), starts, now)
+            end = dict(key=key, state="done", text=text, asks=asks, started=started or ended, ended=ended,
+                       started_source="记录" if starts else ("电脑注意到" if started else "不知道"))
+        old = notifier.ended.get(conv)
+        notifier.ended[conv] = end["key"]
+        if old == end["key"]:
+            return True
+        if asks and initial:
+            return True
+        if asks and waiting is not None:
+            waiting[conv] = {"since": end["started"], "title": chats.one_line(item.get("title") or "", 60)}
+        notifier._tell(found, item, end)
+        return True
+
+    # -- new conversation hooks
+
+    def new_own_folders(self, svc) -> list[tuple[str, str, str | None]]:
+        import deepseek_control
+        return [(w["path"], "DeepSeek 工作区", w.get("name")) for w in deepseek_control.workspaces()]
+
+    def new_options(self, svc) -> dict:
+        import deepseek_control
+        import new_conversations
+        try:
+            catalog = deepseek_control.bridge().models()
+        except deepseek_control.DeepSeekError as exc:
+            return {"models": [], "note": "DeepSeek 的模型列表暂时读不到：" + str(exc)[:100]}
+        routable = set(catalog.get("routableProviders") or [])
+        groups = [g for g in catalog.get("groups") or [] if not routable or g.get("id") in routable]
+        return {
+            "models": [
+                {
+                    "id": f"{g['id']}/{m['id']}",
+                    "label": (m.get("name") or m["id"]) + (" · " + (g.get("name") or g["id"]) if len(groups) > 1 else ""),
+                    "efforts": [
+                        {"id": e["id"], "label": new_conversations.DEEPSEEK_EFFORTS.get(e["id"], e.get("name") or e["id"])}
+                        for e in (m.get("reasoning") or {}).get("efforts") or []
+                    ],
+                    "default_effort": (m.get("reasoning") or {}).get("defaultEffort"),
+                }
+                for g in groups
+                for m in g.get("models") or []
+            ],
+            "note": "",
+        }
+
+    def validate_new_permission(self, permission: str, confirmed: bool) -> None:
+        import deepseek_control
+        option = next((value for value in deepseek_control.bridge().permissions()["options"] if value["value"] == permission), None)
+        if option is None:
+            raise chats.ChatError("DeepSeek 权限选项已变化，请重新选择")
+        if option["confirm"] and confirmed is not True:
+            raise chats.ChatError("完全权限或自动审查需要先确认")
+
+    def validate_new_references(self, refs: list) -> None:
+        if any(isinstance(r, dict) and r.get("kind") not in ("chat", "file", "folder") for r in refs):
+            raise chats.ChatError("DeepSeek 不能用技能，只能引用对话、附文件")
+
+    def prepare_new_submission(self, svc, rid: str, data: dict, body: dict) -> None:
+        import deepseek_control
+        data["workspace_id"] = deepseek_control.workspace_for(data["folder"])["id"]
+        if body.get("permission"):
+            data.update(permission=body.get("permission"), permission_confirmed=body.get("permission_confirmed") is True)
+
+    def run_new(self, svc, rid: str, data: dict, trace) -> None:
+        svc._run_deepseek(rid, data, trace)
+
+    def reconcile_new_status(self, svc, rid: str, state: str, data: dict, result: dict) -> tuple[str, dict]:
+        if data.get("id") and state in ("dispatching", "unconfirmed") and svc._deepseek_receipt(rid) == "accepted":
+            state, result = "accepted", {"message": "首条消息已送达"}
+            svc._save(rid, state, data, result)
+        if state == "prepared":
+            state, result = "failed", {"message": "对话已建好，第一句话还没发出；可以继续发送", "not_submitted": True}
+            svc._save(rid, state, data, result)
+        return state, result
+
+    def handle_new_error(self, svc, rid: str, state: str, data: dict, trace, exc: Exception) -> tuple[bool, bool]:
+        safe = isinstance(exc, chats.SendNotSubmitted) and state != "dispatching"
+        if state == "prepared":
+            safe = True
+        elif state == "dispatching" and data.get("id"):
+            safe = svc._deepseek_receipt(rid) == "unknown"
+        return False, safe
 
 
 AGENT = DeepSeekAgent

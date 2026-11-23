@@ -106,79 +106,11 @@ def send(address: dict, title: str, body: str, subtitle: str = "", group: str = 
 def turn_end(app: str, lines: list[bytes]) -> dict | None:
     """The newest turn in these lines of a conversation file: {"state": running / done / failed / stopped,
     "key": the same for one turn's end, "time": ISO time, "text": its last answer}; None when no turn shows."""
-    return _codex_end(lines) if app == "codex" else _claude_end(lines)
-
-
-def _codex_end(lines: list[bytes]) -> dict | None:
-    states = {"task_started": "running", "task_complete": "done", "turn_aborted": "stopped"}
-    end = None
-    for raw in lines:
-        if b"event_msg" not in raw[:160]:
-            continue
-        try:
-            rec = json.loads(raw)
-        except ValueError:
-            continue
-        payload = rec.get("payload") or {}
-        state = states.get(payload.get("type"))
-        if state:
-            ts = rec.get("timestamp") or ""
-            end = {"state": state, "key": payload.get("turn_id") or ts, "time": ts,
-                   "text": chats.codex_answer(payload.get("last_agent_message") or "")}
-    return end
-
-
-def _claude_text(content) -> str:
-    if isinstance(content, str):
-        return content
-    return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
-
-
-def _claude_end(lines: list[bytes]) -> dict | None:
-    # Read as chats.parse_claude reads it. One answer comes as several records (thinking, then text) with one message
-    # id; an answer that stops to use a tool, or a tool's result, means the turn goes on.
-    end = None
-    asks = {}  # next-step boxes with a question, by their call: the turn ends at their result (10-16)
-    seen = set()  # 11-01: a record Claude wrote twice (same uuid) is read once
-    for raw in lines:
-        try:
-            rec = json.loads(raw)
-        except ValueError:
-            continue
-        uuid = rec.get("uuid")
-        if isinstance(uuid, str) and uuid:
-            if uuid in seen:
-                continue
-            seen.add(uuid)
-        kind = rec.get("type")
-        if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
-            continue
-        ts = rec.get("timestamp") or ""
-        message = rec.get("message") or {}
-        content = message.get("content") if isinstance(message.get("content"), list) else []
-        if kind == "user":
-            box = next((asks[b["tool_use_id"]] for b in content if isinstance(b, dict) and b.get("type") == "tool_result"
-                        and b.get("tool_use_id") in asks), None)
-            if box:  # Claude waits on the user; read as still running before 10-16, so such a turn was never told
-                end = {"state": "done", "key": box["tool_id"], "time": ts, "text": box["ask"], "asks": True}
-                continue
-            stopped = _claude_text(message.get("content")).lstrip().startswith("[Request interrupted")
-            end = {"state": "stopped" if stopped else "running", "key": rec.get("uuid") or ts, "time": ts, "text": ""}
-            continue
-        for block in content:
-            box = chats._claude_next(block) if isinstance(block, dict) and block.get("type") == "tool_use" else None
-            if box and box["ask"]:
-                asks[block.get("id")] = box
-        key = message.get("id") or rec.get("uuid") or ts
-        if message.get("stop_reason") in (None, "tool_use"):
-            end = {"state": "running", "key": key, "time": ts, "text": ""}
-            continue
-        text = _claude_text(message.get("content")).strip()
-        if end and end["key"] == key and end["state"] in ("done", "failed"):
-            end["text"] = (end["text"] + "\n" + text).strip()
-        else:  # an API error comes as an answer of its own, marked so
-            end = {"state": "failed" if rec.get("isApiErrorMessage") else "done", "key": key, "time": ts, "text": text}
-    return end
+    from agents import registry
+    try:
+        return registry.get(app).notify_turn_end(lines)
+    except Exception:
+        return None
 
 
 _CJK = "　-〿一-鿿＀-￯"
@@ -221,22 +153,11 @@ DEEPSEEK_STEPS = {"pwsh": "run", "shell": "run", "bash": "run", "terminal": "run
 
 def record_step(app: str, name: str, argument: str = "") -> str | None:
     """edit | run | search | read for one tool call, or None when it is not one of the four (0.6.4)."""
-    name = (name or "").strip()
-    if app == "claude":
-        return CLAUDE_STEPS.get(name)
-    if app == "deepseek":
-        return DEEPSEEK_STEPS.get(name.rsplit(".", 1)[-1])
-    if app != "codex":
+    from agents import registry
+    try:
+        return registry.get(app).notify_step(name, argument)
+    except Exception:
         return None
-    action = CODEX_STEPS.get(name)
-    if name == "exec":  # Codex's one command tool; a patch or a web search runs through it
-        text = (argument or "").lower()
-        if "apply_patch" in text or "*** begin patch" in text:
-            return "edit"
-        if "web_search" in text or "search_query" in text or "web.run" in text:
-            return "search"
-        return "run"
-    return action
 
 
 def turn_start(previous, starts, now):
@@ -252,6 +173,11 @@ def new_scan(app: str) -> dict:
 
 def scan_lines(scan: dict, lines: list[bytes]) -> dict:
     """Read record lines into [scan]; the state after them is the newest turn's, with the record's own times."""
+    from agents import registry
+    try:
+        agent = registry.get(scan["app"])
+    except Exception:
+        return scan
     for raw in lines:
         if not raw.strip():
             continue
@@ -259,102 +185,8 @@ def scan_lines(scan: dict, lines: list[bytes]) -> dict:
             rec = json.loads(raw)
         except (ValueError, UnicodeError):
             continue
-        if scan["app"] == "codex":
-            _scan_codex(scan, rec)
-        else:
-            _scan_claude(scan, rec)
+        agent.notify_scan_record(scan, rec)
     return scan
-
-
-def _scan_codex(scan: dict, rec: dict) -> None:
-    kind = rec.get("type")
-    payload = rec.get("payload") or {}
-    ts = rec.get("timestamp") or ""
-    if ts:
-        scan["latest"] = ts
-    event = payload.get("type") if kind == "event_msg" else None
-    if event == "task_started":
-        scan.update(state="running", started=ts, ended="", key=payload.get("turn_id") or ts, text="", action="")
-    elif event in ("task_complete", "turn_aborted"):
-        scan.update(state="stopped" if event == "turn_aborted" else "done", ended=ts,
-                    key=payload.get("turn_id") or scan["key"] or ts,
-                    text=chats.codex_answer(payload.get("last_agent_message") or "") if event == "task_complete"
-                    else scan["text"], action="")
-    elif kind == "response_item":
-        ptype = payload.get("type")
-        if ptype in ("function_call", "custom_tool_call"):
-            step = record_step("codex", str(payload.get("name") or ""), str(payload.get("input") or ""))
-            if step:
-                scan["action"] = step
-        elif ptype == "item_completed" and (payload.get("item") or {}).get("type") == "CommandExecution":
-            scan["action"] = "run"
-
-
-def _scan_claude(scan: dict, rec: dict) -> None:
-    # 11-01: after a /compact Claude wrote 1226 old records again, every uuid twice. Read as new lines they began a
-    # turn that had ended days before and ended it again, so the island and the banners started over.
-    uuid = rec.get("uuid")
-    if isinstance(uuid, str) and uuid:
-        seen = scan.setdefault("uuids", set())
-        if uuid in seen:
-            return
-        seen.add(uuid)
-    kind = rec.get("type")
-    if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
-        return
-    ts = rec.get("timestamp") or ""
-    if ts:
-        scan["latest"] = ts
-    message = rec.get("message") or {}
-    content = message.get("content")
-    blocks = content if isinstance(content, list) else []
-    if kind == "user":
-        tool_results = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_result"]
-        if tool_results:
-            asked = any(b.get("tool_use_id") in scan["asks"] for b in tool_results)
-            if asked and scan["state"] == "running":
-                scan.update(state="done", ended=ts, action="")
-            return
-        text = _claude_text(content).strip()
-        if not text or rec.get("isCompactSummary"):
-            return  # 0.6.6: the summary a /compact writes is not a turn of its own
-        if chats._COMMAND_OUTPUT.search(text) and not chats.clean_claude_user(text):
-            # 0.6.6: a local command's output (/compact's "Compacted") ends what the command began; no answer follows.
-            # Read as a new turn, it kept the island at 在干活 for twenty minutes after a /compact.
-            if scan["state"] == "running":
-                scan.update(state="stopped", ended=ts, action="")
-            return
-        if text.startswith("[Request interrupted"):
-            scan.update(state="stopped", ended=ts, action="")
-            return
-        scan.update(state="running", started=ts, ended="", key=rec.get("uuid") or ts, text="", action="")
-        return
-    # assistant: an answer may be written as several records under one message id (thinking, then text)
-    key = message.get("id") or rec.get("uuid") or ts
-    if key != scan.get("answer_id"):
-        scan["answer_id"], scan["text"] = key, ""
-    for block in blocks:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "tool_use":
-            box = chats._claude_next(block)
-            if box and box.get("ask"):
-                scan["asks"].add(block.get("id"))
-            step = record_step("claude", str(block.get("name") or ""))
-            if step and scan["state"] == "running":
-                scan["action"] = step
-        elif block.get("type") == "text" and (block.get("text") or "").strip():
-            scan["text"] = (scan.get("text", "") + "\n" + block["text"].strip()).strip()
-    if rec.get("isApiErrorMessage"):
-        scan.update(state="failed", ended=ts, key=key, action="")
-        return
-    stop = message.get("stop_reason")
-    if stop in (None, "tool_use"):
-        if scan["state"] is None:
-            scan["state"] = "running"
-        return
-    scan.update(state="done", ended=ts, key=key, action="")
-    scan["last_kind"] = "assistant"
 
 
 # ---------------------------------------------------------------- the watcher
@@ -530,9 +362,13 @@ class Notifier:
             return
         if self.since is None:
             self._count_from_now()
+        from agents import registry
         for item in self._conversations():
-            if item['app'] == 'deepseek':
-                self._deepseek(found, item)
+            try:
+                agent = registry.get(item["app"])
+            except Exception:
+                continue
+            if agent.notify_poll(self, found, item):
                 continue
             scan = self._scan_file(item)
             if scan is None or scan.get("state") is None:
@@ -541,7 +377,7 @@ class Notifier:
             title = chats.one_line(item.get("title") or "", 60)
             # A turn waiting on an approval writes nothing more to the record, so its start record still reads
             # running; only such a turn is worth the desktop read (11-16).
-            if item["app"] == "codex" and scan["state"] == "running" and self._codex_approvals(item, conv, title, found):
+            if scan["state"] == "running" and agent.notify_check_approvals(self, item, conv, title, found):
                 continue
             latest = _unix(scan.get("latest"))
             if scan["state"] == "running" and latest and self.clock() - latest > chats.STALE_SECONDS:
@@ -768,31 +604,35 @@ class Notifier:
         self.steps.clear()
 
     def _conversations(self) -> list[dict]:
-        try:
-            codex = chats._codex_rows(CODEX_WHERE, (), LIMIT)
-        except sqlite3.Error:  # a Codex whose database lacks these columns
-            try:
-                codex = chats.codex_threads(LIMIT)
-            except sqlite3.Error:
-                codex = []
-        import deepseek_control
-        deepseek = deepseek_control.catalog()
-        rows = codex + chats.claude_sessions(LIMIT) + deepseek[:LIMIT]
-        return rows + self._followed(rows, deepseek)
+        from agents import registry
+        rows: list[dict] = []
+        full_by_app: dict[str, list[dict]] = {}
+        for agent in registry.load():
+            recent, full = agent.notify_conversations(LIMIT)
+            rows += recent
+            if full:
+                full_by_app[agent.id] = full
+        return rows + self._followed(rows, full_by_app)
 
-    def _followed(self, rows: list[dict], deepseek: list[dict]) -> list[dict]:
-        """What the newest LIMIT leave out but is still under way. 11-04: a DeepSeek row keeps the time its turn began, and
-        the translation workflows touched sixty others during one turn. Left unread, its end went untold and every
-        snapshot still said it worked: the lock screen's timer ran on for hours. One the app no longer has counts no
-        more, since nothing would ever say it ended."""
+    def _followed(self, rows: list[dict], full_by_app: dict[str, list[dict]]) -> list[dict]:
+        """What the newest LIMIT leave out but is still under way."""
+        from agents import registry
         shown = {(row["app"], row["id"]) for row in rows}
         active = {*self.running, *self.waiting}
-        more = [row for row in deepseek if ("deepseek", row["id"]) not in shown
-                and (row.get("_running") or row.get("status") == "waiting" or ("deepseek", row["id"]) in active)]
-        known = shown | {("deepseek", row["id"]) for row in more}
+        more: list[dict] = []
+        for app_id, catalog in full_by_app.items():
+            for row in catalog:
+                conv = (app_id, row["id"])
+                if conv not in shown and (row.get("_running") or row.get("status") == "waiting" or conv in active):
+                    more.append(row)
+        known = shown | {(row["app"], row["id"]) for row in more}
         for conv in active - known:
             item = (self.running.get(conv) or self.waiting.get(conv) or {}).get("item")
-            if item and conv[0] != "deepseek" and chats.conv_path(item) is not None:
+            try:
+                uses_file = registry.get(conv[0]).notify_uses_file
+            except Exception:
+                uses_file = False
+            if item and uses_file and chats.conv_path(item) is not None:
                 more.append(item)
             else:
                 self.running.pop(conv, None)
@@ -800,87 +640,10 @@ class Notifier:
                 self.reported_running.discard(conv)
         return more
 
-    def _deepseek(self,found,item):
-        """DeepSeek's Harness keeps turn/start and turn/end events with their own times; read them, not the clock."""
-        import deepseek_control
-        if item.get('status') == 'unknown':
-            return
-        bridge = deepseek_control.bridge()
-        conv = ('deepseek', item['id'])
-        initial = conv not in self.ended
-        if initial:
-            self.ended[conv] = 'observed'
-        now = int(getattr(self, "clock", time.time)())
-        previous = (getattr(self, "running", {}) or {}).get(conv, {})
-        events = []
-        try:
-            page, _ = bridge.records(item['id'], limit=100)
-            events = [v.get('event') for v in page.get('records', []) if v.get('event')]
-        except deepseek_control.DeepSeekError:
-            pass
-        starts = [e.get('time', 0) / 1000 for e in events if e.get('type') == 'turn/start' and e.get('time')]
-        starts = [int(v) for v in starts if v > 0]
-        ends = [e for e in events if e.get('type') == 'turn/end']
-        action = ""
-        last_start = next((e for e in reversed(events) if e.get('type') == 'turn/start'), None)
-        turn_id = (last_start.get('data') or {}).get('turn') if last_start else None
-        for event in reversed(events):
-            if event.get('type') == 'tool/call':
-                data = event.get('data') or {}
-                if turn_id is not None and data.get('turn') != turn_id:
-                    continue
-                name = data.get('name') or ""
-                action = record_step("deepseek", str(name)) or action
-                if action:
-                    break
-        interactions = bridge.events.for_session(item['id'])
-        questions = (item.get('_values', {}).get('userQuestions') or {}).get('active', [])
-        waiting = getattr(self, "waiting", None)
-        if interactions or questions:
-            self.running.pop(conv, None)
-            ids = [v['eventId'] for v in interactions] + [q['callId'] for q in questions]
-            key = 'pending:' + ','.join(sorted(ids))
-            text = 'DeepSeek 有待处理的提问或批准，请打开对话查看。'
-            asks = True
-            started = turn_start(previous.get('since'), starts, now)
-            if waiting is not None:
-                waiting[conv] = {"since": started, "title": chats.one_line(item.get('title') or "", 60)}
-            end = dict(key=key, state='done', text=text, asks=asks, started=started, ended=now,
-                       started_source='记录' if starts else '不知道')
-        elif item.get('_running'):
-            if waiting is not None:
-                waiting.pop(conv, None)
-            started = turn_start(previous.get('since'), starts, now) or None
-            self._running(item, {"started": datetime.fromtimestamp(started).isoformat() if started else "",
-                                 "key": str(starts[-1]) if starts else "", "action": action})
-            if action and hasattr(self, "_step"):
-                self._step(item, {"action": action}, self.relay_on())
-            return
-        else:
-            self.running.pop(conv, None)
-            if waiting is not None:
-                waiting.pop(conv, None)
-            if not ends:
-                return
-            end_event = ends[-1]
-            ended = int(end_event.get('time', 0) / 1000) if end_event.get('time') else now
-            if ended < self.since or (end_event.get('data', {}).get('reason', {}).get('kind') != 'completed'):
-                return
-            key = str(end_event.get('seq'))
-            text = item.get('preview', '')
-            asks = False
-            started = turn_start(previous.get('since'), starts, now)
-            end = dict(key=key, state='done', text=text, asks=asks, started=started or ended, ended=ended,
-                       started_source='记录' if starts else ('电脑注意到' if started else '不知道'))
-        old = self.ended.get(conv)
-        self.ended[conv] = end['key']
-        if old == end['key']:
-            return
-        if asks and initial:
-            return  # establish pending baseline; no replay of pre-start questions
-        if asks and waiting is not None:
-            waiting[conv] = {"since": end['started'], "title": chats.one_line(item.get('title') or "", 60)}
-        self._tell(found, item, end)
+    def _deepseek(self, found, item):
+        """Backwards-compatible entry point used by tests; delegates to DeepSeekAgent.notify_poll."""
+        import agents.deepseek
+        agents.deepseek.AGENT().notify_poll(self, found, item)
 
     def _quiet(self, item: dict) -> str:
         """Why this turn's end is not sent, or ''."""
@@ -890,7 +653,11 @@ class Notifier:
         return ""
 
     def _tell(self, found: dict | None, item: dict, end: dict) -> None:
-        app = {'codex':'Codex','claude':'Claude','deepseek':'DeepSeek'}[item['app']]
+        from agents import registry
+        try:
+            app = registry.get(item["app"]).manifest()["name"]["zh"]
+        except Exception:
+            app = item["app"]
         done = "出错停了" if end["state"] == "failed" else "在等你选" if end.get("asks") else "好了"
         title = chats.one_line(item.get("title") or "（无标题）", 40)
         what = f"{app}「{title}」{done}"

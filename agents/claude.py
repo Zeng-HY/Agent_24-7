@@ -336,5 +336,181 @@ class ClaudeAgent(Agent):
         import claude_archive
         return claude_archive.archived()
 
+    # -- notify hooks
+
+    @staticmethod
+    def _claude_text(content) -> str:
+        if isinstance(content, str):
+            return content
+        return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+
+    def notify_turn_end(self, lines: list[bytes]) -> dict | None:
+        end = None
+        asks = {}
+        seen = set()
+        for raw in lines:
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            uuid = rec.get("uuid")
+            if isinstance(uuid, str) and uuid:
+                if uuid in seen:
+                    continue
+                seen.add(uuid)
+            kind = rec.get("type")
+            if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
+                continue
+            ts = rec.get("timestamp") or ""
+            message = rec.get("message") or {}
+            content = message.get("content") if isinstance(message.get("content"), list) else []
+            if kind == "user":
+                box = next(
+                    (asks[b["tool_use_id"]] for b in content
+                     if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in asks),
+                    None,
+                )
+                if box:
+                    end = {"state": "done", "key": box["tool_id"], "time": ts, "text": box["ask"], "asks": True}
+                    continue
+                stopped = self._claude_text(message.get("content")).lstrip().startswith("[Request interrupted")
+                end = {"state": "stopped" if stopped else "running", "key": rec.get("uuid") or ts, "time": ts, "text": ""}
+                continue
+            for block in content:
+                box = chats._claude_next(block) if isinstance(block, dict) and block.get("type") == "tool_use" else None
+                if box and box["ask"]:
+                    asks[block.get("id")] = box
+            key = message.get("id") or rec.get("uuid") or ts
+            if message.get("stop_reason") in (None, "tool_use"):
+                end = {"state": "running", "key": key, "time": ts, "text": ""}
+                continue
+            text = self._claude_text(message.get("content")).strip()
+            if end and end["key"] == key and end["state"] in ("done", "failed"):
+                end["text"] = (end["text"] + "\n" + text).strip()
+            else:
+                end = {"state": "failed" if rec.get("isApiErrorMessage") else "done", "key": key, "time": ts, "text": text}
+        return end
+
+    def notify_step(self, name: str, argument: str = "") -> str | None:
+        return CLAUDE_STEPS.get((name or "").strip())
+
+    def notify_scan_record(self, scan: dict, rec: dict) -> None:
+        uuid = rec.get("uuid")
+        if isinstance(uuid, str) and uuid:
+            seen = scan.setdefault("uuids", set())
+            if uuid in seen:
+                return
+            seen.add(uuid)
+        kind = rec.get("type")
+        if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
+            return
+        ts = rec.get("timestamp") or ""
+        if ts:
+            scan["latest"] = ts
+        message = rec.get("message") or {}
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else []
+        if kind == "user":
+            tool_results = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_result"]
+            if tool_results:
+                asked = any(b.get("tool_use_id") in scan["asks"] for b in tool_results)
+                if asked and scan["state"] == "running":
+                    scan.update(state="done", ended=ts, action="")
+                return
+            text = self._claude_text(content).strip()
+            if not text or rec.get("isCompactSummary"):
+                return
+            if chats._COMMAND_OUTPUT.search(text) and not chats.clean_claude_user(text):
+                if scan["state"] == "running":
+                    scan.update(state="stopped", ended=ts, action="")
+                return
+            if text.startswith("[Request interrupted"):
+                scan.update(state="stopped", ended=ts, action="")
+                return
+            scan.update(state="running", started=ts, ended="", key=rec.get("uuid") or ts, text="", action="")
+            return
+        key = message.get("id") or rec.get("uuid") or ts
+        if key != scan.get("answer_id"):
+            scan["answer_id"], scan["text"] = key, ""
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                box = chats._claude_next(block)
+                if box and box.get("ask"):
+                    scan["asks"].add(block.get("id"))
+                step = self.notify_step(str(block.get("name") or ""))
+                if step and scan["state"] == "running":
+                    scan["action"] = step
+            elif block.get("type") == "text" and (block.get("text") or "").strip():
+                scan["text"] = (scan.get("text", "") + "\n" + block["text"].strip()).strip()
+        if rec.get("isApiErrorMessage"):
+            scan.update(state="failed", ended=ts, key=key, action="")
+            return
+        stop = message.get("stop_reason")
+        if stop in (None, "tool_use"):
+            if scan["state"] is None:
+                scan["state"] = "running"
+            return
+        scan.update(state="done", ended=ts, key=key, action="")
+        scan["last_kind"] = "assistant"
+
+    def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
+        import notify
+        return notify.chats.claude_sessions(limit), []
+
+    # -- new conversation hooks
+
+    def new_options(self, svc) -> dict:
+        return svc.claude.new_options() if svc.claude else {"models": [], "note": "Claude 的模型列表暂时读不到"}
+
+    def prepare_new_submission(self, svc, rid: str, data: dict, body: dict) -> None:
+        import new_conversations
+        data["known_ids"] = [v["id"] for v in new_conversations.chats.claude_sessions(1000000, pending=True)]
+
+    def run_new(self, svc, rid: str, data: dict, trace) -> None:
+        from pathlib import Path
+        import new_conversations
+        images = [svc.bridge.attachment(v, "new:" + rid) for v in data["attachments"]]
+
+        def dispatched():
+            svc._save(rid, "dispatching", data, {"message": "已提交，正在核对新对话…"})
+
+        name = Path(data["folder"]).name.casefold()
+        unique = bool(data["folder"]) and sum(Path(v["path"]).name.casefold() == name for v in svc.folders()) == 1
+        chosen = data.get("settings")
+        prepare = (lambda hwnd: svc.claude.apply_new(hwnd, chosen["model"], chosen.get("effort"))) if chosen and svc.claude else None
+        trace.phase("desktop_queue", "等待桌面操作")
+        extra = (prepare,) if prepare else ()
+        svc.desktop.run(
+            svc.desktop.new_claude, data["folder"], data["compiled"], images,
+            dispatched, unique, trace.phase, *extra, timeout=70 if prepare else 50,
+        )
+        trace.phase("claude_record", "等待首条消息记录")
+        deadline = new_conversations.time.monotonic() + 35
+        item = None
+        while new_conversations.time.monotonic() < deadline:
+            item = svc._find_claude(data)
+            if item:
+                break
+            new_conversations.time.sleep(0.5)
+        if not item:
+            raise new_conversations.chats.ChatError("尚未在 Claude 记录中确认新对话，请核对电脑；不会重复发送")
+        trace.phase("receipt", "保存送达回执")
+        data.update(id=item["id"], title=item["title"])
+        svc._bind(rid, data)
+        svc._record_claude(rid, data)
+
+    def reconcile_new_status(self, svc, rid: str, state: str, data: dict, result: dict) -> tuple[str, dict]:
+        if state in ("dispatching", "unconfirmed"):
+            item = svc._find_claude(data)
+            if item:
+                data.update(id=item["id"], title=item["title"])
+                state, result = "accepted", {"message": "首条消息已送达"}
+                svc._bind(rid, data)
+                svc._record_claude(rid, data)
+                svc._save(rid, state, data, result)
+        return state, result
+
 
 AGENT = ClaudeAgent

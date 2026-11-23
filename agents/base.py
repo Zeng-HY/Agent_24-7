@@ -118,6 +118,9 @@ class Agent:
     has_skills = False           # supports skill discovery in composer_references
     can_reset_usage = False      # supports usage reset credit redemption (Codex)
     archive_order: int | None = None  # display order in archived list (defaults to manifest order)
+    notify_uses_file = True      # notify watches transcript file by default
+    new_requires_desktop = True  # new chat needs unlocked desktop unless API-driven
+    new_folder_list_own_only = False  # context() searches only this agent's workspace list
 
     def __init__(self) -> None:
         self._manifest = self.build_manifest()
@@ -271,6 +274,71 @@ class Agent:
 
     def create_status(self, request_id: str) -> dict:
         raise Unsupported("这个助手还不能查新建进度")
+
+    # -- new conversation workflow hooks used by new_conversations.NewConversations
+    def new_own_folders(self, svc) -> list[tuple[str, str, str | None]]:
+        return []
+
+    def new_options(self, svc) -> dict:
+        raise Unsupported("这个助手还没有模型选项")
+
+    def validate_new_permission(self, permission: str, confirmed: bool) -> None:
+        import chats
+        raise chats.ChatError("新建权限选项仅适用于 DeepSeek")
+
+    def new_projectless_error(self) -> str:
+        return f"{self.manifest()['name']['zh']} 的新对话要选一个工作区"
+
+    def validate_new_references(self, refs: list) -> None:
+        pass
+
+    def prepare_new_submission(self, svc, rid: str, data: dict, body: dict) -> None:
+        pass
+
+    def run_new(self, svc, rid: str, data: dict, trace) -> None:
+        created = self.create({
+            "request_id": rid,
+            "folder": data.get("folder", ""),
+            "projectless": data.get("projectless", False),
+            "text": data.get("compiled") or data.get("text", ""),
+            "attachments": data.get("attachments", []),
+            "references": data.get("references", []),
+            "settings": data.get("settings"),
+        })
+        if created.get("id"):
+            data["id"] = created["id"]
+        if created.get("title"):
+            data["title"] = created["title"]
+
+    def reconcile_new_status(self, svc, rid: str, state: str, data: dict, result: dict) -> tuple[str, dict]:
+        return state, result
+
+    def handle_new_error(self, svc, rid: str, state: str, data: dict, trace, exc: Exception) -> tuple[bool, bool]:
+        import chats
+        safe = isinstance(exc, chats.SendNotSubmitted) and state != "dispatching"
+        return False, safe
+
+    def check_new_retry(self, svc, data: dict) -> None:
+        pass
+
+    # -- notify hooks used by notify.py
+    def notify_turn_end(self, lines: list[bytes]) -> dict | None:
+        return None
+
+    def notify_step(self, name: str, argument: str = "") -> str | None:
+        return self.step_of(name, argument) or None
+
+    def notify_scan_record(self, scan: dict, rec: dict) -> None:
+        pass
+
+    def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
+        return [], []
+
+    def notify_poll(self, notifier, found, item: dict) -> bool:
+        return False
+
+    def notify_check_approvals(self, notifier, item: dict, conv: tuple, title: str, found) -> bool:
+        return False
 
     # -- archive and usage
     def archive(self, conv_id: str) -> dict:
