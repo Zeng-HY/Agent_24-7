@@ -35,6 +35,12 @@ data class AgentCatalogSnapshot(
 
     fun can(id: String, check: (AgentCapabilities) -> Boolean): Boolean = check(info(id).caps)
 
+    /** 此刻能力（第二批设计 A1）：说明书加上最近一次控制态的 capabilities_now；老电脑就是说明书。 */
+    fun capsAt(id: String, control: JSONObject?): AgentCapabilities = capsNow(info(id).caps, control)
+
+    /** 做不到的原因（控制态的 capability_notes）；没有就空字符串。 */
+    fun noteAt(id: String, control: JSONObject?, capability: String): String = capsNote(control, capability)
+
     fun sendModes(id: String): List<String> = info(id).caps.sendModes
 
     fun params(id: String): AgentParams = info(id).params

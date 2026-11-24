@@ -201,7 +201,8 @@ private fun QueueTray(app: String, catalog: AgentCatalogSnapshot, chat: Composer
     val p = LocalTeleply.current
     val menus = LocalMenuHost.current
     val info = catalog.info(app)
-    val caps = info.caps
+    // 此刻能力（第二批设计 A1）：排队消息的「立即补充」「撤回」跟着控制态走。
+    val caps = catalog.capsAt(app, raw)
     val layout = info.ui.cardLayout
     data class Row3(val id: String, val text: String, val token: String)
     val rows = if (layout == "claude.v1") raw.rows("queued") { Row3(it.string("id"), it.string("text"), it.string("token")) }
@@ -243,7 +244,7 @@ private fun QueueTray(app: String, catalog: AgentCatalogSnapshot, chat: Composer
  * the composer was left and opened again). Pure, so the JVM tests can read it without a screen.
  */
 internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Boolean, local: String, result: String,
-                            unknown: Boolean, away: String?, receipt: String?): String? = when {
+                            unknown: Boolean, away: String?, receipt: String?, capsNote: String? = null): String? = when {
     chatError != null -> chatError
     wsError != null && !paneOpen -> wsError
     local.isNotBlank() -> local
@@ -251,6 +252,8 @@ internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Bool
     unknown -> "上次操作的结果还没确认"
     // The computer's words on why the next message cannot go, in place of an old receipt (10-27).
     away != null -> away
+    // 此刻能力说不能发（第二批 A1）：控制态 capability_notes 里的原因。
+    capsNote != null -> capsNote
     receipt != null && receipt != "送达状态待确认" -> receipt
     else -> null
 }
@@ -261,7 +264,7 @@ internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Bool
  * nothing to say. A source action whose result is unknown offers 核对.
  */
 @Composable
-private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObject, local: String, vm: ReaderViewModel, away: String?, pill: VoicePill? = null, canOpen: Boolean = true) {
+private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObject, local: String, vm: ReaderViewModel, away: String?, pill: VoicePill? = null, canOpen: Boolean = true, capsNote: String? = null) {
     val p = LocalTeleply.current
     if (pill != null) {
         // Voice says what it is doing, with the one thing that can be done about it (web .voice-pill).
@@ -273,7 +276,7 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
     }
     val receipt = chat.submissions.firstOrNull { it.label != RemovedLabel }?.label?.takeIf { it != "未接收" }
     val unknown = saved.optJSONObject("pending_action")?.string("status") == "unknown"
-    val text = statusLineText(chat.error, ws.error, ws.pane != null, local, ws.result, unknown, away, receipt)
+    val text = statusLineText(chat.error, ws.error, ws.pane != null, local, ws.result, unknown, away, receipt, capsNote)
     val color = if (chat.error != null || ws.error != null && ws.pane == null) p.error else p.muted
     if (text == null) return
     val opens = !unknown && away != null && text == away
@@ -328,9 +331,13 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     val lift by animateFloatAsState(if (focused) 1f else 0f, label = "composer-focus")
     val info = s.catalog.info(s.app)
     val caps = info.caps
+    // 此刻能力（第二批设计 A1）：发送方式、排队、插话、模型与模式按钮、「引用技能」都按最近一次控制态判断。
+    val live = s.catalog.capsAt(s.app, raw)
     val layout = info.ui.cardLayout
-    val queue = chat.control.running && "queue" in caps.sendModes && caps.queue && chat.control.queueAvailable
-    val sendAllowed = if (queue) true else if (chat.control.running) ("steer" in caps.sendModes || "send" in caps.sendModes) else ("send" in caps.sendModes)
+    val queue = chat.control.running && "queue" in live.sendModes && live.queue && chat.control.queueAvailable
+    val sendAllowed = if (queue) true else if (chat.control.running) ("steer" in live.sendModes || "send" in live.sendModes) else ("send" in live.sendModes)
+    // 此刻不能发时，输入卡片的状态行写 capability_notes 里的原因（没有就不写，保持现在的样子）。
+    val sendNote = if (live.sendModes.isEmpty()) s.catalog.noteAt(s.app, raw, "send").ifBlank { null } else null
     // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
     val reachable = chat.control.available || sendsWhileAway(s.app, s.catalog)
     val canSend = chat.ready && sendAllowed && reachable && !chat.submitting && input.composition == null && (chat.draft.isNotBlank() || hasExtras) && chat.draft.trim().length <= info.params.maxText
@@ -347,7 +354,7 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     }
     val maxField = (LocalConfiguration.current.screenHeightDp * 0.3f).dp
     Column(Modifier.fillMaxWidth().then(surface).padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
-        StatusLine(chat, ws, saved, note, vm, awayReason(s.app, raw, s.catalog), voice.pill, canOpen = caps.open)
+        StatusLine(chat, ws, saved, note, vm, awayReason(s.app, raw, s.catalog), voice.pill, canOpen = caps.open, capsNote = sendNote)
         if (!voice.active) Attachments(saved, vm)
         // While recording, the card shows what is heard in place of the text box (web: the box becomes the recorder).
         if (voice.active) VoiceLive(voice, Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
@@ -385,9 +392,10 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
                     if (caps.open) ComposerChip("电脑上打开", vm.workspace::openOnComputer, narrow, description = "电脑上打开这个对话", away = true, enabled = !ws.busy)
                 } else {
                     val (model, mode, plan) = chipLabels(s.app, raw, saved, s.catalog)
-                    val showModel = "model" in caps.settings
-                    val showMode = "mode" in caps.settings || "permission" in caps.settings || layout == "codex.v1"
-                    val modeName = if ("permission" in caps.settings && "mode" !in caps.settings) "权限" else "模式"
+                    val showModel = "model" in live.settings
+                    // A2：控制态里有 capabilities_now 时只看此刻 settings；没有时连同 Codex 布局的旧规则。
+                    val showMode = modeAvailable(live, layout, hasCapsNow(raw))
+                    val modeName = if ("permission" in live.settings && "mode" !in live.settings) "权限" else "模式"
                     if (showModel) {
                         ComposerChip(model, {
                             menus?.show(MenuRequest(modelAnchor.bounds, MenuPlacement.BelowStart, "模型", width = 300.dp, scrolls = false, maxHeight = 480.dp) { ModelMenu(vm) })
@@ -776,6 +784,9 @@ fun rememberAttachPickers(vm: ReaderViewModel, onNote: (String) -> Unit): Attach
 fun MenuScope.AttachMenu(app: String, ready: Boolean, pickers: AttachPickers, vm: ReaderViewModel, catalog: AgentCatalogSnapshot = LocalAgentCatalog.current) {
     val caps = catalog.info(app).caps
     val layout = catalog.cardLayout(app)
+    // A2：「引用技能」不再按助手名字藏：说明书有 skills 就按此刻能力，老电脑沿用旧规则。
+    val raw = runCatching { JSONObject(vm.composer.state.value.control.raw) }.getOrDefault(JSONObject())
+    val live = catalog.capsAt(app, raw)
     if (caps.attachments) {
         MenuRow("拍照", pickers::camera, icon = TeleplyIcons.Camera, enabled = ready)
         MenuRow("手机照片", pickers::photo, icon = TeleplyIcons.Image, enabled = ready)
@@ -783,7 +794,7 @@ fun MenuScope.AttachMenu(app: String, ready: Boolean, pickers: AttachPickers, vm
         MenuRow("从电脑选择文件", { vm.workspace.panel("remote") }, icon = TeleplyIcons.Window, enabled = ready)
         MenuRow("引用对话", { vm.workspace.panel("chat") }, icon = TeleplyIcons.Chat, enabled = ready)
     }
-    if (caps.slashCommands && layout != "deepseek.v1") MenuRow("引用技能", { vm.workspace.panel("skill") }, icon = TeleplyIcons.Skill, enabled = ready)
+    if (skillsAvailable(live, layout)) MenuRow("引用技能", { vm.workspace.panel("skill") }, icon = TeleplyIcons.Skill, enabled = ready)
 }
 
 /**

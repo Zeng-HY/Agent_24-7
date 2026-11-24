@@ -226,12 +226,17 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         }
         val extra=try { if(action=="send" && !planned) extras() else JSONObject() } catch(e:Exception) { update(k) { it.copy(error=e.message) };return }
         val hasExtras=extra.optJSONArray("attachments")?.length()?.let { it>0 }==true || extra.optJSONArray("references")?.length()?.let { it>0 }==true
-        val snap=catalog();val info=snap.info(k.app);val caps=info.caps
+        val snap=catalog();val info=snap.info(k.app)
+        // 此刻能力（第二批设计 A1）：发送方式、排队、插话、停止、计划模式都按最近一次控制态判断。
+        val controlRaw=runCatching { JSONObject(s.control.raw) }.getOrDefault(JSONObject())
+        val caps=snap.capsAt(k.app,controlRaw)
+        // A2：控制态里有 capabilities_now 时计划模式看此刻 settings 里有没有 mode，老电脑保持 Codex 布局的旧规则。
+        val canPlan=if(hasCapsNow(controlRaw)) "mode" in caps.settings else isCodexLayout(k.app)
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
         val reachable=s.control.available || action=="send" && !planned && !promote && sendsWhileAway(k.app,snap)
         if(!foreground || !s.ready || !reachable || !inFlight.add(k)) return
         val canSendNow=if(queue) ("queue" in caps.sendModes && caps.queue && s.control.queueAvailable) else if(s.control.running) ("steer" in caps.sendModes || "send" in caps.sendModes) else ("send" in caps.sendModes)
-        if(action=="send" && !planned && (!canSendNow || (s.draft.isBlank() && !hasExtras) || s.draft.trim().length>info.params.maxText) || action=="stop" && (!caps.stop || !s.control.running) || promote && (!s.control.running || (!caps.steer && "steer" !in caps.sendModes)) || planned && (!isCodexLayout(k.app) || s.control.running)) { inFlight.remove(k);return }
+        if(action=="send" && !planned && (!canSendNow || (s.draft.isBlank() && !hasExtras) || s.draft.trim().length>info.params.maxText) || action=="stop" && (!caps.stop || !s.control.running) || promote && (!s.control.running || (!caps.steer && "steer" !in caps.sendModes)) || planned && (!canPlan || s.control.running)) { inFlight.remove(k);return }
         // 11-16: the page follows the bottom again as soon as you send (the bubble comes once its copy is written).
         if(action=="send") update(k) { it.copy(sent=it.sent+1) }
         val rid=UUID.randomUUID().toString()

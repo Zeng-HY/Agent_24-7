@@ -51,6 +51,8 @@ data class AgentCapabilities(
     val waiting: Boolean = false,
     val attachments: Boolean = false,
     val slashCommands: Boolean = false,
+    /** 说明书里有没有写 skills（第二批设计 A2）：老电脑没有这个键，保持 null 让界面沿用旧规则。 */
+    val skills: Boolean? = null,
     val settings: List<String> = emptyList(),
     val sendModes: List<String> = emptyList(),
     val statuses: List<String> = listOf("running", "waiting", "idle", "unknown"),
@@ -168,6 +170,7 @@ fun parseAgentInfo(json: JSONObject): AgentInfo? {
         waiting = capsObj.optBoolean("waiting", false),
         attachments = capsObj.optBoolean("attachments", false),
         slashCommands = capsObj.optBoolean("slash_commands", false),
+        skills = if (capsObj.has("skills")) capsObj.optBoolean("skills", false) else null,
         settings = capsObj.optJSONArray("settings").stringList(),
         sendModes = capsObj.optJSONArray("send_modes").stringList(),
         statuses = capsObj.optJSONArray("statuses").stringList().ifEmpty { listOf("running", "waiting", "idle", "unknown") },
