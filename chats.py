@@ -1139,6 +1139,25 @@ def _teleply_hook_text(rec: dict) -> str | None:
     return raw.split(marker, 1)[1].strip() if marker in raw else raw.strip()
 
 
+def _teleply_words(text: str) -> tuple[str, bool]:
+    """The user's own words of a record that is one of Teleply's own messages, and whether it was one.
+
+    11-24: a message the phone sent while Claude ran reaches the record in two ways. The hook's own record says what
+    it handed over (_teleply_hook_text); what Claude writes back after the Stop block is the user's own line, with
+    Teleply's prefix in front and, with pictures, our [附图] lines after. Neither is what the user typed, so the
+    delivery check has to look past them, or the phone says 送达状态待确认 for a message Claude already has.
+
+    Only a line that starts with the prefix counts: a summary or a tool's output that quotes one is not ours."""
+    words = clean_claude_user(text or "")
+    ours = False
+    for prefix in (_TELEPLY_QUEUE_PREFIX, _TELEPLY_STEER_PREFIX):
+        if words.startswith(prefix):
+            words, ours = words[len(prefix):], True
+            break
+    cleaned, images = _extract_codex_images(words)
+    return cleaned.strip(), ours or bool(images)
+
+
 def _teleply_hook_message(rec: dict) -> dict | None:
     """A queued or steered phone message as the user's own bubble (with pictures), from the hook record."""
     text = _teleply_hook_text(rec)
@@ -1769,6 +1788,11 @@ def claude_delivery_stage(path,offset,text):
             actual=_join_text((rec.get('message') or {}).get('content'))
             # 10-26: Claude writes its own notes (<system-reminder>Linked sessions now …) into the user's record
             if want and want in (norm(actual),norm(clean_claude_user(actual)),norm(claude_command(actual))):return 'received'
+            # 11-24: a queued or steered phone message comes back as the user's own line with Teleply's prefix and, with
+            # pictures, our [附图] lines. Both are ours: compare without them, looking inside the words when the hook
+            # handed over more than one at a time (that line holds little more than the words themselves).
+            own,ours=_teleply_words(actual)
+            if ours and want and (norm(own)==want or (len(own)<=2*len(want)+200 and want in norm(own))):return 'received'
         elif rec.get('type')=='queue-operation' and rec.get('operation')=='enqueue':
             if want and norm(clean_claude_user(_join_text(rec.get('content'))))==want:stage='queued'
     return stage

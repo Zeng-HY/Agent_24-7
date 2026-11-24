@@ -75,7 +75,7 @@ class UnifiedRouteTests(unittest.TestCase):
         self.claude = Mock()
         self.claude.state.return_value = {"available": True, "running": True, "stop_token": "tok-1"}
         self.claude.choose.return_value = {"ok": True, "text": "已操作"}
-        self.claude.send_steer.return_value = {"ok": True, "steer_requested": True, "text": "已补充"}
+        self.claude.send_steer.return_value = {"ok": True, "steer_requested": True, "offset": 42, "text": "已补充"}
         self.claude.next_step.return_value = {"ok": True, "text": "下一步"}
         self.claude.task_step.return_value = {"ok": True, "text": "任务"}
         self.claude.new_options.return_value = {"models": [{"id": "Sonnet", "label": "Sonnet", "efforts": [], "default_effort": None}], "note": ""}
@@ -218,7 +218,9 @@ class UnifiedRouteTests(unittest.TestCase):
             code, body = call_api(self.server, "POST", "/api/agents/claude/send", {
                 "id": "cl1", "text": "steer", "intent": "steer", "expected_turn": "anc1", "request_id": "steer-123456",
             })
-            self.assertEqual((code, body["steer_requested"]), (200, True))
+            # 11-24: a steer says where to look for it, as a queued send does; without that the phone never asks again
+            self.assertEqual((code, body["steer_requested"], body["pressed"], body["offset"], body["check_text"]),
+                             (200, True, True, 42, "steer"))
 
             code, body = call_api(self.server, "POST", "/api/agents/claude/stop", {"id": "cl1", "token": "tok-1"})
             self.assertEqual((code, body["ok"]), (200, True))

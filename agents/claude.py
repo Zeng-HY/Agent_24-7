@@ -577,6 +577,18 @@ class ClaudeAgent(Agent):
         stage = chats.claude_delivery_stage(chats.conv_path(item), int(offset), text)
         return {"delivered": stage == "received", "queued": stage == "queued", "stage": stage}
 
+    @staticmethod
+    def steer_receipt(result: dict) -> dict:
+        """11-24: a steer says where its words can be looked for, as a queued message does.
+
+        The phone keeps looking in the record (chat/check) only for a send the computer said it pressed, with the
+        offset and words noted then. A steer's answer carried the offset and the words but not that, so a 补充 sent
+        while Claude ran stayed 送达状态待确认 for good, and 核对 had nothing to ask."""
+        if isinstance(result, dict) and "offset" in result:
+            result.setdefault("pressed", True)
+            result.setdefault("running", True)
+        return result
+
     def desktop_open(self, desktop, item: dict) -> None:
         desktop._claude_open(item, [item["title"], self.conversation_title(item)])
 
@@ -842,6 +854,7 @@ class ClaudeAgent(Agent):
                             handler.server.codex._write_meta(image)
                 expected = str(body.get("expected_turn") or body.get("turn_id") or "")
                 result = handler.server.claude.send_steer(tid, text, expected, str(body.get("request_id", "")), display=display)
+                result = self.steer_receipt(result)
                 result["check_text"] = display
                 return result
             self._run_claude_post(handler, "/api/claude/steer", run)
@@ -926,6 +939,7 @@ class ClaudeAgent(Agent):
                 if body.get("references"):
                     text, _ = handler.server.references.compose(self.id, tid, text, body["references"])
                 result = handler.server.claude.send_steer(tid, text, str(body.get("expected_turn", "")), str(body.get("request_id", "")))
+                result = self.steer_receipt(result)
                 result["check_text"] = text
                 return result
             raise chats.ChatError("没有这个操作")

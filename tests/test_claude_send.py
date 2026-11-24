@@ -496,6 +496,30 @@ class SendTests(unittest.TestCase):
             path=Path(folder)/'log.jsonl';path.write_text(json.dumps(record,ensure_ascii=False)+'\n',encoding='utf-8')
             self.assertEqual(chats.claude_delivery_stage(path,0,'请查看这些图片。'),'received')
             self.assertEqual(chats.claude_delivery_stage(path,0,'别的话'),'unknown')
+    def test_a_window_message_with_pictures_is_delivered(self):
+        # 11-24: pictures sent from the phone as an ordinary message (the window path); when the message was pictures
+        # only the computer puts its own sentence in, so that is what has to be looked for
+        words='图上这条提示在哪里改？'
+        pictures=[{'type':'image','source':{}},{'type':'image','source':{}}]
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'log.jsonl'
+            path.write_text(json.dumps({'type':'user','message':{'role':'user','content':pictures+[{'type':'text','text':words}]}},
+                                       ensure_ascii=False)+'\n',encoding='utf-8')
+            self.assertEqual(chats.claude_delivery_stage(path,0,words),'received')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'请查看这些图片。'),'unknown')  # other pictures' words
+            path.write_text(json.dumps({'type':'user','message':{'role':'user','content':pictures+[{'type':'text','text':'请查看这些图片。'}]}},
+                                       ensure_ascii=False)+'\n',encoding='utf-8')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'请查看这些图片。'),'received')
+    def test_a_message_that_never_arrived_stays_unconfirmed(self):
+        # 没送到: the record holds other words, and a record written before this send's offset is not this message
+        first=json.dumps({'type':'user','message':{'role':'user','content':[{'type':'image','source':{}},{'type':'text','text':'别的话'}]}},
+                         ensure_ascii=False)+'\n'
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'log.jsonl'
+            path.write_text(first+json.dumps({'type':'assistant','message':{'content':[]}})+'\n',encoding='utf-8')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'别的话'),'received')
+            self.assertEqual(chats.claude_delivery_stage(path,0,'没送到的话'),'unknown')
+            self.assertEqual(chats.claude_delivery_stage(path,len(first.encode('utf-8')),'别的话'),'unknown')
     # 10-20: a /compact from the phone stayed 排队中 after the compaction had long finished. The record had the enqueue line
     # with the words sent, then the command only in tags; the summary showed as the user's own 10,973-character message,
     # and the conversation counted as running (停止这一轮)
