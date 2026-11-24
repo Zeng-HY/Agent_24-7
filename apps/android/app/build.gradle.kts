@@ -23,8 +23,8 @@ android {
         applicationId = "com.pocketagentdesk.teleply"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.0.9"
+        versionCode = 21
+        versionName = "1.0.10"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         manifestPlaceholders["appLabel"] = "遥应"
