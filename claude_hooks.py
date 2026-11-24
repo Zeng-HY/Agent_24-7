@@ -15,8 +15,10 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -56,12 +58,27 @@ FAST_EVENTS = frozenset({
 
 STOP_REASON = "用户在手机上停止了这一轮（遥应）"
 STOP_DENY_REASON = "用户在手机上按了停止（遥应）。不要再调用任何工具。"
+QUEUE_PREFIX = "用户在手机上发来下一条消息（遥应）："
+STEER_PREFIX = "用户刚在手机上补充（遥应）："
+MAX_BLOCKS_PER_TURN = 8  # Stop blocks Teleply sends in one user turn (Claude Code's own cap is also 8)
 
 COMMAND_TOOLS = frozenset({"Bash", "PowerShell"})
 COMMAND_SHELLS = frozenset({"bash.exe", "sh.exe", "pwsh.exe", "powershell.exe", "cmd.exe"})
 SESSION_BACKOFF_START = 2.0   # seconds before an unknown session is looked for again: 2, 4, 8 … 60
 SESSION_BACKOFF_MAX = 60.0
 PID_RECHECK_SECONDS = 60.0    # how long a verified conversation claude.exe is trusted before its path is checked again
+
+# Images that cannot go through the desktop window (queued / steered) are stored for Claude's Read tool.
+IMAGE_MAX_SIDE = 1600
+IMAGE_FALLBACK_SIDE = 1280
+IMAGE_MAX_BYTES = 400 * 1024
+IMAGE_RETENTION_SECONDS = 7 * 86400
+IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _data_path(name: str) -> Path:
+    from app_paths import DATA
+    return Path(DATA) / name
 
 
 def settings_file() -> Path:
@@ -348,6 +365,199 @@ def kill_session_command(
     return killed
 
 
+class HookQueues:
+    """Teleply's own per-conversation queue and steer slot: one small JSON file each, so a restart keeps them.
+
+    A phone message sent while Claude runs goes into `queue`; one that should interrupt the current step goes into
+    `steer`. The hook events hand them to Claude (design 3.5). `recent` only remembers request ids for a while, so a
+    phone retrying a send does not enqueue the same message twice."""
+
+    def __init__(self, root: Path | None = None) -> None:
+        self._root = Path(root) if root is not None else None
+        self.lock = threading.RLock()
+
+    @property
+    def root(self) -> Path:
+        return self._root if self._root is not None else _data_path("claude-queues")
+
+    def _file(self, tid: str) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(tid or "conversation"))[:120] or "conversation"
+        return self.root / f"{safe}.json"
+
+    @staticmethod
+    def _items(value) -> list[dict]:
+        return [v for v in value if isinstance(v, dict) and v.get("id") and isinstance(v.get("text"), str)] \
+            if isinstance(value, list) else []
+
+    def _load(self, tid: str) -> dict:
+        try:
+            data = json.loads(self._file(tid).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        return {"queue": self._items(data.get("queue")), "steer": self._items(data.get("steer")),
+                "recent": self._items(data.get("recent"))}
+
+    def _save(self, tid: str, data: dict) -> None:
+        path = self._file(tid)
+        if not any(data.get(key) for key in ("queue", "steer", "recent")):
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(temp, path)
+
+    @staticmethod
+    def _request_id(value: str) -> str:
+        text = str(value or "")
+        return text if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", text) else ""
+
+    @staticmethod
+    def _find(entry_id: str, data: dict) -> dict | None:
+        if not entry_id:
+            return None
+        for item in data["queue"] + data["steer"] + data["recent"]:
+            if str(item.get("id")) == entry_id:
+                return item
+        return None
+
+    @staticmethod
+    def _remember(data: dict, item: dict) -> None:
+        data["recent"] = [v for v in data["recent"] if v.get("id") != item.get("id")] + [dict(item)]
+        del data["recent"][:-80]
+
+    def enqueue(self, tid: str, text: str, display: str | None = None, request_id: str = "") -> tuple[dict, bool]:
+        """Put one message at the end of the conversation's queue. Returns (item, duplicate)."""
+        rid = self._request_id(request_id)
+        with self.lock:
+            data = self._load(tid)
+            found = self._find(rid, data)
+            if found is not None:
+                if found.get("text") != text:
+                    raise ValueError("请求编号已用于其他消息")
+                return found, True
+            item = {"id": rid or uuid.uuid4().hex, "text": text,
+                    "display": str(display) if display is not None else text,
+                    "request_id": rid, "created": time.time()}
+            data["queue"].append(item)
+            self._remember(data, item)
+            self._save(tid, data)
+            return item, False
+
+    def add_steer(self, tid: str, text: str, display: str | None = None, request_id: str = "") -> tuple[dict, bool]:
+        """Put one message in the conversation's steer slot. Returns (item, duplicate)."""
+        rid = self._request_id(request_id)
+        with self.lock:
+            data = self._load(tid)
+            found = self._find(rid, data)
+            if found is not None:
+                if found.get("text") != text:
+                    raise ValueError("请求编号已用于其他消息")
+                return found, True
+            item = {"id": rid or uuid.uuid4().hex, "text": text,
+                    "display": str(display) if display is not None else text,
+                    "request_id": rid, "created": time.time()}
+            data["steer"].append(item)
+            self._remember(data, item)
+            self._save(tid, data)
+            return item, False
+
+    def promote(self, tid: str, item_id: str) -> dict:
+        """Move one queued message into the steer slot: the phone's 'make this a steer'."""
+        with self.lock:
+            data = self._load(tid)
+            item = next((v for v in data["queue"] if str(v.get("id")) == str(item_id)), None)
+            if item is None:
+                raise KeyError(item_id)
+            data["queue"] = [v for v in data["queue"] if str(v.get("id")) != str(item_id)]
+            data["steer"].append(item)
+            self._save(tid, data)
+            return item
+
+    def take_steer(self, tid: str) -> list[dict]:
+        with self.lock:
+            data = self._load(tid)
+            items, data["steer"] = data["steer"], []
+            if items:
+                self._save(tid, data)
+            return items
+
+    def pop_queue(self, tid: str) -> dict | None:
+        with self.lock:
+            data = self._load(tid)
+            if not data["queue"]:
+                return None
+            item = data["queue"].pop(0)
+            self._save(tid, data)
+            return item
+
+    def list_queue(self, tid: str) -> list[dict]:
+        with self.lock:
+            return list(self._load(tid)["queue"])
+
+    def has_any(self, tid: str) -> bool:
+        with self.lock:
+            data = self._load(tid)
+            return bool(data["queue"] or data["steer"])
+
+
+def cleanup_claude_images(images_root: Path, *, now: float | None = None) -> None:
+    """Remove image files older than 7 days under <data_dir>/claude-images."""
+    root = Path(images_root)
+    if not root.is_dir():
+        return
+    cutoff = (now if now is not None else time.time()) - IMAGE_RETENTION_SECONDS
+    for child in list(root.iterdir()):
+        if child.is_symlink() or not child.is_dir():
+            continue
+        for file in list(child.iterdir()):
+            if file.is_symlink() or not file.is_file():
+                continue
+            try:
+                if file.stat().st_mtime < cutoff:
+                    file.unlink(missing_ok=True)
+            except OSError:
+                continue
+        try:
+            if not any(child.iterdir()):
+                child.rmdir()
+        except OSError:
+            pass
+
+
+def store_claude_image(images_root: Path, tid: str, meta: dict, *, now: float | None = None) -> Path:
+    """Compress one phone picture for Claude's Read tool (long side ≤1600, ≤400 KB) into claude-images/<tid>/."""
+    from codex_apptools import _prepare_codex_image  # the same Codex dev.48 compression
+    cleanup_claude_images(images_root, now=now)
+    safe_tid = re.sub(r"[^A-Za-z0-9._-]", "_", str(tid or "conversation"))[:120] or "conversation"
+    dest_dir = Path(images_root) / safe_tid
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    src = Path(str(meta["path"]))
+    ident = str(meta.get("id") or "")
+    if not re.fullmatch(r"[a-f0-9]{32}", ident):
+        import hashlib
+        ident = hashlib.sha256(str(src).encode("utf-8")).hexdigest()[:32]
+    for ext in IMAGE_SUFFIXES:
+        existing = dest_dir / f"{ident}{ext}"
+        if existing.is_file():
+            return existing
+    compressed, ext = _prepare_codex_image(src)
+    dest = dest_dir / f"{ident}{ext}"
+    temp = dest_dir / f"{ident}{ext}.tmp"
+    if compressed is None:
+        shutil.copy2(src, temp)
+    else:
+        temp.write_bytes(compressed)
+    os.replace(temp, dest)
+    return dest
+
+
+def image_line(path: Path) -> str:
+    return f"[附图] {path}（请先用 Read 工具打开这张图片）"
+
+
 class Ask:
     """One request Claude Code holds open, and the phone's answer to it as it is put together."""
 
@@ -389,6 +599,8 @@ class _ConvState:
         self.turn_ended = 0
         self.step_started_at = 0.0
         self.stop_requested = False
+        self.blocks_sent = 0      # Stop blocks used for queued/steered messages in this user turn
+        self.continued = False    # a Stop was answered with a block: the same turn goes on
         self.last_event_at: float | None = None
         self.last_event_name = ""
         self.last_notification: dict[str, Any] | None = None
@@ -406,6 +618,8 @@ class _ConvState:
             "turn_ended": self.turn_ended,
             "step_started_at": self.step_started_at,
             "stop_requested": self.stop_requested,
+            "blocks_sent": self.blocks_sent,
+            "continued": self.continued,
             "last_event_at": self.last_event_at,
             "last_event_name": self.last_event_name,
             "last_notification": dict(self.last_notification) if self.last_notification else None,
@@ -431,6 +645,8 @@ class Bridge:
         kill_process=None,
         current_user: str | None = None,
         server_port: int = 0,
+        queue_root: Path | None = None,
+        images_root: Path | None = None,
     ) -> None:
         self.log = log
         self.notify = notify          # notify.Notifier.asking: the phone hears that Claude waits
@@ -445,6 +661,8 @@ class Bridge:
         self._kill_process = kill_process
         self._current_user = current_user
         self.server_port = int(server_port or 0)
+        self.queues = HookQueues(queue_root)
+        self._images_root = Path(images_root) if images_root is not None else None
 
         self.lock = threading.Lock()
         self.asks: dict[str, Ask] = {}      # held now, oldest first
@@ -596,6 +814,28 @@ class Bridge:
             st = self._states.get(tid)
             return st is not None and st.last_event_at is not None
 
+    def is_running(self, tid: str) -> bool:
+        """Whether hooks are active here and the turn is still running (the phone's queue/steer condition)."""
+        with self.lock:
+            st = self._states.get(tid)
+            return bool(st is not None and st.last_event_at is not None and st.running)
+
+    @property
+    def images_root(self) -> Path:
+        return self._images_root if self._images_root is not None else _data_path("claude-images")
+
+    def enqueue_message(self, tid: str, text: str, display: str | None = None, request_id: str = "") -> tuple[dict, bool]:
+        return self.queues.enqueue(tid, text, display, request_id)
+
+    def enqueue_steer(self, tid: str, text: str, display: str | None = None, request_id: str = "") -> tuple[dict, bool]:
+        return self.queues.add_steer(tid, text, display, request_id)
+
+    def list_queued(self, tid: str) -> list[dict]:
+        return self.queues.list_queue(tid)
+
+    def promote_to_steer(self, tid: str, item_id: str) -> dict:
+        return self.queues.promote(tid, item_id)
+
     def conv_state(self, tid: str) -> dict[str, Any] | None:
         with self.lock:
             st = self._states.get(tid)
@@ -666,8 +906,11 @@ class Bridge:
                 st.tool_use_id = ""
                 st.step_started_at = 0.0
                 st.stop_requested = False
+                st.blocks_sent = 0
+                st.continued = False
 
             elif event == "PreToolUse":
+                st.continued = False
                 if st.stop_requested:
                     st.running = False
                     st.turn_ended = int(now_wall)
@@ -702,15 +945,43 @@ class Bridge:
                     st.tool_use_id = ""
                     st.step = ""
                     st.step_started_at = 0.0
+                if not st.stop_requested:  # a steer waits in Teleply's slot until this step is done
+                    pending = self.queues.take_steer(tid)
+                    if pending:
+                        text = "\n\n".join(str(v.get("text") or "") for v in pending)
+                        reply = {"hookSpecificOutput": {"hookEventName": event,
+                                                        "additionalContext": STEER_PREFIX + text}}
 
             elif event == "Stop":
+                stopped = st.stop_requested
                 st.stop_requested = False
                 st.running = False
+                st.continued = False
                 st.turn_ended = int(now_wall)
                 st.step = ""
                 st.tool_name = ""
                 st.tool_use_id = ""
                 st.step_started_at = 0.0
+                # A phone stop ends the turn; what is still queued stays for the next sending chance. Otherwise the
+                # steer slot goes first (it could not be handed over during the turn), then one queued message.
+                if not stopped and st.blocks_sent < MAX_BLOCKS_PER_TURN:
+                    pending = self.queues.take_steer(tid)
+                    if pending:
+                        st.blocks_sent += 1
+                        st.running = True
+                        st.continued = True
+                        st.turn_ended = 0
+                        text = "\n\n".join(str(v.get("text") or "") for v in pending)
+                        reply = {"decision": "block", "reason": STEER_PREFIX + text}
+                    else:
+                        queued = self.queues.pop_queue(tid)
+                        if queued:
+                            st.blocks_sent += 1
+                            st.running = True
+                            st.continued = True
+                            st.turn_ended = 0
+                            reply = {"decision": "block",
+                                     "reason": QUEUE_PREFIX + str(queued.get("text") or "")}
 
             elif event == "Notification":
                 st.last_notification = {
