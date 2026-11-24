@@ -161,6 +161,9 @@ class PushChannel(private val context: Context, private val apiFactory: (String)
     }
 }
 
+/** 「后台没起来」: a foreground service the system refused (Android 12+ from the background). Opening the app tries again. */
+const val PushForegroundFailedText = "后台没起来：打开遥应一次就好"
+
 /** `POST /account/push/<action>` answers; a phone that is not signed in gets 401 and the page says so. */
 fun pushFailureText(error: Exception): String = when {
     error is ServiceFailure && error.status == 401 -> "登录已失效，请重新登录后再打开遥应通知"

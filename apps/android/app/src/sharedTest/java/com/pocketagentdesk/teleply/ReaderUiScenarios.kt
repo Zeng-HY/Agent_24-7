@@ -520,9 +520,31 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithText("后台运行设置").performScrollTo().assertHasClickAction()
         // Codex 定时任务 comes from the computer: three choices, the picked one is marked.
         compose.onNodeWithText("Codex 定时任务").performScrollTo().assertExists()
-        compose.onNodeWithText("只通知失败").performScrollTo().performClick()
+        compose.onNodeWithText("跟 Codex 一样").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("只推失败的").performScrollTo().assertExists()
+        compose.onNodeWithText("不推").performScrollTo().assertExists()
+        compose.onNodeWithText("跟 Codex 一样：Codex 在电脑上提醒的才推；任务在 Codex 里设了『只在失败时通知』的，成功不推。").assertExists()
+        compose.onNodeWithText("只推失败的").performScrollTo().performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("只通知失败").assertIsSelected()
+        compose.onNodeWithText("只推失败的").assertIsSelected()
+    }
+    /** 复核 2026-11-24: the computer may answer automations as an object with mode; the group still shows. */
+    @Test fun codexAutomationObjectAnswerIsShownAndSelected() {
+        val reads=java.util.concurrent.atomic.AtomicInteger()
+        val api=demoNotifyAnswer(org.json.JSONObject().put("mode","failed"),reads)
+        launch(api={ api });fixtureList();compose.runOnIdle { vm.settings() }
+        compose.waitUntil(10000) { reads.get()>0 && !vm.state.value.busy }
+        compose.onNodeWithText("Codex 定时任务").performScrollTo().assertExists()
+        compose.onNodeWithText("只推失败的").performScrollTo().assertIsSelected()
+    }
+    /** 复核 2026-11-24: an older computer has no automations key at all, so the whole group stays away. */
+    @Test fun codexAutomationMissingKeyHidesTheGroup() {
+        val reads=java.util.concurrent.atomic.AtomicInteger()
+        val api=demoNotifyAnswer(null,reads)
+        launch(api={ api });fixtureList();compose.runOnIdle { vm.settings() }
+        compose.waitUntil(10000) { reads.get()>0 && !vm.state.value.busy }
+        compose.waitForIdle()
+        compose.onNodeWithText("Codex 定时任务").assertDoesNotExist()
     }
     /** Notifications and voice on 设置; 诊断测速 under its 开发者选项 (0.9). */
     @Test fun ntfyAndVoiceInSettingsAndDiagnosticsUnderDeveloper() {
@@ -720,6 +742,18 @@ abstract class ReaderUiScenarios {
         vm.fixtureApi={ api("fixture://local") }
         // New conversations are looked at again at once here: the JVM run's main clock does not move by itself.
         vm.jobs.pause={}
+    }
+    /** A demo API whose `GET notify` carries [automations] (a string, an object, or null to leave the key out). */
+    protected fun demoNotifyAnswer(automations:Any?,reads:java.util.concurrent.atomic.AtomicInteger):ReadApi {
+        val base=FixtureApi()
+        return object:ReadApi by base {
+            override fun forSource(app:String):ReadApi=this
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:org.json.JSONObject?):org.json.JSONObject {
+                val result=base.detail(device,route,query,body)
+                if(route=="notify") { reads.incrementAndGet();if(automations==null) result.remove("automations") else result.put("automations",automations) }
+                return result
+            }
+        }
     }
     /** A row of the list, scrolled into view first: the list composes only the rows on screen. */
     protected fun listRow(text:String):SemanticsNodeInteraction {

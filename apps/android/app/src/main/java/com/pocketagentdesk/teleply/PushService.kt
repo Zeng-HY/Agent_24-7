@@ -45,6 +45,7 @@ class PushService : Service() {
     private var origin = ""
     private var stopping = false
     private var foregroundStarted = false
+    private var foregroundFailed = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
@@ -60,14 +61,15 @@ class PushService : Service() {
             stopping = true
             cancelRetry()
             closeSocket()
-            notifier.clear()
+            // The conversation notices already in the shade stay; only the live cards and their overflow line go.
+            notifier.clearCards()
             stopSelf()
             return START_NOT_STICKY
         }
         origin = intent?.getStringExtra(ExtraOrigin)?.takeIf { it.isNotBlank() } ?: channel.origin()
         if (origin.isBlank() || !channel.enabled.value || !isPushSecret(channel.secret())) {
             // Nothing to connect to, or the registration is gone: the switch is on but needs the settings page again.
-            startInForeground(PushPhase.NeedsRenew)
+            if (!startInForeground(PushPhase.NeedsRenew)) return START_NOT_STICKY
             needsRenew()
             return START_STICKY
         }
@@ -76,7 +78,7 @@ class PushService : Service() {
             connect()
             return START_STICKY
         }
-        startInForeground(PushPhase.Connecting)
+        if (!startInForeground(PushPhase.Connecting)) return START_NOT_STICKY
         connect()
         return START_STICKY
     }
@@ -89,23 +91,40 @@ class PushService : Service() {
         closeSocket()
         networkCallback?.let { runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) } }
         networkCallback = null
-        notifier.clear()
+        // Only the live cards go; the ordinary conversation notices stay in the shade (复核 2026-11-24).
+        notifier.clearCards()
         scope.cancel()
-        PushRuntime.set(PushStatus(enabled = channel.enabled.value, phase = PushPhase.Stopped))
+        // A startForeground that was refused is the one state the user must act on: keep saying so after the service ends.
+        if (foregroundFailed) PushRuntime.set(PushStatus(enabled = true, phase = PushPhase.Error, reason = PushForegroundFailedText))
+        else PushRuntime.set(PushStatus(enabled = channel.enabled.value, phase = PushPhase.Stopped))
         super.onDestroy()
     }
 
-    private fun startInForeground(phase: PushPhase, text: String? = null) {
+    /** Returns false when the system refused the foreground service; the caller then stops instead of crashing. */
+    private fun startInForeground(phase: PushPhase, text: String? = null): Boolean {
         PushRuntime.set(PushStatus(true, phase, online = model.onlineCount(), computers = model.computerCount()))
         val line = text ?: pushStatusText(PushRuntime.status.value)
         val notification = notifier.serviceNotification(line)
-        ServiceCompat.startForeground(
-            this,
-            notifier.serviceId,
-            notification,
-            if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
-        )
-        foregroundStarted = true
+        return try {
+            ServiceCompat.startForeground(
+                this,
+                notifier.serviceId,
+                notification,
+                if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0,
+            )
+            foregroundStarted = true
+            true
+        } catch (e: Exception) {
+            // Android 12+ may refuse a foreground service started from the background: do not take the app down.
+            foregroundFailed = true
+            stopping = true
+            cancelRetry()
+            closeSocket()
+            notifier.clearCards()
+            PushRuntime.set(PushStatus(enabled = true, phase = PushPhase.Error, reason = PushForegroundFailedText))
+            stopSelf()
+            false
+        }
     }
 
     private fun connect() {

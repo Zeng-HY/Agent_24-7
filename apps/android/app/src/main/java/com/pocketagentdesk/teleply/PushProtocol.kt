@@ -167,7 +167,8 @@ data class PushModel(
      * A conversation on an offline computer says 电脑离线 and is dropped after 30 minutes; done, failed and gone have no
      * card (they are ordinary notices instead).
      */
-    fun liveCards(now: Long, limit: Int = 3): PushLiveCards {        val live = chats.values.filter { it.state == "working" || it.state == "waiting" }
+    fun liveCards(now: Long, limit: Int = 3): PushLiveCards {
+        val live = chats.values.filter { it.state == "working" || it.state == "waiting" }
             .sortedWith(compareByDescending<PushChat> { it.since ?: 0L }.thenByDescending { it.turn ?: 0L }.thenByDescending { it.ended ?: 0L })
         val shown = mutableListOf<PushLiveCard>()
         var overflow = 0
@@ -254,3 +255,45 @@ fun pushTestNotice(message: PushMessage.Test) = PushNotice(
     body = message.body,
     loud = true,
 )
+
+/**
+ * 「Codex 定时任务」's three choices (复核 2026-11-24): the computer's own reminder rule, only failures, or nothing.
+ * "codex" means the same rule the computer already uses, not "notify everything".
+ */
+val PushAutomationChoices: List<Pair<String, String>> = listOf(
+    "codex" to "跟 Codex 一样",
+    "failed" to "只推失败的",
+    "off" to "不推",
+)
+
+/** The line under the three choices, the same words as the computer's web page. */
+fun pushAutomationExplanation(): String =
+    "跟 Codex 一样：Codex 在电脑上提醒的才推；任务在 Codex 里设了『只在失败时通知』的，成功不推。"
+
+/**
+ * The computer's `GET notify` carries `automations` as a plain string in its first version ("codex" / "failed" / "off");
+ * an object with `mode` is accepted too, and no key at all (an older computer) hides the group.
+ */
+fun pushAutomationMode(notify: JSONObject?): String? {
+    val value = notify?.opt("automations") ?: return null
+    return when (value) {
+        is String -> value.trim().takeIf { it.isNotEmpty() }
+        is JSONObject -> value.optString("mode").trim().takeIf { it.isNotEmpty() }
+        else -> null
+    }
+}
+
+/** One shown notification as NotificationManager reports it: which group and tag it has (for counting a device's notices). */
+data class PushShownNotification(val group: String?, val tag: String?)
+
+/** The tag of a device's group summary, which is not counted among its conversation notices. */
+fun pushGroupSummaryTag(device: String): String = "summary:$device"
+
+/**
+ * How many conversation notices of [device] are still in the shade. The system's own list is used, so a notification
+ * the user swiped away stops counting; the summary itself and other groups (the live cards, 试推) are left out.
+ */
+fun pushGroupNoticeCount(shown: List<PushShownNotification>, device: String): Int =
+    if (device.isBlank()) 0
+    else shown.count { it.group == device && it.tag != pushGroupSummaryTag(device) }
+

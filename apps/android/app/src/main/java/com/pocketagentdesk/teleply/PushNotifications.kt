@@ -66,7 +66,6 @@ private const val TestId = 7202
  */
 class PushNotifier(private val context: Context) {
     private val manager = NotificationManagerCompat.from(context)
-    private val noticesByDevice = mutableMapOf<String, MutableSet<String>>()
     private val shownCards = mutableSetOf<String>()
     private var overflowShown = false
 
@@ -85,9 +84,9 @@ class PushNotifier(private val context: Context) {
         if (!notice.loud) builder.setSilent(true)
         notify(notice.key, NoticeId, builder.build())
         if (notice.group.isNotBlank()) {
-            val tags = noticesByDevice.getOrPut(notice.group) { mutableSetOf() }
-            tags += notice.key
-            if (tags.size >= 2) showGroupSummary(notice.group, tags.size) else cancelGroupSummary(notice.group)
+            // Count what is still in the shade, not what this process remembers: a notice the user swiped away is gone.
+            val count = pushGroupNoticeCount(activeNotifications(), notice.group)
+            if (count >= 2) showGroupSummary(notice.group, count) else cancelGroupSummary(notice.group)
         }
     }
 
@@ -119,9 +118,13 @@ class PushNotifier(private val context: Context) {
     }
 
     private fun cancelGroupSummary(device: String) {
-        manager.cancel("summary:$device", NoticeId)
-        noticesByDevice[device]?.let { if (it.isEmpty()) noticesByDevice.remove(device) }
+        manager.cancel(pushGroupSummaryTag(device), NoticeId)
     }
+
+    /** The system's current notifications, as groups and tags; an unreadable list just means no summary this time. */
+    private fun activeNotifications(): List<PushShownNotification> = runCatching {
+        context.getSystemService(NotificationManager::class.java).activeNotifications.map { PushShownNotification(it.notification.group, it.tag) }
+    }.getOrDefault(emptyList())
 
     /** The lock-screen cards: one per working or waiting conversation, the overflow line, and nothing for what ended. */
     fun showCards(cards: PushLiveCards) {
@@ -166,18 +169,15 @@ class PushNotifier(private val context: Context) {
         }
     }
 
-    /** 关掉 or 退出登录: the cards and the notices this phone posted go; the relay's stream has stopped anyway. */
-    fun clear() {
+    /**
+     * 关掉开关、退出登录、服务结束：只撤锁屏卡片和「还有 N 个在干活」。已经出过的对话通知留在通知栏里，
+     * 用户关掉开关不该把通知栏的历史一起清掉（复核 2026-11-24）。
+     */
+    fun clearCards() {
         shownCards.forEach { manager.cancel(it, LiveId) }
         shownCards.clear()
         if (overflowShown) manager.cancel("overflow", LiveOverflowId)
         overflowShown = false
-        noticesByDevice.forEach { (device, tags) ->
-            tags.forEach { manager.cancel(it, NoticeId) }
-            manager.cancel("summary:$device", NoticeId)
-        }
-        noticesByDevice.clear()
-        manager.cancel("test", TestId)
     }
 
     /** The foreground service's own line; its words say what the connection is doing (design-2 §3.4.3). */

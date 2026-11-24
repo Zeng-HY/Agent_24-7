@@ -185,4 +185,38 @@ class PushProtocolTest {
         assertEquals(42L, since.seq)
         assertEquals("1a2b3c4d", JSONObject("""{"boot":"1a2b3c4d"}""").string("boot"))
     }
+
+    /** 复核 2026-11-24: the computer sends automations as a plain string; an object and a missing key are handled too. */
+    @Test fun automationAnswerIsAStringOrAnObjectAndAMissingKeyHidesTheGroup() {
+        assertEquals("failed", pushAutomationMode(JSONObject("""{"automations":"failed"}""")))
+        assertEquals("codex", pushAutomationMode(JSONObject("""{"automations":" codex "}""")))
+        assertEquals("codex", pushAutomationMode(JSONObject().put("automations", JSONObject().put("mode", "codex"))))
+        assertEquals("off", pushAutomationMode(JSONObject("""{"automations":{"mode":"off"}}""")))
+        assertNull("no automations key: an older computer", pushAutomationMode(JSONObject("""{"configured":false}""")))
+        assertNull(pushAutomationMode(null))
+        assertNull(pushAutomationMode(JSONObject().put("automations", JSONObject.NULL)))
+        assertNull(pushAutomationMode(JSONObject().put("automations", 3)))
+        assertNull(pushAutomationMode(JSONObject("""{"automations":""}""")))
+        assertEquals(listOf("跟 Codex 一样", "只推失败的", "不推"), PushAutomationChoices.map { it.second })
+        assertEquals(listOf("codex", "failed", "off"), PushAutomationChoices.map { it.first })
+        assertEquals("跟 Codex 一样：Codex 在电脑上提醒的才推；任务在 Codex 里设了『只在失败时通知』的，成功不推。", pushAutomationExplanation())
+    }
+
+    /** 复核 2026-11-24: the group summary counts what is still in the shade, not what this process remembers. */
+    @Test fun groupSummaryCountsOnlyTheLiveConversationNoticesOfOneComputer() {
+        val shown = listOf(
+            PushShownNotification(device, "c1"),
+            PushShownNotification(device, "c2"),
+            PushShownNotification(device, pushGroupSummaryTag(device)),
+            PushShownNotification(other, "c3"),
+            PushShownNotification(null, "overflow"),
+            PushShownNotification(null, "test"),
+        )
+        assertEquals(2, pushGroupNoticeCount(shown, device))
+        assertEquals(1, pushGroupNoticeCount(shown, other))
+        assertEquals(0, pushGroupNoticeCount(shown, ""))
+        assertEquals(0, pushGroupNoticeCount(shown.filter { it.tag == pushGroupSummaryTag(device) }, device))
+        assertEquals("summary:$device", pushGroupSummaryTag(device))
+        assertEquals("还有 1 个对话", pushGroupSummary(2))
+    }
 }

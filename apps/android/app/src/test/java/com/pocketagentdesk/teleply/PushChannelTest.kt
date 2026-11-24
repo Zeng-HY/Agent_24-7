@@ -68,6 +68,7 @@ class PushChannelTest {
         assertEquals("需要重新打开", pushStatusText(PushStatus(true, PushPhase.NeedsRenew)))
         assertEquals("钥匙不对", pushStatusText(PushStatus(true, PushPhase.Error, reason = "钥匙不对")))
         assertEquals("连接出错", pushStatusText(PushStatus(true, PushPhase.Error)))
+        assertEquals("后台没起来：打开遥应一次就好", pushStatusText(PushStatus(true, PushPhase.Error, reason = PushForegroundFailedText)))
     }
 
     @Test fun aSignInThatRanOutIsSaidInThePagesWords() {

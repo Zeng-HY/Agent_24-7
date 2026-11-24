@@ -137,19 +137,20 @@ private fun CodexAutomationSettings(s: ReaderState, vm: ReaderViewModel) {
     var failure by remember(device.id) { mutableStateOf<String?>(null) }
     LaunchedEffect(device.id) {
         state = runCatching { vm.deviceCall("notify") }.getOrElse { failure = it.message; null }
-        mode = state?.optJSONObject("automations")?.string("mode").orEmpty()
+        mode = pushAutomationMode(state).orEmpty()
     }
-    val automations = state?.optJSONObject("automations") ?: return
-    val current = mode.ifBlank { automations.string("mode") }
+    // The computer's first version sends a plain string; an object with mode is accepted too. No key at all: older
+    // computer, the group is not shown.
+    val current = pushAutomationMode(state) ?: return
     SectionLabel("Codex 定时任务")
-    SegmentedChoice(listOf("codex" to "都通知", "failed" to "只通知失败", "off" to "不通知"), current, { chosen ->
+    SegmentedChoice(PushAutomationChoices, mode.ifBlank { current }, { chosen ->
         mode = chosen
         failure = null
         scope.launch {
             try { vm.deviceCall("notify/automations", body = JSONObject().put("mode", chosen)) } catch (e: Exception) { failure = e.message ?: "电脑没有回应" }
         }
     })
-    Text("电脑上的 Codex 定时任务跑完时要不要发通知；改了立刻生效。", style = MaterialTheme.typography.note, color = p.muted)
+    Text(pushAutomationExplanation(), style = MaterialTheme.typography.note, color = p.muted)
     failure?.let { Text(it, style = MaterialTheme.typography.note, color = p.error) }
 }
 

@@ -646,18 +646,18 @@ class FixtureWorld {
 
     fun notifyState(): JSONObject = JSONObject().put("configured", false).put("server", "")
         .put("ntfy", JSONObject().put("on", ntfyOn).put("topic", "agent-remote").put("server", "https://test-pc.example.ts.net").put("listening", if (ntfyOn) 1 else 0).put("last_seen", ""))
-        .put("automations", JSONObject().put("mode", automationMode))
+        .put("automations", automationMode)
         .put("recent", JSONArray(recent.toList()))
     fun ntfy(on: Boolean): JSONObject {
         ntfyOn = on
         if (on) remember("本地示例：试推了一条")
         return JSONObject().put("ok", true).put("text", if (on) "本地示例：已打开，刚推了一条" else "本地示例：已关掉")
     }
-    /** 设置 → Codex 定时任务 (design-2 §3.5): 每次都通知 / 只在失败时通知 / 不通知. */
+    /** 设置 → Codex 定时任务: 跟 Codex 一样 / 只推失败的 / 不推 (the computer's first version sends a plain string). */
     fun automations(mode: String): JSONObject {
         if (mode !in setOf("codex", "failed", "off")) throw ServiceFailure(400, detail = "不认识的定时任务通知方式")
         automationMode = mode
-        return JSONObject().put("ok", true).put("automations", JSONObject().put("mode", mode)).put("text", "本地示例：定时任务通知已改为$mode")
+        return JSONObject().put("ok", true).put("automations", mode).put("text", "本地示例：定时任务通知已改为$mode")
     }
     fun notifyTest(): JSONObject { remember("本地示例：试推了一条"); return JSONObject().put("ok", true).put("text", "本地示例：刚推了一条，看看手机") }
     private fun remember(text: String) { recent.addFirst(JSONObject().put("time", "12:00").put("text", text)); while (recent.size > 5) recent.removeLast() }
