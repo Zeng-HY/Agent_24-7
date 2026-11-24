@@ -54,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -97,6 +98,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -429,7 +432,8 @@ private fun ChatTopBar(s: ReaderState, vm: ReaderViewModel, chat: ComposerState,
         if (isNewPage(s.chat)) return@Row
         val stopToken = raw.string("stop_token")
         val usesDesktopStop = s.catalog.cardLayout(s.app) == "claude.v1"
-        val canStop = s.catalog.can(s.app) { it.stop } && chat.control.running && (!usesDesktopStop || stopToken.isNotBlank())
+        // 此刻能力（第二批设计 A1）：钩子没信任、助手没运行时不显示停止。
+        val canStop = s.catalog.capsAt(s.app, raw).stop && chat.control.running && (!usesDesktopStop || stopToken.isNotBlank())
         if (canStop) {
             StopPill("停止这一轮", enabled = chat.control.available && !chat.submitting, disabledReason = "暂时不能控制这个来源") {
                 if (usesDesktopStop) vm.workspace.action("claude/choose", JSONObject().put("token", stopToken), local = claudePress("stop")) else vm.composer.stop()
@@ -865,8 +869,10 @@ fun pendingCards(app: String, raw: JSONObject, catalog: AgentCatalogSnapshot = A
         }
     }
     else -> if (!catalog.can(app) { it.approve || it.answer }) emptyList() else raw.rows("questions") { it }.filter { it.string("status") == "pending" }.map { card ->
-        if (card.string("kind") == "approval") PendingCard("approval", "${catalog.name(app)} 等你批准")
-        else PendingCard("question", card.rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "${catalog.name(app)} 有问题要问你" })
+        // A3：有 title 时横条用 title；按钮能不能点交给卡片按此刻能力判断。
+        val title = card.string("title").ifBlank { "" }
+        if (card.string("kind") == "approval") PendingCard("approval", title.ifBlank { "${catalog.name(app)} 等你批准" })
+        else PendingCard("question", title.ifBlank { card.rows("questions") { it }.firstOrNull()?.string("question").orEmpty().ifBlank { "${catalog.name(app)} 有问题要问你" } })
     }
 }
 
@@ -876,7 +882,8 @@ private fun InlineCards(app: String, catalog: AgentCatalogSnapshot, raw: JSONObj
         "claude.v1" -> ClaudeCards(raw, vm, ws)
         "deepseek.v1" -> DeepSeekCards(raw, saved, vm, ws)
         "codex.v1" -> CodexCards(raw, saved, vm, ws)
-        else -> Unit
+        // 通用布局：按设计第三节的批准 / 提问卡片（第二批 A3）。
+        else -> GenericCards(app, catalog, raw, vm, ws)
     }
 }
 
@@ -1025,6 +1032,143 @@ private fun CodexApprovalCard(card: JSONObject, saved: JSONObject, vm: ReaderVie
             }
             Text("只放行这一次；以后同样的操作还会再问。", style = MaterialTheme.typography.bodySmall, color = p.muted)
         }
+    }
+}
+
+/**
+ * 通用布局助手的批准 / 提问卡片（第二批设计第三节与 A3）：控制态里每一张 pending 的卡片画一张。
+ * 批准卡每个选项一个按钮，点一下就提交；单题、单选、不能自己写的提问卡点选项直接提交；其余把题目都列出来，
+ * 填完点「提交」。答复走统一地址 POST /api/agents/<id>/answer（RelayApi 的 answer 分支）。
+ */
+@Composable
+private fun GenericCards(app: String, catalog: AgentCatalogSnapshot, raw: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
+    raw.rows("questions") { it }
+        .filter { it.string("status") == "pending" && it.rows("questions") { q -> q }.isNotEmpty() }
+        .forEach { card ->
+            key(card.string("id"), card.string("answer_revision")) {
+                GenericCard(app, catalog, raw, card, vm, ws)
+            }
+        }
+}
+
+@Composable
+private fun GenericCard(app: String, catalog: AgentCatalogSnapshot, raw: JSONObject, card: JSONObject, vm: ReaderViewModel, ws: WorkspaceState) {
+    val p = LocalTeleply.current
+    val c = vm.workspace
+    val approval = card.string("kind") == "approval"
+    // 能不能答按此刻能力（A1/A3）：批准看 approve、提问看 answer；过时的卡片也灰掉。
+    val live = catalog.capsAt(app, raw)
+    val expires = card.optLong("expires_at")
+    val why = when {
+        !(if (approval) live.approve else live.answer) ->
+            catalog.noteAt(app, raw, if (approval) "approve" else "answer").ifBlank { "请在电脑上处理" }
+        expires > 0 && System.currentTimeMillis() > expires -> "已过时，请在电脑上处理"
+        else -> ""
+    }
+    val questions = card.rows("questions") { it }
+    val cardID = card.string("id")
+    var answers by remember(cardID, card.string("answer_revision")) { mutableStateOf(JSONObject()) }
+    var expanded by remember(cardID) { mutableStateOf(false) }
+    fun picked(id: String): List<String> = answers.optJSONArray(id)
+        ?.let { a -> (0 until a.length()).mapNotNull { a.optString(it, "").takeIf(String::isNotBlank) } }
+        .orEmpty()
+    fun put(id: String, labels: List<String>) { answers = JSONObject(answers.toString()).put(id, JSONArray(labels)) }
+    fun answered(q: JSONObject) = picked(q.string("id")).isNotEmpty()
+    val sent = pendingRoute(JSONObject(ws.saved), "generic/answer")
+        ?.let { it.optJSONObject("body")?.string("question_id") == cardID && it.string("status") == "done" } == true
+    val send: () -> Unit = {
+        val body = JSONObject().put("question_id", cardID).put("answers", JSONObject(answers.toString()))
+        if (card.string("answer_revision").isNotBlank()) body.put("answer_revision", card.string("answer_revision"))
+        c.action("generic/answer", body, card)
+    }
+    val title = card.string("title").ifBlank {
+        questions.firstOrNull()?.string("header").orEmpty()
+            .ifBlank { catalog.name(app) + if (approval) " 等你批准" else " 有问题要问你" }
+    }
+    val onlyQuestion = questions.firstOrNull()
+    val direct = !approval && questions.size == 1 && onlyQuestion != null &&
+        !onlyQuestion.optBoolean("isMultiple") && !onlyQuestion.optBoolean("isOther") && !onlyQuestion.optBoolean("isSecret")
+    QuestionCard {
+        CardTitle(title)
+        val detail = card.string("detail")
+        if (detail.isNotBlank()) {
+            val lines = detail.lines().size
+            Text(
+                detail, style = MaterialTheme.typography.process, color = p.text, fontFamily = FontFamily.Monospace,
+                maxLines = if (expanded) Int.MAX_VALUE else 12, overflow = TextOverflow.Ellipsis,
+            )
+            if (lines > 12 && !expanded) PillButton("展开全部 $lines 行", { expanded = true }, style = PillStyle.Text, minHeight = 36.dp)
+        }
+        questions.forEach { q ->
+            val id = q.string("id")
+            val options = q.rows("options") { it }
+            if (q.string("header").isNotBlank() && q.string("header") != q.string("question") && q.string("header") != title) {
+                Text(q.string("header"), style = MaterialTheme.typography.note, color = p.muted)
+            }
+            if (q.string("question").isNotBlank()) Text(q.string("question"), style = MaterialTheme.typography.card, color = p.text, fontWeight = FontWeight.Medium)
+            val selected = picked(id)
+            if (approval) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    options.filter { it.string("label").isNotBlank() }.forEachIndexed { index, option ->
+                        val label = option.string("label")
+                        PillButton(
+                            label,
+                            { put(id, listOf(label)); send() },
+                            style = if (index == 0) PillStyle.Primary else PillStyle.Secondary,
+                            enabled = !ws.busy && why.isBlank(),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            } else {
+                options.filter { it.string("label").isNotBlank() }.forEach { option ->
+                    val label = option.string("label")
+                    OptionCard(
+                        label, option.string("description"), label in selected,
+                        enabled = !ws.busy && why.isBlank(),
+                        multiple = q.optBoolean("isMultiple"),
+                        description = "选择$label",
+                    ) { checked ->
+                        if (direct) {
+                            // 只有一题、单选、不能自己写时，点选项直接提交。
+                            put(id, listOf(label))
+                            send()
+                        } else {
+                            val now = picked(id)
+                            put(id, if (q.optBoolean("isMultiple")) (if (checked) now + label else now - label) else listOf(label))
+                        }
+                    }
+                }
+                if (q.optBoolean("isOther") || q.optBoolean("isSecret")) {
+                    val secret = q.optBoolean("isSecret")
+                    // 自己的字：写了就顶掉已点的选项（和网页一样）；密码题不存盘，只留在这一次的界面里。
+                    val own = selected.filter { value -> options.none { it.string("label") == value } }.joinToString("\n")
+                    TeleplyTextField(
+                        own,
+                        { text -> put(id, listOfNotNull(text.takeIf(String::isNotBlank))) },
+                        "自行填写",
+                        singleLine = false,
+                        minLines = 1,
+                        maxLines = 4,
+                        enabled = !ws.busy && why.isBlank(),
+                        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+                    )
+                }
+            }
+        }
+        if (!approval && !direct) {
+            val ready = questions.isNotEmpty() && questions.all { answered(it) }
+            PillButton(
+                if (ws.busy) "提交中…" else "提交",
+                { send() },
+                style = PillStyle.Primary,
+                enabled = !ws.busy && why.isBlank() && ready,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (sent && ws.result.isNotBlank()) CardStatus(ws.result)
+        if (why.isNotBlank()) Text(why, style = MaterialTheme.typography.note, color = p.muted)
+        ws.error?.let { Text(it, style = MaterialTheme.typography.note, color = p.error) }
     }
 }
 

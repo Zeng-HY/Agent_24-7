@@ -472,7 +472,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             var checked=false
             try {
                 val result=when(pending.string("route")) {
-                    "codex/answer" -> {
+                    // 通用布局的答复（第二批 A3）和 Codex 一样有自己的回执。
+                    "codex/answer", "generic/answer" -> {
                         val receipt=service.receipt(k.device,k.chat,pending.getJSONObject("body").getString("request_id"))
                         if(receipt.string("state") in listOf("accepted","rejected")) settle(k,pending,"receipt")
                         "回答回执：${receipt.string("state")}"
@@ -557,7 +558,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 persist(k,next.put("pending_action",kept("unknown")),synthetic)
                 posted=true
                 val result=when {
-                    route=="codex/answer" -> service.command(k.device,"answer",payload)
+                    route=="codex/answer" || route=="generic/answer" -> service.command(k.device,"answer",payload)
                     route=="claude/choose" && local?.string("what")=="stop" -> service.command(k.device,"stop",payload)
                     else -> service.detail(k.device,route,body=payload)
                 }

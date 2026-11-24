@@ -224,6 +224,13 @@ class FixtureWorld {
     private val created = mutableListOf<Pair<Chat, String>>()
     private val queues = mutableMapOf<String, MutableMap<String, Queued>>()
     private var codexAnswered = false
+    /** 第二批 A1/A2：给 Codex 的控制态加一份 capabilities_now（测试停止、模式按钮按此刻能力）。 */
+    var codexCapsNow: JSONObject? = null
+    /** 第二批 A3：假助手此刻不能批准，带一句中文原因。 */
+    var testingApproveBlocked: String? = null
+    /** 通用卡片（第二批 A3）：假助手两张卡片中已经答过的，以及答复时发出去的请求体（测试用）。 */
+    val testingAnswered = mutableSetOf<String>()
+    val testingAnswers = mutableListOf<JSONObject>()
     private var claudeStep = 0
     /** What is ticked in Claude's second question, which takes several: its first option to begin with. */
     private val claudePicked = mutableSetOf("t-choice-3")
@@ -411,10 +418,18 @@ class FixtureWorld {
             }
             "testing" -> {
                 val testRunning = if (chat == "test-running") running["testing"] != false else run
-                val raw = JSONObject().put("available", true).put("running", testRunning).put("status", if (testRunning) "running" else if (chat == "test-waiting") "waiting" else "idle")
-                    .put("turn_id", if (testRunning) "turn-1" else "").put("settings", JSONObject()).put("questions", JSONArray())
+                // 第二批 A3：测试对话 B 里有一张批准卡和一张提问卡（和 agents/testing.py 一样），答过的不再列出。
+                val cards = if (chat == "test-waiting") JSONArray(TESTING_CARDS.filter { it.string("id") !in testingAnswered }.map { it }) else JSONArray()
+                val waiting = cards.length() > 0
+                val raw = JSONObject().put("available", true).put("running", testRunning)
+                    .put("status", if (testRunning) "running" else if (chat == "test-waiting" && waiting) "waiting" else "idle")
+                    .put("turn_id", if (testRunning) "turn-1" else "").put("settings", JSONObject()).put("questions", cards)
                     .put("queued", JSONArray()).put("queue_available", true).put("stop_token", "stop-1")
-                Control(true, testRunning, if (testRunning) "turn-1" else "", true, queued, turnMap, chat == "test-waiting", raw.toString())
+                testingApproveBlocked?.let { reason ->
+                    raw.put("capabilities_now", JSONObject().put("approve", false))
+                        .put("capability_notes", JSONObject().put("approve", reason))
+                }
+                Control(true, testRunning, if (testRunning) "turn-1" else "", true, queued, turnMap, waiting, raw.toString())
             }
             else -> {
                 val raw = JSONObject(CODEX_STATE)
@@ -424,12 +439,24 @@ class FixtureWorld {
                     return Control(true, run, if (run) turn else "", true, queued, turnMap, false, raw.toString())
                 }
                 if (codexAnswered) raw.getJSONArray("questions").getJSONObject(0).put("status", "answered").put("editable", true)
+                codexCapsNow?.let { raw.put("capabilities_now", JSONObject(it.toString())) }
                 Control(true, run, if (run) turn else "", true, queued, turnMap, !codexAnswered, raw.toString())
             }
         }
     }
 
     fun command(app: String, route: String, body: JSONObject): JSONObject {
+        // 通用布局的答复（第二批 A3）：记下请求体，卡片标成答过，回一句中文结果。
+        if (app == "testing" && route == "answer") {
+            testingAnswers += JSONObject(body.toString())
+            testingAnswered += body.string("question_id")
+            val card = TESTING_CARDS.firstOrNull { it.string("id") == body.string("question_id") }
+            val text = if (card?.string("kind") == "approval") {
+                val decision = body.optJSONObject("answers")?.optJSONArray("decision")?.optString(0).orEmpty()
+                if ("拒绝" in decision) "已拒绝本次操作" else "已允许本次操作"
+            } else "答案已提交"
+            return JSONObject().put("request_id", body.string("request_id")).put("ok", true).put("accepted", true).put("text", text)
+        }
         val rid = body.string(if (route == "stop") "operation_id" else "request_id")
         val queue = queues.getOrPut(app) { linkedMapOf() }
         if (app == "claude" && route == "send") return claudeSend(body)
@@ -738,6 +765,11 @@ class FixtureWorld {
             ),
             params = AgentParams(stateTimeoutS = 2, sendTimeoutS = 5, refreshMs = 1_000),
             ui = AgentUi(cardLayout = "generic.v1", waitingText = "等待你处理"),
+        )
+        /** 假助手的两张通用卡片（和 agents/testing.py 一样，第二批 A3）。 */
+        val TESTING_CARDS = listOf(
+            JSONObject("""{"id":"approval-7","status":"pending","kind":"approval","turn_id":"turn-3","title":"测试助手想运行命令","detail":"npm test\n在 C:\\测试\\项目","questions":[{"id":"decision","header":"","question":"允许运行这条命令吗？","options":[{"label":"允许一次","description":""},{"label":"拒绝","description":""}],"isOther":false,"isSecret":false,"isMultiple":false}],"answer_revision":"","expires_at":0}"""),
+            JSONObject("""{"id":"question-8","status":"pending","kind":"question","turn_id":"turn-3","questions":[{"id":"plan","header":"选方案","question":"用哪个方案？","options":[{"label":"方案 A","description":"先改接口"},{"label":"方案 B","description":"先改界面"}],"isOther":true,"isSecret":false,"isMultiple":false},{"id":"files","header":"改哪些文件","question":"这次要改哪些文件？","options":[{"label":"a.py","description":""},{"label":"b.py","description":""}],"isOther":false,"isSecret":false,"isMultiple":true}],"answer_revision":"rev-1","expires_at":0}"""),
         )
         const val UNGROUPED = "ungrouped"
         const val AWAY_CODEX = "codex-away"
