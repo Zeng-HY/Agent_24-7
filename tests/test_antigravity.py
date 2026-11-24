@@ -93,7 +93,7 @@ class DetectTests(Base):
         fake.write(self.home, [])
         self.assertTrue(agent.detect())
 
-    def test_the_manifest_is_read_only(self):
+    def test_the_manifest_sends_and_approves_from_the_phone(self):
         manifest = registry.get("antigravity").manifest()
         self.assertEqual((manifest["id"], manifest["order"], manifest["legacy"], manifest["min_protocol"]),
                          ("antigravity", 40, False, 2))
@@ -102,14 +102,16 @@ class DetectTests(Base):
                          ("#4285F4", "#8AB4F8", {"kind": "builtin", "key": "generic"}))
         self.assertEqual(manifest["ui"], {"card_layout": "generic.v1", "waiting_text": "等待你处理"})
         self.assertEqual(manifest["sources"], {"catalog": "sqlite", "transcript": "jsonl",
-                                               "control": "none", "live": "file-poll"})
+                                               "control": "local-api", "live": "file-poll"})
         capabilities = manifest["capabilities"]
         self.assertTrue(capabilities["list"] and capabilities["read"] and capabilities["search"])
-        for name in ("open", "stop", "queue", "steer", "approve", "answer", "new", "archive", "restore",
-                     "delete", "usage", "waiting", "attachments", "slash_commands", "skills"):
+        self.assertEqual(capabilities["send_modes"], ["send"])
+        self.assertTrue(capabilities["approve"] and capabilities["waiting"])
+        self.assertEqual(capabilities["statuses"], ["running", "waiting", "idle", "unknown"])
+        for name in ("open", "stop", "queue", "steer", "answer", "new", "archive", "restore",
+                     "delete", "usage", "attachments", "slash_commands", "skills"):
             self.assertFalse(capabilities[name], name)
-        self.assertEqual((capabilities["send_modes"], capabilities["settings"]), ([], []))
-        self.assertEqual(capabilities["statuses"], ["running", "idle", "unknown"])
+        self.assertEqual(capabilities["settings"], [])
 
 
 class CatalogTests(Base):
@@ -467,8 +469,38 @@ class RouteTests(Base):
         handler.rfile = io.BytesIO(json.dumps({"id": "a", "text": "hi"}).encode())
         handler.headers["Content-Length"] = str(len(handler.rfile.getvalue()))
         handler.do_POST()
-        self.assertEqual(sent[0][0], 400)
-        self.assertEqual(json.loads(sent[0][1])["code"], "unsupported")
+        self.assertEqual(sent[0][0], 409)
+        self.assertIn("没开", json.loads(sent[0][1])["error"])
+
+        handler, sent = self.handler("/api/agents/antigravity/answer?t=secret", apps, protocol=2)
+        handler.rfile = io.BytesIO(json.dumps({"id": "a", "question_id": "traj:1",
+                                               "answers": {"decision": ["允许一次"]}}).encode())
+        handler.headers["Content-Length"] = str(len(handler.rfile.getvalue()))
+        handler.do_POST()
+        self.assertEqual(sent[0][0], 409)
+        self.assertIn("没开", json.loads(sent[0][1])["error"])
+
+    def test_protocol_two_sends_and_answers_through_the_unified_routes(self):
+        apps = ["codex", "claude", "deepseek", "antigravity"]
+        runner = fake.FakeAgentapi()
+        with fake.FakeHub(self.home, steps=[fake.waiting_step()]) as _hub:
+            antigravity.reset()
+            with patch.object(antigravity, "_run_language_server", runner):
+                handler, sent = self.handler("/api/agents/antigravity/send?t=secret", apps, protocol=2)
+                handler.rfile = io.BytesIO(json.dumps({"id": "a", "text": "从手机发的"}).encode())
+                handler.headers["Content-Length"] = str(len(handler.rfile.getvalue()))
+                handler.do_POST()
+                self.assertEqual(sent[0][0], 200)
+                self.assertEqual(json.loads(sent[0][1])["text"], "已交给 Antigravity")
+                self.assertEqual(runner.calls[0]["args"], ["send-message", "a", "从手机发的"])
+
+                handler, sent = self.handler("/api/agents/antigravity/answer?t=secret", apps, protocol=2)
+                handler.rfile = io.BytesIO(json.dumps(
+                    {"id": "a", "question_id": "traj-1:3", "answers": {"decision": ["拒绝"]}}).encode())
+                handler.headers["Content-Length"] = str(len(handler.rfile.getvalue()))
+                handler.do_POST()
+                self.assertEqual(sent[0][0], 200)
+                self.assertEqual(json.loads(sent[0][1]), {"ok": True, "accepted": True, "text": "已拒绝"})
 
     def test_protocol_one_never_sees_the_new_assistant(self):
         apps = ["codex", "claude", "deepseek", "antigravity"]
@@ -481,6 +513,309 @@ class RouteTests(Base):
         handler, sent = self.handler("/api/agents/antigravity/state?id=a&t=secret", apps)
         handler.do_GET()
         self.assertEqual(sent[0][0], 404)
+
+
+class ControlBase(Base):
+    """Fake data, a fake local service and a fake agentapi: never the real Antigravity."""
+
+    def hub(self, steps=None, token=fake.TOKEN, clear=True):
+        found = fake.FakeHub(self.home, token=token, steps=steps)
+        found.__enter__()
+        self.addCleanup(found.__exit__, None, None, None)
+        if clear:
+            antigravity.reset()
+        return found
+
+    def agentapi(self, **changes):
+        runner = fake.FakeAgentapi(**changes)
+        patcher = patch.object(antigravity, "_run_language_server", runner)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return runner
+
+    def transcript_path(self, conv_id: str = "a") -> Path:
+        return (fake.data_root(self.home) / "brain" / conv_id / ".system_generated" / "logs"
+                / "transcript.jsonl")
+
+    def append_user_input(self, text: str, conv_id: str = "a", step: int = 9) -> None:
+        with self.transcript_path(conv_id).open("a", encoding="utf-8") as file:
+            file.write(json.dumps(fake.record(step, "USER_INPUT", "USER_EXPLICIT", text),
+                                  ensure_ascii=False) + "\n")
+
+
+class CapabilitiesTests(ControlBase):
+    def test_no_running_antigravity_says_so_for_sending_and_approving(self):
+        self.build([fake.row("a")])
+        now = antigravity.AGENT().capabilities_now(None, "a")
+        self.assertEqual(now["capabilities"], {"send_modes": [], "approve": False})
+        self.assertEqual(now["notes"], {"send": antigravity.NOT_OPEN, "approve": antigravity.NOT_OPEN})
+
+    def test_open_and_idle_is_the_manifest_itself(self):
+        self.build([fake.row("a")])
+        self.hub()
+        self.assertIsNone(antigravity.AGENT().capabilities_now(None, "a"))
+
+    def test_open_and_running_cannot_send(self):
+        self.build([fake.row("a", status="CASCADE_RUN_STATUS_RUNNING")])
+        self.hub()
+        now = antigravity.AGENT().capabilities_now(None, "a")
+        self.assertEqual(now["capabilities"], {"send_modes": []})
+        self.assertEqual(now["notes"], {"send": antigravity.BUSY_SEND})
+
+    def test_the_check_is_kept_two_seconds(self):
+        self.build([fake.row("a")])
+        clock = {"t": 1000.0}
+        with patch.object(antigravity, "_now", lambda: clock["t"]):
+            self.assertEqual(antigravity.AGENT().capabilities_now(None, "a")["capabilities"]["send_modes"], [])
+            self.hub(clear=False)  # the app appears, but the answer is kept for two seconds
+            self.assertEqual(antigravity.AGENT().capabilities_now(None, "a")["capabilities"]["send_modes"], [])
+            clock["t"] += 2.1
+            self.assertIsNone(antigravity.AGENT().capabilities_now(None, "a"))
+
+
+class SendTests(ControlBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.build([fake.row("a", status="CASCADE_RUN_STATUS_IDLE")],
+                   transcripts={"a": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "旧消息")]})
+
+    def test_an_idle_conversation_takes_the_message(self):
+        hub = self.hub()
+        runner = self.agentapi()
+        result = antigravity.AGENT().send({"id": "a", "text": "  帮我看看  ", "request_id": "r-1"})
+        self.assertTrue(result["ok"] and result["accepted"])
+        self.assertEqual(result["text"], "已交给 Antigravity")
+        self.assertEqual(result["request_id"], "r-1")
+        call = runner.calls[0]
+        self.assertEqual(call["args"], ["send-message", "a", "  帮我看看  "])
+        self.assertEqual(call["exe"], str(antigravity._language_server()))
+        self.assertTrue(call["exe"].endswith("language_server.exe"))
+        self.assertEqual(call["env"]["ANTIGRAVITY_LS_ADDRESS"], f"localhost:{hub.port}")
+        self.assertEqual(call["env"]["ANTIGRAVITY_CSRF_TOKEN"], fake.TOKEN)
+        self.assertEqual(call["timeout"], 60.0)
+        self.assertNotIn(fake.TOKEN, json.dumps(result, ensure_ascii=False))
+
+    def test_a_running_conversation_is_refused(self):
+        self.build([fake.row("a", status="CASCADE_RUN_STATUS_RUNNING")])
+        self.hub()
+        runner = self.agentapi()
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().send({"id": "a", "text": "在吗"})
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(str(caught.exception), antigravity.BUSY_SEND)
+        self.assertEqual(runner.calls, [])
+
+    def test_no_antigravity_is_refused(self):
+        runner = self.agentapi()
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().send({"id": "a", "text": "在吗"})
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("没开", str(caught.exception))
+        self.assertEqual(runner.calls, [])
+
+    def test_empty_and_over_long_text_are_refused(self):
+        self.hub()
+        self.agentapi()
+        for text in ("", "   \n  "):
+            with self.assertRaises(antigravity.ControlError) as caught:
+                antigravity.AGENT().send({"id": "a", "text": text})
+            self.assertEqual(caught.exception.status, 400)
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().send({"id": "a", "text": "字" * 20001})
+        self.assertEqual(caught.exception.status, 400)
+        self.assertIn("20,000", str(caught.exception))
+
+    def test_an_agentapi_failure_is_502_and_never_carries_the_token(self):
+        self.hub()
+        self.agentapi(stdout=json.dumps({"error": "被拒绝了 " + fake.TOKEN}, ensure_ascii=False))
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().send({"id": "a", "text": "在吗"})
+        self.assertEqual(caught.exception.status, 502)
+        self.assertIn("没发出去", str(caught.exception))
+        self.assertNotIn(fake.TOKEN, str(caught.exception))
+
+    def test_agentapi_no_json_is_502_without_the_token(self):
+        self.hub()
+        self.agentapi(stdout="不是 JSON " + fake.TOKEN)
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().send({"id": "a", "text": "在吗"})
+        self.assertEqual(caught.exception.status, 502)
+        self.assertNotIn(fake.TOKEN, str(caught.exception))
+
+    def test_a_receipt_is_confirmed_when_a_new_user_input_appears(self):
+        self.hub()
+        self.agentapi()
+        agent = antigravity.AGENT()
+        agent.send({"id": "a", "text": "帮我看看这个文件"})
+        self.assertFalse(agent.check("a", 0, "帮我看看这个文件")["delivered"])
+        self.append_user_input("帮我看看这个文件，谢谢")
+        self.assertTrue(agent.check("a", 0, "帮我看看这个文件")["delivered"])
+        self.assertFalse(agent.check("a", 0, "另一句话")["delivered"])
+
+
+class ApprovalTests(ControlBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.build([fake.row("a", status="CASCADE_RUN_STATUS_RUNNING", title="测试对话 A")],
+                   transcripts={"a": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "跑一下测试")]})
+
+    def test_a_waiting_step_becomes_a_generic_approval_card(self):
+        self.hub([fake.waiting_step()])
+        state = antigravity.AGENT().state("a")
+        self.assertEqual(state["status"], "waiting")
+        self.assertTrue(state["running"])
+        card = state["questions"][0]
+        self.assertEqual((card["id"], card["kind"], card["status"]), ("traj-1:3", "approval", "pending"))
+        self.assertEqual(card["title"], "Antigravity 想运行命令")
+        self.assertEqual(card["detail"], "npm test")
+        self.assertEqual(card["expires_at"], 0)
+        question = card["questions"][0]
+        self.assertEqual((question["id"], question["isMultiple"], question["isOther"]), ("decision", False, False))
+        self.assertEqual([option["label"] for option in question["options"]],
+                         ["允许一次", "本对话里这条都允许", "拒绝"])
+
+    def test_a_non_command_step_has_its_own_words(self):
+        self.hub([fake.waiting_step(action="read_file", target="C:\\测试\\说明.txt")])
+        card = antigravity.AGENT().state("a")["questions"][0]
+        self.assertEqual(card["title"], "Antigravity 想读文件")
+        self.assertEqual(card["questions"][0]["question"], "允许读取这个文件吗？")
+
+    def test_an_unknown_action_still_asks(self):
+        self.hub([fake.waiting_step(action="future_thing")])
+        card = antigravity.AGENT().state("a")["questions"][0]
+        self.assertEqual(card["title"], "Antigravity 等你批准")
+        self.assertEqual(card["questions"][0]["question"], "允许这一步吗？")
+
+    def test_a_very_long_target_is_cut_at_four_thousand(self):
+        self.hub([fake.waiting_step(target="x" * 5000)])
+        detail = antigravity.AGENT().state("a")["questions"][0]["detail"]
+        self.assertLessEqual(len(detail), 4000)
+        self.assertTrue(detail.endswith("…"))
+
+    def test_the_three_answers_send_the_documented_request(self):
+        expected = {
+            "允许一次": (True, "PERMISSION_SCOPE_ONCE", "已允许"),
+            "本对话里这条都允许": (True, "PERMISSION_SCOPE_CONVERSATION", "已允许（本对话里这条都允许）"),
+            "拒绝": (False, "PERMISSION_SCOPE_ONCE", "已拒绝"),
+        }
+        hub = self.hub([fake.waiting_step()])
+        agent = antigravity.AGENT()
+        for label, (allow, scope, text) in expected.items():
+            hub.steps = [fake.waiting_step()]
+            antigravity._forget_waiting("a")
+            result = agent.answer({"id": "a", "question_id": "traj-1:3",
+                                   "answers": {"decision": [label]}})
+            self.assertEqual(result, {"ok": True, "accepted": True, "text": text})
+            body = hub.calls("HandleCascadeUserInteraction")[-1]["body"]
+            self.assertEqual(body["cascadeId"], "a")
+            self.assertNotIn("conversationId", body)
+            self.assertEqual(body["interaction"], {
+                "trajectoryId": "traj-1", "stepIndex": 3,
+                "permission": {"allow": allow, "scope": scope}})
+
+    def test_a_card_that_is_gone_is_409(self):
+        hub = self.hub([fake.waiting_step()])
+        antigravity.AGENT().state("a")
+        hub.steps = []
+        antigravity._forget_waiting("a")
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().answer({"id": "a", "question_id": "traj-1:3",
+                                        "answers": {"decision": ["允许一次"]}})
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("已经处理过", str(caught.exception))
+
+    def test_an_unknown_option_is_400(self):
+        self.hub([fake.waiting_step()])
+        for answers in ({"decision": ["也许"]}, {"decision": []}, {}, {"other": ["允许一次"]}):
+            with self.assertRaises(antigravity.ControlError) as caught:
+                antigravity.AGENT().answer({"id": "a", "question_id": "traj-1:3", "answers": answers})
+            self.assertEqual(caught.exception.status, 400)
+            self.assertIn("选项不存在", str(caught.exception))
+
+    def test_no_antigravity_cannot_answer(self):
+        with self.assertRaises(antigravity.ControlError) as caught:
+            antigravity.AGENT().answer({"id": "a", "question_id": "traj-1:3",
+                                        "answers": {"decision": ["允许一次"]}})
+        self.assertEqual(caught.exception.status, 409)
+        self.assertIn("没开", str(caught.exception))
+
+
+class WaitingNoticeTests(ControlBase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.build([fake.row("a", status="CASCADE_RUN_STATUS_RUNNING", title="测试对话 A")],
+                   transcripts={"a": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "跑一下测试")]})
+
+    def test_the_same_card_is_told_once_then_the_turn_is_running_again(self):
+        hub = self.hub([fake.waiting_step()])
+        agent = antigravity.AGENT()
+        notifier = FakeNotifier()
+        item = agent.notify_conversations(10)[0][0]
+        agent.notify_poll(notifier, None, item)
+        self.assertIn(("antigravity", "a"), notifier.waiting)
+        self.assertEqual([end.get("asks") for end in notifier.told], [True])
+        agent.notify_poll(notifier, None, item)
+        self.assertEqual(len(notifier.told), 1)
+
+        hub.steps = []
+        antigravity._forget_waiting("a")
+        agent.notify_poll(notifier, None, item)
+        self.assertNotIn(("antigravity", "a"), notifier.waiting)
+        self.assertIn(("antigravity", "a"), notifier.running)
+        self.assertEqual(len(notifier.told), 1)
+
+    def test_a_finished_turn_after_waiting_still_says_done(self):
+        hub = self.hub([fake.waiting_step()])
+        agent = antigravity.AGENT()
+        notifier = FakeNotifier()
+        agent.notify_poll(notifier, None, agent.notify_conversations(10)[0][0])
+        hub.steps = []
+        antigravity._forget_waiting("a")
+        fake.write(self.home, [fake.row("a", status="CASCADE_RUN_STATUS_IDLE")],
+                   transcripts={"a": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "跑一下测试")]})
+        antigravity.reset()
+        agent.notify_poll(notifier, None, agent.notify_conversations(10)[0][0])
+        self.assertEqual([end["state"] for end in notifier.told], ["done", "done"])
+
+
+class TokenLeakTests(ControlBase):
+    def test_the_token_never_appears_in_results_errors_or_logs(self):
+        secret = "secret-" + fake.TOKEN
+        self.build([fake.row("a", status="CASCADE_RUN_STATUS_RUNNING"),
+                    fake.row("b", status="CASCADE_RUN_STATUS_IDLE")],
+                   transcripts={"a": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "跑一下测试")],
+                                "b": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "旧消息")]})
+        hub = self.hub([fake.waiting_step()], token=secret)
+        agent = antigravity.AGENT()
+        logs: list[str] = []
+        agent.on_server_start({}, [], logs.append)
+        self.addCleanup(lambda: antigravity._LOG_WRITER.__setitem__(0, None))
+
+        state_text = json.dumps(agent.state("a"), ensure_ascii=False)
+        self.assertNotIn(secret, state_text)
+
+        hub.steps = [fake.waiting_step()]
+        antigravity._forget_waiting("a")
+        answer_text = json.dumps(agent.answer({"id": "a", "question_id": "traj-1:3",
+                                               "answers": {"decision": ["拒绝"]}}), ensure_ascii=False)
+        self.assertNotIn(secret, answer_text)
+
+        hub.fail = "GetCascadeTrajectorySteps"
+        antigravity._forget_waiting("a")
+        agent.state("a")
+        hub.fail = "HandleCascadeUserInteraction"
+        hub.steps = [fake.waiting_step()]
+        antigravity._forget_waiting("a")
+        with self.assertRaises(antigravity.ControlError) as caught:
+            agent.answer({"id": "a", "question_id": "traj-1:3", "answers": {"decision": ["允许一次"]}})
+        self.assertNotIn(secret, str(caught.exception))
+
+        runner = self.agentapi(stdout=secret)
+        with self.assertRaises(antigravity.ControlError) as caught:
+            agent.send({"id": "b", "text": "在吗"})
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertEqual(len(runner.calls), 1)
+        self.assertNotIn(secret, "\n".join(logs))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
-"""Antigravity desktop, read-only: its conversation list and the steps of a conversation.
+"""Antigravity desktop: its conversation list, reading, sending and phone approvals.
 
-Antigravity is only read from two things it writes on this computer: the summaries database
+The list and the transcript are read from the two files Antigravity writes: the summaries database
 `conversation_summaries.db` and each conversation's `brain/<id>/.system_generated/logs/transcript.jsonl`.
-Nothing else under its data folder is opened, and none of its programs, ports or windows are touched.
+Sending and approving use the app's own local service, the way the user's `ag.py` does: the language
+server writes its port and a CSRF token to `daemon/hub_<port>.json`, and the token is read from there,
+kept in memory and sent only to `localhost`. It is never logged, returned or put into an error.
 
 The format has no public description and may change in any Antigravity update, so a missing column, a
 changed time or one bad row is read as an empty value instead of an error: the list returns what it can.
@@ -10,12 +12,17 @@ changed time or one bad row is read as an empty value instead of an error: the l
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -46,6 +53,52 @@ LIST_SECONDS = 2.0        # at most one database read this often, even when it c
 CACHE_LIMIT = 8           # conversations kept parsed
 FULL_CACHE_LIMIT = 4      # full transcripts kept for cut answers
 
+# The app's own local service (the same one the user's ag.py drives).
+SERVICE = "exa.language_server_pb.LanguageServerService"
+HUB_SECONDS = 2.0         # capabilities_now asks again at most this often
+WAITING_SECONDS = 3.0     # one conversation's waiting steps read at most this often
+LIST_WAITING_SECONDS = 15.0  # the list only uses a result this recent, never reads for itself
+WAITING_TIMEOUT = 5.0     # reading the waiting steps
+SEND_TIMEOUT = 60.0       # agentapi send-message
+ANSWER_TIMEOUT = 10.0     # HandleCascadeUserInteraction
+SEND_LIMIT = 20000        # agentapi takes the text as one command-line argument
+DETAIL_LIMIT = 4000       # a card's detail is cut here
+NOT_OPEN = "电脑上的 Antigravity 没开"
+BUSY_SEND = "Antigravity 正在跑，这一轮结束后才能发"
+
+# The three answers a phone may give to one approval step.
+APPROVAL_CHOICES = {
+    "允许一次": (True, "PERMISSION_SCOPE_ONCE", "已允许"),
+    "本对话里这条都允许": (True, "PERMISSION_SCOPE_CONVERSATION", "已允许（本对话里这条都允许）"),
+    "拒绝": (False, "PERMISSION_SCOPE_ONCE", "已拒绝"),
+}
+APPROVAL_OPTIONS = tuple({"label": label, "description": ""} for label in APPROVAL_CHOICES)
+
+APPROVAL_TITLES = {
+    "run_command": "Antigravity 想运行命令",
+    "run_workflow": "Antigravity 想运行命令",
+    "read_file": "Antigravity 想读文件",
+    "edit_file": "Antigravity 想改文件",
+    "write_file": "Antigravity 想改文件",
+    "search_web": "Antigravity 想联网搜索",
+    "webview_browser": "Antigravity 想打开网页",
+}
+APPROVAL_QUESTIONS = {
+    "run_command": "允许运行这条命令吗？",
+    "run_workflow": "允许运行这条命令吗？",
+    "read_file": "允许读取这个文件吗？",
+    "edit_file": "允许修改这个文件吗？",
+    "write_file": "允许修改这个文件吗？",
+}
+
+
+class ControlError(Exception):
+    """One action Antigravity could not carry out; the HTTP layer reads .status."""
+
+    def __init__(self, message: str, status: int = 502) -> None:
+        super().__init__(message)
+        self.status = status
+
 _TIME_FRACTION = re.compile(r"(\.\d{6})\d")
 _ISO_FRACTION = re.compile(r"(\.\d{3})\d+")
 
@@ -53,8 +106,16 @@ _LOCK = threading.Lock()
 _LIST_CACHE: dict = {"path": None, "stamp": None, "at": 0.0, "rows": None}
 _MESSAGE_CACHE: dict[str, tuple] = {}
 _FULL_CACHE: dict[str, tuple] = {}
+_HUB_CACHE: dict = {"at": 0.0, "data": None}
+_WAITING_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_SENT: dict[str, dict] = {}
 _LOGGED: set[tuple[str, str]] = set()
 _LOG_WRITER = [None]
+
+
+def _now() -> float:
+    """The clock caches are measured with (tests replace it)."""
+    return time.monotonic()
 
 
 # ---------------------------------------------------------------- where the data is
@@ -84,6 +145,9 @@ def reset() -> None:
         _LIST_CACHE.update(path=None, stamp=None, at=0.0, rows=None)
         _MESSAGE_CACHE.clear()
         _FULL_CACHE.clear()
+        _HUB_CACHE.update(at=0.0, data=None)
+        _WAITING_CACHE.clear()
+        _SENT.clear()
         _LOGGED.clear()
 
 
@@ -243,7 +307,7 @@ def _read_rows() -> list[dict]:
 def _all_rows(fresh: bool = False) -> list[dict]:
     path = str(_db_path())
     stamp = _stamp()
-    now = time.monotonic()
+    now = _now()
     with _LOCK:
         hit = _LIST_CACHE
         if (hit["rows"] is not None and hit["path"] == path and not fresh
@@ -595,6 +659,253 @@ def _fill_cut(messages: list[dict], conv_id: str) -> None:
                 message["text"] = result
 
 
+# ---------------------------------------------------------------- the app's local service
+#
+# Same interface as the user's ag.py: find the live language server through its hub file, then either
+# POST to its Connect service or run `language_server.exe agentapi`. The CSRF token only ever travels
+# in the request header / child environment, both to localhost; it is never logged or returned.
+
+
+def _daemon_dir() -> Path:
+    return _root() / "daemon"
+
+
+def _alive(pid: int) -> bool:
+    """Whether that process is running (ag.py's rule: OpenProcess + GetExitCodeProcess == 259)."""
+    if pid <= 0:
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+    except AttributeError:  # not Windows (the service itself only runs on Windows)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _read_hub() -> dict | None:
+    """The newest hub file whose language server is still running; None when Antigravity is not open."""
+    folder = _daemon_dir()
+    if not folder.is_dir():
+        return None
+    try:
+        paths = sorted(folder.glob("hub_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            pid = int(data.get("pid") or 0)
+        except (TypeError, ValueError):
+            continue
+        if _alive(pid) and data.get("httpPort") and data.get("csrfToken"):
+            return {"pid": pid, "httpPort": data["httpPort"], "csrfToken": data["csrfToken"]}
+    return None
+
+
+def _hub(max_age: float = HUB_SECONDS) -> dict | None:
+    """The live language server, kept [max_age] seconds (0 reads it again now)."""
+    now = _now()
+    with _LOCK:
+        hit = _HUB_CACHE
+        if hit["at"] and now - hit["at"] < max_age:
+            return hit["data"]
+    data = _read_hub()
+    with _LOCK:
+        _HUB_CACHE.update(at=now, data=data)
+    return data
+
+
+def _safe(text, token) -> str:
+    """A message that can be logged or returned: the token is never in it."""
+    value = str(text or "")
+    return value.replace(str(token), "***") if token else value
+
+
+def _rpc(method: str, body: dict, timeout: float = WAITING_TIMEOUT) -> dict:
+    """One POST to the app's own Connect service on localhost."""
+    data = _hub(0)
+    if data is None:
+        raise ControlError(NOT_OPEN, 409)
+    url = f"http://localhost:{data['httpPort']}/{SERVICE}/{method}"
+    request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers={
+        "Content-Type": "application/json", "Connect-Protocol-Version": "1",
+        "x-codeium-csrf-token": str(data["csrfToken"])})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        raise ControlError(f"Antigravity 没接受这次请求（HTTP {exc.code}）", 502) from None
+    except (urllib.error.URLError, OSError):
+        raise ControlError("连不上电脑上的 Antigravity，请打开它再试", 502) from None
+    try:
+        return json.loads(raw or b"{}")
+    except ValueError:
+        raise ControlError("Antigravity 的回答看不懂", 502) from None
+
+
+def _language_server() -> Path:
+    """Where the app puts the program that has the agentapi command."""
+    import machines
+    return (Path(machines.LOCALAPPDATA) / "Programs" / "Antigravity"
+            / "resources" / "bin" / "language_server.exe")
+
+
+def _run_language_server(exe, args: list[str], env: dict, timeout: float):
+    """Run `language_server.exe agentapi …` (tests replace this function, never the real program)."""
+    return subprocess.run([str(exe), "agentapi", *args], env=env, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout)
+
+
+def _agentapi(args: list[str], data: dict, timeout: float = SEND_TIMEOUT) -> dict:
+    """One agentapi command; its output is JSON and an error field or a non-zero exit is a failure."""
+    env = dict(os.environ)
+    env["ANTIGRAVITY_LS_ADDRESS"] = f"localhost:{data['httpPort']}"
+    env["ANTIGRAVITY_CSRF_TOKEN"] = str(data["csrfToken"])
+    try:
+        done = _run_language_server(_language_server(), list(args), env, timeout)
+    except subprocess.TimeoutExpired:
+        raise ControlError("Antigravity 没有回应（超时），请到电脑上看看", 502) from None
+    except OSError:
+        raise ControlError("找不到 Antigravity 的程序，可能没装好", 502) from None
+    text = (getattr(done, "stdout", "") or "").strip() or (getattr(done, "stderr", "") or "").strip()
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        raise ControlError(_safe("Antigravity 的回答看不懂：" + text[:200], data["csrfToken"]), 502) from None
+    if getattr(done, "returncode", 1) != 0 or (isinstance(parsed, dict) and parsed.get("error")):
+        reason = parsed.get("error") if isinstance(parsed, dict) else ""
+        raise ControlError(_safe("Antigravity 没发出去：" + str(reason or text[:200]), data["csrfToken"]), 502) from None
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _pending_steps(data: dict) -> list[dict]:
+    """The waiting-for-approval steps in one GetCascadeTrajectorySteps answer (ag.py's pending())."""
+    found: list[dict] = []
+    steps = data.get("steps") if isinstance(data, dict) else None
+    for index, step in enumerate(steps or []):
+        if not isinstance(step, dict) or step.get("status") != "CORTEX_STEP_STATUS_WAITING":
+            continue
+        interaction = step.get("requestedInteraction")
+        permission = interaction.get("permission") if isinstance(interaction, dict) else None
+        if not isinstance(permission, dict):
+            continue
+        resource = permission.get("resource")
+        resource = resource if isinstance(resource, dict) else {}
+        metadata = step.get("metadata")
+        info = metadata.get("sourceTrajectoryStepInfo") if isinstance(metadata, dict) else None
+        info = info if isinstance(info, dict) else {}
+        step_index = info.get("stepIndex", index)
+        try:
+            step_index = int(step_index)
+        except (TypeError, ValueError):
+            step_index = index
+        found.append({"trajectory_id": _text(info.get("trajectoryId")), "step_index": step_index,
+                      "action": _text(resource.get("action")), "target": _text(resource.get("target"))})
+    return found
+
+
+def _cached_waiting(conv_id: str, max_age: float) -> list[dict] | None:
+    """The waiting steps kept for this conversation if they are younger than [max_age]; None when there is none."""
+    with _LOCK:
+        hit = _WAITING_CACHE.get(conv_id)
+        if hit and _now() - hit[0] < max_age:
+            return [dict(step) for step in hit[1]]
+    return None
+
+
+def waiting_steps(conv_id: str, max_age: float = WAITING_SECONDS, fetch: bool = True) -> list[dict]:
+    """This conversation's waiting-for-approval steps.
+
+    Read from the app at most once every [max_age] seconds; with [fetch] False only a cached answer is
+    used (the list never reads for itself). A read failure counts as "no waiting steps" and is logged
+    once a day, without the token.
+    """
+    conv_id = str(conv_id or "").strip()
+    if not conv_id:
+        return []
+    cached = _cached_waiting(conv_id, max_age)
+    if cached is not None:
+        return cached
+    if not fetch:
+        return []
+    try:
+        steps = _pending_steps(_rpc("GetCascadeTrajectorySteps", {"cascadeId": conv_id}, timeout=WAITING_TIMEOUT))
+    except ControlError as exc:
+        _log_once("等批准状态读不到", _one_line(f"{type(exc).__name__}: {exc}", 200))
+        steps = []
+    with _LOCK:
+        if len(_WAITING_CACHE) >= 64:
+            oldest = min(_WAITING_CACHE, key=lambda key: _WAITING_CACHE[key][0])
+            _WAITING_CACHE.pop(oldest, None)
+        _WAITING_CACHE[conv_id] = (_now(), steps)
+    return [dict(step) for step in steps]
+
+
+def _forget_waiting(conv_id: str) -> None:
+    with _LOCK:
+        _WAITING_CACHE.pop(str(conv_id or ""), None)
+
+
+def _card_id(step: dict) -> str:
+    return f"{step.get('trajectory_id', '')}:{step.get('step_index', 0)}"
+
+
+def _card_detail(target: str) -> str:
+    return target if len(target) <= DETAIL_LIMIT else target[:DETAIL_LIMIT - 1] + "…"
+
+
+def _approval_card(step: dict) -> dict:
+    action = str(step.get("action") or "")
+    return {
+        "id": _card_id(step),
+        "status": "pending",
+        "kind": "approval",
+        "turn_id": str(step.get("trajectory_id") or ""),
+        "title": APPROVAL_TITLES.get(action, "Antigravity 等你批准"),
+        "detail": _card_detail(str(step.get("target") or "")),
+        "questions": [{
+            "id": "decision",
+            "header": "",
+            "question": APPROVAL_QUESTIONS.get(action, "允许这一步吗？"),
+            "options": [dict(option) for option in APPROVAL_OPTIONS],
+            "isOther": False,
+            "isSecret": False,
+            "isMultiple": False,
+        }],
+        "answer_revision": "",
+        "expires_at": 0,
+    }
+
+
+def _waiting_cards(conv_id: str) -> list[dict]:
+    return [_approval_card(step) for step in waiting_steps(conv_id)]
+
+
+def _listed(row: dict) -> dict:
+    """A public list row: a running one says waiting only when a recent read saw a pending step."""
+    item = _trim(row)
+    if item.get("status") in ("running", "waiting"):
+        pending = _cached_waiting(str(item.get("id") or ""), LIST_WAITING_SECONDS)
+        item["status"] = "waiting" if pending else "running"
+    return item
+
+
 # ---------------------------------------------------------------- the agent
 
 
@@ -621,15 +932,33 @@ class AntigravityAgent(Agent):
                 "list": True,
                 "read": True,
                 "search": True,
-                "send_modes": [],
+                "send_modes": ["send"],
                 "settings": [],
                 "skills": False,
-                "waiting": False,
-                "statuses": ["running", "idle", "unknown"],
+                "waiting": True,
+                "approve": True,
+                "statuses": ["running", "waiting", "idle", "unknown"],
             },
             ui={"card_layout": "generic.v1", "waiting_text": "等待你处理"},
-            sources={"catalog": "sqlite", "transcript": "jsonl", "control": "none", "live": "file-poll"},
+            sources={"catalog": "sqlite", "transcript": "jsonl", "control": "local-api", "live": "file-poll"},
         )
+
+    def capabilities_now(self, server, conv_id: str) -> dict | None:
+        """What this conversation can do right now: sending needs Antigravity open and the conversation idle.
+
+        Both checks are cached by their readers (the hub 2 s, the list 2 s), so an open conversation may ask
+        every second. A conversation that is not in the records is left at the manifest's capabilities.
+        """
+        if _hub() is None:
+            return {"capabilities": {"send_modes": [], "approve": False},
+                    "notes": {"send": NOT_OPEN, "approve": NOT_OPEN}}
+        try:
+            item = self._find(conv_id)
+        except NotFound:
+            return None
+        if item.get("status") in ("running", "waiting"):
+            return {"capabilities": {"send_modes": []}, "notes": {"send": BUSY_SEND}}
+        return None
 
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
         _LOG_WRITER[0] = log
@@ -660,7 +989,7 @@ class AntigravityAgent(Agent):
             size = 40
         page = rows[start:start + size]
         more = start + len(page) < len(rows)
-        return {"items": [_trim(row) for row in page], "has_more": more,
+        return {"items": [_listed(row) for row in page], "has_more": more,
                 "next_cursor": str(start + len(page)) if more else "", "total": len(rows)}
 
     def catalog_entries(self, limit: int) -> list[dict]:
@@ -671,7 +1000,7 @@ class AntigravityAgent(Agent):
             size = max(1, int(limit or 40))
         except (TypeError, ValueError):
             size = 40
-        return [_trim(row) for row in rows[:size]]
+        return [_listed(row) for row in rows[:size]]
 
     def find(self, conv_id: str) -> dict:
         return self._find(conv_id)
@@ -685,9 +1014,13 @@ class AntigravityAgent(Agent):
 
     def summary(self, item: dict) -> dict:
         status = item.get("status") or "unknown"
+        conv_id = str(item.get("id") or "")
         step = ""
-        if status == "running" and item.get("id"):
-            step = STEP_NAMES.get(_last_tool_name(_transcript_path(item["id"])), "")
+        if status in ("running", "waiting") and conv_id:
+            step = STEP_NAMES.get(_last_tool_name(_transcript_path(conv_id)), "")
+            # The list only uses a waiting result read in the last 15 seconds; it never reads for itself.
+            pending = _cached_waiting(conv_id, LIST_WAITING_SECONDS)
+            status = "waiting" if pending else "running"
         return {"status": status, "preview": item.get("preview", ""),
                 "modified": int(item.get("updated") or 0),
                 "turn_started": int(item.get("turn_started") or 0),
@@ -787,13 +1120,98 @@ class AntigravityAgent(Agent):
         status = item.get("status") or "unknown"
         running = status == "running"
         step = ""
-        if running:
+        questions: list[dict] = []
+        if running and item.get("id"):
             step = STEP_NAMES.get(_last_tool_name(_transcript_path(item["id"])), "")
+            # Reading the app's waiting steps is at most once every 3 seconds, and only for a running turn.
+            questions = _waiting_cards(str(item["id"]))
+            if questions:
+                status = "waiting"
         return {"available": True, "running": running, "status": status, "turn_id": "",
                 "turn_started": int(item.get("turn_started") or 0),
                 "turn_ended": int(item.get("turn_ended") or 0), "step": step,
-                "settings": {}, "runtime": {}, "questions": [], "tasks": [],
+                "settings": {}, "runtime": {}, "questions": questions, "tasks": [],
                 "queued": [], "queue_available": False, "stop_token": ""}
+
+    # -- acting
+
+    def send(self, payload: dict) -> dict:
+        """Hand one message to an idle conversation through agentapi (Antigravity's own send path)."""
+        conv_id = str(payload.get("id") or "").strip()
+        text = str(payload.get("text") or "")
+        if not text.strip():
+            raise ControlError("消息不能为空", 400)
+        if len(text) > SEND_LIMIT:
+            raise ControlError(f"消息太长（最多 {SEND_LIMIT:,} 字）", 400)
+        data = _hub(0)
+        if data is None:
+            raise ControlError(f"{NOT_OPEN}，开了再发", 409)
+        # The newest database, not the 2-second list cache: a turn that just ended must be able to take a message.
+        item = self._find(conv_id, fresh=True)
+        if item.get("status") != "idle":
+            raise ControlError(BUSY_SEND, 409)
+        before = _records(_transcript_path(item["id"]))
+        _agentapi(["send-message", str(item["id"]), text], data, timeout=SEND_TIMEOUT)
+        with _LOCK:
+            _SENT[str(item["id"])] = {"at": time.time(), "count": len(before), "text": text}
+        return {"ok": True, "accepted": True, "pressed": False, "offset": 0,
+                "request_id": str(payload.get("request_id") or ""), "text": "已交给 Antigravity",
+                "delivery_state": "accepted", "accepted_at": int(time.time() * 1000)}
+
+    def check(self, conv_id: str, offset: int = 0, text: str = "") -> dict:
+        """Whether the transcript now has a new user message that begins with the text we sent."""
+        item = self._find(conv_id)
+        conv_id = str(item["id"])
+        with _LOCK:
+            mark = dict(_SENT.get(conv_id) or {})
+        wanted = (str(text or "") or str(mark.get("text") or "")).strip()
+        if not wanted:
+            return {"delivered": False, "queued": False, "stage": "sent"}
+        start = int(mark.get("count") or 0)
+        sent_at = float(mark.get("at") or 0)
+        for index, message in enumerate(_records(_transcript_path(conv_id))):
+            if message.get("role") != "user":
+                continue
+            # Only messages that appeared after the send; without a mark every user message counts.
+            if start or sent_at:
+                later = index >= start or bool(sent_at and _seconds(message.get("time")) >= sent_at)
+                if not later:
+                    continue
+            if (message.get("text") or "").strip().startswith(wanted):
+                return {"delivered": True, "queued": False, "stage": "received"}
+        return {"delivered": False, "queued": False, "stage": "sent"}
+
+    def answer(self, payload: dict) -> dict:
+        """One phone approval: only a card that is still pending right now may be answered."""
+        conv_id = str(payload.get("id") or "").strip()
+        question_id = str(payload.get("question_id") or "")
+        answers = payload.get("answers")
+        choice = None
+        if isinstance(answers, dict):
+            given = answers.get("decision")
+            if isinstance(given, list) and len(given) == 1 and isinstance(given[0], str):
+                choice = APPROVAL_CHOICES.get(given[0].strip())
+        if choice is None:
+            raise ControlError("这个选项不存在，请刷新后重选", 400)
+        if _hub(0) is None:
+            raise ControlError(NOT_OPEN, 409)
+        # Read the waiting steps again (no cache): an approval handled on the phone or the PC is gone.
+        step = next((one for one in waiting_steps(conv_id, max_age=0) if _card_id(one) == question_id), None)
+        if step is None:
+            raise ControlError("这个批准已经处理过或已失效，请刷新", 409)
+        allow, scope, done_text = choice
+        body = {"cascadeId": conv_id, "interaction": {
+            "trajectoryId": str(step.get("trajectory_id") or ""),
+            "stepIndex": int(step.get("step_index") or 0),
+            "permission": {"allow": allow, "scope": scope}}}
+        try:
+            _rpc("HandleCascadeUserInteraction", body, timeout=ANSWER_TIMEOUT)
+        except ControlError as exc:
+            if exc.status == 409:
+                raise
+            raise ControlError(f"Antigravity 没接受这次批准：{exc}", 502) from None
+        _forget_waiting(conv_id)
+        return {"ok": True, "accepted": True, "text": done_text}
 
     # -- notify
     def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
@@ -824,7 +1242,23 @@ class AntigravityAgent(Agent):
             return True  # cannot tell: leave whatever was already said alone
         path = _transcript_path(item["id"]) if item.get("id") else None
         if status == "running":
-            notifier.waiting.pop(conv, None)
+            cards = _waiting_cards(str(item.get("id") or ""))
+            if cards:
+                previous = notifier.running.pop(conv, None) or {}
+                started = int(previous.get("since") or item.get("turn_started") or notifier.clock())
+                notifier.waiting[conv] = {"since": started, "title": item.get("title", ""), "item": item}
+                key = "waiting:" + ",".join(card["id"] for card in cards)
+                # One notice for each set of waiting cards: the same card is never told twice.
+                if notifier.ended.get(conv) != key:
+                    notifier.ended[conv] = key
+                    notifier._tell(found, item, {"state": "done", "key": key, "time": "", "asks": True,
+                                                 "text": item.get("preview", ""), "started": started,
+                                                 "ended": int(notifier.clock()),
+                                                 "started_source": "记录" if item.get("turn_started") else "不知道"})
+                return True
+            # Approved and still running: back to running (said once more only if it had been waiting).
+            if notifier.waiting.pop(conv, None) is not None:
+                notifier.reported_running.discard(conv)
             started = int(item.get("turn_started") or 0)
             started_iso = datetime.fromtimestamp(started).isoformat() if started else ""
             action = STEP_NAMES.get(_last_tool_name(path), "") if path is not None else ""
@@ -833,7 +1267,7 @@ class AntigravityAgent(Agent):
             if action:
                 notifier._step(item, {"action": action}, notifier.relay_on())
             return True
-        previous = notifier.running.pop(conv, None) or {}
+        previous = notifier.running.pop(conv, None) or notifier.waiting.pop(conv, None) or {}
         notifier.waiting.pop(conv, None)
         notifier.reported_running.discard(conv)
         if not previous:
