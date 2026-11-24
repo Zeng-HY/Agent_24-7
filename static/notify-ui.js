@@ -26,11 +26,14 @@
   const system = phoneSystem(), iPhone = system === 'iphone';
   const ntfyGroup = el('div', 'setting-group'), ntfyNote = el('div', 'setting-note');
   const barkGroup = el('div', 'setting-group'), barkNote = el('div', 'setting-note'), recentNote = el('div', 'setting-note');
+  // 定时任务 governs 遥应's own notices and Bark too, so it shows on every phone and on a computer (11-24)
+  const autoGroup = el('div', 'setting-group'), autoNote = el('div', 'setting-note');
   ntfyGroup.dataset.channel = ntfyNote.dataset.channel = 'ntfy';
   barkGroup.dataset.channel = barkNote.dataset.channel = 'bark';
   body.append(el('div', 'setting-title', '手机通知'), ...(iPhone ? [] : [ntfyGroup, ntfyNote]),
-    ...(system === 'android' ? [] : [barkGroup, barkNote]), recentNote);
-  let state = {configured: false, server: '', recent: [], ntfy: {on: false, topic: 'agent-remote', server: '', listening: 0, last_seen: ''}};
+    ...(system === 'android' ? [] : [barkGroup, barkNote]), autoGroup, autoNote, recentNote);
+  let state = {configured: false, server: '', recent: [], automations: 'codex',
+               ntfy: {on: false, topic: 'agent-remote', server: '', listening: 0, last_seen: ''}};
   let busy = false, draft = '';
 
   function row(text, onclick, cls) {  // an action, so no › (that one means another page opens)
@@ -46,28 +49,63 @@
       .then(() => toast('已复制'), () => toast('没复制成功，照着抄：' + value, true));
     return b;
   }
+  function choiceRow(label, value, onclick) {  // the current choice on the right; a tap changes it
+    const b = el('button', 'menu-row setting-row'), name = el('span', '', label), shown = el('span', 'setting-value', value);
+    shown.style.cssText = 'flex:none;text-align:right';
+    b.type = 'button'; b.append(name, shown); b.onclick = onclick;
+    return b;
+  }
   function paint() {
     paintNtfy();
     paintBark();
+    paintAutomations();
     const recent = (state.recent || []).slice(0, 3);
     recentNote.textContent = recent.length ? '最近：' + recent.map(r => r.time + ' ' + r.text).join('\n') : '';
     recentNote.hidden = !recent.length;
   }
+  function relayMode(n) {  // opened through the relay (/d/…) or from another origin than the computer itself
+    if (location.pathname.indexOf('/d/') === 0) return true;
+    if (!n.server) return false;
+    try { return new URL(n.server).origin !== location.origin; } catch (e) { return false; }
+  }
   function paintNtfy() {
-    const n = state.ntfy || {}, server = location.protocol === 'https:' ? location.origin : (n.server || location.origin);
+    // 11-24: only this computer's Tailscale address works as an ntfy server; the origin the page came from may be
+    // the relay's, which asks for a sign-in the app never has.
+    const n = state.ntfy || {}, server = (n.server || '').replace(/\/+$/, ''), relay = relayMode(n);
     ntfyGroup.replaceChildren();
     if (n.on) {
       const on = el('div', 'setting-row'); on.append(el('span', '', '已开 · ntfy'), el('span', 'setting-value', n.listening ? '手机连着' : '手机没连着'));
       ntfyGroup.append(on);
     }
-    ntfyGroup.append(copyRow('主题', n.topic || 'agent-remote'), copyRow('服务器', server));
+    ntfyGroup.append(copyRow('主题', n.topic || 'agent-remote'));
+    if (server) ntfyGroup.append(copyRow('服务器', server));
+    else {  // no Tailscale address: nothing to copy, and saying so is better than the page's origin
+      const none = el('div', 'setting-row'), shown = el('span', 'setting-value', '这台电脑没有 Tailscale 地址');
+      shown.style.cssText = 'flex:1;min-width:0;text-align:right;overflow-wrap:anywhere';
+      none.append(el('span', '', '服务器'), shown);
+      ntfyGroup.append(none);
+    }
     if (n.on) ntfyGroup.append(row('试推一条', () => call('/api/notify/test', {channel: 'ntfy'})), row('关掉', () => call('/api/notify/ntfy', {on: false}), 'danger'));
     else ntfyGroup.append(row('打开并试推一条', () => call('/api/notify/ntfy', {on: true})));
-    ntfyNote.textContent = !n.on ? '安卓手机用 ntfy App 收。① 装 ntfy（Google Play、F-Droid 都有）；② 在 ntfy 里点 ＋，主题名称填上面的主题，' +
+    let note = !n.on ? '安卓手机用 ntfy App 收。① 装 ntfy（Google Play、F-Droid 都有）；② 在 ntfy 里点 ＋，主题名称填上面的主题，' +
         '勾上「使用其他服务器」，地址填上面的服务器，点「订阅」；③ 回到这里点「打开并试推一条」。点主题或服务器就能复制。手机上的 Tailscale 要一直连着才收得到。'
       : n.listening ? '对话做完时推到 ntfy App。手机正开着那个对话时不推。'
       : '现在没有手机连着：看看 ntfy 里订阅了上面的主题和服务器没有，手机上的 Tailscale 连着没有。' +
         (n.last_seen ? '上次连着是 ' + n.last_seen + '。' : '') + '没连着时做完的对话，连上后会补推（12 小时内的）。';
+    if (n.on) note += ' ntfy 那条「正在监听通知」可以藏起来：长按它，只关「后台服务」这一类，通知照常收。';
+    if (relay) note += ' 经中转用遥应的安卓手机：新版遥应安卓会自带通知，不用 ntfy；现在想用 ntfy，手机要连着 Tailscale。';
+    ntfyNote.textContent = note;
+  }
+  const AUTOMATION_WORDS = {codex: '跟 Codex 一样', failed: '只推失败的', off: '不推'};
+  function paintAutomations() {
+    const value = state.automations || 'codex';
+    autoGroup.replaceChildren(choiceRow('Codex 定时任务', AUTOMATION_WORDS[value] || AUTOMATION_WORDS.codex,
+      () => changeAutomations(value)));
+    autoNote.textContent = '跟 Codex 一样：Codex 在电脑上提醒的才推；任务在 Codex 里设了「只在失败时通知」的，成功不推。';
+  }
+  async function changeAutomations(current) {
+    const order = ['codex', 'failed', 'off'], next = order[(order.indexOf(current) + 1) % order.length];
+    await call('/api/notify/automations', {mode: next});
   }
   function paintBark() {
     barkGroup.replaceChildren();

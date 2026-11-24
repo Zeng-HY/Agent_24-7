@@ -39,8 +39,8 @@ SETTINGS = """(() => {
 
 def check(browser, agent, width, mic_says, channels, notes_say):
     problems, errors, posts = [], [], []
-    told = {'configured': False, 'server': '', 'recent': [],
-            'ntfy': {'on': False, 'topic': 'agent-remote', 'server': 'https://pc.example.ts.net', 'listening': 0, 'last_seen': ''}}
+    told = {'configured': False, 'server': '', 'recent': [], 'automations': 'codex',
+            'ntfy': {'on': False, 'topic': 'agent-remote', 'server': ORIGIN, 'listening': 0, 'last_seen': ''}}
 
     def route(r, req):
         path = urlsplit(req.url).path
@@ -98,6 +98,65 @@ def check(browser, agent, width, mic_says, channels, notes_say):
     return problems
 
 
+def check_relay(browser):
+    """11-24: opened through the relay, the ntfy server row is the computer's Tailscale address, never the relay's
+    (the app cannot sign in to it); the note says the new Android app brings its own notices. 定时任务 changes."""
+    problems, errors, posts = [], [], []
+    tailscale = 'https://pc.example.ts.net'
+    told = {'configured': False, 'server': '', 'recent': [], 'automations': 'codex',
+            'ntfy': {'on': True, 'topic': 'agent-remote', 'server': tailscale, 'listening': 0, 'last_seen': ''}}
+    words = {'codex': '跟 Codex 一样', 'failed': '只推失败的', 'off': '不推'}
+
+    def route(r, req):
+        path = urlsplit(req.url).path
+        if path == '/api/notify' and req.method == 'GET':
+            return r.fulfill(status=200, content_type='application/json', body=json.dumps(told, ensure_ascii=False))
+        if path == '/api/notify/automations':
+            body = json.loads(req.post_data or '{}')
+            posts.append(body)
+            told['automations'] = body.get('mode') or told['automations']
+            return r.fulfill(status=200, content_type='application/json', body=json.dumps(
+                {'ok': True, 'automations': told['automations'], 'text': '已改成：' + words[told['automations']]},
+                ensure_ascii=False))
+        return handle(r, req)
+
+    context = browser.new_context(viewport={'width': 390, 'height': 800}, is_mobile=True, has_touch=True,
+                                  user_agent=ANDROID)
+    page = context.new_page()
+    page.route('**/*', route)
+    page.on('pageerror', lambda e: errors.append(str(e)))
+    page.goto(ORIGIN + '/?open=codex:c3')
+    page.wait_for_function("window.voiceUI && typeof cur !== 'undefined' && cur && cur.id === 'c3'", timeout=20000)
+    page.evaluate("closeConv(true); openSheet('settingsSheet')")
+    page.wait_for_timeout(500)
+    seen = page.evaluate(SETTINGS)
+    if '服务器 ' + tailscale not in seen['ntfy']:
+        problems.append(f"the server row is {seen['ntfy']}, wanted this computer's {tailscale}")
+    if '服务器 ' + ORIGIN in seen['ntfy']:
+        problems.append('the server row is the relay address, which ntfy cannot subscribe to')
+    note = ' '.join(seen['notes'])
+    for word in ('经中转用遥应的安卓手机', '不用 ntfy', '正在监听通知'):
+        if word not in note:
+            problems.append(f'the ntfy note does not say {word!r}: {note!r}')
+    rows = page.evaluate("[...document.querySelectorAll('#settingsBody .setting-row')]"
+                         ".map(r => r.innerText.replace(/\\s+/g, ' ').trim())")
+    if not any('Codex 定时任务' in row and '跟 Codex 一样' in row for row in rows):
+        problems.append(f'the 定时任务 row is {rows}')
+    page.locator("#settingsBody button.setting-row:has-text('Codex 定时任务')").tap()
+    page.wait_for_timeout(600)
+    if posts != [{'mode': 'failed'}]:
+        problems.append(f'the 定时任务 row sent {posts}')
+    after = page.evaluate("[...document.querySelectorAll('#settingsBody .setting-row')]"
+                          ".map(r => r.innerText.replace(/\\s+/g, ' ').trim())")
+    if not any('Codex 定时任务' in row and '只推失败的' in row for row in after):
+        problems.append(f'after the tap the 定时任务 row is {after}')
+    if not seen['inside'] or seen['wide']:
+        problems.append('a settings row runs off the screen')
+    problems += [f'page error: {e}' for e in errors]
+    context.close()
+    return problems
+
+
 def main():
     failed = []
     with sync_playwright() as p:
@@ -106,6 +165,9 @@ def main():
             problems = check(browser, *case)
             print(('FAIL ' if problems else 'PASS ') + name, *problems, sep='\n    ' if problems else '')
             failed += problems
+        problems = check_relay(browser)
+        print(('FAIL ' if problems else 'PASS ') + 'relay', *problems, sep='\n    ' if problems else '')
+        failed += problems
         browser.close()
     assert not failed, failed
     print('phone system ui check: ok')
