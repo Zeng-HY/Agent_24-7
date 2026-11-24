@@ -1200,10 +1200,12 @@ class NewWorkerTests(ControlBase):
 
     def test_pictures_and_references_are_refused_at_submit(self):
         agent = antigravity.AGENT()
-        with self.assertRaises(chats.ChatError):
+        with self.assertRaises(chats.ChatError) as refs:
             agent.validate_new_references([{"kind": "chat", "id": "x"}])
-        with self.assertRaises(chats.ChatError):
+        self.assertIn("暂不支持引用", str(refs.exception))
+        with self.assertRaises(chats.ChatError) as pictures:
             agent.prepare_new_submission(self.service, "r", {"attachments": ["a" * 32]}, {})
+        self.assertIn("暂不支持带图片", str(pictures.exception))
 
 
 class PictureTests(ControlBase):
@@ -1330,6 +1332,19 @@ class PictureTests(ControlBase):
         self.assertEqual(self.handler.sent[-1][0], 400)
         self.assertIn(antigravity.BAD_PICTURE, self.handler.sent[-1][1]["error"])
         self.assertEqual(len(self.app_hub.calls("SendUserCascadeMessage")), before)
+        self.assertEqual(self.app_hub.requests, [])
+
+    def test_a_png_with_a_broken_chunk_is_a_chinese_bad_picture(self):
+        good = self.store(fake.picture("PNG"))
+        raw = bytearray(fake.picture("PNG"))
+        at = raw.find(b"IDAT")
+        self.assertGreater(at, 0)
+        raw[at + 8] ^= 0xFF  # the compressed image data no longer decodes
+        (self.codex.data_root / good["id"] / "image.png").write_bytes(bytes(raw))
+        antigravity.AGENT().http_send(self.handler, {
+            "id": "a", "text": "坏块", "attachments": [good["id"]]})
+        self.assertEqual(self.handler.sent[-1][0], 400)
+        self.assertIn("这张图片打不开", self.handler.sent[-1][1]["error"])
         self.assertEqual(self.app_hub.requests, [])
 
     def test_a_big_picture_is_sent_as_a_smaller_jpeg(self):

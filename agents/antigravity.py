@@ -1193,7 +1193,7 @@ def send_picture(image: dict) -> tuple[dict, int]:
                 picture.save(jpeg, format="JPEG", quality=90)
                 outgoing = jpeg.getvalue()
                 mime = "image/jpeg"
-    except (OSError, ValueError, KeyError, TypeError, Image.DecompressionBombError):
+    except Exception:
         raise ControlError(f"「{name}」{BAD_PICTURE}", 400) from None
     picture_info(outgoing)  # the freshly encoded copy must pass the same checks
     return {"mimeType": mime, "inlineData": base64.b64encode(outgoing).decode("ascii")}, len(outgoing)
@@ -1661,12 +1661,14 @@ class AntigravityAgent(Agent):
     def validate_new_references(self, refs: list) -> None:
         import chats
         if refs:
-            raise chats.ChatError("新建 Antigravity 对话暂不支持带图片（引用），请建好后再发")
+            raise chats.ChatError("新建 Antigravity 对话暂不支持引用，请建好后再发")
 
     def prepare_new_submission(self, svc, rid: str, data: dict, body: dict) -> None:
         import chats
-        if data.get("attachments") or data.get("references"):
-            raise chats.ChatError("新建 Antigravity 对话暂不支持带图片（引用），请建好后再发")
+        if data.get("attachments"):
+            raise chats.ChatError("新建 Antigravity 对话暂不支持带图片，请建好后再发")
+        if data.get("references"):
+            raise chats.ChatError("新建 Antigravity 对话暂不支持引用，请建好后再发")
 
     def run_new(self, svc, rid: str, data: dict, trace) -> None:
         """The shared new-conversation worker: warm-up, wait for its answer, full auto, then the real words."""
