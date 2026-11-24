@@ -504,6 +504,26 @@ abstract class ReaderUiScenarios {
         listRow("检查日志").performClick()
         compose.waitUntil(10000) { vm.state.value.chat?.id=="deepseek-demo" && !vm.state.value.busy }
     }
+    /** 安卓 1.0.10: 遥应通知's group leads 手机通知 (design-2 §3.5); the demo shows it and contacts no relay. */
+    @Test fun pushNotificationsGroupShowsInTheDemo() {
+        launch();fixtureList();compose.runOnIdle { vm.settings() }
+        val switch = hasText("遥应通知") and isToggleable()
+        compose.waitUntil(10000) { compose.onAllNodes(switch).fetchSemanticsNodes().isNotEmpty() && !vm.state.value.busy }
+        compose.onNode(switch).performScrollTo().assertIsOff().performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithText("本地示例 · 不连接中转").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(switch).assertIsOn()
+        compose.onNodeWithText("本地示例不连接中转，试推不可用；真机上打开后会先登记这台手机。").assertExists()
+        // The demo has no relay to ask, so 试推一条 is not offered (the switch, the channels and the real one are on a phone).
+        compose.onNodeWithText("试推一条").assertDoesNotExist()
+        // ntfy keeps its own line, folded open at first, and 后台运行设置 is here.
+        compose.onNodeWithText("用 ntfy 收（经 Tailscale）").performScrollTo().assertHasClickAction()
+        compose.onNodeWithText("后台运行设置").performScrollTo().assertHasClickAction()
+        // Codex 定时任务 comes from the computer: three choices, the picked one is marked.
+        compose.onNodeWithText("Codex 定时任务").performScrollTo().assertExists()
+        compose.onNodeWithText("只通知失败").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("只通知失败").assertIsSelected()
+    }
     /** Notifications and voice on 设置; 诊断测速 under its 开发者选项 (0.9). */
     @Test fun ntfyAndVoiceInSettingsAndDiagnosticsUnderDeveloper() {
         launch();fixtureList();compose.runOnIdle { vm.settings() }

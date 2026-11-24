@@ -108,9 +108,14 @@ class SpeechGate(val key:ChatKey) {
  */
 @Composable fun PlatformSettings(s:ReaderState,vm:ReaderViewModel) {
     val context=LocalContext.current
+    val graph=context.applicationContext as? NativeApplication
+    var ntfyOpen by remember { mutableStateOf(true) }
     SectionLabel("手机通知")
-    if(!s.fixture || s.device!=null) NtfySettings(vm,s)
-    (context.applicationContext as? NativeApplication)?.let { WatchSettings(s,it) }
+    // 遥应通知 first (安卓 1.0.10, design-2 §3.5), then ntfy folded under its own line (open at first, as it was before).
+    PushSettings(s,vm,graph)
+    CardSection { CardRow("用 ntfy 收（经 Tailscale）",{ ntfyOpen=!ntfyOpen },detail="电脑上的 ntfy 服务，经 Tailscale 推到这台手机",chevron=true) }
+    if(ntfyOpen && (!s.fixture || s.device!=null)) NtfySettings(vm,s)
+    graph?.let { WatchSettings(s,it) }
     SectionLabel("语音输入")
     VoiceSettings(vm,s)
     // 读屏与字号 is gone (0.9): the app follows the system's settings by itself, nothing here to set.
