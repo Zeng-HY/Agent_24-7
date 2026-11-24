@@ -128,6 +128,10 @@ class Agent:
 
     def __init__(self) -> None:
         self._manifest = self.build_manifest()
+        # 说明书里没写 skills 的，按类属性 has_skills 补；模块自己在 build_manifest 里写了的以模块为准。
+        caps = self._manifest.get("capabilities")
+        if isinstance(caps, dict) and "skills" not in caps:
+            caps["skills"] = bool(self.has_skills)
 
     def build_manifest(self) -> dict:
         raise NotImplementedError
@@ -143,16 +147,24 @@ class Agent:
 
         Returns {"capabilities": {...same keys/types as manifest capabilities...},
                  "notes": {"<capability>": "<plain Chinese reason>", ...}}.
-        Rule: every item must be at most as wide as the manifest (False cannot become
-        True; lists must be subsets). Must be cheap: open conversations call this every
-        second, so any file/pipe check must cache at least 2 seconds.
+        Rules: every item must be at most as wide as the manifest (False cannot become
+        True; lists must be subsets); a key left out means the manifest's value.
+        Must be cheap: open conversations call this every second, so any file/pipe
+        check must cache at least 2 seconds.
         """
         return None
 
+    def _now_capabilities(self, now: dict) -> dict:
+        """The manifest's capabilities with the module's runtime ones laid over them."""
+        base = self._manifest.get("capabilities")
+        merged = dict(base) if isinstance(base, dict) else {}
+        merged.update(now.get("capabilities") or {})
+        return merged
+
     def can_now(self, capability: str, server=None, conv_id: str = "") -> bool:
         now = self.capabilities_now(server, conv_id) if server is not None else None
-        if now and isinstance(now.get("capabilities"), dict):
-            return bool(now["capabilities"].get(capability))
+        if isinstance(now, dict) and isinstance(now.get("capabilities"), dict):
+            return bool(self._now_capabilities(now).get(capability))
         return self.can(capability)
 
     def attach_capabilities_now(self, handler, conv_id: str, data: dict) -> dict:
@@ -167,7 +179,7 @@ class Agent:
             return data
         return {
             **data,
-            "capabilities_now": now["capabilities"],
+            "capabilities_now": self._now_capabilities(now),
             "capability_notes": now.get("notes") or {},
         }
 

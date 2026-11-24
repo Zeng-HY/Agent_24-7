@@ -403,14 +403,28 @@ class TestingAgentEndToEndTests(unittest.TestCase):
             self.assertEqual(body["status"], "idle")
             self.assertFalse(body["running"])
 
-            # 5. Approve / answer waiting conversation
+            # 5. Approve / answer waiting conversation (two generic cards, design §3)
             code, body = self._call(server, "POST", "/api/agents/testing/answer?t=secret", protocol=2,
-                                    body={"id": "test-waiting", "choice": "A"})
+                                    body={"id": "test-waiting", "question_id": "approval-7",
+                                          "answers": {"decision": ["允许一次"]}})
             self.assertEqual(code, 200)
             self.assertTrue(body["ok"])
+            self.assertEqual(body["text"], "已允许本次操作")
 
             code, body = self._call(server, "GET", "/api/agents/testing/state?id=test-waiting&t=secret", protocol=2)
             self.assertEqual(code, 200)
+            self.assertEqual([card["id"] for card in body["questions"]], ["question-8"])
+
+            code, body = self._call(server, "POST", "/api/agents/testing/answer?t=secret", protocol=2,
+                                    body={"id": "test-waiting", "question_id": "question-8",
+                                          "answers": {"plan": ["方案 A"], "files": ["a.py", "b.py"]},
+                                          "answer_revision": "rev-1"})
+            self.assertEqual(code, 200)
+            self.assertEqual(body["text"], "答案已提交")
+
+            code, body = self._call(server, "GET", "/api/agents/testing/state?id=test-waiting&t=secret", protocol=2)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["questions"], [])
             self.assertEqual(body["status"], "idle")
 
             # 6. Archive -> listed in archived & hidden from catalog -> restore -> archive -> delete

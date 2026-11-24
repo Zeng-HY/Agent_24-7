@@ -31,7 +31,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 每个助手在 `build_manifest()` 里调用 `agents.base.make_manifest(...)` 生成说明书。能力分成两层：
 - **说明书（`manifest()`）固定、便宜**：只写这一版电脑程序能做什么，由基类在 `__init__` 里算一次，**不许读文件、查管道或走网络**，也不要为了动态能力覆写 `manifest()` 或 `can()`。
-- **此刻的能力（`capabilities_now(server, conv_id)`）**：如果某家助手的能力会在运行中变化，覆写 `capabilities_now()`，返回 `{"capabilities": {...}, "notes": {"<能力名>": "<中文原因>"}}`（不变的助手保持默认返回 `None`）。它只在协议 2 的控制态接口和实时推送里下发 `capabilities_now` 与 `capability_notes`；`capabilities` 的键和类型必须和说明书一致，且每一项只能比说明书更窄（说明书为 `False` 的不能变 `True`，列表只能是子集），并附上不能做的中文原因。因为每个打开着的对话每秒都会调一次，读文件或管道的结果必须自己缓存（至少 2 秒）。服务端判断会变的能力时，改用 `can_now(capability, server, conv_id)`。
+- **此刻的能力（`capabilities_now(server, conv_id)`）**：如果某家助手的能力会在运行中变化，覆写 `capabilities_now()`，返回 `{"capabilities": {...}, "notes": {"<能力名>": "<中文原因>"}}`（不变的助手保持默认返回 `None`）。它只在协议 2 的控制态接口和实时推送里下发 `capabilities_now` 与 `capability_notes`；`capabilities` 的键和类型必须和说明书一致，且每一项只能比说明书更窄（说明书为 `False` 的不能变 `True`，列表只能是子集），并附上不能做的中文原因。**没写到的键等于说明书**：服务端发出去之前会先用说明书的 `capabilities` 打底，再盖上这里给的值；`can_now()` 遇到没写的键也退回说明书。因为每个打开着的对话每秒都会调一次，读文件或管道的结果必须自己缓存（至少 2 秒）。服务端判断会变的能力时，改用 `can_now(capability, server, conv_id)`。
 
 以 Codex 为例：说明书固定保留老路线的完整能力；运行时在老路线、新版应用工具路线（按钩子是否已信任区分停止、批准、回答）和未运行三条状态间切换时，由 `capabilities_now()` 返回此刻可用能力与中文原因。
 
@@ -79,6 +79,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 | `waiting` | `False` | 有「等你处理」状态（批准或提问） |
 | `attachments` | `False` | 支持上传图片/附件 |
 | `slash_commands` | `False` | 支持 `/` 斜杠命令列表 |
+| `skills` | 类属性 `has_skills` | 支持在输入区「引用技能」（`composer_references` 的技能清单）。说明书里不写时按类属性补：Claude、Codex 为 `True`，DeepSeek 为 `False`；模块自己在 `make_manifest(capabilities=...)` 里写了的以模块为准。 |
 | `settings` | `[]` | 支持调整的设置项列表（如 `["model", "effort"]`） |
 | `send_modes` | `[]` | 支持的发送方式，取值子集为 `["send", "steer", "queue"]`；只读助手留 `[]`，网页和手机会自动禁用发送按钮 |
 | `statuses` | `["running", "waiting", "idle", "unknown"]` | 这家助手可能出现的状态集合；没有等待态的助手应设为 `["running", "idle", "unknown"]` |
@@ -152,7 +153,46 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ---
 
-## 五、为什么不用动老路由前缀表（`agents/legacy.py`）
+## 五、通用卡片：批准和回答
+
+控制态（`GET /api/agents/<id>/state` 与实时推送里的 `control`）用 `questions` 列出发给手机的卡片，一项一张。网页的通用面板（`static/generic-ui.js`）、安卓 1.0.9 起和以后的 iOS 都按这一个格式画，新助手照这里实现 `state()` 里的 `questions` 与 `answer()` 就行，不用为某一家改前端。
+
+```json
+{
+  "id": "approval-7",
+  "status": "pending",
+  "kind": "approval",
+  "turn_id": "turn-3",
+  "title": "想运行命令",
+  "detail": "npm test\n在 C:\\测试\\项目",
+  "questions": [
+    {"id": "decision", "header": "", "question": "允许运行这条命令吗？",
+     "options": [{"label": "允许一次", "description": ""}, {"label": "拒绝", "description": ""}],
+     "isOther": false, "isSecret": false, "isMultiple": false}
+  ],
+  "answer_revision": "",
+  "expires_at": 0
+}
+```
+
+- 必填：`id`（对话内唯一）、`status`（`pending` / `answered`，客户端只画 `pending`）、`kind`（`approval` / `question`）、`questions`（1 到 3 题；每题 `id`、`question`、`options`）。
+- 可选：`turn_id`、`title`（没有就用第一题的 `header`，再没有就写「<助手名> 等你批准」或「<助手名> 有问题要问你」）、`detail`（多行纯文本，网页等宽显示、超过 12 行折叠）、`answer_revision`（回答时原样带回）、`expires_at`（毫秒时间戳，`0` 表示不过时）。每题的 `isOther`、`isSecret`、`isMultiple` 缺省为 `false`，`description` 缺省为空。
+- 批准卡只有一题，`id` 固定为 `"decision"`，选项文字由助手给（建议「允许一次」「拒绝」）。
+
+回答走统一地址 `POST /api/agents/<id>/answer`：
+
+```json
+{"id": "<对话 id>", "request_id": "<随机号>", "question_id": "<卡片 id>",
+ "answers": {"<题 id>": ["<选项文字或手写的字>", "..."]}, "answer_revision": "<原样带回，没有就不带>"}
+```
+
+- 成功：`{"ok": true, "accepted": true, "text": "<一句中文结果>"}`。
+- 失败：HTTP 400 或 409，`{"error": "<中文原因>"}`（答过的卡片、失效的卡片用 409；没答全、单选给了多个、值为空或超过 8000 字用 400）。客户端把原因显示在卡片下面，不清空已选、已填的内容。
+- 能不能答：批准卡看 `approve`，提问卡看 `answer`，都按此刻能力（`capabilities_now` 里有就用它，没有就用说明书）。不能答时按钮灰掉并显示 `capability_notes` 里同名的原因，没有原因就写「请在电脑上处理」；`expires_at` 已过的同样灰掉并写「已过时，请在电脑上处理」。
+
+---
+
+## 六、为什么不用动老路由前缀表（`agents/legacy.py`）
 
 `agents/legacy.py` 集中存放重构前遗留给老版本客户端的兼容映射：
 - `/api/codex/*`、`/api/claude/*`、`/api/deepseek/*` 三个旧前缀；
@@ -163,7 +203,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ---
 
-## 六、协议 1 和协议 2 的区别
+## 七、协议 1 和协议 2 的区别
 
 客户端通过以下方式告知电脑端自己支持说明书协议：
 - 普通 HTTP 请求带请求头 `X-Teleply-Protocol: 2`（网页版 `api()` 和新版手机端会自动带上）；
@@ -183,7 +223,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ---
 
-## 七、网页和手机怎么显示新助手与不认识的助手
+## 八、网页和手机怎么显示新助手与不认识的助手
 
 - **网页版（`static/agents.js` + `remote.html`）**：
   - 打开页面时从 `window.MACHINE.agents` 读取说明书（只在打开时读一次），动态渲染筛选标签、侧栏图标、新建面板按钮、归档说明以及各操作按钮的显隐；运行中会变的能力从控制态里的 `capabilities_now` 读取（`Agents.canNow` / `settingsNow` / `modesNow` / `noteNow`）。
@@ -193,10 +233,11 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 - **手机端（安卓 / iOS）**：
   - 按电脑版本号缓存 `/api/agents` 说明书（App 重开、在手机上点「重试」或电脑升级后才重新拉取），并按说明书显示名字、颜色、图标和能力；未知布局走通用面板，未知助手用通用样式且不崩溃；连老电脑时回退内置三家与老路由。
   - 因为网页和手机都会按电脑版本缓存说明书，**运行中会变的能力必须走控制态的 `capabilities_now`，不能靠改说明书**。
+  - 安卓 1.0.9 起：停止、发送方式（发送 / 插话 / 排队）、排队消息操作、模式按钮、「引用技能」、批准和回答卡片都按最近一次控制态的 `capabilities_now` 显示。不能做的按钮灰掉或直接不显示（卡片上的按钮灰掉），并写 `capability_notes` 里同名的中文原因，没有原因时写「请在电脑上处理」；`expires_at` 已过的卡片写「已过时，请在电脑上处理」。连没有 `capabilities_now` 的老电脑时，三家的界面和改前完全一样。iOS 第 6 步照同样的规则写。
 
 ---
 
-## 八、中转怎么放行与发布顺序
+## 九、中转怎么放行与发布顺序
 
 1. **隧道请求头**：`relay_transport.py` 中的 `REQUEST_HEADERS` 包含 `X-Teleply-Protocol` 和 `X-Teleply-Client`，中转服务与电脑端保持同一白名单，放行这两个头并继续丢弃名单外的头。
 2. **推送事件与通知**：
@@ -208,7 +249,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ---
 
-## 九、测试清单（以假测试助手为例）
+## 十、测试清单（以假测试助手为例）
 
 `agents/testing.py` 是仓库内置的假测试助手（`id="testing"`，`legacy=False`，`min_protocol=2`），全部数据在内存里编造，不碰任何真实文件。它**不在** `AGENT_MODULES` 正式名单里，只在源码测试时通过 `TELEPLY_TEST_AGENTS=1` 或 `include_testing=True` 加载；打包版（`sys.frozen`）会无视该环境变量，且 `AgentRemote.spec` 会排除该文件。
 
@@ -234,7 +275,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ---
 
-## 十、公开仓库隐私提醒
+## 十一、公开仓库隐私提醒
 
 本仓库为公开仓库。编写助手模块、示例文档、测试夹具和提交说明时：
 - 所有测试和示例数据一律编造（如 `example`、`测试助手`、`测试对话 A`、`C:\测试\项目`）；
