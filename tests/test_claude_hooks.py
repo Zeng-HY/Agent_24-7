@@ -1260,6 +1260,22 @@ class HookQueueStateAndSendTests(unittest.TestCase):
         self.assertTrue(any(self.dir.joinpath("claude-images").rglob("*.png")) or
                         any(self.dir.joinpath("claude-images").rglob("*.jpg")))
 
+    def test_a_recorded_end_older_than_the_stop_block_does_not_end_the_continued_turn(self):
+        self.run_event("UserPromptSubmit")
+        self.bridge.enqueue_message("local_test", "继续")
+        self.bridge.wall_clock = lambda: 1767323010.0  # the block goes back 10 s after the turn began
+        self.assertTrue(self.run_event("Stop")["decision"] == "block")
+        ctrl = claude_control.Controller(SimpleNamespace())
+        ctrl.hooks = self.bridge
+        with patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "idle", "turn_started": 1767323000,
+                                                                 "turn_ended": 1767323005, "step": ""}):
+            self.assertTrue(ctrl._hook_status(ITEM)["running"])  # the old end before the block is not the turn's end
+        with patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "idle", "turn_started": 1767323000,
+                                                                 "turn_ended": 1767323015, "step": ""}):
+            self.assertFalse(ctrl._hook_status(ITEM)["running"])  # an end after the block: the turn really is over
+
     def test_steer_while_running_goes_to_the_slot_and_is_handed_over_by_the_next_tool(self):
         path = self.dir / "cli-1.jsonl"
         path.write_text(json.dumps({"type": "user", "uuid": "turn-1", "isSidechain": False,

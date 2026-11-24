@@ -601,6 +601,7 @@ class _ConvState:
         self.stop_requested = False
         self.blocks_sent = 0      # Stop blocks used for queued/steered messages in this user turn
         self.continued = False    # a Stop was answered with a block: the same turn goes on
+        self.continued_at = 0     # when that block went back, so an older recorded end is not read as idle
         self.last_event_at: float | None = None
         self.last_event_name = ""
         self.last_notification: dict[str, Any] | None = None
@@ -620,6 +621,7 @@ class _ConvState:
             "stop_requested": self.stop_requested,
             "blocks_sent": self.blocks_sent,
             "continued": self.continued,
+            "continued_at": self.continued_at,
             "last_event_at": self.last_event_at,
             "last_event_name": self.last_event_name,
             "last_notification": dict(self.last_notification) if self.last_notification else None,
@@ -970,6 +972,7 @@ class Bridge:
                         st.blocks_sent += 1
                         st.running = True
                         st.continued = True
+                        st.continued_at = int(now_wall)
                         st.turn_ended = 0
                         text = "\n\n".join(str(v.get("text") or "") for v in pending)
                         reply = {"decision": "block", "reason": STEER_PREFIX + text}
@@ -979,6 +982,7 @@ class Bridge:
                             st.blocks_sent += 1
                             st.running = True
                             st.continued = True
+                            st.continued_at = int(now_wall)
                             st.turn_ended = 0
                             reply = {"decision": "block",
                                      "reason": QUEUE_PREFIX + str(queued.get("text") or "")}

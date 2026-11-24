@@ -485,8 +485,11 @@ class Controller:
         hook_running=bool(hstate.get('running'))
         h_started=int(hstate.get('turn_started') or 0)
         r_ended=int(info.get('turn_ended') or 0)
-        if (hook_running and not hstate.get('continued') and info.get('status')=='idle'
-                and h_started>0 and r_ended>=h_started):
+        continued_at=int(hstate.get('continued_at') or 0)
+        # A Stop block before this one may have left an older "end" in the record; only an end written after the block
+        # (a manual PC stop, or the turn really finishing with the hook missing) means the turn is over.
+        if (hook_running and info.get('status')=='idle' and h_started>0 and r_ended>=h_started
+                and (not hstate.get('continued') or (continued_at and r_ended>=continued_at))):
             hook_running=False
         path=path if path is not None else chats.conv_path(item)
         anchor=turn_anchor(path) or (f"hook:{h_started}" if h_started else f"hook:{item['id']}")
