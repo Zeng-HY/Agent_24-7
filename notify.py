@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import hashlib
 import json
 import re
 import sqlite3
 import threading
 import time
+import tomllib
 import traceback
 import urllib.error
 import urllib.request
@@ -54,6 +56,20 @@ DEFAULT_SERVER = "https://api.day.app"
 # new-conversation button (no thread_source) or by another conversation. Not: codex exec runs (the translation
 # workflows start thousands), sub-agents, reviews, automations.
 CODEX_WHERE = "source in ('vscode', 'cli') and coalesce(thread_source, '') in ('', 'user', 'agent_created_thread')"
+# 定时任务: Codex starts one thread per run with thread_source 'automation' and the task's name as its title (11-24).
+AUTOMATIONS = {"codex": "跟 Codex 一样", "failed": "只推失败的", "off": "不推"}
+POLICY_SECONDS = 60  # a task's automation.toml is read at most this often per id
+_HEARTBEAT = re.compile(r"<heartbeat>([\s\S]*?)</heartbeat>", re.I)
+_DECISION = re.compile(r"<decision>\s*(DONT_NOTIFY|NOTIFY)\s*</decision>", re.I)
+_MESSAGE = re.compile(r"<message>([\s\S]*?)</message>", re.I)
+_INBOX = re.compile(r"::inbox-item\{([^{}]*)\}")
+_INBOX_PARAM = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"')
+_FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```")
+_TILDE = re.compile(r"~~~[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*~~~")
+_ESCAPE = re.compile(r"<escape>([\s\S]*?)</escape>", re.I)
+_TICKS = re.compile(r"`{1,2}([\s\S]*?)`{1,2}")
+_AUTOMATION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+_AUTOMATION_POLICY: dict[str, tuple] = {}  # id -> (when read, failed runs only)
 
 
 class NotifyError(Exception):
@@ -122,6 +138,154 @@ def _preview(text: str) -> str:
     return re.sub(f"(?<=[{_CJK}]) (?=[{_CJK}])", "", line)
 
 
+def used_text(started: int, ended: int) -> str:
+    """'用了 6 分钟' for a turn of a minute or more; '' when shorter or unknown. The same words relay_push uses."""
+    try:
+        started, ended = int(started), int(ended)
+    except (TypeError, ValueError):
+        return ""
+    if started <= 0 or ended - started < 60:
+        return ""
+    minutes = (ended - started) // 60
+    if minutes < 60:
+        return f"用了 {minutes} 分钟"
+    hours, rest = divmod(minutes, 60)
+    return f"用了 {hours} 小时" + (f" {rest} 分钟" if rest else "")
+
+
+def notice_state(end: dict) -> str:
+    """What happened to a turn in the words the iPhone's notice uses (relay_push.notice_body)."""
+    if end.get("asks"):
+        return "在等你选"
+    if end.get("state") == "failed":
+        return "出错停了"
+    used = used_text(end.get("started") or 0, end.get("ended") or 0)
+    return "好了" + (f" · {used}" if used else "")
+
+
+def notice_title(title: str, app: str, computer: str) -> str:
+    """A notice's first line: the conversation's title, or 'Codex · 家里电脑' when it has none (11-24)."""
+    line = chats.one_line((title or "").strip(), 40)
+    return f"{app} · {computer}" if line in ("", "（无标题）") else line
+
+
+def sequence_id(app: str, conv_id: str) -> str:
+    """ntfy's key for one conversation: a new notice replaces the old one in the app; 64 characters at most."""
+    cleaned = re.sub(r"[^-_A-Za-z0-9]", "_", f"{app}-{conv_id}")
+    if len(cleaned) <= 64:
+        return cleaned
+    return cleaned[:40] + "-" + hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
+
+
+def _cdata(text: str) -> str:
+    """[text] without the CDATA shell."""
+    return re.sub(r"<!\[CDATA\[|\]\]>", "", text or "")
+
+
+def _peeled(text: str) -> str:
+    """[text] with up to four shells off: a code block, <escape>, one or two backticks, a JSON string's quotes."""
+    text = (text or "").strip()
+    for _ in range(4):
+        match = _FENCE.fullmatch(text) or _TILDE.fullmatch(text)
+        if match:
+            text = match.group(1).strip()
+            continue
+        match = _ESCAPE.fullmatch(text)
+        if match:
+            text = match.group(1).strip()
+            continue
+        match = _TICKS.fullmatch(text)
+        if match:
+            text = match.group(1).strip()
+            continue
+        if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+            try:
+                value = json.loads(text)
+            except ValueError:
+                break
+            if isinstance(value, str):
+                text = value.strip()
+                continue
+        break
+    return text
+
+
+def inbox_summary(raw: str) -> str:
+    """What an automation wrote for its inbox (::inbox-item{title="…" summary="…"}); the last one wins."""
+    found = _INBOX.findall(raw or "")
+    if not found:
+        return ""
+    params = dict(_INBOX_PARAM.findall(found[-1]))
+    return params.get("summary") or params.get("title") or ""
+
+
+def _without_markers(text: str) -> str:
+    """An answer without the heartbeat block and the inbox-item line, which a phone should not show."""
+    text = _HEARTBEAT.sub("", text or "")
+    return re.sub(r"(?m)^[ \t]*::inbox-item\{[^{}]*\}[ \t]*$", "", text)
+
+
+def notice_decision(raw: str, automation: bool = False, mode: str = "codex", aborted: str = "",
+                    runs_only: bool = False) -> dict:
+    """Whether a turn's end goes to the phone, why not, and the words Codex wrote for it.
+
+    Codex 26.1117's own rules, in order: a heartbeat block's decision, a bare DONT_NOTIFY, the skip marks; then, for
+    an automation's thread, only failed runs when that task or the setting asks for it, and no notice for an empty
+    successful run. Returns {"send", "why", "text"}."""
+    text = raw or ""
+    blocks = list(_HEARTBEAT.finditer(text))
+    found = blocks[-1] if blocks else None  # the last block decides
+    if found is not None:
+        outside = re.sub(r"```[A-Za-z0-9_-]*|~~~", " ", text[:found.start()] + text[found.end():]).strip()
+        inside = found.group(1)
+        decision = _DECISION.search(inside)
+        if outside and decision:
+            if decision.group(1).upper() == "DONT_NOTIFY":
+                return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
+            message = _MESSAGE.search(inside)
+            return {"send": True, "why": "", "text": _cdata(message.group(1)).strip() if message else ""}
+    bare = _cdata(text).strip()
+    if bare == "DONT_NOTIFY":
+        return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
+    peeled = _peeled(bare)
+    if re.fullmatch(r"::\s*SKIP_COMPLETION\s*::", peeled) or peeled == "skip_notification":
+        return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
+    if peeled.startswith("{"):
+        try:
+            value = json.loads(peeled)
+        except ValueError:
+            value = None
+        if isinstance(value, dict) and value.get("type") in ("skip_notification", "skip_completion"):
+            return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
+    failed = bool(aborted) and aborted != "interrupted"
+    if automation:
+        if (mode == "failed" or (mode == "codex" and runs_only)) and not failed:
+            return {"send": False, "why": "这个定时任务只在失败时提醒", "text": ""}
+        if not failed and not text.strip():
+            return {"send": False, "why": "定时任务这次没有回答", "text": ""}
+    return {"send": True, "why": "", "text": ""}
+
+
+def automation_failed_runs_only(automation_id: str, clock=time.time) -> bool:
+    """Whether the task's automation.toml says failed_runs_only; an id that could walk the path is never read, and
+    the answer is kept POLICY_SECONDS (11-24)."""
+    ident = (automation_id or "").strip()
+    if not _AUTOMATION_ID.fullmatch(ident):
+        return False
+    now = clock()
+    cached = _AUTOMATION_POLICY.get(ident)
+    if cached is not None and now - cached[0] < POLICY_SECONDS:
+        return cached[1]
+    result = False
+    try:
+        with (chats.CODEX_HOME / "automations" / ident / "automation.toml").open("rb") as f:
+            result = tomllib.load(f).get("notification_policy") == "failed_runs_only"
+    except (OSError, ValueError):
+        result = False  # unreadable or not TOML: Codex's rule is not known, so its markers decide
+    _AUTOMATION_POLICY[ident] = (now, result)
+    return result
+
+
 def _seconds(ts: str, fallback: float) -> float:
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
@@ -168,6 +332,7 @@ def turn_start(previous, starts, now):
 def new_scan(app: str) -> dict:
     """What one conversation's turn looks like while its record is read a piece at a time (0.6.4)."""
     return {"app": app, "state": None, "started": "", "ended": "", "latest": "", "key": "", "text": "", "action": "",
+            "raw_text": "", "automation_id": "", "automation_name": "", "abort_reason": "",
             "asks": set(), "answer_id": "", "last_kind": None, "last_stop": None, "uuids": set()}
 
 
@@ -246,7 +411,23 @@ class Notifier:
         ntfy = {"on": self.ntfy_on(), "topic": self.feed.topic, "server": self.url.rstrip("/"),
                 "listening": self.feed.listening, "last_seen": time.strftime("%m-%d %H:%M", time.localtime(seen)) if seen else ""}
         return {"configured": bool(found), "server": urlsplit(found["server"]).netloc if found else "", "ntfy": ntfy,
-                "relay": {"listening": self.relay.listening > 0}, "recent": list(self.recent)[::-1]}
+                "relay": {"listening": self.relay.listening > 0}, "automations": self.automations(),
+                "recent": list(self.recent)[::-1]}
+
+    def automations(self) -> str:
+        """The 定时任务 setting: 'codex' (its own rule), 'failed' or 'off'; anything else reads as 'codex'."""
+        mode = self.cfg.get("automations")
+        return mode if mode in AUTOMATIONS else "codex"
+
+    def set_automations(self, mode: str) -> dict:
+        mode = str(mode or "").strip()
+        if mode not in AUTOMATIONS:
+            raise NotifyError("定时任务的通知只有三个选项：跟 Codex 一样、只推失败的、不推")
+        with self.lock:
+            self.cfg["automations"] = mode
+            self.save()
+        self.log(f"通知：定时任务的通知已改成「{AUTOMATIONS[mode]}」")
+        return {"ok": True, "automations": mode, "text": f"已改成：{AUTOMATIONS[mode]}"}
 
     def set_address(self, text: str) -> dict:
         """Keep the pasted address once a first notification went through; an empty one turns them off."""
@@ -280,7 +461,8 @@ class Notifier:
         self.log("通知：ntfy " + ("已打开" if on else "已关掉"))
         if not on:
             return {"ok": True, "ntfy": False, "text": "ntfy 已关掉，不再推送"}
-        self.feed.publish(f"{self.name}的通知设好了", "对话做完时会推到这里，点通知能打开那个对话。", click=self.page_url())
+        self.feed.publish(f"{self.name}的通知设好了", "对话做完时会推到这里，点通知能打开那个对话。", click=self.page_url(),
+                          icon=self.icon_url())
         return {"ok": True, "ntfy": True, "text": "已打开，刚推了一条，看看 ntfy" if self.feed.listening else
                 "已打开。ntfy 现在没连着这台电脑：在 ntfy App 里订阅后就能收到"}
 
@@ -292,7 +474,7 @@ class Notifier:
             raise NotifyError("ntfy 还没打开" if channel == "ntfy" else "还没设推送地址")
         texts = []
         if ntfy:
-            self.feed.publish(f"{self.name}的通知是好的", "这是一条试推。", click=self.page_url())
+            self.feed.publish(f"{self.name}的通知是好的", "这是一条试推。", click=self.page_url(), icon=self.icon_url())
             texts.append("推了一条，看看 ntfy" if self.feed.listening else "推了一条，但 ntfy 现在没连着这台电脑")
         if found:
             self.sender(found, f"{self.name}的通知是好的", "这是一条试推。", group=self.name, url=self.page_url())
@@ -321,6 +503,11 @@ class Notifier:
         if not self.url:
             return ""
         return self.url + (f"?open={item['app']}:{quote(item['id'], safe='')}" if item else "")
+
+    def icon_url(self) -> str:
+        """The icon a notice carries: this computer's page, which serves it without a token (11-24)."""
+        root = self.page_url()
+        return root.rstrip("/") + "/icon-192.png" if root else ""
 
     # -- the loop
 
@@ -399,13 +586,23 @@ class Notifier:
                 continue
             self.ended[conv] = key
             ended = _unix(scan.get("ended"))
-            if scan["state"] == "stopped" or (ended is not None and ended < self.since):
+            aborted = scan.get("abort_reason") or ""
+            # A user-stopped turn is not sent; an automation's turn_aborted with any other reason is a failed run.
+            failed_run = (bool(item.get("automation")) and scan["state"] == "stopped"
+                          and bool(aborted) and aborted != "interrupted")
+            if scan["state"] == "stopped" and not failed_run:
+                continue
+            if ended is not None and ended < self.since:
                 continue
             answer = scan.get("text") or ""
             started = _unix(scan.get("started")) or previous.get("since") or 0
             source = "记录" if _unix(scan.get("started")) else ("不知道" if not started else "电脑注意到")
-            self._tell(found, item, {"state": scan["state"], "key": key, "time": scan.get("ended") or "",
-                                     "text": answer, "started": int(started or self.clock()),
+            self._tell(found, item, {"state": "failed" if failed_run else scan["state"], "key": key,
+                                     "time": scan.get("ended") or "", "text": answer,
+                                     "raw_text": scan.get("raw_text") or "", "abort_reason": aborted,
+                                     "automation_id": scan.get("automation_id") or "",
+                                     "automation_name": scan.get("automation_name") or "",
+                                     "started": int(started or self.clock()),
                                      "ended": int(ended or self.clock()), "started_source": source})
         self.running_quiet = False
         self._snapshot()
@@ -608,7 +805,9 @@ class Notifier:
         rows: list[dict] = []
         full_by_app: dict[str, list[dict]] = {}
         for agent in registry.load():
-            recent, full = agent.notify_conversations(LIMIT)
+            # 定时任务 belongs to Codex alone: only it is told the setting, so the other agents' interface is untouched.
+            recent, full = (agent.notify_conversations(LIMIT, self.automations()) if getattr(agent, "id", "") == "codex"
+                            else agent.notify_conversations(LIMIT))
             rows += recent
             if full:
                 full_by_app[agent.id] = full
@@ -619,6 +818,14 @@ class Notifier:
         from agents import registry
         shown = {(row["app"], row["id"]) for row in rows}
         active = {*self.running, *self.waiting}
+        if self.automations() == "off":
+            # 11-24: with 定时任务 off an automation is not even followed, and nothing of it reaches the relay.
+            for conv in list(active):
+                if ((self.running.get(conv) or self.waiting.get(conv) or {}).get("item") or {}).get("automation"):
+                    self.running.pop(conv, None)
+                    self.waiting.pop(conv, None)
+                    self.reported_running.discard(conv)
+            active = {*self.running, *self.waiting}
         more: list[dict] = []
         for app_id, catalog in full_by_app.items():
             for row in catalog:
@@ -658,32 +865,51 @@ class Notifier:
             app = registry.get(item["app"]).manifest()["name"]["zh"]
         except Exception:
             app = item["app"]
+        automation = bool(item.get("automation")) and item["app"] == "codex"
+        label = "Codex 定时任务" if automation else app
         done = "出错停了" if end["state"] == "failed" else "在等你选" if end.get("asks") else "好了"
         title = chats.one_line(item.get("title") or "（无标题）", 40)
-        what = f"{app}「{title}」{done}"
+        what = f"{label}「{title}」{done}"
         why = self._quiet(item)
-        body, subtitle, outcomes = _preview(end["text"]), f"{self.name} · {app} {done}", []
+        preview = _preview(end.get("text") or "")
+        subtitle, outcomes = f"{self.name} · {label} {done}", []
+        decision = {"send": True, "why": "", "text": ""}
+        if item["app"] == "codex":  # 11-24: Codex's own rules for what is worth a phone notice
+            mode = self.automations()
+            runs_only = automation and mode == "codex" and automation_failed_runs_only(end.get("automation_id") or "")
+            decision = notice_decision(end.get("raw_text") or end.get("text") or "", automation, mode,
+                                       end.get("abort_reason") or "", runs_only)
+            if not decision["send"] and not why:
+                why = decision["why"]
         conv = (item["app"], item["id"])
         if end.get("asks"):
             self.waiting[conv] = {"since": int(end.get("started") or self.clock()), "title": title, "item": item}
         if self.relay_on():  # what happened, not what was said: the relay writes the words (relay_push.py)
             kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
-            # quiet: the phone has this conversation open, so no banner — but its island still needs the state.
-            self.relay.publish("", "", extra={"kind": kind, "app": item["app"], "chat": item["id"],
-                                              "quiet": bool(why), "title": title,
-                                              "started": int(end.get("started") or 0),
-                                              "ended": int(end.get("ended") or self.clock()),
-                                              "started_source": end.get("started_source") or "不知道"},
-                               keep=True)
+            event = {"kind": kind, "app": item["app"], "chat": item["id"],
+                     "quiet": bool(why), "title": title,
+                     "started": int(end.get("started") or 0),
+                     "ended": int(end.get("ended") or self.clock()),
+                     "started_source": end.get("started_source") or "不知道"}
+            if automation:
+                event["automation"] = True  # today's relay ignores it; the iPhone's words stay as they were
+            # quiet: the phone has this conversation open (or Codex asked for none) — but its island still needs the state.
+            self.relay.publish("", "", extra=event, keep=True)
             outcomes.append("遥应通知已交给中转" if self.relay.listening else "中转现在没连着，连上后会补报")
         if why:
             self._note(what, "没推：" + why + ("；只更新岛" if self.relay_on() else ""))
             return
         if self.ntfy_on():  # kept for a phone that is away, which gets it when it connects again (ntfy_feed.py)
-            self.feed.publish(title, f"{subtitle}\n{body}", click=self.page_url(item))
+            chosen = decision["text"] or (inbox_summary(end.get("raw_text") or "") if automation else "")
+            shown = _preview(chosen) if chosen else _preview(_without_markers(end.get("text") or ""))
+            message = f"{label} · {self.name} · {notice_state(end)}" + (f"\n{shown}" if shown else "")
+            self.feed.publish(notice_title(item.get("title") or "", label, self.name), message,
+                              click=self.page_url(item),
+                              priority=4 if (end.get("asks") or end["state"] == "failed") else 3,
+                              icon=self.icon_url(), sequence_id=sequence_id(item["app"], item["id"]))
             outcomes.append("ntfy 已推到" if self.feed.listening else "ntfy 现在没连着，连上后会收到")
-        if found:
-            outcomes.append(self._bark(found, title, body, subtitle, item))
+        if found:  # Bark keeps its own words; only an automation's name in the subtitle is new
+            outcomes.append(self._bark(found, title, preview, subtitle, item))
         if outcomes:  # none when both were turned off a moment ago
             self._note(what, "；".join(outcomes))
 

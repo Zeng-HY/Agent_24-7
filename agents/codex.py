@@ -22,6 +22,13 @@ CODEX_STEPS = {
     "js": "run",
 }
 
+# 11-24: one thread per automation run, its source 'automation'; kept apart from the conversations a person talks in so
+# that however many tasks run they never push those out of the newest LIMIT.
+AUTOMATION_WHERE = "coalesce(thread_source, '') = 'automation'"
+AUTOMATION_LIMIT = 10
+_AUTOMATION_ID = re.compile(r"^[ \t]*Automation ID:[ \t]*([A-Za-z0-9_-]{1,80})[ \t]*$", re.M)
+_AUTOMATION_NAME = re.compile(r"^[ \t]*Automation:[ \t]*(.+?)[ \t]*$", re.M)
+
 
 class CodexAgent(Agent):
     id = "codex"
@@ -703,25 +710,45 @@ class CodexAgent(Agent):
             scan["latest"] = ts
         event = payload.get("type") if kind == "event_msg" else None
         if event == "task_started":
-            scan.update(state="running", started=ts, ended="", key=payload.get("turn_id") or ts, text="", action="")
+            scan.update(state="running", started=ts, ended="", key=payload.get("turn_id") or ts, text="", action="",
+                        raw_text="", abort_reason="")
         elif event in ("task_complete", "turn_aborted"):
+            raw = (payload.get("last_agent_message") or "") if event == "task_complete" else ""
             scan.update(
                 state="stopped" if event == "turn_aborted" else "done",
                 ended=ts,
                 key=payload.get("turn_id") or scan["key"] or ts,
-                text=chats.codex_answer(payload.get("last_agent_message") or "") if event == "task_complete" else scan["text"],
+                text=chats.codex_answer(raw) if event == "task_complete" else scan["text"],
+                raw_text=raw,
+                abort_reason=(payload.get("reason") or "") if event == "turn_aborted" else "",
                 action="",
             )
+        elif event == "item_completed" and (payload.get("item") or {}).get("type") == "UserMessage":
+            self._scan_automation(scan, chats._join_text((payload.get("item") or {}).get("content")))
         elif kind == "response_item":
             ptype = payload.get("type")
             if ptype in ("function_call", "custom_tool_call"):
                 step = self.notify_step(str(payload.get("name") or ""), str(payload.get("input") or ""))
                 if step:
                     scan["action"] = step
+            elif ptype == "message" and payload.get("role") in ("user", "developer"):
+                self._scan_automation(scan, chats._join_text(payload.get("content")))
             elif ptype == "item_completed" and (payload.get("item") or {}).get("type") == "CommandExecution":
                 scan["action"] = "run"
 
-    def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:
+    def _scan_automation(self, scan: dict, text: str) -> None:
+        """The Automation ID and name Codex writes at the top of an automation run's user message (11-24). Not cleared
+        on task_started: the record writes the user message before the turn starts."""
+        ids = _AUTOMATION_ID.findall(text or "")
+        names = _AUTOMATION_NAME.findall(text or "")
+        if ids:
+            scan["automation_id"] = ids[-1]
+        if names:
+            scan["automation_name"] = chats.one_line(names[-1], 80)
+
+    def notify_conversations(self, limit: int, automations: str = "codex") -> tuple[list[dict], list[dict]]:
+        """The conversations the phone hears about. 11-24: automations too, unless off; they are looked up
+        separately (the newest ten) so that a pile of them never squeezes out the conversations a person had."""
         import sqlite3
         import notify
         try:
@@ -731,6 +758,19 @@ class CodexAgent(Agent):
                 rows = notify.chats.codex_threads(limit)
             except sqlite3.Error:
                 rows = []
+        rows = list(rows)
+        if automations != "off":
+            try:
+                extra = notify.chats._codex_rows(AUTOMATION_WHERE, (), AUTOMATION_LIMIT)
+            except sqlite3.Error:
+                extra = []
+            known = {row.get("id") for row in rows}
+            for row in extra:
+                if row.get("id") in known:  # never twice (the two queries cannot overlap in the database)
+                    continue
+                item = dict(row)
+                item["automation"] = True
+                rows.append(item)
         return rows, []
 
     def notify_check_approvals(self, notifier, item: dict, conv: tuple, title: str, found) -> bool:

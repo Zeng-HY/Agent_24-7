@@ -785,14 +785,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.log.write(traceback.format_exc())
                 self._json({"error": "电脑端出错，没确认这次用成了没有，请到电脑上的 Codex 里看用量"}, 500)
             return
-        if path in ("/api/notify", "/api/notify/ntfy", "/api/notify/test"):
-            # Bark's address (empty: off), ntfy on or off, one to try (on one channel, or on all)
+        if path in ("/api/notify", "/api/notify/ntfy", "/api/notify/test", "/api/notify/automations"):
+            # Bark's address (empty: off), ntfy on or off, one to try (on one channel, or on all), 定时任务's setting
             try:
                 notifier = self.server.notifier
                 if path.endswith("/test"):
                     self._json(notifier.test(str(body.get("channel", ""))))
                 elif path.endswith("/ntfy"):
                     self._json(notifier.set_ntfy(body.get("on") is True))
+                elif path.endswith("/automations"):
+                    self._json(notifier.set_automations(str(body.get("mode", ""))))
                 else:
                     self._json(notifier.set_address(str(body.get("address", ""))))
             except notify.NotifyError as exc:

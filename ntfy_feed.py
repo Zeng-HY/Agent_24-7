@@ -63,13 +63,19 @@ class Feed:
         self.changed = threading.Condition()
 
     def publish(self, title: str, message: str, click: str = "", priority: int = 3, extra: dict | None = None,
-                keep: bool = True) -> dict:
+                keep: bool = True, icon: str = "", sequence_id: str = "") -> dict:
         """A message; [extra] fields ride along (notify.py's events for the relay: kind, app, chat). [keep] False:
-        a stream open now sees it, but a later reconnect is not given it (snapshot and step, 0.6.4)."""
+        a stream open now sees it, but a later reconnect is not given it (snapshot and step, 0.6.4). [icon] is the
+        picture the app shows on the right; [sequence_id] makes a new notice replace the old one of its conversation
+        (11-24). Both are top-level fields, as the app reads them."""
         msg = {"id": _new_id(), "time": int(self.clock()), "event": "message", "topic": self.topic,
                "title": title, "message": message, "priority": priority, **(extra or {})}
         if click:
             msg["click"] = click
+        if icon:
+            msg["icon"] = icon
+        if sequence_id:
+            msg["sequence_id"] = sequence_id
         with self.changed:
             self.count += 1
             (self.messages if keep else self.fresh).append((self.count, msg))
