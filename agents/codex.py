@@ -68,6 +68,7 @@ def output_text(value) -> str:
 
 class CodexAgent(Agent):
     id = "codex"
+    helpers = (("deploy/windows/TeleplyCodexHook.cs", "TeleplyCodexHook.exe"),)
     home_list = True
     requires_running_state = True
     dedupe_twins = True

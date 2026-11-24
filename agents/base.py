@@ -110,6 +110,9 @@ class Agent:
     # remote._post() checks this before the phone token, so the hook's own key must be checked in
     # handle_hook().
     hook_path: str = ""
+    # Small programs packaged next to AgentRemote.exe: (source path from the repo root, exe file name).
+    # deploy/windows/agent_helpers.py compiles these and writes the installer include from this list.
+    helpers: tuple[tuple[str, str], ...] = ()
     # Reading hooks the shared transcript reader asks about.
     home_list = False            # appears in chats.list_conversations (the old home list)
     requires_running_state = True  # a transcript without a running flag cannot be called idle

@@ -27,7 +27,7 @@ SetupIconFile=..\..\static\app.ico
 UninstallDisplayIcon={app}\AgentRemote.exe
 [Files]
 Source: "..\..\dist\AgentRemote\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\build\TeleplyCodexHook.exe"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
+#include "..\..\build\agent-helpers.iss"
 Source: "..\..\.toolchain\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView
 [Icons]
 Name: "{group}\Agent Remote"; Filename: "{app}\AgentRemote.exe"; IconFilename: "{app}\AgentRemote.exe"; AppUserModelID: "AgentRemote.Desktop"
