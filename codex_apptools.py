@@ -13,6 +13,7 @@ UTF-8 JSON, max 8 MB). This module:
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -37,6 +38,10 @@ APPTOOLS_PREFIX = "codex-app-tools-"
 MAX_FRAME_BYTES = 8 << 20
 ROUTE_CACHE_TTL = 2.0
 IMAGE_RETENTION_SECONDS = 7 * 86400
+CODEX_IMAGE_MAX_SIDE = 1600
+CODEX_IMAGE_FALLBACK_SIDE = 1280
+CODEX_IMAGE_MAX_BYTES = 400 * 1024
+_CODEX_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 DEFAULT_WAKE_DELAY = 2.0
 STATUS_CACHE_TTL = 1.5
 
@@ -46,6 +51,23 @@ WINDOW_NOT_READY_REASON = "Codex 窗口没准备好，请先在电脑上打开 C
 
 _ROUTE_LOCK = threading.Lock()
 _ROUTE_CACHE: tuple[float, str, str | None] | None = None
+_DATA_DIR_OVERRIDE: Path | None = None
+_DELIVERY_LINK_CACHE_LOCK = threading.Lock()
+_DELIVERY_LINK_CACHE: dict[str, tuple[int, int, dict[str, str], dict[str, str]]] = {}
+DELIVERY_LINKS_DIRNAME = "codex-delivery-links"
+MAX_DELIVERY_LINKS_PER_THREAD = 500
+
+
+def set_default_data_dir_override(path: Path | None) -> None:
+    """Test helper: redirect default codex_apptools data directory away from repo/user data."""
+    global _DATA_DIR_OVERRIDE
+    _DATA_DIR_OVERRIDE = Path(path) if path is not None else None
+    with _DELIVERY_LINK_CACHE_LOCK:
+        _DELIVERY_LINK_CACHE.clear()
+
+
+def default_data_dir() -> Path:
+    return _DATA_DIR_OVERRIDE if _DATA_DIR_OVERRIDE is not None else DATA
 
 
 class AppToolsError(codex_control.ControlError):
@@ -582,7 +604,13 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
     return info
 
 
-def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> dict | None:
+def find_delegation_delivery(
+    path: Path | None,
+    thread_id: str,
+    prompt: str,
+    *,
+    exclude_message_ids: set[str] | None = None,
+) -> dict | None:
     """Find a matching self-delegation or Stop-hook <hook_prompt> entry in the transcript tail."""
     if path is None or not path.is_file():
         return None
@@ -595,6 +623,7 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
         lines, _ = chats.read_tail(path, 2 << 20)
     except OSError:
         return None
+    excluded = exclude_message_ids or set()
     fallback_hook_prompt: dict | None = None
     for raw in reversed(lines):
         if b"codex_delegation" not in raw and b"hook_prompt" not in raw and b"HookPrompt" not in raw:
@@ -613,16 +642,22 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
             if t == "FunctionCallOutput":
                 delegated = chats._codex_delegation(item, thread_id=thread_id)
                 if delegated and not delegated.get("origin"):
+                    mid = delegated.get("source_id")
+                    if mid and mid in excluded:
+                        continue
                     raw_input = chats._codex_delegation_raw_text(item)
                     if (want_raw and raw_input and chats.norm(raw_input) == want_raw) or (
                         want_clean and chats.norm(delegated.get("text") or "") == want_clean
                     ):
                         return {
                             "source": "conversation_record",
-                            "message_id": delegated.get("source_id"),
+                            "message_id": mid,
                             "time": rec.get("timestamp"),
                         }
             elif t == "UserMessage":
+                mid = item.get("id")
+                if mid and mid in excluded:
+                    continue
                 raw_text, is_hook = chats._unwrap_hook_prompt(chats._join_text(item.get("content")))
                 if is_hook:
                     cleaned, _ = chats._extract_codex_images(raw_text)
@@ -631,10 +666,13 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
                     ):
                         return {
                             "source": "conversation_record",
-                            "message_id": item.get("id"),
+                            "message_id": mid,
                             "time": rec.get("timestamp"),
                         }
             elif t == "HookPrompt" and fallback_hook_prompt is None:
+                mid = item.get("id")
+                if mid and mid in excluded:
+                    continue
                 raw_text = chats._hook_prompt_item_text(item)
                 cleaned, _ = chats._extract_codex_images(raw_text)
                 if (want_raw and chats.norm(raw_text) == want_raw) or (
@@ -642,10 +680,13 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
                 ):
                     fallback_hook_prompt = {
                         "source": "conversation_record",
-                        "message_id": item.get("id"),
+                        "message_id": mid,
                         "time": rec.get("timestamp"),
                     }
         elif kind == "user_message":
+            mid = payload.get("id")
+            if mid and mid in excluded:
+                continue
             raw_text, is_hook = chats._unwrap_hook_prompt(payload.get("message") or "")
             if is_hook:
                 cleaned, _ = chats._extract_codex_images(raw_text)
@@ -654,7 +695,7 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
                 ):
                     return {
                         "source": "conversation_record",
-                        "message_id": payload.get("id"),
+                        "message_id": mid,
                         "time": rec.get("timestamp"),
                     }
     return fallback_hook_prompt
@@ -747,19 +788,142 @@ class LocalQueueStore:
 # ---------------------------------------------------------------- image file storage (7-day retention)
 
 
+def _image_has_transparency(img) -> bool:
+    """Return True only when the image actually contains non-opaque pixels."""
+    if "A" in img.getbands():
+        lo, _ = img.getchannel("A").getextrema()
+        return lo < 255
+    if "transparency" in img.info:
+        rgba = img.convert("RGBA")
+        lo, _ = rgba.getchannel("A").getextrema()
+        return lo < 255
+    return False
+
+
+def _resize_to_max_side(img, max_side: int, resampling):
+    if max(img.width, img.height) <= max_side:
+        return img
+    resized = img.copy()
+    resized.thumbnail((max_side, max_side), resampling)
+    return resized
+
+
+def _encode_jpeg_under_limit(img, resampling) -> bytes:
+    rgb = img.convert("RGB")
+    rgb.info.clear()
+    best: bytes | None = None
+    attempts = (
+        (CODEX_IMAGE_MAX_SIDE, (85, 75, 65, 55, 45, 35)),
+        (CODEX_IMAGE_FALLBACK_SIDE, (85, 75, 65, 55, 45, 35, 25)),
+        (1024, (65, 50, 35, 25)),
+        (800, (55, 40, 25)),
+        (640, (45, 30, 20)),
+    )
+    for max_side, qualities in attempts:
+        scaled = _resize_to_max_side(rgb, max_side, resampling)
+        for q in qualities:
+            buf = io.BytesIO()
+            scaled.save(buf, format="JPEG", quality=q, optimize=True)
+            data = buf.getvalue()
+            if best is None or len(data) < len(best):
+                best = data
+            if len(data) <= CODEX_IMAGE_MAX_BYTES:
+                return data
+    return best or b""
+
+
+def _encode_png_under_limit(img, resampling, quantize_method, dither_method) -> bytes:
+    rgba = img.convert("RGBA")
+    rgba.info.clear()
+    best: bytes | None = None
+    for max_side in (CODEX_IMAGE_MAX_SIDE, CODEX_IMAGE_FALLBACK_SIDE, 1024, 800, 640, 480):
+        scaled = _resize_to_max_side(rgba, max_side, resampling)
+        buf = io.BytesIO()
+        scaled.save(buf, format="PNG", optimize=True, compress_level=9)
+        data = buf.getvalue()
+        if best is None or len(data) < len(best):
+            best = data
+        if len(data) <= CODEX_IMAGE_MAX_BYTES:
+            return data
+        for colors in (256, 128, 64):
+            try:
+                quantized = scaled.quantize(colors=colors, method=quantize_method, dither=dither_method)
+                buf = io.BytesIO()
+                quantized.save(buf, format="PNG", optimize=True, compress_level=9)
+                data = buf.getvalue()
+                if len(data) < len(best):
+                    best = data
+                if len(data) <= CODEX_IMAGE_MAX_BYTES:
+                    return data
+            except Exception:
+                continue
+    return best or b""
+
+
+def _prepare_codex_image(src: Path) -> tuple[bytes | None, str]:
+    """Return (compressed_bytes_or_None_for_verbatim_copy, file_extension) for Codex's image viewer.
+
+    Small images already within 1600 px and 400 KB (without EXIF rotation) are copied verbatim.
+    Larger images are EXIF-transposed, resized to <=1600 px (falling back to 1280 px if needed),
+    and encoded as JPEG (opaque) or PNG (transparent) at <=400 KB.
+    """
+    from PIL import Image, ImageOps, UnidentifiedImageError
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+
+    src_size = src.stat().st_size
+    orig_ext = src.suffix.lower() if src.suffix.lower() in _CODEX_IMAGE_SUFFIXES else ".png"
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    quantize_method = getattr(Image, "Quantize", Image).FASTOCTREE
+    dither_method = getattr(Image, "Dither", Image).FLOYDSTEINBERG
+
+    try:
+        with Image.open(src) as source:
+            try:
+                exif = source.getexif()
+                orientation = exif.get(274, 1) if exif else 1
+            except Exception:
+                orientation = 1
+            if (
+                orientation in (1, None)
+                and max(source.width, source.height) <= CODEX_IMAGE_MAX_SIDE
+                and src_size <= CODEX_IMAGE_MAX_BYTES
+            ):
+                return None, orig_ext
+            transposed = ImageOps.exif_transpose(source)
+            transposed.load()
+            has_alpha = _image_has_transparency(transposed)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None, orig_ext
+
+    if has_alpha:
+        return _encode_png_under_limit(transposed, resampling, quantize_method, dither_method), ".png"
+    return _encode_jpeg_under_limit(transposed, resampling), ".jpg"
+
+
 def store_codex_image(images_root: Path, tid: str, meta: dict, *, now: float | None = None) -> Path:
-    """Copy an uploaded attachment PNG to <images_root>/<tid>/<id>.png and prune >7 day old files."""
+    """Save an uploaded attachment under <images_root>/<tid>/<id>.<ext> (compressed for Codex) and prune >7d files."""
     cleanup_codex_images(images_root, now=now)
     safe_tid = re.sub(r"[^A-Za-z0-9._-]", "_", tid)
     dest_dir = Path(images_root) / safe_tid
     dest_dir.mkdir(parents=True, exist_ok=True)
     ident = str(meta.get("id") or uuid.uuid4().hex)
-    dest = dest_dir / f"{ident}.png"
+    for ext in _CODEX_IMAGE_SUFFIXES:
+        existing = dest_dir / f"{ident}{ext}"
+        if existing.is_file():
+            return existing
     src = Path(meta["path"])
-    if not dest.is_file():
-        tmp = dest.with_suffix(".tmp")
+    compressed, ext = _prepare_codex_image(src)
+    dest = dest_dir / f"{ident}{ext}"
+    tmp = dest_dir / f"{ident}{ext}.tmp"
+    if compressed is None:
         shutil.copy2(src, tmp)
-        os.replace(tmp, dest)
+    else:
+        tmp.write_bytes(compressed)
+    os.replace(tmp, dest)
     return dest
 
 
@@ -787,6 +951,126 @@ def cleanup_codex_images(images_root: Path, *, now: float | None = None) -> None
             pass
 
 
+# ---------------------------------------------------------------- message source_id <-> request_id links
+
+
+def _delivery_link_file(root: Path, tid: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", tid)
+    return Path(root) / f"{safe}.json"
+
+
+def _read_delivery_links_cached(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    key = str(path)
+    try:
+        st = path.stat()
+    except OSError:
+        with _DELIVERY_LINK_CACHE_LOCK:
+            _DELIVERY_LINK_CACHE.pop(key, None)
+        return {}, {}
+    with _DELIVERY_LINK_CACHE_LOCK:
+        cached = _DELIVERY_LINK_CACHE.get(key)
+        if cached and cached[0] == st.st_size and cached[1] == st.st_mtime_ns:
+            return dict(cached[2]), dict(cached[3])
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}, {}
+    by_source: dict[str, str] = {}
+    by_request: dict[str, str] = {}
+    if isinstance(raw, dict):
+        src_map = raw.get("by_source")
+        if isinstance(src_map, dict):
+            for sid, rid in src_map.items():
+                if isinstance(sid, str) and sid and isinstance(rid, str) and rid:
+                    by_source[sid] = rid
+                    by_request[rid] = sid
+        req_map = raw.get("by_request")
+        if isinstance(req_map, dict):
+            for rid, sid in req_map.items():
+                if isinstance(rid, str) and rid and isinstance(sid, str) and sid:
+                    by_request[rid] = sid
+                    by_source.setdefault(sid, rid)
+    with _DELIVERY_LINK_CACHE_LOCK:
+        _DELIVERY_LINK_CACHE[key] = (st.st_size, st.st_mtime_ns, dict(by_source), dict(by_request))
+        if len(_DELIVERY_LINK_CACHE) > 64:
+            _DELIVERY_LINK_CACHE.pop(next(iter(_DELIVERY_LINK_CACHE)))
+    return by_source, by_request
+
+
+def read_source_request_map(tid: str, *, data_dir: Path | None = None) -> dict[str, str]:
+    """Read persisted {source_id: request_id} mapping for [tid], surviving restarts."""
+    if not tid:
+        return {}
+    base = Path(data_dir) if data_dir is not None else default_data_dir()
+    by_source, _ = _read_delivery_links_cached(_delivery_link_file(base / DELIVERY_LINKS_DIRNAME, tid))
+    return by_source
+
+
+def read_request_source_map(tid: str, *, data_dir: Path | None = None) -> dict[str, str]:
+    """Read persisted {request_id: source_id} mapping for [tid], surviving restarts."""
+    if not tid:
+        return {}
+    base = Path(data_dir) if data_dir is not None else default_data_dir()
+    _, by_request = _read_delivery_links_cached(_delivery_link_file(base / DELIVERY_LINKS_DIRNAME, tid))
+    return by_request
+
+
+class DeliveryLinkStore:
+    """Persists message source_id <-> request_id pairs under <data_dir>/codex-delivery-links/<tid>.json."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self._lock = threading.RLock()
+
+    def _file(self, tid: str) -> Path:
+        return _delivery_link_file(self.root, tid)
+
+    def source_to_request(self, tid: str) -> dict[str, str]:
+        with self._lock:
+            by_source, _ = _read_delivery_links_cached(self._file(tid))
+            return by_source
+
+    def request_to_source(self, tid: str) -> dict[str, str]:
+        with self._lock:
+            _, by_request = _read_delivery_links_cached(self._file(tid))
+            return by_request
+
+    def record(self, tid: str, source_id: str, request_id: str) -> bool:
+        sid = str(source_id or "").strip()
+        rid = str(request_id or "").strip()
+        if not tid or not sid or not rid:
+            return False
+        with self._lock:
+            path = self._file(tid)
+            by_source, by_request = _read_delivery_links_cached(path)
+            if by_source.get(sid) == rid and by_request.get(rid) == sid:
+                return False
+            # Keep one-to-one mapping cleanly updated
+            old_sid = by_request.get(rid)
+            if old_sid and old_sid != sid and by_source.get(old_sid) == rid:
+                by_source.pop(old_sid, None)
+            old_rid = by_source.get(sid)
+            if old_rid and old_rid != rid and by_request.get(old_rid) == sid:
+                by_request.pop(old_rid, None)
+            by_source[sid] = rid
+            by_request[rid] = sid
+            while len(by_source) > MAX_DELIVERY_LINKS_PER_THREAD:
+                oldest_sid = next(iter(by_source))
+                oldest_rid = by_source.pop(oldest_sid)
+                if by_request.get(oldest_rid) == oldest_sid:
+                    by_request.pop(oldest_rid, None)
+            self.root.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"by_source": by_source, "by_request": by_request}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+            with _DELIVERY_LINK_CACHE_LOCK:
+                _DELIVERY_LINK_CACHE.pop(str(path), None)
+            return True
+
+
 # ---------------------------------------------------------------- new-route controller
 
 
@@ -805,13 +1089,15 @@ class AppToolsBridge:
     ) -> None:
         self.legacy = legacy_bridge
         self.client = client or AppToolsClient(log=getattr(legacy_bridge, "log", None))
-        self.data_dir = Path(data_dir) if data_dir is not None else DATA
+        self.data_dir = Path(data_dir) if data_dir is not None else default_data_dir()
         self.queues = LocalQueueStore(self.data_dir / "codex-queues")
         self.images_root = self.data_dir / "codex-images"
+        self.delivery_links = DeliveryLinkStore(self.data_dir / DELIVERY_LINKS_DIRNAME)
         self.hooks = hooks
         self._clock = clock
         self._lock = threading.RLock()
         self._status_cache: dict[str, tuple[float, dict]] = {}
+        self._reconcile_seen: dict[tuple[str, str], tuple[int, int]] = {}
         self._stop = threading.Event()
         self._drain_wake = threading.Event()
         self._drain_thread: threading.Thread | None = None
@@ -990,7 +1276,7 @@ class AppToolsBridge:
                 "catalog": codex_control.catalog(),
                 "queued": queued,
                 "queue_available": True,
-                "images": self.legacy.message_images(tid),
+                "images": self.message_images(tid),
                 "observed_at": int(time.time() * 1000),
             }
             if hook_notice:
@@ -1017,7 +1303,7 @@ class AppToolsBridge:
                     for v in self.queues.list_items(tid)
                 ],
                 "queue_available": True,
-                "images": self.legacy.message_images(tid),
+                "images": self.message_images(tid),
             }
 
     def _hook_notice(self) -> str:
@@ -1257,6 +1543,7 @@ class AppToolsBridge:
                     "intent": "start",
                     "request_id": first["id"],
                     "text": "已交给 Codex",
+                    "compiled_prompt": first["prompt"],
                     "evidence": {"source": "app_tools_queue_dispatch"},
                 },
             )
@@ -1278,6 +1565,7 @@ class AppToolsBridge:
                     "intent": "queue_hook",
                     "request_id": first["id"],
                     "text": "已交给 Codex",
+                    "compiled_prompt": first["prompt"],
                     "evidence": {"source": "stop_hook_handoff"},
                 },
             )
@@ -1339,6 +1627,7 @@ class AppToolsBridge:
                 "client_id": mid,
                 "intent": "steer",
                 "text": "已交给 Codex",
+                "compiled_prompt": removed["prompt"],
                 "evidence": {"source": "app_tools_promote"},
             }
             self.legacy._finish(mid, {**result, "request_id": mid})
@@ -1388,6 +1677,101 @@ class AppToolsBridge:
                 time.sleep(step)
         raise codex_control.CodexNotTaken(str(last_exc or WINDOW_NOT_READY_REASON))
 
+    def _link_delivery(self, tid: str, rid: str, evidence: dict | None) -> None:
+        msg_id = (evidence or {}).get("message_id")
+        if msg_id and self.delivery_links.record(tid, str(msg_id), rid):
+            self._status_cache.pop(tid, None)
+
+    def _claimed_sources_excluding(self, tid: str, rid: str) -> set[str]:
+        by_source = self.delivery_links.source_to_request(tid)
+        return {sid for sid, owner in by_source.items() if owner != rid}
+
+    def reconcile_deliveries(self, tid: str) -> None:
+        """Match recently accepted/dispatched new-route sends to their transcript source_id and persist links."""
+        if not tid or not (self.legacy.data_root / "delivery.sqlite").exists():
+            return
+        with self._lock:
+            with self.legacy._db() as con:
+                rows = con.execute(
+                    "SELECT id,state,result,data FROM deliveries WHERE thread=? AND state IN ('dispatching','accepted','queued') ORDER BY created DESC LIMIT 30",
+                    (tid,),
+                ).fetchall()
+            if not rows:
+                return
+            queued_ids = {v["id"] for v in self.queues.list_items(tid)}
+            by_req = self.delivery_links.request_to_source(tid)
+            claimed = set(self.delivery_links.source_to_request(tid).keys())
+            pending: list[tuple[str, dict, dict, str]] = []
+            for rid, status, raw_result, raw_data in reversed(rows):
+                if rid in queued_ids:
+                    continue
+                try:
+                    result = json.loads(raw_result or "{}")
+                    body = json.loads(raw_data or "{}")
+                except ValueError:
+                    continue
+                if body.get("question_id") or body.get("action"):
+                    continue
+                ev_mid = (result.get("evidence") or {}).get("message_id")
+                if ev_mid:
+                    if by_req.get(rid) != ev_mid:
+                        self._link_delivery(tid, rid, result.get("evidence"))
+                        by_req[rid] = str(ev_mid)
+                        claimed.add(str(ev_mid))
+                    continue
+                if rid in by_req:
+                    continue
+                prompt = result.get("compiled_prompt") or body.get("text") or ""
+                if prompt:
+                    pending.append((rid, result, body, prompt))
+            if not pending:
+                return
+            path = self._thread_file(tid)
+            if path is None:
+                return
+            try:
+                st = path.stat()
+                file_sig = (st.st_size, st.st_mtime_ns)
+            except OSError:
+                return
+            for rid, result, _body, prompt in pending:
+                key = (tid, rid)
+                if self._reconcile_seen.get(key) == file_sig:
+                    continue
+                evidence = find_delegation_delivery(path, tid, prompt, exclude_message_ids=claimed)
+                if evidence:
+                    updated = {
+                        **result,
+                        "ok": True,
+                        "accepted": True,
+                        "delivery_state": "accepted",
+                        "request_id": rid,
+                        "text": "已送达",
+                        "evidence": evidence,
+                    }
+                    self.legacy._finish(rid, updated)
+                    self._link_delivery(tid, rid, evidence)
+                    if evidence.get("message_id"):
+                        claimed.add(str(evidence["message_id"]))
+                    self._reconcile_seen.pop(key, None)
+                else:
+                    self._reconcile_seen[key] = file_sig
+                    if len(self._reconcile_seen) > 256:
+                        self._reconcile_seen.pop(next(iter(self._reconcile_seen)))
+
+    def message_images(self, tid: str) -> list[dict]:
+        """Return control-state image records enriched with confirmed transcript message_id."""
+        self.reconcile_deliveries(tid)
+        rows = self.legacy.message_images(tid)
+        by_req = self.delivery_links.request_to_source(tid)
+        if not by_req:
+            return rows
+        out = []
+        for row in rows:
+            mid = by_req.get(str(row.get("request_id") or ""))
+            out.append({**row, "message_id": mid} if mid else row)
+        return out
+
     def receipt(self, tid: str, rid: str) -> dict:
         if not (self.legacy.data_root / "delivery.sqlite").exists():
             return {"state": "unknown"}
@@ -1407,9 +1791,17 @@ class AppToolsBridge:
                 return {"state": "queued", "request_id": rid, "result": result}
 
         # Check rollout transcript for matching self-delegation / hook_prompt to upgrade ack -> delivered
+        existing_ev = result.get("evidence") or {}
+        if existing_ev.get("message_id"):
+            self._link_delivery(tid, rid, existing_ev)
         prompt = result.get("compiled_prompt") or body.get("text") or ""
-        if status in ("dispatching", "accepted", "queued") and prompt and not (result.get("evidence") or {}).get("message_id"):
-            evidence = find_delegation_delivery(self._thread_file(tid), tid, prompt)
+        if status in ("dispatching", "accepted", "queued") and prompt and not existing_ev.get("message_id"):
+            evidence = find_delegation_delivery(
+                self._thread_file(tid),
+                tid,
+                prompt,
+                exclude_message_ids=self._claimed_sources_excluding(tid, rid),
+            )
             if evidence:
                 result = {
                     **result,
@@ -1421,6 +1813,7 @@ class AppToolsBridge:
                     "evidence": evidence,
                 }
                 self.legacy._finish(rid, result)
+                self._link_delivery(tid, rid, evidence)
                 status = "accepted"
 
         if status == "accepted" and not body.get("question_id"):

@@ -250,6 +250,10 @@ class Agent:
     def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False):
         return page["messages"], []
 
+    def message_request_ids(self, tid: str) -> dict[str, str]:
+        """Persisted {source_id: client_request_id} links for user messages that lack native client_id."""
+        return {}
+
     def summary(self, item: dict) -> dict:
         raise Unsupported("这个助手还不能算状态")
 

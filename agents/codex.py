@@ -465,6 +465,15 @@ class CodexAgent(Agent):
     def _not_running_state(self, bridge, tid: str) -> dict:
         import codex_apptools
         import codex_control
+        images = bridge.message_images(tid)
+        by_req = codex_apptools.read_request_source_map(tid)
+        if by_req:
+            images = [
+                {**row, "message_id": by_req[row["request_id"]]}
+                if row.get("request_id") in by_req and not row.get("message_id")
+                else row
+                for row in images
+            ]
         return {
             "available": False,
             "route": "none",
@@ -472,8 +481,12 @@ class CodexAgent(Agent):
             "questions": [],
             "plan": None,
             "catalog": codex_control.catalog(),
-            "images": bridge.message_images(tid),
+            "images": images,
         }
+
+    def message_request_ids(self, tid: str) -> dict[str, str]:
+        import codex_apptools
+        return codex_apptools.read_source_request_map(tid)
 
     def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False):
         import live_events

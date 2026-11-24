@@ -1486,9 +1486,14 @@ def conversation_for(agent, conv_id: str, n: int = 60) -> dict:
         nbytes *= 4
     if item.get("id"):
         own_tid = str(item["id"]).lower()
+        req_map = agent.message_request_ids(str(item["id"])) if hasattr(agent, "message_request_ids") else {}
         for m in msgs:
             if str(m.get("source_thread_id") or "").lower() == own_tid:
                 m.pop("origin", None)
+            if m.get("role") == "user" and not m.get("client_request_id") and req_map:
+                rid = req_map.get(m.get("source_id") or "")
+                if rid:
+                    m["client_request_id"] = rid
     if state.get("title"):
         out["title"] = state["title"]
     duplicates: dict[str, int] = {}

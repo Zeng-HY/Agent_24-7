@@ -220,15 +220,25 @@ class History:
         result['length']=len(m['text']);result['truncated']=not full and len(m['text'])>6000
         if result['truncated']:result['text']=m['text'][:6000]
         return result
+    @staticmethod
+    def _with_client_request_id(m,req_map):
+        if m.get('role')=='user' and not m.get('client_request_id') and req_map:
+            rid=req_map.get(m.get('source_id') or '') or req_map.get(m.get('id') or '')
+            if rid:return {**m,'client_request_id':rid}
+        return m
     def resolve_requests(self,app,tid,request_ids,aliases=None):
         """Read-only resolution against the whole transcript, never the visible page."""
         if not isinstance(request_ids,list) or len(request_ids)>100 or any(not isinstance(v,str) or not v or len(v)>200 for v in request_ids):
             raise HistoryError('消息定位请求无效',400)
         _,entry=self.transcript(app,tid);out=[];aliases=aliases or {}
+        entry_agent=getattr(entry,'agent',None)
+        req_map=entry_agent.message_request_ids(tid) if entry_agent is not None else {}
         with entry.lock:
             candidates={}
             for m in entry.messages:
-                if m.get('role')=='user' and m.get('client_request_id'):candidates.setdefault(m['client_request_id'],{})[m['id']]=m
+                if m.get('role')=='user':
+                    cid=m.get('client_request_id') or req_map.get(m.get('source_id') or '') or req_map.get(m.get('id') or '')
+                    if cid:candidates.setdefault(cid,{})[m['id']]=m
             by_request={rid:next(iter(rows.values())) for rid,rows in candidates.items() if len(rows)==1}
             for rid in dict.fromkeys(request_ids):
                 ledger=aliases.get(rid,{})
@@ -250,6 +260,7 @@ class History:
             try:return agent.read(tid,limit=limit,before=before,around=around,lite=lite)
             except chats.ChatError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
         item,entry=self.transcript(app,tid);limit=max(5,min(100,limit));reset=False
+        req_map=agent.message_request_ids(tid)
         with entry.lock:
             rows=entry.messages;end=len(rows)
             if before:
@@ -269,7 +280,8 @@ class History:
             items=[]
             for m in page:
                 tr=turns.get(m.get('activity_turn')) or {}
-                timed={**m,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
+                enriched=self._with_client_request_id(m,req_map)
+                timed={**enriched,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
                 items.append(self.public_message(timed,lite=lite))
             return chats.public(item)|{'messages':items, 'status':chats._status(entry.state,entry.mtime/1e9),
                 'size':entry.size,'runtime':agent.runtime(entry.path),'modified':entry.mtime//1000000,
@@ -288,10 +300,12 @@ class History:
         return next((i for i,m in enumerate(entry.messages) if m is row),None) if row is not None else None
     def message(self,app,tid,mid):
         _,entry=self.transcript(app,tid)
+        entry_agent=getattr(entry,'agent',None)
+        req_map=entry_agent.message_request_ids(tid) if entry_agent is not None else {}
         with entry.lock:
             m=entry.by_id.get(mid)
             if not m:raise HistoryError('消息已变化，请刷新',404)
-            return self.public_message(m,True)
+            return self.public_message(self._with_client_request_id(m,req_map),True)
     def diff(self,app,tid,ref,offset=0):
         _,entry=self.transcript(app,tid)
         with entry.lock:
