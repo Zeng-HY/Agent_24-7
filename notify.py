@@ -226,44 +226,56 @@ def _without_markers(text: str) -> str:
     return re.sub(r"(?m)^[ \t]*::inbox-item\{[^{}]*\}[ \t]*$", "", text)
 
 
-def notice_decision(raw: str, automation: bool = False, failed_only: bool = False, aborted: str = "") -> dict:
-    """Whether a turn's end goes to the phone, why not, and the words written for it.
+def notice_decision(raw: str, heartbeat: bool = False, task: bool = False, failed: bool = False,
+                    failed_only: bool = False, off: bool = False) -> dict:
+    """Whether a turn's end goes to the phone, why not, and the words written for it (11-24, rechecked 11-24 night).
 
-    The rules, in order: a heartbeat block's decision, a bare DONT_NOTIFY, the skip marks; then, for an automation's
-    thread, no notice when only failed runs are wanted and this one succeeded, or when a successful run left nothing.
-    [failed_only] is the setting the automation's own assistant resolved. Returns {"send", "why", "text"}."""
+    Codex 26.1117's order: a heartbeat turn's bare DONT_NOTIFY; a heartbeat block's decision (the last block, bare or
+    fenced, no other text needed); on a successful turn, the skip marks; on a successful empty answer, a heartbeat or
+    a task run says nothing; then only-failed overrides all of it; anything left is sent. [task] is a cron thread or a
+    heartbeat turn, [failed] this turn's own error (see agents/codex.py). Returns {"send", "why", "text"}."""
     text = raw or ""
-    blocks = list(_HEARTBEAT.finditer(text))
-    found = blocks[-1] if blocks else None  # the last block decides
-    if found is not None:
-        outside = re.sub(r"```[A-Za-z0-9_-]*|~~~", " ", text[:found.start()] + text[found.end():]).strip()
-        inside = found.group(1)
-        decision = _DECISION.search(inside)
-        if outside and decision:
-            if decision.group(1).upper() == "DONT_NOTIFY":
-                return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
-            message = _MESSAGE.search(inside)
-            return {"send": True, "why": "", "text": _cdata(message.group(1)).strip() if message else ""}
+    task = task or heartbeat  # a heartbeat turn is an automation run (change 2)
+    if off and task:
+        return {"send": False, "why": "定时任务的通知已关掉", "text": ""}
     bare = _cdata(text).strip()
-    if bare == "DONT_NOTIFY":
-        return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
-    peeled = _peeled(bare)
-    if re.fullmatch(r"::\s*SKIP_COMPLETION\s*::", peeled) or peeled == "skip_notification":
-        return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
-    if peeled.startswith("{"):
+    send, why, words = None, "", ""
+    if heartbeat and bare == "DONT_NOTIFY":  # a heartbeat answer that is only this (Codex writes spaces in CDATA too)
+        send, why = False, "Codex 说这次不用提醒"
+    if send is None:
+        blocks = list(_HEARTBEAT.finditer(text))
+        found = blocks[-1] if blocks else None  # the last block decides; a block alone is a complete answer
+        if found is not None:
+            decision = _DECISION.search(found.group(1))
+            if decision:
+                if decision.group(1).upper() == "DONT_NOTIFY":
+                    send, why = False, "Codex 说这次不用提醒"
+                else:
+                    message = _MESSAGE.search(found.group(1))
+                    send, why, words = True, "", _cdata(message.group(1)).strip() if message else ""
+    if send is None and not failed and _skip_marker(_peeled(bare)):
+        send, why = False, "Codex 说这次不用提醒"
+    if send is None and not failed and not bare and task:
+        send, why = False, "定时任务这次没有回答"
+    if failed_only:  # Codex's last override: a task that only wants failed runs
+        send = bool(failed)
+        why = "" if failed else "这个定时任务只在失败时提醒"
+    if send is None:
+        send, why = True, ""
+    return {"send": send, "why": "" if send else why, "text": words}
+
+
+def _skip_marker(text: str) -> bool:
+    """Whether a whole answer is one of Codex's marks for "do not tell the user" (::SKIP_COMPLETION:: and friends)."""
+    if re.fullmatch(r"::\s*SKIP_COMPLETION\s*::", text or "") or text == "skip_notification":
+        return True
+    if (text or "").startswith("{"):
         try:
-            value = json.loads(peeled)
+            value = json.loads(text)
         except ValueError:
-            value = None
-        if isinstance(value, dict) and value.get("type") in ("skip_notification", "skip_completion"):
-            return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
-    failed = bool(aborted) and aborted != "interrupted"
-    if automation:
-        if failed_only and not failed:
-            return {"send": False, "why": "这个定时任务只在失败时提醒", "text": ""}
-        if not failed and not text.strip():
-            return {"send": False, "why": "定时任务这次没有回答", "text": ""}
-    return {"send": True, "why": "", "text": ""}
+            return False
+        return isinstance(value, dict) and value.get("type") in ("skip_notification", "skip_completion")
+    return False
 
 
 def automation_failed_runs_only(automation_id: str, home, clock=time.time) -> bool:
@@ -333,6 +345,7 @@ def new_scan(app: str) -> dict:
     """What one conversation's turn looks like while its record is read a piece at a time (0.6.4)."""
     return {"app": app, "state": None, "started": "", "ended": "", "latest": "", "key": "", "text": "", "action": "",
             "raw_text": "", "automation_id": "", "automation_name": "", "abort_reason": "",
+            "heartbeat": False, "error": False,
             "asks": set(), "answer_id": "", "last_kind": None, "last_stop": None, "uuids": set()}
 
 
@@ -600,9 +613,12 @@ class Notifier:
             self.ended[conv] = key
             ended = _unix(scan.get("ended"))
             aborted = scan.get("abort_reason") or ""
-            # A user-stopped turn is not sent; an automation's turn_aborted with any other reason is a failed run.
-            failed_run = (bool(item.get("automation")) and scan["state"] == "stopped"
-                          and bool(aborted) and aborted != "interrupted")
+            # 11-24 night: a cron thread or a heartbeat turn is an automation run. Codex marks one failed when an
+            # error event appeared in it (it still ends with task_complete), or when it was aborted for any reason
+            # other than the user's own stop. Other conversations keep the old behaviour.
+            automation_turn = bool(item.get("automation")) or bool(scan.get("heartbeat"))
+            failed_run = (automation_turn and aborted != "interrupted"
+                          and (bool(scan.get("error")) or bool(aborted)))
             if scan["state"] == "stopped" and not failed_run:
                 continue
             if ended is not None and ended < self.since:
@@ -613,6 +629,7 @@ class Notifier:
             self._tell(found, item, {"state": "failed" if failed_run else scan["state"], "key": key,
                                      "time": scan.get("ended") or "", "text": answer,
                                      "raw_text": scan.get("raw_text") or "", "abort_reason": aborted,
+                                     "automation": automation_turn, "heartbeat": bool(scan.get("heartbeat")),
                                      "automation_id": scan.get("automation_id") or "",
                                      "automation_name": scan.get("automation_name") or "",
                                      "started": int(started or self.clock()),
@@ -881,7 +898,8 @@ class Notifier:
             app = agent.manifest()["name"]["zh"]
         except Exception:
             app = item["app"]
-        automation = bool(item.get("automation"))
+        automation = bool(item.get("automation")) or bool(end.get("automation"))
+        heartbeat = bool(end.get("heartbeat"))
         label = str(getattr(self._automation_agent(), "automation_label", "") or "") if automation else app
         label = label or app
         done = "出错停了" if end["state"] == "failed" else "在等你选" if end.get("asks") else "好了"
@@ -893,8 +911,8 @@ class Notifier:
         decision = {"send": True, "why": "", "text": ""}
         hook = getattr(agent, "notify_decision", None)  # 11-24: the assistant's own rule for a phone notice
         if hook is not None:
-            decision = hook(end.get("raw_text") or end.get("text") or "", automation, self.automations(),
-                            end.get("abort_reason") or "", end.get("automation_id") or "")
+            decision = hook(end.get("raw_text") or end.get("text") or "", heartbeat, automation,
+                            end["state"] == "failed", self.automations(), end.get("automation_id") or "")
             if not decision["send"] and not why:
                 why = decision["why"]
         conv = (item["app"], item["id"])

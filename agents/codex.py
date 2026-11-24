@@ -33,6 +33,37 @@ AUTOMATION_OFF = "off"
 AUTOMATION_LABEL = "Codex 定时任务"
 _AUTOMATION_ID = re.compile(r"^[ \t]*Automation ID:[ \t]*([A-Za-z0-9_-]{1,80})[ \t]*$", re.M)
 _AUTOMATION_NAME = re.compile(r"^[ \t]*Automation:[ \t]*(.+?)[ \t]*$", re.M)
+_HEARTBEAT_ID = re.compile(r"<automation_id>\s*([^<]{1,80}?)\s*</automation_id>")
+
+
+def heartbeat_input(text: str) -> str | None:
+    """The heartbeat block a turn's input is, or None. Codex's own test: the whole text, trimmed, starts with
+    <heartbeat> and ends with </heartbeat>, and holds <current_time_iso> and <instructions> (11-24 night)."""
+    value = (text or "").strip()
+    if not value.startswith("<heartbeat>") or not value.endswith("</heartbeat>"):
+        return None
+    if "<current_time_iso>" not in value or "<instructions>" not in value:
+        return None
+    return value
+
+
+def output_text(value) -> str:
+    """A tool output's words: the string itself, or the output inside the JSON envelope Codex wraps it in."""
+    if isinstance(value, dict):
+        value = value.get("output")
+    if not isinstance(value, str):
+        return ""
+    stripped = value.strip()
+    if stripped.startswith("{"):
+        try:
+            inner = json.loads(stripped)
+        except ValueError:
+            return value
+        if isinstance(inner, dict):
+            for key in ("output", "content", "text"):
+                if isinstance(inner.get(key), str):
+                    return inner[key]
+    return value
 
 
 class CodexAgent(Agent):
@@ -720,8 +751,13 @@ class CodexAgent(Agent):
             scan["latest"] = ts
         event = payload.get("type") if kind == "event_msg" else None
         if event == "task_started":
+            # 11-24 night: every turn starts clean. The record on this PC writes task_started before this turn's user
+            # input (or heartbeat block), so a user's own turn after a heartbeat never counts as one.
             scan.update(state="running", started=ts, ended="", key=payload.get("turn_id") or ts, text="", action="",
-                        raw_text="", abort_reason="")
+                        raw_text="", abort_reason="", heartbeat=False, error=False,
+                        automation_id="", automation_name="")
+        elif event == "error":  # Codex marks the turn failed with this event; stream_error is only a reconnect hint
+            scan["error"] = True
         elif event in ("task_complete", "turn_aborted"):
             raw = (payload.get("last_agent_message") or "") if event == "task_complete" else ""
             scan.update(
@@ -735,6 +771,9 @@ class CodexAgent(Agent):
             )
         elif event == "item_completed" and (payload.get("item") or {}).get("type") == "UserMessage":
             self._scan_automation(scan, chats._join_text((payload.get("item") or {}).get("content")))
+        elif event == "item_completed" and (payload.get("item") or {}).get("type") in (
+                "FunctionCallOutput", "CustomToolCallOutput"):
+            self._scan_automation(scan, output_text((payload.get("item") or {}).get("output")))
         elif kind == "response_item":
             ptype = payload.get("type")
             if ptype in ("function_call", "custom_tool_call"):
@@ -743,12 +782,21 @@ class CodexAgent(Agent):
                     scan["action"] = step
             elif ptype == "message" and payload.get("role") in ("user", "developer"):
                 self._scan_automation(scan, chats._join_text(payload.get("content")))
+            elif ptype in ("function_call_output", "custom_tool_call_output"):
+                # Model-made heartbeat tasks arrive as a tool's output, not as a user message (11-24 night)
+                self._scan_automation(scan, output_text(payload.get("output")))
             elif ptype == "item_completed" and (payload.get("item") or {}).get("type") == "CommandExecution":
                 scan["action"] = "run"
 
     def _scan_automation(self, scan: dict, text: str) -> None:
-        """The Automation ID and name Codex writes at the top of an automation run's user message (11-24). Not cleared
-        on task_started: the record writes the user message before the turn starts."""
+        """This turn's automation input (11-24 night): a heartbeat block, or the Automation ID/name lines a cron run
+        puts at the top of its user message. Both are whole texts, never searched inside other words."""
+        block = heartbeat_input(text)
+        if block is not None:
+            scan["heartbeat"] = True
+            found = _HEARTBEAT_ID.search(block)
+            scan["automation_id"] = found.group(1).strip() if found else ""
+            return
         ids = _AUTOMATION_ID.findall(text or "")
         names = _AUTOMATION_NAME.findall(text or "")
         if ids:
@@ -756,17 +804,19 @@ class CodexAgent(Agent):
         if names:
             scan["automation_name"] = chats.one_line(names[-1], 80)
 
-    def notify_decision(self, raw: str, automation: bool, mode: str, aborted: str, automation_id: str) -> dict:
-        """Codex's own rule for a phone notice (11-24): the gesture marks in the answer, plus failed_runs_only from
-        the task's automation.toml when the setting is 跟 Codex 一样. Only automation runs have a task file."""
+    def notify_decision(self, raw: str, heartbeat: bool, task: bool, failed: bool, mode: str,
+                        automation_id: str) -> dict:
+        """Codex's own rule for a phone notice (11-24 night): a heartbeat block or bare DONT_NOTIFY in the answer,
+        the skip marks, and failed_runs_only from the task's automation.toml when the setting is 跟 Codex 一样."""
         import notify
         failed_only = False
-        if automation:
+        if task:
             if mode == "failed":
                 failed_only = True
             elif mode == "codex":
                 failed_only = notify.automation_failed_runs_only(automation_id, chats.CODEX_HOME)
-        return notify.notice_decision(raw, automation, failed_only, aborted)
+        return notify.notice_decision(raw, heartbeat=heartbeat, task=task, failed=failed,
+                                      failed_only=failed_only, off=(task and mode == "off"))
 
     def notify_conversations(self, limit: int, automations: str = "codex") -> tuple[list[dict], list[dict]]:
         """The conversations the phone hears about. 11-24: automations too, unless off; they are looked up
