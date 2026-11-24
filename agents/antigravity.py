@@ -25,7 +25,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -1181,37 +1180,6 @@ def send_picture(image: dict) -> tuple[dict, int]:
     return {"mimeType": mime, "inlineData": base64.b64encode(outgoing).decode("ascii")}, len(outgoing)
 
 
-def _save_picture(codex, tid: str, name: str, raw: bytes, info: tuple[str, int, int]) -> dict:
-    """Store a checked picture in the shared attachment folder, normalized to PNG like codex.upload does."""
-    from PIL import Image, ImageOps
-
-    ident = uuid.uuid4().hex
-    folder = codex.data_root / ident
-    folder.mkdir(parents=True, exist_ok=True)
-    try:
-        with Image.open(io.BytesIO(raw)) as source:
-            image = ImageOps.exif_transpose(source)
-            if image.mode not in ("RGB", "RGBA"):
-                image = image.convert("RGBA" if "transparency" in source.info else "RGB")
-            image.info.clear()
-        image.save(folder / "image.png", format="PNG")
-        thumb = image.copy()
-        thumb.thumbnail((320, 320))
-        thumb.save(folder / "thumb.png")
-        meta = {"id": ident, "thread": str(tid), "app": "antigravity",
-                "name": Path(str(name).replace("\\", "/")).name[:120] or "图片",
-                "file": "image.png", "original_size": len(raw), "width": image.width, "height": image.height,
-                "created": time.time(), "used": False, "source_format": info[0].split("/")[-1].upper(),
-                "source_images": 1}
-        codex._write_meta(meta)
-    except Exception:
-        for name_ in ("image.png", "thumb.png", "meta.json"):
-            (folder / name_).unlink(missing_ok=True)
-        folder.rmdir()
-        raise
-    return codex.public_attachment(meta)
-
-
 # ---------------------------------------------------------------- the agent
 
 
@@ -1642,17 +1610,13 @@ class AntigravityAgent(Agent):
     # -- pictures
 
     def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
-        """Check the picture first, then store it where the shared attachment reader finds it."""
-        try:
-            info = picture_info(raw)
-            return _save_picture(handler.server.codex, tid, name, raw, info)
-        except ControlError:
-            raise
-        except Exception:
-            raise ControlError(BAD_PICTURE, 400) from None
+        """The shared uploader: checks the conversation, the picture, animation and size, and cleans old drafts."""
+        return handler.server.codex.upload(tid, name, raw, self.id)
 
     def http_upload(self, handler) -> None:
         """An upload bigger than 20 MB is a 400 here (the shared uploader would say 413)."""
+        import chats
+        import codex_control
         try:
             size = int(handler.headers.get("Content-Length") or 0)
             if not 0 < size <= MAX_PICTURE_BYTES:
@@ -1667,6 +1631,8 @@ class AntigravityAgent(Agent):
             handler._json(self._upload_for_chat(handler, q.get("id", ""), q.get("name", "图片"), raw))
         except ControlError as exc:
             handler._json({"error": str(exc)}, exc.status)
+        except (codex_control.ControlError, chats.ChatError) as exc:
+            handler._json({"error": str(exc)}, getattr(exc, "status", 400))
         except Exception as exc:
             handler._json({"error": str(exc) or "图片没有收到"}, getattr(exc, "status", 400))
 

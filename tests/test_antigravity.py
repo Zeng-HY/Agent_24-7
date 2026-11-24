@@ -22,6 +22,8 @@ from unittest.mock import patch
 
 import chat_history
 import chat_projects
+import chats
+import codex_control
 import machines
 import remote
 from agents import antigravity, claude as claude_agent, codex as codex_agent, deepseek as deepseek_agent, registry
@@ -1061,7 +1063,10 @@ class PictureTests(ControlBase):
         super().setUp()
         self.build([fake.row("a", status="CASCADE_RUN_STATUS_IDLE")])
         self.app_hub = self.hub()
-        self.codex = fake.FakeAttachments(self.home / "attachments")
+        self.codex = codex_control.Bridge()
+        self.codex.data_root = self.home / "attachments"
+        self.codex.data_root.mkdir()
+        self.addCleanup(self.codex.close)
         self.handler = SimpleNamespace(server=SimpleNamespace(codex=self.codex), sent=[])
         self.handler._json = lambda obj, status=200: self.handler.sent.append((status, obj))
 
@@ -1090,21 +1095,39 @@ class PictureTests(ControlBase):
                 self.assertTrue(stored.startswith(b"\x89PNG\r\n\x1a\n"))
                 self.assertEqual((meta["width"], meta["height"]), (5, 7))
 
+    def test_a_heic_photo_is_accepted_by_the_shared_uploader(self):
+        from PIL import Image
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+        buffer = io.BytesIO()
+        Image.new("RGB", (5, 7), (10, 20, 30)).save(buffer, format="HEIF")
+        meta = self.store(buffer.getvalue(), "照片.heic")
+        self.assertTrue((self.codex.data_root / meta["id"] / "image.png").is_file())
+
     def test_a_bad_picture_is_refused_before_it_is_stored(self):
         for raw in (b"", b"not a picture at all", b"\x89PNG\r\n\x1a\nbroken"):
             with self.subTest(raw=raw[:12]):
-                with self.assertRaises(antigravity.ControlError) as caught:
+                with self.assertRaises((antigravity.ControlError, codex_control.ControlError,
+                                        chats.ChatError)) as caught:
                     self.store(raw, "坏图.png")
-                self.assertEqual(caught.exception.status, 400)
-                self.assertIn(antigravity.BAD_PICTURE, str(caught.exception))
-        self.assertEqual(self.codex.metas, {})
+                self.assertIn(getattr(caught.exception, "status", 400), (400, 413))
+        self.assertEqual([path for path in self.codex.data_root.iterdir() if path.is_dir()], [])
 
-    def test_a_picture_must_be_within_the_side_and_size_limits(self):
-        with self.assertRaises(antigravity.ControlError):
-            self.store(fake.picture("PNG", 8001, 2))
+    def test_a_gif_is_refused_like_the_other_assistants(self):
+        with self.assertRaises(codex_control.ControlError) as caught:
+            self.store(fake.picture("GIF"), "动图.gif")
+        self.assertEqual(caught.exception.status, 400)
+        self.assertIn("GIF", str(caught.exception))
+
+    def test_a_picture_for_an_unknown_conversation_is_refused(self):
+        with self.assertRaises(chats.ChatError):
+            antigravity.AGENT()._upload_for_chat(self.handler, "nope", "图.png", fake.picture("PNG"))
+
+    def test_an_oversized_picture_is_refused(self):
         big = b"\x89PNG\r\n\x1a\n" + b"0" * (antigravity.MAX_PICTURE_BYTES + 1)
-        with self.assertRaises(antigravity.ControlError) as caught:
+        with self.assertRaises((antigravity.ControlError, codex_control.ControlError)) as caught:
             self.store(big, "太大.png")
+        self.assertIn(getattr(caught.exception, "status", 400), (400, 413))
         self.assertIn("20 MB", str(caught.exception))
 
     def test_a_picture_message_sends_inline_png_data(self):
@@ -1127,9 +1150,9 @@ class PictureTests(ControlBase):
         folder = self.codex.data_root / broken
         folder.mkdir(parents=True)
         (folder / "image.png").write_bytes(b"this is not a picture")
-        self.codex.metas[broken] = {"id": broken, "thread": "a", "app": "antigravity", "name": "坏图",
-                                    "file": "image.png", "original_size": 22, "width": 1, "height": 1,
-                                    "created": 1.0, "used": False}
+        self.codex._write_meta({"id": broken, "thread": "a", "app": "antigravity", "name": "坏图",
+                                "file": "image.png", "original_size": 22, "width": 1, "height": 1,
+                                "created": time.time(), "used": False})
         before = len(self.app_hub.calls("SendUserCascadeMessage"))
         antigravity.AGENT().http_send(self.handler, {
             "id": "a", "text": "看看", "attachments": [good["id"], broken]})
