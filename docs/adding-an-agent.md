@@ -247,8 +247,8 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
    - 中转侧需要完成第 3 步升级部署（取消 `relay_push.py` 里的三家白名单，新增 `push_phone_protocol` 和 `push_agent_meta` 表，按每部手机登记的 `protocol` 过滤 `min_protocol > 1` 的助手），让老手机收不到新助手的通知和灵动岛，新手机按推送携带的名称/颜色/图标展示。
 3. **发布顺序要求**：
    - 三家老助手的推送字段不变：`notify.py` 发给中转的 `running`、`step`、`waiting`、`done`、`failed` 事件和 `snapshot` 项，一个字节都不加。
-   - 新助手（说明书 `legacy=False`）的事件带 `app_name`、`app_color`、`app_icon`、`min_protocol` 四个字段，`snapshot` 里这家助手的那几项也带；新手机按推送携带的名称、颜色、图标展示。
-   - 还没升级的中转会安静地丢掉新助手的事件和快照项，不影响三家老助手；所以老中转还在时发新助手的通知也不会出错，只是名字会退回成助手 ID。
+   - 新助手（说明书 `legacy=False`）的事件带 `app_name`、`app_color`、`app_icon`、`min_protocol` 四个字段，`snapshot` 里这家助手的那几项也带；新手机按推送携带的名称、颜色、图标展示。新中转没收到 `app_name` 时，名字会退回成助手 ID。
+   - 还没升级的中转会安静地丢掉新助手的事件和快照项，不影响三家老助手；所以老中转还在时发新助手的通知也不会出错，但这条通知到不了手机，不是显示成助手 ID。
    - 以后每再加一家新助手，**只需发布 Windows 电脑端新版，中转和已支持协议 2 的手机端都不用再改代码或重新发版**。
 
 ---
