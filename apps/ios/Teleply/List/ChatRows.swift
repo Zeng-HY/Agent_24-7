@@ -22,6 +22,8 @@ struct ChatRow: View {
     var first = false
     var open: Bool?
     var draft: String?
+    /// The catalog of the computer in use: a new assistant's name comes from it (handoff 3.3).
+    var catalog: AgentCatalogSnapshot = .current
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -37,12 +39,12 @@ struct ChatRow: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 if large {
-                    if !chat.app.isEmpty { SourceBadge(app: chat.app) }
+                    if !chat.app.isEmpty { SourceBadge(app: chat.app, catalog: catalog) }
                     title.lineLimit(3)
                     if chat.updated > 0 { RowTime(updated: chat.updated) }
                 } else {
                     HStack(spacing: 8) {
-                        if !chat.app.isEmpty { SourceBadge(app: chat.app) }
+                        if !chat.app.isEmpty { SourceBadge(app: chat.app, catalog: catalog) }
                         title
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)

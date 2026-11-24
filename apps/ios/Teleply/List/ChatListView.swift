@@ -155,7 +155,8 @@ struct ChatListView: View {
                     model.open(chat)
                 }
             }) {
-                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil, draft: model.drafts[key])
+                ChatRow(chat: chat, first: first, open: chat.group ? folds.keys.contains(key) : nil, draft: model.drafts[key],
+                        catalog: model.catalog)
             }
             .buttonStyle(RowPressStyle())
             .disabled(model.listPageBusy)
@@ -163,7 +164,7 @@ struct ChatListView: View {
             // swipe: the system's takes a flick as one too, and a conversation went at a brush (user 10-26). 撤销 stays
             // under the list for six seconds. VoiceOver finds it among the row's actions.
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if !chat.group && chat.kind.isEmpty && sourceOrder.contains(chat.app) {
+                if !chat.group && chat.kind.isEmpty && model.catalog.can(chat.app, { $0.archive }) {
                     Button {
                         model.archive(chat)
                     } label: {
@@ -205,7 +206,7 @@ struct ChatListView: View {
         let name: (Chat) -> String
         switch model.listGroup {
         case "project": name = { $0.folder.isEmpty ? "未分组" : $0.folder }
-        case "app": name = { Labels.sourceName($0.app) }
+        case "app": name = { Labels.sourceName($0.app, catalog: model.catalog) }
         default: name = { _ in "" }
         }
         let ordered = model.listGroup == "none" ? model.chats
@@ -335,7 +336,7 @@ private struct SourceChips: View {
     var body: some View {
         let known = model.knownApps
         let apps = known ?? (model.listSource == "all" ? [] : [model.listSource])
-        let options = [("all", L("全部"))] + apps.map { ($0, Labels.sourceName($0)) }
+        let options = [("all", L("全部"))] + apps.map { ($0, Labels.sourceName($0, catalog: model.catalog)) }
         HStack(spacing: 8) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
@@ -465,7 +466,7 @@ private struct ListDisplayMenu: View {
             Picker("来源", selection: Binding(get: { model.listSource }, set: { model.listDisplay(source: $0) })) {
                 Text("全部应用").tag("all")
                 ForEach(apps, id: \.self) { app in
-                    Text(Labels.sourceName(app)).tag(app)
+                    Text(Labels.sourceName(app, catalog: model.catalog)).tag(app)
                 }
             }
             .pickerStyle(.menu)
@@ -620,7 +621,7 @@ private struct EmptyList: View {
 
     private var conditions: [String] {
         var parts: [String] = []
-        if model.listSource != "all" { parts.append("来源：" + Labels.sourceName(model.listSource)) }
+        if model.listSource != "all" { parts.append("来源：" + Labels.sourceName(model.listSource, catalog: model.catalog)) }
         let states = ["running": "运行中", "waiting": "等待处理", "idle": "已结束"]
         if model.listStatus != "all" { parts.append("状态：" + (states[model.listStatus] ?? "")) }
         if searching { parts.append("搜索：" + model.query) }

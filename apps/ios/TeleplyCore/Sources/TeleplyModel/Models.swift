@@ -136,9 +136,6 @@ public struct ReadFailure: Error, Sendable, Equatable {
     }
 }
 
-/// The desktop apps in the order the web and the sidebar show them.
-public let sourceOrder = ["codex", "claude", "deepseek"]
-
 /// org.json getString: present and not null, or the read fails.
 func requiredString(_ json: JSONValue, _ key: String) throws -> String {
     guard json.has(key) else { throw RelayError.unreadable }

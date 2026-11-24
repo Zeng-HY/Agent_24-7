@@ -101,7 +101,7 @@ public func newJobProgress(_ job: NewJob) -> String {
 }
 
 /// A row above the list for a job not on screen (web dockText).
-public func newJobDock(_ job: NewJob) -> String {
+public func newJobDock(_ job: NewJob, catalog: AgentCatalogSnapshot = .current) -> String {
     let words = oneLine(job.text, limit: 60)
-    return Labels.sourceName(job.app) + " · " + newJobState(job) + " · " + (words.isEmpty ? "新对话" : words)
+    return Labels.sourceName(job.app, catalog: catalog) + " · " + newJobState(job) + " · " + (words.isEmpty ? "新对话" : words)
 }

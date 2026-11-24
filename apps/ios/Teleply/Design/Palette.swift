@@ -1,4 +1,6 @@
 import SwiftUI
+import TeleplyModel
+import UIKit
 
 /// The web's colour values (remote.html :root, static/theme.css) as asset-catalog colours with a light and a
 /// dark value each (spec 2.2). Views take colours by role, never a grey of their own.
@@ -49,12 +51,14 @@ enum Palette {
     static let cardBackground = Color("CardBackground")
     static let cardForeground = Color("CardForeground")
 
-    /// The source marks (web sidebar .mark; Android Brand.kt).
+    /// The source marks (web sidebar .mark; Android Brand.kt). The three keep their own asset colours; any other
+    /// assistant takes the colour its computer's manifest gives, or the neutral grey (handoff 3.3).
     static func tint(_ app: String) -> Color {
         switch app {
+        case "codex": return Color("CodexTint")
         case "claude": return Color("ClaudeTint")
         case "deepseek": return Color("DeepSeekTint")
-        default: return Color("CodexTint")
+        default: return agentColor(app)
         }
     }
 
@@ -63,8 +67,30 @@ enum Palette {
         switch app {
         case "claude": return Color("ClaudeTint")
         case "deepseek": return Color("DeepSeekTint")
-        default: return codexBadge
+        case "codex": return codexBadge
+        default: return color(hex: AgentCatalogSnapshot.current.badgeColor(app)) ?? muted
         }
+    }
+
+    /// A new assistant's mark colour, light and dark, from its manifest; the neutral grey when it gave none.
+    private static func agentColor(_ app: String) -> Color {
+        let catalog = AgentCatalogSnapshot.current
+        guard let light = color(hex: catalog.color(app)), let dark = color(hex: catalog.color(app, dark: true)) else { return muted }
+        return Color(uiColor: UIColor(dynamicProvider: { traits in
+            UIColor(traits.userInterfaceStyle == .dark ? dark : light)
+        }))
+    }
+
+    /// `#RRGGBB` or `#AARRGGBB` as a colour; nil when it is neither (the computer's value is never trusted).
+    static func color(hex: String) -> Color? {
+        var digits = hex.trimmingCharacters(in: .whitespaces)
+        if digits.hasPrefix("#") { digits.removeFirst() }
+        guard digits.count == 6 || digits.count == 8, let value = UInt32(digits, radix: 16) else { return nil }
+        return Color(.sRGB,
+                     red: Double((value >> 16) & 0xFF) / 255,
+                     green: Double((value >> 8) & 0xFF) / 255,
+                     blue: Double(value & 0xFF) / 255,
+                     opacity: digits.count == 8 ? Double((value >> 24) & 0xFF) / 255 : 1)
     }
 }
 

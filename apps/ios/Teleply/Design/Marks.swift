@@ -2,26 +2,37 @@ import SwiftUI
 import TeleplyModel
 
 /// A source's own mark (spec 2.4, 4.2): Codex's cloud in ink, Claude's orange and DeepSeek's blue, from the
-/// vector assets made out of Android Brand.kt.
+/// vector assets made out of Android Brand.kt. Any other assistant draws the generic mark — one SF Symbol — as the
+/// website's generic icon does; a remote icon is not downloaded yet (handoff 3.3).
 struct SourceMark: View {
     let app: String
     var size: CGFloat = 18
 
     var body: some View {
-        Image(asset)
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .foregroundStyle(Palette.tint(app))
-            .accessibilityHidden(true)
+        Group {
+            if let asset {
+                Image(asset)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "sparkles")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(size * 0.08)
+            }
+        }
+        .frame(width: size, height: size)
+        .foregroundStyle(Palette.tint(app))
+        .accessibilityHidden(true)
     }
 
-    private var asset: String {
+    private var asset: String? {
         switch app {
+        case "codex": return "CodexMark"
         case "claude": return "ClaudeMark"
         case "deepseek": return "DeepSeekMark"
-        default: return "CodexMark"
+        default: return nil
         }
     }
 }
@@ -29,9 +40,10 @@ struct SourceMark: View {
 /// The list's source badge (web .badge): the source name in 11 pt semibold white on its colour, 6 pt corners.
 struct SourceBadge: View {
     let app: String
+    var catalog: AgentCatalogSnapshot = .current
 
     var body: some View {
-        Text(verbatim: Labels.sourceName(app))
+        Text(verbatim: Labels.sourceName(app, catalog: catalog))
             .scaledFont(11, .semibold, relativeTo: .caption2)
             .foregroundStyle(.white)
             .lineLimit(1)

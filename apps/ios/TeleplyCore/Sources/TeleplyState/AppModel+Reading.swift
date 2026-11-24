@@ -45,7 +45,7 @@ extension AppModel {
 
     /// Points reading at [app] when it changes (the list's rows carry their own source).
     func useSource(_ source: String) async {
-        guard !source.isEmpty, source != app, sourceOrder.contains(source) else { return }
+        guard isValidAgentId(source), source != app else { return }
         app = source
         clearReading()
         if !fixture { await services.store.setSource(source) }

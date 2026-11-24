@@ -55,7 +55,7 @@ struct ArchivedView: View {
             }
             .listRowBackground(Color.clear)
             ForEach(groups(items), id: \.app) { group in
-                Section(Labels.sourceName(group.app)) {
+                Section(Labels.sourceName(group.app, catalog: model.catalog)) {
                     ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
                         let key = row["app"].string() + ":" + row["id"].string()
                         ArchivedRow(row: row, picked: picked.contains(key), canPick: row["can_delete"].bool() && deletable.contains(row["app"].string()) && !busy,

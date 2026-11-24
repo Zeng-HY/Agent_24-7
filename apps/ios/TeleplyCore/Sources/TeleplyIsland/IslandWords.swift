@@ -24,9 +24,12 @@ public enum IslandWords {
 
     public static func appName(_ app: String) -> String {
         switch app {
+        case "codex": return "Codex"
         case "claude": return "Claude"
         case "deepseek": return "DeepSeek"
-        default: return "Codex"
+        // A new assistant: its id, until the push or the catalog names it (the island is a separate target and
+        // cannot read the catalog; the third step brings the name in the push itself).
+        default: return app
         }
     }
 

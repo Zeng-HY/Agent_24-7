@@ -33,13 +33,17 @@ struct RelayReadTests {
         await #expect(throws: ReadFailure("登录响应缺少有效的账号凭据")) { try await client.login(name: "a", password: "b") }
     }
 
-    @Test func mixedListKeepsEachRowsSourceAndRefusesUnknownOnes() async throws {
+    @Test func mixedListKeepsEachRowsSourceAndAcceptsAnyLegalOne() async throws {
         let mixed = RelayClient(origin: .default, transport: RecordingTransport { _ in
             .json(#"{"items":[{"id":"a","app":"codex","title":"A"},{"id":"b","app":"claude","title":"B"},{"id":"c","app":"deepseek","title":"C"}],"has_more":false}"#)
         })
         #expect(try await mixed.chatList(device: device, app: "all", sort: "created", status: "waiting").items.map(\.app) == ["codex", "claude", "deepseek"])
+        // 第一段 (handoff 3.2): an assistant this app does not know yet is a legal source, drawn generically; only a
+        // row whose source is not an id at all is refused.
         let unknown = RelayClient(origin: .default, transport: RecordingTransport { _ in .json(#"{"items":[{"id":"x","app":"other","title":"X"}]}"#) })
-        await #expect(throws: ReadFailure("来源应用不匹配")) { try await unknown.chatList(device: device, app: "all") }
+        #expect(try await unknown.chatList(device: device, app: "all").items.map(\.app) == ["other"])
+        let illegal = RelayClient(origin: .default, transport: RecordingTransport { _ in .json(#"{"items":[{"id":"x","app":"Mail!","title":"X"}]}"#) })
+        await #expect(throws: ReadFailure("来源应用不匹配")) { try await illegal.chatList(device: device, app: "all") }
         let claudeRow = RelayClient(origin: .default, transport: RecordingTransport { _ in .json(#"{"items":[{"id":"x","app":"claude","title":"X"}]}"#) })
         await #expect(throws: ReadFailure("来源应用不匹配")) { try await claudeRow.chatList(device: device, app: "codex") }
     }
@@ -147,7 +151,8 @@ struct RelayReadTests {
         })
         #expect(try await client.account().devices == [Computer(id: device, label: "测试电脑 A", connectable: true)])
         let tree = try JSONValue.parse(Data(#"{"apps":[{"app":"deepseek"},{"app":"codex"},{"app":"other"}]}"#.utf8))
-        #expect(treeApps(tree) == ["codex", "deepseek"])
+        // 第一段: every legal id the tree names stays, in the catalog's order, an unknown one last (handoff 3.2).
+        #expect(treeApps(tree) == ["codex", "deepseek", "other"])
     }
 
     /// 用量 (11-17): the read is a GET with live=1, the reset a POST carrying the request id and the confirmation.

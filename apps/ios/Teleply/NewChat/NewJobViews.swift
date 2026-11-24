@@ -16,7 +16,7 @@ struct NewJobDock: View {
                     Button {
                         model.openJob(job)
                     } label: {
-                        Text(newJobDock(job))
+                        Text(newJobDock(job, catalog: model.catalog))
                             .noteFont()
                             .foregroundStyle(job.problem ? Palette.danger : Palette.muted)
                             .lineLimit(1)
@@ -83,7 +83,7 @@ struct NewJobSheet: View {
                     if let job {
                         let place = job.projectless ? "无项目" : (job.label.isEmpty ? lastPart(job.folder) : job.label)
                         let words = oneLine(job.text, limit: 40)
-                        Text([Labels.sourceName(job.app), place, words.isEmpty ? "只有图片或引用" : words].filter { !$0.isEmpty }.joined(separator: " · "))
+                        Text([Labels.sourceName(job.app, catalog: model.catalog), place, words.isEmpty ? "只有图片或引用" : words].filter { !$0.isEmpty }.joined(separator: " · "))
                             .noteFont()
                             .foregroundStyle(Palette.muted)
                         Text(newJobProgress(job))

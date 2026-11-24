@@ -92,7 +92,7 @@ struct DrawerView: View {
             let app = group["app"].string()
             let appKey = "app:" + app
             let appOpen = !folds.keys.contains(appKey)
-            let name = group["name"].string().isEmpty ? Labels.sourceName(app) : group["name"].string()
+            let name = group["name"].string().isEmpty ? Labels.sourceName(app, catalog: model.catalog) : group["name"].string()
             rows.append(DrawerRow(id: appKey, kind: .app(index: index, app: app, name: name, open: appOpen)))
             guard appOpen else { continue }
             let projects = group["projects"].array
@@ -140,7 +140,7 @@ struct DrawerView: View {
                 .transition(.opacity)
         case .project(let key, let app, let name, let folder, let projectless, let open):
             TreeProject(name: name, projectless: projectless, open: open,
-                        addLabel: projectless ? "新建不在项目里的\(Labels.sourceName(app))对话" : "在「\(name)」新建对话",
+                        addLabel: projectless ? "新建不在项目里的\(Labels.sourceName(app, catalog: model.catalog))对话" : "在「\(name)」新建对话",
                         add: folder.isEmpty && !projectless ? nil : chrome.tap {
                             close()
                             model.startNew(app: app, folder: projectless ? "" : folder, projectless: projectless)

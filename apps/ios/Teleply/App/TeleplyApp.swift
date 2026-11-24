@@ -13,6 +13,8 @@ struct TeleplyApp: App {
         Labels.language = Locale.current.language.languageCode?.identifier == "en" ? "en" : "zh-Hans"
         Hints.language = Labels.language
         IslandWords.language = Labels.language
+        // The protocol handshake every request carries: X-Teleply-Client: ios/<version> (handoff 3.1).
+        TeleplyClient.version = AppVersion.short
         let vault = KeychainVault()
         // The keychain outlives the app; a reinstall starts signed out (plan: 登录).
         vault.forgetAfterReinstall()

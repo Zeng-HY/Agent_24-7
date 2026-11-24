@@ -215,14 +215,20 @@ public final class ChatModel {
             do {
                 connection = "正在核对实时状态"
                 control.available = false
-                let state = try await client.control(device: key.device, app: key.app, chat: key.chat)
-                guard t == token else { return }
-                take(state, key)
-                // Recovery reads receipts only; nothing is sent again.
-                for record in submissions where unsettledLabels.contains(record.label) || record.action == "stop" {
-                    try? await reconcile(record, client)
+                // 第一段 (handoff 3.4): a new assistant's state and its actions live at /api/agents/<id>/…, which the
+                // second step brings. Until then its conversation only reads and follows the live stream: no state
+                // read (it has none at the old address), no poll, so no wrong "连接中断" line over a readable page.
+                let stateful = AgentCatalogSnapshot.current.isLegacy(key.app)
+                if stateful {
+                    let state = try await client.control(device: key.device, app: key.app, chat: key.chat)
+                    guard t == token else { return }
+                    take(state, key)
+                    // Recovery reads receipts only; nothing is sent again.
+                    for record in submissions where unsettledLabels.contains(record.label) || record.action == "stop" {
+                        try? await reconcile(record, client)
+                    }
+                    guard t == token else { return }
                 }
-                guard t == token else { return }
                 // The local demo has no live stream (Android: an empty flow).
                 if synthetic {
                     connection = "本地固定场景"
@@ -230,7 +236,7 @@ public final class ChatModel {
                     return
                 }
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    if key.app != "codex" {
+                    if stateful && key.app != "codex" {
                         let every: Duration = key.app == "claude" ? .seconds(5) : .milliseconds(2_500)
                         group.addTask { [weak self] in try await self?.poll(key, client, t, every) }
                     }

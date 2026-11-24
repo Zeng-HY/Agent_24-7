@@ -52,7 +52,7 @@ struct NewChatSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if apps.count > 1 {
                         Picker("来源", selection: Binding(get: { app }, set: { next in switchSource(to: next, from: app, ready: ready) })) {
-                            ForEach(apps, id: \.self) { Text(Labels.sourceName($0)).tag($0) }
+                            ForEach(apps, id: \.self) { Text(Labels.sourceName($0, catalog: model.catalog)).tag($0) }
                         }
                         .pickerStyle(.segmented)
                     }
@@ -117,7 +117,7 @@ struct NewChatSheet: View {
 
     @ViewBuilder
     private func sourceNote(_ app: String) -> some View {
-        let name = Labels.sourceName(app)
+        let name = Labels.sourceName(app, catalog: model.catalog)
         if model.sources.failed != nil && !model.sources.loading {
             Button("读不到这台电脑上有哪些应用，先用 \(name)。点这里重试") { model.retrySources() }
                 .noteFont()

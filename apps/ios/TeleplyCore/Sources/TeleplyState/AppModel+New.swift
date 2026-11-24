@@ -32,7 +32,7 @@ extension AppModel {
         let fromReading = screen == .reading
         // From a conversation: a read of it still under way must not bring its page back over the list.
         if fromReading { cancelWork() }
-        let switched = target != app && sourceOrder.contains(target)
+        let switched = target != app && isValidAgentId(target)
         if switched {
             app = target
             clearReading()

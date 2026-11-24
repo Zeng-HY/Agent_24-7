@@ -144,7 +144,7 @@ extension AppModel {
     /// The ⋯ 列表显示 menu: 分组, 排序, 状态, 来源.
     public func listDisplay(source: String? = nil, sort: String? = nil, status: String? = nil, group: String? = nil) {
         let source = source ?? listSource, sort = sort ?? listSort, status = status ?? listStatus
-        guard source == "all" || sourceOrder.contains(source) else { return }
+        guard source == "all" || isValidAgentId(source) else { return }
         let reload = source != listSource || sort != listSort || status != listStatus
         listSource = source
         listSort = sort
@@ -195,16 +195,17 @@ extension AppModel {
         guard !fixture, !scope.isEmpty else { return nil }
         let key = sourcesKey(scope: scope, device: device)
         guard let saved = await services.store.detail(scope: key.scope, device: key.device, app: key.app, chat: key.chat, kind: "sources") else { return nil }
-        return saved.split(separator: ",").map(String.init).filter { sourceOrder.contains($0) }
+        return saved.split(separator: ",").map(String.init).filter { isValidAgentId($0) }
     }
 
-    /// The chips' and the sheet's 重试: ask the computer again.
+    /// The chips' and the sheet's 重试: ask the computer again, for its apps and for its assistant list.
     public func retrySources() {
         if let device, sources.device == device.id {
             sources.loading = true
             sources.failed = nil
         }
         loadTree(force: true)
+        if let id = device?.id { refreshAgents(device: id, force: true) }
     }
 
     /// The computer answered with its apps: a list filter on one it does not have goes back to 全部.
@@ -215,6 +216,69 @@ extension AppModel {
         listCursor = nil
         listMore = false
         if listShown { operation(.list) { [weak self] g in try await self?.loadChats(g) } }
+    }
+
+    // MARK: The assistants this computer has (handoff 3.2): its manifest list, one catalog per computer
+
+    /// The catalog of the computer in use, kept in step with [device]: another computer's catalog shows from this
+    /// phone's memory at once, then the computer is asked again. Called from live().
+    func syncCatalog() {
+        let id = device?.id ?? ""
+        guard id != agentsFor else { return }
+        agentsFor = id
+        agentsTask?.cancel()
+        agentsTask = nil
+        catalog = id.isEmpty ? .builtin : agentCatalog.snapshot(for: id)
+        AgentCatalogSnapshot.current = catalog
+        if !id.isEmpty { refreshAgents(device: id, force: false) }
+    }
+
+    /// Asks the computer for its assistant list (GET /api/agents): on entering it, another computer, 重试, and when its
+    /// version changed. A 404 keeps the three built-ins (an older computer); a call that failed keeps what this phone
+    /// already had and asks again next time (nothing new is recorded). Never fails a page: reading the list is all
+    /// this needs.
+    func refreshAgents(device id: String, force: Bool) {
+        agentsTask?.cancel()
+        let client = client
+        let known = agentCatalog.snapshotIfAny(for: id)
+        agentsTask = Task { [weak self] in
+            guard let self else { return }
+            // Its version tells whether the list can have changed; it is recorded only once the list arrived, so a
+            // failed call is asked again next time.
+            let version = await self.serverVersion(id)
+            guard !Task.isCancelled, self.device?.id == id else { return }
+            if !force, known != nil, !version.isEmpty, version == self.agentCatalog.version(for: id) { return }
+            do {
+                let fetched = try await client.agents(device: id)
+                guard !Task.isCancelled, self.device?.id == id else { return }
+                self.applyCatalog(self.agentCatalog.store(fetched, for: id, version: version), device: id)
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, self.device?.id == id else { return }
+                // Nothing was read: the three built-ins, or the catalog this phone kept from before.
+                self.applyCatalog(self.agentCatalog.snapshot(for: id), device: id)
+            }
+        }
+    }
+
+    /// The computer's own version (`/api/status`'s ui_version; older computers say version); "" when it cannot say.
+    func serverVersion(_ id: String) async -> String {
+        guard let path = try? RelayClient.devicePath(id, "/api/status"),
+              let status = try? await client.json(client.get(path, deadline: 10)) else { return "" }
+        let ui = status["ui_version"].string()
+        return ui.isEmpty ? status["version"].string() : ui
+    }
+
+    /// One computer's catalog is now the one to draw. The chips and the sidebar keep the computer's own groups, put in
+    /// the order the catalog gives them (handoff 3.2: 不认识的排最后).
+    func applyCatalog(_ snapshot: AgentCatalogSnapshot, device id: String) {
+        guard device?.id == id else { return }
+        catalog = snapshot
+        AgentCatalogSnapshot.current = snapshot
+        if sources.device == id, !tree.object.isEmpty {
+            let apps = treeApps(tree, catalog: snapshot)
+            if sources.apps != apps { sources.apps = apps }
+        }
     }
 
     // MARK: The sidebar tree (spec 4.2)
@@ -241,7 +305,7 @@ extension AppModel {
                 let request = try client.get(RelayClient.devicePath(device.id, "/api/chat/projects"), query: [("more", more.isEmpty ? nil : encoded)])
                 let tree = try await client.json(request)
                 guard let self, !Task.isCancelled, (self.origin, self.scope, self.device?.id ?? "") == owner else { return }
-                let apps = treeApps(tree)
+                let apps = treeApps(tree, catalog: self.catalog)
                 self.treeAt = Date()
                 self.tree = tree
                 self.treeError = nil

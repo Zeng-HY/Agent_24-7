@@ -23,9 +23,11 @@ enum IslandPalette {
 
     static func source(_ app: String) -> Color {
         switch app {
+        case "codex": return codex
         case "claude": return claude
         case "deepseek": return deepseek
-        default: return codex
+        // A new assistant gets the neutral grey for now; its own colour comes with the push in the third step.
+        default: return muted
         }
     }
 
@@ -48,28 +50,39 @@ struct IslandMark: View {
     var dot = false
 
     var body: some View {
-        Image(asset)
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .foregroundStyle(IslandPalette.source(app))
-            .overlay(alignment: .bottomTrailing) {
-                if dot {
-                    Circle()
-                        .fill(IslandPalette.ask)
-                        .frame(width: size * 0.34, height: size * 0.34)
-                        .offset(x: size * 0.1, y: size * 0.1)
-                }
+        Group {
+            if let asset {
+                Image(asset)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                // A new assistant: the same generic mark the app draws (a remote icon is not downloaded yet).
+                Image(systemName: "sparkles")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(size * 0.08)
             }
-            .accessibilityHidden(true)
+        }
+        .frame(width: size, height: size)
+        .foregroundStyle(IslandPalette.source(app))
+        .overlay(alignment: .bottomTrailing) {
+            if dot {
+                Circle()
+                    .fill(IslandPalette.ask)
+                    .frame(width: size * 0.34, height: size * 0.34)
+                    .offset(x: size * 0.1, y: size * 0.1)
+            }
+        }
+        .accessibilityHidden(true)
     }
 
-    private var asset: String {
+    private var asset: String? {
         switch app {
+        case "codex": return "CodexMark"
         case "claude": return "ClaudeMark"
         case "deepseek": return "DeepSeekMark"
-        default: return "CodexMark"
+        default: return nil
         }
     }
 }

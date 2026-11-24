@@ -5,6 +5,16 @@ public enum HTTPMethod: String, Sendable {
     case post = "POST"
 }
 
+/// The manifest protocol this app speaks, and the tag every request to the service carries (handoff 3.1; Android
+/// RelayApi.kt `TeleplyProtocol`: 2 and `android/<version>`). A computer without protocol 2 silently treats this as
+/// protocol 1, as before: the three old assistants answer exactly as they did.
+public enum TeleplyClient {
+    public static let protocolVersion = 2
+    /// "0.9.0": set once at launch from the app's own bundle (LaunchOptions sets it); tests keep it empty.
+    nonisolated(unsafe) public static var version = ""
+    public static var tag: String { "ios/" + (version.isEmpty ? "?" : version) }
+}
+
 /// One call to the relay, built here and carried out by a RelayTransport (URLSession on the phone, a fake in
 /// tests and the local demo).
 public struct RelayRequest: Sendable, Equatable {
@@ -121,9 +131,12 @@ public struct RelayClient: Sendable {
     }
 
     /// Throws when the keychain cannot be read now (phone locked), so nothing goes out without the sign-in and
-    /// a resulting 401 cannot sign the user out.
+    /// a resulting 401 cannot sign the user out. Every call to the service also carries the protocol handshake
+    /// (handoff 3.1): the computer then sends the new assistants and `/api/agents`, and an older one ignores both.
     func signed(_ headers: [String: String]) throws -> [String: String] {
         var headers = headers
+        headers["X-Teleply-Protocol"] = String(TeleplyClient.protocolVersion)
+        headers["X-Teleply-Client"] = TeleplyClient.tag
         if let header = try vault?.read(origin.key)?.header(at: now()) { headers["Cookie"] = header }
         return headers
     }
@@ -217,16 +230,28 @@ public struct RelayClient: Sendable {
 
     // MARK: Reading a computer
 
+    /// The assistants this computer offers (GET /api/agents, protocol 2): nil for an older computer that answers 404
+    /// there, which keeps the app's own three (handoff 3.2; Android RelayApi.agents).
+    public func agents(device: String) async throws -> [AgentInfo]? {
+        let path = try Self.devicePath(device, "/api/agents")
+        do {
+            return parseAgentsResponse(try await json(get(path, deadline: 20)))
+        } catch let failure as ServiceFailure where failure.status == 404 {
+            return nil
+        }
+    }
+
     /// The web list (spec 4.1): [app] is "all" or one source; [sort] updated / created; [status] all / running /
-    /// waiting / idle. Every row must belong to a known source, and to [app] when it is one.
+    /// waiting / idle. Every row must belong to a source the computer named, and to [app] when it is one; an
+    /// assistant this app does not know yet is a legal source too, drawn generically and read-only (handoff 3.2).
     public func chatList(device: String, app: String, query: String = "", cursor: String? = nil,
                          sort: String = "updated", status: String = "all") async throws -> Page<Chat> {
-        guard app == "all" || sourceOrder.contains(app) else { throw ReadFailure("来源应用无效") }
+        guard app == "all" || isValidAgentId(app) else { throw ReadFailure("来源应用无效") }
         let page = try await json(get(Self.devicePath(device, "/api/chats"),
                                       query: [("app", app), ("limit", "40"), ("query", query), ("cursor", cursor), ("sort", sort), ("status", status)]))
         let items = try page["items"].array.map { row -> Chat in
             let chat = try parseChat(row)
-            guard sourceOrder.contains(chat.app), app == "all" || chat.app == app else { throw ReadFailure("来源应用不匹配") }
+            guard isValidAgentId(chat.app), app == "all" || chat.app == app else { throw ReadFailure("来源应用不匹配") }
             return chat
         }
         return Page(items: items, cursor: Self.cursor(page), hasMore: page["has_more"].bool())
@@ -417,7 +442,9 @@ public struct RelayClient: Sendable {
     /// closes, so the caller reconnects for a new snapshot.
     public func events(device: String, app: String, chat: String) throws -> AsyncThrowingStream<LiveFrame, any Error> {
         guard let streaming = transport as? any RelayStreamingTransport else { throw ReadFailure("当前服务不支持实时连接") }
-        var request = try get(Self.devicePath(device, "/api/events"), query: [("app", app), ("id", chat), ("lite", "1")])
+        var request = try get(Self.devicePath(device, "/api/events"),
+                              query: [("app", app), ("id", chat), ("lite", "1"),
+                                      ("protocol", String(TeleplyClient.protocolVersion)), ("client", TeleplyClient.tag)])
         request.headers["Accept"] = "text/event-stream"
         let opening = request, vault = vault, key = origin.key
         return AsyncThrowingStream { continuation in
@@ -448,10 +475,21 @@ public struct RelayClient: Sendable {
     }
 }
 
-/// The apps of a sidebar tree, each group one app this computer has, in the web's order.
-public func treeApps(_ tree: JSONValue) -> [String] {
-    let found = Set(tree["apps"].array.map { $0["app"].string() })
-    return sourceOrder.filter { found.contains($0) }
+/// The apps of a sidebar tree, each group one app this computer has: every legal id it names, in the catalog's order,
+/// an assistant the catalog does not know last (handoff 3.2; Android `isValidAgentId` + catalog order).
+public func treeApps(_ tree: JSONValue, catalog: AgentCatalogSnapshot = .builtin) -> [String] {
+    var found: [String] = []
+    for group in tree["apps"].array {
+        let id = group["app"].string()
+        guard isValidAgentId(id), !found.contains(id) else { continue }
+        found.append(id)
+    }
+    let order = catalog.order
+    return found.enumerated().sorted { left, right in
+        let a = order.firstIndex(of: left.element) ?? Int.max
+        let b = order.firstIndex(of: right.element) ?? Int.max
+        return a == b ? left.offset < right.offset : a < b
+    }.map(\.element)
 }
 
 public enum RelayError: Error, Sendable, Equatable {

@@ -103,10 +103,12 @@ public final class DemoWorld: Sendable {
         state.withLock { $0.stateReads }
     }
 
-    /// The desktop apps each demo computer has; 测试电脑 B has no Claude, like a tester's (Android 0.9.1).
+    /// The desktop apps each demo computer has; 测试电脑 B has no Claude, like a tester's (Android 0.9.1), and the
+    /// fake testing helper lives on 测试电脑 A only (handoff 3.7): it exists in the demo and the tests, never in the
+    /// real app's own list.
     func apps(of device: String) -> [String] {
         if site != nil { return ["deepseek"] }
-        return device == DemoData.computerB ? ["codex", "deepseek"] : sourceOrder
+        return device == DemoData.computerA ? DemoData.allApps : ["codex", "deepseek"]
     }
 
     /// Times the demo computer opened Claude's menus on its desktop (only 刷新 or a first read should).
@@ -655,6 +657,8 @@ enum DemoData {
     static let computerA = String(repeating: "a", count: 32)
     static let computerB = String(repeating: "b", count: 32)
     static let offline = String(repeating: "c", count: 32)
+    /// Every assistant 测试电脑 A has, the fake testing helper included (handoff 3.7).
+    static let allApps = ["codex", "claude", "deepseek", "testing"]
     static let ungrouped = "ungrouped"
     static let taskTitle = "整理发布清单"
 
@@ -683,6 +687,10 @@ enum DemoData {
         row("claude-demo", "Claude 选项示例", "测试项目", "请选择发布说明的格式", "waiting", "claude", now - 600_000),
         row("deepseek-demo", "DeepSeek 批准示例", "固定测试项目", "批准这一步吗？", "waiting", "deepseek", now - 1_800_000,
             ["children": .array(Array(deepseekChildren.prefix(2))), "child_count": 3, "child_running": 1]),
+        // 3.7: the fake testing helper's two rows, as agents/testing.py has them (0.9.0: while it runs, and waiting).
+        row("test-running", "测试对话 A", "测试项目", "正在跑测试", "running", "testing", now - 2_400_000,
+            ["turn_started": .number(Double(startedSeconds)), "step": "run"]),
+        row("test-waiting", "测试对话 B", "", "等你选择", "waiting", "testing", now - 3_000_000),
         row("question", "只读问题记录", "测试项目", "问题卡在时间线里作答", "waiting", "codex", now - 7_200_000),
         row("claude-next", "Claude 下一步示例", "测试项目", "下一步按钮和任务卡片", "idle", "claude", now - 9_000_000),
         row("plan-demo", "Codex 计划示例", "测试项目", "计划待确认", "idle", "codex", now - 10_800_000),
@@ -736,6 +744,13 @@ enum DemoData {
                 message("d2", "assistant", "需要运行一个命令删除构建目录，等你批准。", ["phase": "commentary"]),
                 message("subagent:sa-1", "subagent", "子智能体：检查日志", ["child": "sa-1", "label": "检查日志", "status": "running"]),
             ]
+        case "testing":
+            // The fake testing helper's record, word for word as agents/testing.py has it.
+            if chat == "test-waiting" {
+                return [message("t3", "user", "选一个方案"),
+                        message("t4", "assistant", "请选择 A 或 B", ["kind": "question"])]
+            }
+            return [message("t1", "user", "跑一下测试"), message("t2", "assistant", "正在跑")]
         default:
             if chat == "plan-demo" {
                 return [
@@ -795,10 +810,26 @@ enum DemoData {
              "projects": [project("p-test", "测试项目", codex), project("p-none", "其他对话", [], projectless: true)]],
             ["app": "claude", "name": "Claude", "count": .number(Double(only("claude").count)), "projects": [project("p-claude", "测试项目", only("claude"))]],
             ["app": "deepseek", "name": "DeepSeek", "count": .number(Double(only("deepseek").count)), "projects": [project("p-deepseek", deepseekProject, only("deepseek"))]],
+            ["app": "testing", "name": "测试助手", "count": .number(Double(only("testing").count)), "projects": [project("p-testing", "测试项目", only("testing"))]],
         ]
         // Only the apps this computer has, even with none of their conversations (remote.py filters the same way).
         return ["now": .number(Double(now)), "apps": .array(groups.filter { apps.contains($0["app"].string()) })]
     }
+
+    /// GET /api/agents as the demo computer answers (docs §三): only the assistants this computer has. The three old
+    /// ones' words and colours are ignored by the app, which keeps its own; the fake testing helper shows that a new
+    /// assistant needs no build of the app (handoff 3.2, 3.7).
+    static func agents(_ apps: [String]) -> JSONValue {
+        ["schema": 1, "protocol": 2, "agents": .array(agentManifests.filter { apps.contains($0["id"].string()) })]
+    }
+
+    /// One manifest per assistant, word for word as docs §三 describes them. `testing` matches agents/testing.py.
+    static let agentManifests: [JSONValue] = [
+        parse(#"{"schema":1,"id":"codex","name":{"zh":"Codex","en":"Codex"},"order":10,"color":"#1E222A","color_dark":"#EEEEEE","icon":{"kind":"builtin","key":"codex"},"legacy":true,"min_protocol":1,"capabilities":{"list":true,"read":true,"search":true,"open":true,"stop":true,"queue":true,"steer":true,"approve":true,"answer":true,"new":true,"new_projectless":true,"new_permission":false,"archive":true,"restore":true,"delete":true,"usage":true,"waiting":true,"attachments":true,"slash_commands":true,"settings":["model","effort"],"send_modes":["send","steer","queue"],"statuses":["running","waiting","idle","unknown"]},"params":{"state_timeout_s":40,"send_timeout_s":60,"open_timeout_s":45,"new_timeout_s":60,"refresh_ms":2500,"max_images":5,"max_image_bytes":52428800,"max_text":20000},"ui":{"card_layout":"codex.v1","waiting_text":"等你处理"}}"#),
+        parse(#"{"schema":1,"id":"claude","name":{"zh":"Claude","en":"Claude"},"order":20,"color":"#D97757","color_dark":"#D97757","icon":{"kind":"builtin","key":"claude"},"legacy":true,"min_protocol":1,"capabilities":{"list":true,"read":true,"search":true,"open":true,"stop":true,"queue":false,"steer":true,"approve":true,"answer":true,"new":true,"new_projectless":true,"new_permission":false,"archive":true,"restore":true,"delete":false,"usage":true,"waiting":true,"attachments":true,"slash_commands":true,"settings":["model","effort","permission","mode"],"send_modes":["send","steer"],"statuses":["running","waiting","idle","unknown"]},"params":{"state_timeout_s":20,"send_timeout_s":60,"open_timeout_s":45,"new_timeout_s":70,"refresh_ms":5000,"max_images":5,"max_image_bytes":52428800,"max_text":20000},"ui":{"card_layout":"claude.v1","waiting_text":"等待你处理"}}"#),
+        parse(#"{"schema":1,"id":"deepseek","name":{"zh":"DeepSeek","en":"DeepSeek"},"order":30,"color":"#4D6BFE","color_dark":"#4D6BFE","icon":{"kind":"builtin","key":"deepseek"},"legacy":true,"min_protocol":1,"capabilities":{"list":true,"read":true,"search":true,"open":true,"stop":true,"queue":true,"steer":true,"approve":true,"answer":true,"new":true,"new_projectless":false,"new_permission":true,"archive":true,"restore":true,"delete":false,"usage":false,"waiting":true,"attachments":true,"slash_commands":true,"settings":["model","permission"],"send_modes":["send","steer","queue"],"statuses":["running","waiting","idle","unknown"]},"params":{"state_timeout_s":40,"send_timeout_s":60,"open_timeout_s":45,"new_timeout_s":60,"refresh_ms":2500,"max_images":5,"max_image_bytes":52428800,"max_text":20000},"ui":{"card_layout":"deepseek.v1","waiting_text":"等待你处理"}}"#),
+        parse(#"{"schema":1,"id":"testing","name":{"zh":"测试助手","en":"Test Helper"},"order":99,"color":"#7C3AED","color_dark":"#A78BFA","icon":{"kind":"builtin","key":"generic"},"legacy":false,"min_protocol":2,"capabilities":{"list":true,"read":true,"search":true,"open":true,"stop":true,"queue":true,"steer":true,"approve":true,"answer":true,"new":true,"new_projectless":true,"new_permission":true,"archive":true,"restore":true,"delete":true,"usage":true,"waiting":true,"attachments":true,"slash_commands":true,"settings":["model","effort"],"send_modes":["send","steer","queue"],"statuses":["running","waiting","idle","unknown"]},"params":{"state_timeout_s":2,"send_timeout_s":5,"open_timeout_s":45,"new_timeout_s":60,"refresh_ms":1000,"max_images":5,"max_image_bytes":20971520,"max_text":20000},"ui":{"card_layout":"generic.v1","waiting_text":"等待你处理"}}"#),
+    ]
 
     static func parse(_ text: String) -> JSONValue {
         (try? JSONValue.parse(Data(text.utf8))) ?? [:]

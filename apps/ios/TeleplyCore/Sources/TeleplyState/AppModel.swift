@@ -126,6 +126,9 @@ public final class AppModel {
     public internal(set) var sources = SourceInfo()
     public internal(set) var tree: JSONValue = [:]
     public internal(set) var treeError: String?
+    /// The assistants this computer offers (GET /api/agents, handoff 3.2): the three built-ins until it answers, and
+    /// also what an older computer (404) keeps. Names, colours, marks and capability bits all come from here.
+    public internal(set) var catalog = AgentCatalogSnapshot.builtin
 
     // Reading (AppModel+Reading)
     public internal(set) var chat: Chat?
@@ -202,6 +205,11 @@ public final class AppModel {
     @ObservationIgnored var listJustRead = false
     @ObservationIgnored var treeTask: Task<Void, Never>?
     @ObservationIgnored var treeToken = 0
+    /// The catalog kept for each computer this phone entered (AppModel+List), and the read under way for the one in use.
+    @ObservationIgnored let agentCatalog = AgentCatalog()
+    @ObservationIgnored var agentsTask: Task<Void, Never>?
+    /// The computer [catalog] belongs to; "" before one is entered.
+    @ObservationIgnored var agentsFor = ""
     @ObservationIgnored var treeMore: [String: Int] = [:]
     @ObservationIgnored var treeAt: Date?
     /// Clears the page just left once its slide-out is over.
@@ -351,6 +359,10 @@ public final class AppModel {
             if listWork == running { break }
         }
         await treeTask?.value
+        while let running = agentsTask {
+            await running.value
+            if agentsTask == running { break }
+        }
         await leaving?.value
     }
 
@@ -390,6 +402,11 @@ public final class AppModel {
         tree = [:]
         treeError = nil
         treeTask?.cancel()
+        agentsTask?.cancel()
+        agentsTask = nil
+        agentsFor = ""
+        catalog = AgentCatalogSnapshot.builtin
+        AgentCatalogSnapshot.current = catalog
         treeMore = [:]
         treeAt = nil
         pendingNew = nil
@@ -591,6 +608,7 @@ public final class AppModel {
             try? await self.client.logout()
             await self.persistSelection(scope: self.scope, device: "")
             guard self.current(g) else { return }
+            self.agentCatalog.forget()
             self.clearAll()
             self.screen = .login
         }
@@ -711,6 +729,7 @@ public final class AppModel {
     /// the workspace holds the new conversation's draft ("@new"). A new conversation's page has no state yet:
     /// drafts only.
     public func live() {
+        syncCatalog()
         var key: ChatKey?
         if screen == .reading, !expired, let device, let chat { key = ChatKey(scope: scope, device: device.id, app: app, chat: chat.id) }
         let newPage = isNewPage(key?.chat)
@@ -821,11 +840,17 @@ public final class AppModel {
         }
     }
 
-    /// 测一下连接 (开发者选项 → 诊断测速): one status read of the computer in use, as the web words the outcome.
+    /// 测一下连接 (开发者选项 → 诊断测速): one status read of the computer in use, as the web words the outcome. Its
+    /// version also tells whether the computer was updated, which asks its assistant list again (handoff 3.2).
     public func checkStatus() async -> String {
         guard let device else { return "没有选择电脑" }
         do {
-            _ = try await client.json(client.get(RelayClient.devicePath(device.id, "/api/status"), deadline: 10))
+            let status = try await client.json(client.get(RelayClient.devicePath(device.id, "/api/status"), deadline: 10))
+            let ui = status["ui_version"].string()
+            let version = ui.isEmpty ? status["version"].string() : ui
+            if !version.isEmpty, version != agentCatalog.version(for: device.id) {
+                refreshAgents(device: device.id, force: true)
+            }
             return "成功"
         } catch let failure as ServiceFailure {
             return "HTTP \(failure.status)"

@@ -194,6 +194,9 @@ public struct DemoTransport: RelayFileTransport {
             return Self.json(world.site?.models ?? DemoData.deepseekModels)
         case "/api/deepseek/permissions":
             return Self.json(DemoData.deepseekPermissions)
+        case "/api/agents":
+            // The manifest list (handoff 3.2): only the assistants this demo computer has.
+            return Self.json(DemoData.agents(world.apps(of: device)))
         case "/api/chat/projects":
             return Self.json(DemoData.tree(device: device, apps: world.apps(of: device), more: query["more"], rows: world.firstPage(),
                                            deepseekProject: world.site?.project ?? "固定测试项目"))

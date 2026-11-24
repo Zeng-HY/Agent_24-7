@@ -6,13 +6,10 @@ public enum Labels {
     nonisolated(unsafe) public static var language = "zh-Hans"
     static var english: Bool { language.hasPrefix("en") }
 
-    public static func sourceName(_ app: String) -> String {
-        switch app {
-        case "codex": return "Codex"
-        case "claude": return "Claude"
-        case "deepseek": return "DeepSeek"
-        default: return app
-        }
+    /// An assistant's name: the catalog's, in the phone's language; the id for one the catalog does not know yet.
+    /// The three old ones keep their names exactly as before (they are in the built-in catalog).
+    public static func sourceName(_ app: String, catalog: AgentCatalogSnapshot = .current) -> String {
+        catalog.name(app)
     }
 
     /// A list row's state (Android statusLabel).

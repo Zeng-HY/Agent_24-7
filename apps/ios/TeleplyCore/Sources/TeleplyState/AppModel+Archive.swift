@@ -13,9 +13,10 @@ public struct ArchiveUndo: Equatable, Sendable {
 /// 左滑归档, 撤销 and 已归档对话 (spec 4.1, 4.6; web archive-ui.js; Android ReaderViewModel): the archive is made on
 /// the computer; the row leaves the list at once and comes back if the computer says no.
 extension AppModel {
-    /// Archives [chat] on the computer. A running conversation is refused here, as the computer would.
+    /// Archives [chat] on the computer. A running conversation is refused here, as the computer would; so is one whose
+    /// assistant cannot archive (handoff 3.3: the swipe is only there when the manifest allows it).
     public func archive(_ chat: Chat) {
-        guard let device, !chat.group, chat.kind.isEmpty, sourceOrder.contains(chat.app) else { return }
+        guard let device, !chat.group, chat.kind.isEmpty, catalog.can(chat.app, { $0.archive }) else { return }
         if chat.status == "running" {
             notice = "这个对话正在运行，先停止这一轮再归档"
             return

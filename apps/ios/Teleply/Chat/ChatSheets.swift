@@ -53,7 +53,7 @@ struct SearchSheet: View {
                                                 .foregroundStyle(Palette.ink)
                                                 .lineLimit(3)
                                                 .multilineTextAlignment(.leading)
-                                            Text(hit.role == "user" ? "你" : Labels.sourceName(model.app))
+                                            Text(hit.role == "user" ? "你" : Labels.sourceName(model.app, catalog: model.catalog))
                                                 .captionFont()
                                                 .foregroundStyle(Palette.muted)
                                         }

@@ -9,9 +9,11 @@ public struct PushTarget: Sendable, Equatable {
     public let app: String
     public let chat: String
 
-    /// Nil unless the computer is a 32-hex id, the app one of the sources and the conversation a short id.
+    /// Nil unless the computer is a 32-hex id, the app one this catalog knows (the three always are) and the
+    /// conversation a short id.
     public init?(device: String, app: String, chat: String) {
-        guard (try? RelayClient.devicePath(device, "")) != nil, sourceOrder.contains(app), !chat.isEmpty, chat.count <= 200 else {
+        guard (try? RelayClient.devicePath(device, "")) != nil, AgentCatalogSnapshot.current.contains(app),
+              !chat.isEmpty, chat.count <= 200 else {
             return nil
         }
         self.device = device
@@ -106,12 +108,14 @@ extension RelayClient {
         return PushStatus(available: state["available"].bool(), registered: state["registered"].bool(), phones: Int(state["phones"].int64()))
     }
 
-    /// Keeps this phone's token for the signed-in account (again, when it is there already).
+    /// Keeps this phone's token for the signed-in account (again, when it is there already). The protocol tells the
+    /// relay which assistants this app can show: the new ones' notices go only to phones that registered 2 (docs §九).
     public func pushRegister(token: String, environment: String, label: String, version: String,
                              language: String = "zh-Hans") async throws {
         _ = try await json(post("/account/push/register", json: ["token": .string(token), "platform": "ios", "environment": .string(environment),
                                                                   "label": .string(label), "version": .string(version),
-                                                                  "language": .string(language)]))
+                                                                  "language": .string(language),
+                                                                  "protocol": .string(String(TeleplyClient.protocolVersion))]))
     }
 
     public func pushUnregister(token: String) async throws {

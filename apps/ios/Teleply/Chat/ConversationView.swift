@@ -530,7 +530,7 @@ private struct ConversationTitle: View {
 
     var body: some View {
         let folder = model.chat?.folder.isEmpty == false ? model.chat?.folder ?? "" : model.pageMeta["folder"].string()
-        let meta = [folder, Labels.sourceName(model.app)].filter { !$0.isEmpty }.joined(separator: " · ")
+        let meta = [folder, Labels.sourceName(model.app, catalog: model.catalog)].filter { !$0.isEmpty }.joined(separator: " · ")
         VStack(alignment: .leading, spacing: 2) {
             Text(model.chat?.title ?? "对话")
                 .chatTitleFont()
