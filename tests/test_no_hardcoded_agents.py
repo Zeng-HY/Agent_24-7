@@ -2,11 +2,10 @@
 
 What this test checks (using `ast`, IDs loaded from production `agents.registry`):
   1. Exact string constants matching any production assistant ID (case-insensitive)
-     in `PYTHON_COMMON_FILES` (14 original shared files + `relay_controller.py`).
+     in `PYTHON_COMMON_FILES` (14 original shared files + `relay_controller.py` + `relay_desktop.py`).
      Every existing hit must match `ALLOW` exactly (no growth, no stale entries).
-     Note: `relay_desktop.py` is currently excluded from the string-literal scan
-     because `--self-test` (line 349) asserts `{'codex', 'claude', 'deepseek'} <= loaded_ids`;
-     it is still covered by checks (2) and (3) below.
+     `relay_desktop.py` has one allowed line: the packaged `--self-test` asserts that the
+     three legacy assistants are in the production list.
   2. Imports of per-assistant private modules (`import <id>_...` / `from <id>_... import ...`)
      across all 16 shared files (`AST_COMMON_FILES`, including `relay_controller.py`
      and `relay_desktop.py`), locked to exact per-file counts in `FROZEN_PRIVATE_IMPORTS`.
@@ -50,10 +49,11 @@ PYTHON_COMMON_FILES = (
     "usage_limits.py",
     "activity.py",
     "relay_controller.py",
+    "relay_desktop.py",
 )
 
 # All 16 shared computer-side files scanned for private-module imports and agent-named attributes.
-AST_COMMON_FILES = PYTHON_COMMON_FILES + ("relay_desktop.py",)
+AST_COMMON_FILES = PYTHON_COMMON_FILES
 
 # (filename, enclosing_scope, literal) -> (exact_count, reason)
 # Zero entries are allowed in remote.py, chat_history.py, notify.py,
@@ -82,6 +82,10 @@ ALLOW: dict[tuple[str, str, str], tuple[int, str]] = {
     # usage_limits.py: Codex wire-format rateLimitsByLimitId bucket key in Codex-only readers
     ("usage_limits.py", "_last_token_count", "codex"): (1, "Codex 用量原始协议字段 limit_id == 'codex'（仅由 CodexAgent 调用）"),
     ("usage_limits.py", "_live_snapshot", "codex"): (1, "Codex 用量原始协议字段 rateLimitsByLimitId['codex']（仅由 CodexAgent 调用）"),
+    # relay_desktop.py: the packaged --self-test checks the three legacy assistants are still in the production list
+    ("relay_desktop.py", "main", "codex"): (1, "打包自检：三家老助手必须在正式名单里（dev.42 漏打包的教训）"),
+    ("relay_desktop.py", "main", "claude"): (1, "打包自检：三家老助手必须在正式名单里（dev.42 漏打包的教训）"),
+    ("relay_desktop.py", "main", "deepseek"): (1, "打包自检：三家老助手必须在正式名单里（dev.42 漏打包的教训）"),
 }
 
 # Frozen per-file counts for importing assistant-private modules (`import <id>_...` / `from <id>_... import ...`).
