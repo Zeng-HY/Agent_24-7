@@ -40,6 +40,11 @@ MODE_CHOICES=re.compile(r'^(Plan|Manual|Auto|Ask(?: permissions)?)(?:\b|\s)',re.
 MODES_VERSION=2  # remembered mode lists from before Auto could be picked are read again from the desktop
 MODE_NOTICE='Plan 先出计划，确认后再改；Manual 每次改动前都先问你；Auto 自己做，遇到看起来不安全的操作才停下来问。'
 EFFORT_LABELS=('Low','Medium','High','Extra','Max','Ultracode')
+# 11-24: the phones poll a conversation's state every 5 s; each found the last read of Claude's window over 4 s old and
+# read it again through UI Automation (60-340 ms, longer behind other desktop work). A read up to STATE_STALE old is
+# answered at once, with what the hooks and the record say now, while the window is read again in the background.
+STATE_FRESH=4
+STATE_STALE=60
 
 
 def model_label(name):
@@ -166,8 +171,11 @@ def has_pending_prompt(path):
 
 
 class Controller:
+    ticket_lock=threading.Lock()  # 11-24: tickets are also handed out by a read in the background, outside self.lock
+    window_sink=threading.local()  # 11-24: per thread, the dict a window read fills for _read_keeping
     def __init__(self,desktop):
         self.desktop=desktop;self.cache={};self.choices={};self.lock=threading.RLock();self.menu_context=None;self.steer_submissions={}
+        self.revalidating={}  # conversation -> the thread reading its window again for the next poll (11-24)
         from claude_archive import SessionActions
         self.session_actions = SessionActions(self)
         self.catalog_path=DATA/'attachments'/'claude-catalog.json'
@@ -469,6 +477,13 @@ class Controller:
         except COMError:
             time.sleep(.5)
             return read(*args)
+    def _read_keeping(self,item,window):
+        """self._read(item), on the desktop's thread, with what the window alone showed (before anything the hooks add)
+        put in window: state() answers from it while it reads the window again (11-24). window stays empty when the read
+        fails. _read keeps its one argument: tests stand in for it."""
+        Controller.window_sink.window=window
+        try:return self._read(item)
+        finally:Controller.window_sink.window=None
     def _read(self,item):
         try:return self._again(self._read_once,item)
         except COMError as exc:  # twice in a row: say so, the phone reads again in 5 s
@@ -569,7 +584,7 @@ class Controller:
             for _,queued in self._queued(doc,buttons):
                 revision=signature([item['id'],anchor,queued['id']])
                 result['queued'].append({'id':queued['id'],'text':queued['text'],'token':self._ticket(item['id'],'steer_queued',{'id':queued['id']},revision)})
-            self._hook_queued(item,result)
+            # the phone messages Teleply holds follow the desktop's own queue: added below, after the window's part
             if result['running'] and anchor:
                 result['stop_revision']=signature([item['id'],anchor]);result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
             if usage:
@@ -603,6 +618,11 @@ class Controller:
                 else:
                     result['prompt']=None
         except chats.ChatError as exc:result['reason']=str(exc)
+        window=getattr(Controller.window_sink,'window',None)
+        if window is not None:  # what the window showed, apart from what the hooks add next (11-24)
+            window.clear();window.update(result)
+            if 'queued' in result:window['queued']=list(result['queued'])
+        if 'queued' in result:self._hook_queued(item,result)
         if hook_active:
             hs=self._hook_status(item,path)
             if hs is not None:self._apply_hook_status(item,result,hs)
@@ -623,23 +643,74 @@ class Controller:
         return None
     def state(self,tid,fresh=False):
         with self.lock:
+            # self.cache[tid]: (when, what was answered, the window's own part or None)
             old=self.cache.get(tid)
-            if not fresh and old and time.monotonic()-old[0]<4:return self._held(tid,old[1])
+            age=time.monotonic()-old[0] if old else None
+            if not fresh and old and age<STATE_FRESH:return self._held(tid,old[1])
             item=chats.find('claude',tid)
-            try:data=self.desktop.run(self._read,item,timeout=12)
-            except Exception as exc:data={'available':False,'reason':plain_error(exc),'settings':settings(item),'actions':[]}
-            hs=self._hook_status(item)
-            if hs is not None:
-                data=self._apply_hook_status(item,dict(data),hs)
-            else:
-                try:
-                    info=chats.summary(item)
-                    data={**data,'turn_started':info.get('turn_started',0),'turn_ended':info.get('turn_ended',0),
-                          'step':info.get('step','') if data.get('running') else ''}
-                except (OSError,chats.ChatError):pass
-            self.cache[tid]=(time.monotonic(),data)
-            if len(self.cache)>20:self.cache.pop(next(iter(self.cache)))
+            if not fresh and old and age<STATE_STALE:
+                data=self._stale(tid,item,old)
+                if data is not None:return self._held(tid,data)
+            data,window=self._read_state(item)
+            self._keep(tid,(time.monotonic(),data,window))
             return self._held(tid,data)
+    def _read_state(self,item):
+        """(what state() answers, the window's own part or None) from a read of Claude's window now."""
+        window={}
+        try:data=self.desktop.run(self._read_keeping,item,window,timeout=12)
+        except Exception as exc:
+            data={'available':False,'reason':plain_error(exc),'settings':settings(item),'actions':[]}
+            window={}  # a read that timed out may still fill the other one
+        return self._settle(item,data),window or None
+    def _settle(self,item,data,path=None):
+        """data with what the hooks, or else the record, say of the turn now: running, step, its times, the queue Teleply
+        holds and Stop."""
+        hs=self._hook_status(item,path)
+        if hs is not None:return self._apply_hook_status(item,dict(data),hs)
+        try:
+            info=chats.summary(item)
+            return {**data,'turn_started':info.get('turn_started',0),'turn_ended':info.get('turn_ended',0),
+                    'step':info.get('step','') if data.get('running') else ''}
+        except (OSError,chats.ChatError):return data
+    def _keep(self,tid,entry):
+        self.cache[tid]=entry
+        if len(self.cache)>20:self.cache.pop(next(iter(self.cache)))
+    def _stale(self,tid,item,old):
+        """What state() answers at once from a window read STATE_FRESH to STATE_STALE seconds old, starting a new read
+        for the next poll: the window's part as read then, what the hooks or the record say now. None when the window
+        must be read now: it showed a question or buttons (a stale one is never offered, and leaving it out would hide
+        it from the phone), a turn began since (Stop and the queue are bound to the turn), or the record shows Claude
+        asking something the window has not been seen to show."""
+        window=old[2] if len(old)>2 else None
+        if not window or window.get('prompt') or window.get('actions'):return None
+        path=chats.conv_path(item)
+        if 'turn_anchor' in window and turn_anchor(path)!=window['turn_anchor']:return None
+        if has_pending_prompt(path):return None
+        data={**window,'actions':[]}
+        if 'prompt' in data:data['prompt']=None
+        if 'queued' in data:  # the desktop's queue as read, then the phone messages Teleply holds now
+            data['queued']=list(data['queued'])
+            self._hook_queued(item,data)
+        self._revalidate(tid,item,old)
+        return self._settle(item,data,path)
+    def _revalidate(self,tid,item,old):
+        """Read the window again in the background for the next poll, through the same desktop worker; one read per
+        conversation at a time. What it reads is kept only if the entry it renews is still there (an action drops the
+        entry: a read from before an action is not kept after it), and only if the read worked: while the desktop worker
+        is busy the older read keeps answering, until it is STATE_STALE old and a poll reads in the foreground."""
+        running=self.revalidating.get(tid)
+        if running is not None and running.is_alive():return
+        def run():
+            try:
+                data,window=self._read_state(item)
+                with self.lock:
+                    if window is not None and self.cache.get(tid) is old:self._keep(tid,(time.monotonic(),data,window))
+            except Exception:pass  # the next poll reads it in the foreground, as before
+            finally:
+                with self.lock:
+                    if self.revalidating.get(tid) is thread:del self.revalidating[tid]
+        thread=threading.Thread(target=run,name='claude-state',daemon=True)
+        self.revalidating[tid]=thread;thread.start()
     def _held(self,tid,data):
         """data with the question or permission Claude Code holds open for this conversation (claude_hooks.py) as its
         prompt, in place of what was read off the desktop's card: answered from here, nothing on the desktop is clicked,
@@ -656,12 +727,13 @@ class Controller:
             part['token']=self._ticket(tid,'hook',{'ask':ask_id,'do':do},stamp) if ready else None
         return {**data,'prompt':prompt,'actions':[]}
     def _ticket(self,tid,kind,option,revision):
-        now=time.monotonic()
-        self.choices={k:v for k,v in self.choices.items() if now-v['created']<120}
-        for token,value in self.choices.items():
-            if value['id']==tid and value['kind']==kind and value['option']==option and value['revision']==revision and now-value['created']<60:return token
-        token=secrets.token_hex(16);self.choices[token]={'id':tid,'kind':kind,'option':option,'revision':revision,'created':now}
-        return token
+        with Controller.ticket_lock:  # a ticket taken by choose() must not come back with the trimmed copy (11-24)
+            now=time.monotonic()
+            self.choices={k:v for k,v in self.choices.items() if now-v['created']<120}
+            for token,value in self.choices.items():
+                if value['id']==tid and value['kind']==kind and value['option']==option and value['revision']==revision and now-value['created']<60:return token
+            token=secrets.token_hex(16);self.choices[token]={'id':tid,'kind':kind,'option':option,'revision':revision,'created':now}
+            return token
     def _menu(self,item,kind,page=None):
         # page: the new-session page as _new_page gives it, instead of the conversation item names (10-14)
         if kind not in ('model','effort','mode','fast'):raise chats.ChatError('未知设置项')
@@ -991,7 +1063,7 @@ class Controller:
             return result
     def choose(self,tid,token,value=None):
         with self.lock:
-            ticket=self.choices.pop(token,None)
+            with Controller.ticket_lock:ticket=self.choices.pop(token,None)
             if not ticket or ticket['id']!=tid or time.monotonic()-ticket['created']>=120:raise chats.ChatError('选项已过期，请重新打开面板')
             if ticket['kind']=='hook':  # answered through the request Claude Code holds open; the desktop is not touched
                 if self.hooks is None:raise chats.ChatError('选项已过期，请重新打开面板')

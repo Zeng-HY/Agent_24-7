@@ -1,7 +1,8 @@
 """Append-aware public transcript index and scoped result-file registry."""
 from __future__ import annotations
-import os
+import os,sys
 import base64,copy,hashlib,hmac,json,mimetypes,re,threading,time
+from array import array
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -14,10 +15,40 @@ class HistoryError(Exception):
 
 UNGROUPED='ungrouped'  # the list row standing for DeepSeek's Ungrouped bucket (10-20)
 CHILDREN_SHOWN=30      # children sent with a row; the rest on request (/api/chats/children)
-# 11-16: parsed transcripts kept in memory, bounded by how much source they hold. A ninth conversation used to throw
-# the oldest away, so opening it again parsed a 114 MB file from its first line.
+# 11-16: parsed transcripts kept in memory. A ninth conversation used to throw the oldest away, so opening it again
+# parsed a 114 MB file from its first line.
 MAX_TRANSCRIPTS=24
-MAX_TRANSCRIPT_BYTES=600<<20
+# 11-24: bounded by the memory the parsed messages take (Transcript.weight), no longer by the size of their files. A
+# parsed Claude record keeps 6-23% of its file (tracemalloc: 420 MB -> 48 MB, 319 MB -> 19 MB, 114 MB -> 14 MB), so the
+# 600 MB of files allowed before let two or three big conversations push out all the others, and each switch back
+# read a big file again for seconds.
+MAX_TRANSCRIPT_MEMORY=400<<20
+# The files' own size is only a far backstop now (the 30 recent Claude records on the PC total 1.3 GB).
+MAX_TRANSCRIPT_BYTES=4<<30
+# What a message costs beyond the strings, lists and dicts weigh() counts: its slots in messages, by_id and duplicates
+# (a 24-character digest each), its weight and its numbers. And each record uuid kept to leave a repeated copy out.
+# With these the estimate came within 7% of tracemalloc on 7 Claude records of 3-420 MB (11-24).
+MESSAGE_EXTRA=200
+UUID_EXTRA=140
+WEIGH_AGAIN=64  # rows before a read's first new one weighed again: a tool's result lands on its call's row lines later
+# 11-24: the conversations updated last are read ahead in the background, so opening one does not parse its file first
+# (a 420 MB Claude record took 5 s cold, 25 ms once read). Only in the installed app: History(warm=None).
+WARM_AFTER=20        # seconds after start
+WARM_EVERY=60        # seconds between rounds
+WARM_COUNT=8         # conversations read ahead, newest first
+WARM_SLICE=4<<20     # bytes read at a time, ending at a line's end ...
+WARM_PAUSE=.03       # ... with a pause between, so the page requests keep the interpreter
+WARM_GUESS=4         # a file not read yet counts as a quarter of its size in memory until it is (6-23% measured)
+
+def weigh(value,depth=0):
+    """Bytes held by one parsed message, or a list or dict inside it: the object itself and every string and container
+    it holds (sys.getsizeof each). Keys are the parsers' own names, shared by every message, and not counted."""
+    size=sys.getsizeof(value)
+    if depth>8:return size
+    for v in (value.values() if isinstance(value,dict) else value):
+        if isinstance(v,(str,bytes)):size+=sys.getsizeof(v)
+        elif isinstance(v,(dict,list,tuple,set)):size+=weigh(v,depth+1)
+    return size
 
 def encode(value):return base64.urlsafe_b64encode(json.dumps(value,separators=(',',':')).encode()).decode().rstrip('=')
 def decode(value):
@@ -32,16 +63,30 @@ class Transcript:
         self.context={'thread_id':tid} if tid else {}  # what a line needs to know of earlier ones (Claude's next-step boxes, 10-16)
         # 11-16: Codex writes each answer twice; the final answers by turn, so a big file is not scanned for each.
         self.final_answers={}
-    def refresh(self):
+        # 11-24: weigh() of each message, in step with self.messages, and their sum: what History's cache counts
+        self.weights=array('q');self.held=0
+        self.partial=False  # the last refresh stopped at its budget with whole lines left to read
+        self.sliced=False   # read in slices since the rows were last all weighed
+    @property
+    def weight(self):
+        """The memory this transcript keeps, estimated (bytes)."""
+        return self.held+len(self.messages)*MESSAGE_EXTRA+len(self.context.get('uuids') or ())*UUID_EXTRA
+    def refresh(self,budget=None):
+        """Read what the file gained since the last call. budget: stop at the end of the line that takes this call past
+        that many bytes; self.partial then says lines are left, and the next call goes on from self.offset (History's
+        read-ahead parses a big file a slice at a time, 11-24). Whole or in slices, the result is the same."""
         with self.lock:
             st=self.path.stat()
             if self.inode is not None and (st.st_ino!=self.inode or st.st_size<self.offset or (st.st_size==self.offset and st.st_mtime_ns!=self.mtime)):
                 self.offset=0;self.messages=[];self.by_id={};self.duplicates={};self.state={};self.modern=False;self.context={'thread_id':self.tid} if self.tid else {};self.final_answers={}
-            self.inode=st.st_ino
+                self.weights=array('q');self.held=0;self.sliced=False
+            self.inode=st.st_ino;self.partial=False
             if st.st_size==self.offset:self.size=st.st_size;self.mtime=st.st_mtime_ns;return self
+            first=len(self.messages);start=self.offset
             with self.path.open('rb') as f:
                 f.seek(self.offset)
                 while f.tell()<st.st_size:
+                    if budget is not None and self.offset-start>=budget:self.partial=True;break
                     raw=f.readline(st.st_size-f.tell())
                     if not raw.endswith(b'\n'):break
                     self.offset=f.tell()
@@ -93,13 +138,30 @@ class Transcript:
                                 if not any(v is row for v in rows):rows.append(row)
             # Read a line at a time, a box looked open on its own line for good, even after the user had answered (10-16)
             if self.agent.mark_next_open:self.agent.mark_open_next(self.messages)
+            # read in slices, a row filled in more than WEIGH_AGAIN rows later was missed: all weighed once at the end
+            if self.partial:self.sliced=True
+            elif self.sliced:first=0;self.sliced=False
+            self._weigh(first)
             self.size=st.st_size;self.mtime=st.st_mtime_ns
         return self
+    def _weigh(self,first):
+        """Weigh the rows this read added and the WEIGH_AGAIN before them, which a later line may have filled in."""
+        rows=self.messages;weights=self.weights
+        if len(weights)<len(rows):weights.frombytes(bytes(8*(len(rows)-len(weights))))
+        held=self.held
+        for i in range(max(0,first-WEIGH_AGAIN),len(rows)):
+            w=weigh(rows[i]);held+=w-weights[i];weights[i]=w
+        self.held=held
 
 class History:
-    def __init__(self,roots=None,secret=''):
+    def __init__(self,roots=None,secret='',warm=None):
         self.entries=OrderedDict();self.lock=threading.RLock();self.roots=roots or [];self.secret=secret.encode();self.files={};self.catalog_cache=(0,[],[])
         self.catalog_load_lock=threading.Lock();self.catalog_generation=0
+        # 11-24: the read-ahead (warm_once) runs on its own thread in the installed app only; tests call warm_once().
+        self.log=None  # a callable given the read-ahead's errors, when the service hands one over
+        self.warm_errors=0;self.warming=None;self.warm_stop=threading.Event()
+        if warm is None:warm=getattr(sys,'frozen',False)
+        if warm:self.start_warming()
     def transcript(self,app,tid):
         from agents import registry
         from agents.base import AgentError
@@ -112,15 +174,80 @@ class History:
         item=chats.find(app,tid);path=chats.conv_path(item)
         if not path or not path.is_file():raise HistoryError('没有找到这段对话的记录',404)
         key=(app,tid,str(path))
-        with self.lock:
+        with self.lock:  # two requests for one conversation share one entry
             entry=self.entries.get(key)
             if entry is None:entry=Transcript(path,agent,item.get('cwd') or '',tid=tid);self.entries[key]=entry
             self.entries.move_to_end(key)
-            entry.refresh()  # its size decides how much of the cache it takes
-            while len(self.entries)>MAX_TRANSCRIPTS or sum(v.size for v in self.entries.values())>MAX_TRANSCRIPT_BYTES:
-                if len(self.entries)<=1:break
-                self.entries.popitem(last=False)
+        # 11-24: read outside History's lock. A cold parse of a big record takes seconds, and every other page, list and
+        # conversation waited behind it; the transcript's own lock keeps two reads of one file in turn.
+        entry.refresh()
+        with self.lock:
+            if key not in self.entries:self.entries[key]=entry  # pushed out while it was read: it is the newest asked for
+            self._evict(keep=entry)  # what it now holds decides how much of the cache is left
         return item,entry
+    def _memory(self):return sum(v.weight for v in self.entries.values())
+    def _evict(self,keep=None):
+        """Within MAX_TRANSCRIPTS, MAX_TRANSCRIPT_MEMORY and MAX_TRANSCRIPT_BYTES, the least recently asked for going
+        first; never keep (the one a caller is being given), and always one. With self.lock held."""
+        while len(self.entries)>1 and (len(self.entries)>MAX_TRANSCRIPTS or self._memory()>MAX_TRANSCRIPT_MEMORY
+                                       or sum(v.size for v in self.entries.values())>MAX_TRANSCRIPT_BYTES):
+            victim=next((k for k,v in self.entries.items() if v is not keep),None)
+            if victim is None:break
+            del self.entries[victim]
+    # -- 11-24: reading ahead the conversations updated last
+    def start_warming(self):
+        if self.warming is None:
+            self.warming=threading.Thread(target=self._warm_loop,name='history-warm',daemon=True);self.warming.start()
+    def stop_warming(self,timeout=5):
+        self.warm_stop.set()
+        if self.warming is not None:self.warming.join(timeout)
+    def _warm_loop(self):
+        if self.warm_stop.wait(WARM_AFTER):return
+        while True:
+            try:self.warm_once()
+            except Exception as exc:self._warm_failed(exc)
+            if self.warm_stop.wait(WARM_EVERY):return
+    def _warm_failed(self,exc):
+        self.warm_errors+=1
+        try:
+            if self.log:self.log(f'预读对话记录出错：{type(exc).__name__}: {exc}')
+        except Exception:pass
+    def warm_once(self,count=WARM_COUNT,pause=WARM_PAUSE):
+        """Bring the count conversations updated last (of the assistants that keep record files) up to date in memory,
+        newest first. Polite: a slice of WARM_SLICE bytes at a time with a pause between, never under History's lock,
+        nothing pushed out for it (a conversation not cached yet is read only while the cache has room for it), and a
+        request for the same conversation meanwhile simply finishes the read. Returns how many it went through."""
+        from agents import registry
+        done=0
+        for item in self.catalog():
+            if done>=count or self.warm_stop.is_set():break
+            try:
+                agent=registry.get(item['app'])
+                if not agent.home_list:continue
+                path=chats.conv_path(item)
+                if not path or not path.is_file():continue
+                done+=1
+                self._warm(item,agent,path,pause)
+            except Exception as exc:self._warm_failed(exc)
+        return done
+    def _warm(self,item,agent,path,pause):
+        key=(item['app'],item['id'],str(path))
+        with self.lock:
+            entry=self.entries.get(key)
+            if entry is None:
+                size=path.stat().st_size
+                if (len(self.entries)>=MAX_TRANSCRIPTS or self._memory()+size//WARM_GUESS>MAX_TRANSCRIPT_MEMORY
+                        or sum(v.size for v in self.entries.values())+size>MAX_TRANSCRIPT_BYTES):return
+                entry=Transcript(path,agent,item.get('cwd') or '',tid=item['id'])
+                # the first to go: no one has asked for it yet (an entry already cached keeps its place)
+                self.entries[key]=entry;self.entries.move_to_end(key,last=False)
+        while not self.warm_stop.is_set():
+            with self.lock:
+                self._evict()
+                if self.entries.get(key) is not entry:return  # pushed out: what it read is not kept
+            if not entry.refresh(WARM_SLICE).partial:break
+            self.warm_stop.wait(pause)  # a pause, cut short when the service stops
+        with self.lock:self._evict()
     def _load(self):
         """(conversations of every app, DeepSeek sessions in no workspace that no conversation claims), 10 s."""
         # The home list and sidebar arrive together. Only one request scans a cold catalog.
