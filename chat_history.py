@@ -168,7 +168,10 @@ class History:
                 for v in found:
                     items+=[c|{'parent_title':v['title']} for c in v.get('children',[])]
                 items+=stray
-            items=[v for v in items if query in (v['title']+' '+(v.get('folder') or '')+' '+v['id']).casefold()]
+            from agents import registry
+            preview_apps={a.id for a in registry.load() if getattr(a,'search_in_preview',False)}
+            items=[v for v in items if query in (v['title']+' '+(v.get('folder') or '')+' '+v['id']
+                                                 +(' '+(v.get('preview') or '') if v['app'] in preview_apps else '')).casefold()]
             items.sort(key=lambda v:(-v['updated'],v['app'],v['id']))
         elif stray and (app=='all' or app==stray[0]['app']):
             items=sorted(items+[self.bucket(stray)],key=lambda v:(-v['updated'],v['app'],v['id']))

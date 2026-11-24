@@ -19,6 +19,7 @@ AGENT_MODULES: tuple[str, ...] = (
     "agents.codex",
     "agents.claude",
     "agents.deepseek",
+    "agents.antigravity",
 )
 
 # Test-only module: never in the production list above, and never in the frozen build.

@@ -255,6 +255,9 @@ def tree(catalog: list[dict], status, first: int = FIRST, more: dict | None = No
         app = agent.id
         label = agent.manifest()["name"]["zh"]
         mine = [g for (a, _), g in groups.items() if a == app]
+        # An assistant whose sidebar is only worth showing once it has conversations (Antigravity) stays out while empty.
+        if not mine and getattr(agent, "sidebar_without_chats", True) is False:
+            continue
         mine.sort(key=lambda g: (g["key"] == OTHER_KEY, -int(g["items"][0][0].get("updated") or 0)))
         projects = []
         for g in mine:
