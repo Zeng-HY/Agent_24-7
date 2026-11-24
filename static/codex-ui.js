@@ -80,14 +80,14 @@
   document.querySelector('.cv-row').before(codexQueue);
   const fileRefs=me=>window.referencesUI?.fileCount(me)||0,filesGoingUp=me=>window.referencesUI?.pendingCount(me)||0;
   async function queueAction(message,action){
-    const me=current(),s=states.get(me?.id);if(!isCodex(me)||!Agents.can(me.app,'queue'))return false;
+    const me=current(),s=states.get(me?.id);if(!isCodex(me)||!Agents.canNow(me.app,'queue',s))return false;
     const key='lbr_queue_action_'+me.id+':'+message.id+':'+action;
     let body=localGet(key,null)||{id:me.id,message_id:message.id,action,expected_turn:s?.active_turn_id,request_id:uid()};
     try{localStorage.setItem(key,JSON.stringify(body));const result=await api('/api/codex/queue-action',body);toast(result.text||'已处理');await refresh(me,true);await workspaceUI.pollReceipts();return true;}
     catch(e){toast('结果待核对：'+e.message,true);await refresh(me,true);return false;}
   }
   function paintQueue(me,s){
-    const codex=isCodex(me)&&Agents.can(me?.app,'queue'),native=codex?(s?.queued||[]).filter(q=>!window.workspaceUI?.delivered(q.id)):[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
+    const codex=isCodex(me)&&Agents.canNow(me?.app,'queue',s),native=codex?(s?.queued||[]).filter(q=>!window.workspaceUI?.delivered(q.id)):[],local=codex?window.workspaceUI?.pendingQueue(me)||[]:[],rows=[...native,...local.filter(q=>!native.some(n=>n.id===q.id))];
     if(isCodex(me))$('cvBtn').setAttribute('aria-label',s?.running?'发送并排队':'发送');
     // rebuilt only when it changes (this runs on every refresh): a tap on a button in it is not lost
     const sig=JSON.stringify([rows.map(q=>[q.id,q.text,q.status,!!q.local]),!!s?.running]);if(codexQueue.dataset.sig===sig)return;codexQueue.dataset.sig=sig;
@@ -105,10 +105,11 @@
     const away=isCodex(me) && !!s && !s.available;
     const modelName=s?.catalog?.models?.find(m=>m.id===settings?.model)?.name || modelLabel(settings?.model);
     $('modelChoice').querySelector('.composer-label').textContent=away ? '电脑上打开' : settings ? modelName + ' · '+(EFFORT[settings.effort]||settings.effort||'默认') : '模型';
-    $('modelChoice').classList.toggle('is-away',away);$('modeChoice').hidden=away;
+    const canMode=Agents.settingsNow(me.app,s).includes('mode');
+    $('modelChoice').classList.toggle('is-away',away);$('modeChoice').hidden=away||!canMode;
     $('modeChoice').querySelector('.composer-label').textContent=settings?.mode==='plan'?'计划模式':'普通执行';$('modeChoice').classList.toggle('is-plan',settings?.mode==='plan');
-    $('modelChoice').disabled=sending || (!away && !s?.available);$('modeChoice').disabled=sending || !s?.available;$('addImageBtn').disabled=sending;
-    $('cvText').placeholder=settings?.mode==='plan'?'说明需要规划或调整的内容…':'输入消息…';
+    $('modelChoice').disabled=sending || (!away && !s?.available);$('modeChoice').disabled=sending || !s?.available || !canMode;$('addImageBtn').disabled=sending;
+    $('cvText').placeholder=canMode&&settings?.mode==='plan'?'说明需要规划或调整的内容…':'输入消息…';
     const box=$('attachmentPreviews');box.innerHTML='';box.hidden=!d.images.length;
     for(const image of d.images){
       const tile=el('div','attachment-tile'),open=el('button','attachment-open');open.type='button';open.setAttribute('aria-label','预览 '+image.name);
@@ -186,7 +187,7 @@
   }
   $('applyModel').onclick=()=>{if(!current())return;chooseSettings(cur,modelEdit);closeSheet('modelSheet');toast('已选择下条消息的模型与推理强度');};
   async function openModels(){const me=current();if(!me)return;if(me.app==='codex'&&states.get(me.id)?.available===false){await openOnPC();if(active(me))await refresh(me,true);return;}await refresh(me,true);const s=states.get(me.id);if(!active(me)||!s?.available)return;modelEdit={...(draft(me.id).settings||s.settings)};renderModels();openSheet('modelSheet');}
-  function openModes(){const me=current(),s=states.get(me?.id);if(!s?.available)return;const selected=draft(me.id).settings||s.settings,box=$('modeRows');box.innerHTML='';for(const [value,name,description] of [['default','普通执行','分析问题并完成你要求的操作。'],['plan','计划模式','先分析和制定计划，确认后再开始执行。']]){const b=el('button','option-card');b.setAttribute('role','radio');b.setAttribute('aria-checked',String(selected.mode===value));b.append(el('span','choice-dot'));const text=el('span','',name);text.append(el('small','',description));b.append(text);b.onclick=()=>{chooseSettings(me,{mode:value});closeSheet('modeSheet');toast('下条消息使用'+name);};box.append(b);}openSheet('modeSheet');}
+  function openModes(){const me=current(),s=states.get(me?.id);if(!s?.available||!Agents.settingsNow(me.app,s).includes('mode'))return;const selected=draft(me.id).settings||s.settings,box=$('modeRows');box.innerHTML='';for(const [value,name,description] of [['default','普通执行','分析问题并完成你要求的操作。'],['plan','计划模式','先分析和制定计划，确认后再开始执行。']]){const b=el('button','option-card');b.setAttribute('role','radio');b.setAttribute('aria-checked',String(selected.mode===value));b.append(el('span','choice-dot'));const text=el('span','',name);text.append(el('small','',description));b.append(text);b.onclick=()=>{chooseSettings(me,{mode:value});closeSheet('modeSheet');toast('下条消息使用'+name);};box.append(b);}openSheet('modeSheet');}
   function hasChanges(me){const d=draft(me.id),s=states.get(me.id);return d.images.length>0||!!d.settings||!!window.referencesUI?.count();}
   function settleReceipt(me,ticket,result){
     ticket.state='delivered';ticket.note='已确认送达';persistPending();workspaceUI?.update(me,ticket);
@@ -242,7 +243,7 @@
       const p=custom.plan;const title=el('div','card-title','计划');title.append(el('span','card-state',p.ready?'待确认':'历史计划'));node.append(title);
       const preview=el('div','plan-preview');preview.innerHTML=md(p.text);node.append(preview);const read=el('button','plan-read','展开完整计划');read.onclick=()=>{preview.classList.toggle('expanded');read.textContent=preview.classList.contains('expanded')?'收起计划':'展开完整计划';};node.append(read);
       const actions=el('div','card-actions'),run=el('button','big','执行计划'),edit=el('button','','继续修改');run.disabled=!p.ready||sending;edit.disabled=!p.ready||sending;
-      run.onclick=()=>send(p.id);edit.onclick=()=>{const me=current();if(!me)return;chooseSettings(me,{mode:'plan'});$('cvText').focus();$('cvText').placeholder='写下需要调整的地方…';};actions.append(run,edit);node.append(actions);
+      run.onclick=()=>send(p.id);edit.onclick=()=>{const me=current();if(!me)return;if(Agents.settingsNow(me.app,states.get(me.id)).includes('mode'))chooseSettings(me,{mode:'plan'});$('cvText').focus();$('cvText').placeholder='写下需要调整的地方…';};actions.append(run,edit);node.append(actions);
       if(!p.ready)node.append(el('div','card-note','这份计划已进入后续对话，或当前任务尚未结束。'));return;
     }
   }

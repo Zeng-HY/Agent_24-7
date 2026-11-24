@@ -48,7 +48,7 @@
         approve: true, answer: true, new: true, new_projectless: true, new_permission: false,
         archive: true, restore: true, delete: true, usage: true, waiting: true,
         attachments: true, slash_commands: true,
-        settings: ['model', 'effort'], send_modes: ['send', 'steer', 'queue'],
+        settings: ['model', 'effort', 'mode'], send_modes: ['send', 'steer', 'queue'],
         statuses: ['running', 'waiting', 'idle', 'unknown'],
       },
       params: {...DEFAULT_PARAMS, state_timeout_s: 40, refresh_ms: 2500},
@@ -164,6 +164,34 @@
     return Array.isArray(m?.capabilities?.settings) ? m.capabilities.settings : [];
   }
 
+  function capsNow(control) {
+    const c = control?.capabilities_now;
+    return c && typeof c === 'object' && !Array.isArray(c) ? c : null;
+  }
+
+  function canNow(app, cap, control) {
+    const c = capsNow(control);
+    if (c) return c[cap] === true;
+    return can(app, cap);
+  }
+
+  function modesNow(app, control) {
+    const c = capsNow(control);
+    if (c) return Array.isArray(c.send_modes) ? c.send_modes : [];
+    return modes(app);
+  }
+
+  function settingsNow(app, control) {
+    const c = capsNow(control);
+    if (c) return Array.isArray(c.settings) ? c.settings : [];
+    return settings(app);
+  }
+
+  function noteNow(app, cap, control) {
+    const n = control?.capability_notes;
+    return n && typeof n === 'object' && typeof n[cap] === 'string' ? n[cap] : '';
+  }
+
   function params(app) {
     const m = get(app);
     return {...DEFAULT_PARAMS, ...(m?.params || {})};
@@ -197,9 +225,13 @@
     badgeColor,
     icon,
     can,
+    canNow,
     modes,
+    modesNow,
     canSend: app => modes(app).length > 0,
     settings,
+    settingsNow,
+    noteNow,
     params,
     cardLayout,
     isGenericLayout,
