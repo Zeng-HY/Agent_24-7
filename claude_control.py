@@ -170,6 +170,54 @@ def has_pending_prompt(path):
     return asked is not None
 
 
+# Claude's own permission prompt, as its buttons read in the installed desktop app (6.28899; the approval card's strings
+# in ion-dist.asar, 11-24): 'Allow once' / 'Allow for this task' / 'Always allow' or 'Allow for all tasks' (whichever the
+# settings give) allow, 'Deny' or 'Decline' refuse. 'Reject' is no label of that card today (an inline-edit toolbar has
+# it) and stands here only as a guard. The Chinese names are plain translations of those labels: the installed build
+# carries no Chinese strings, and no Chinese permission card has been recorded.
+PERMISSION_ALLOW=('Allow','Always allow','Allow for this task','Allow for all tasks','允许','允许一次','总是允许','始终允许',
+                  '允许全部','以后都允许')
+PERMISSION_DENY=('Deny','Decline','Reject','拒绝','不允许')
+
+
+def permission_prompt(options):
+    """Whether these dock buttons are Claude's permission prompt rather than the loose buttons of a session that is not
+    asking anything (the Stop of a nested session, the buttons of a next-step box): one of them allows and one refuses.
+    options: what _dock_read read as clickable, each with its 'name'; plain names are read too."""
+    names=[]
+    for option in options or []:
+        name=option.get('name') if isinstance(option,dict) else option
+        names.append((name or '').strip() if isinstance(name,str) else '')
+    allowed=any(name.startswith(PERMISSION_ALLOW) for name in names)
+    refused=any(name.startswith(PERMISSION_DENY) for name in names)
+    return allowed and refused
+
+
+def has_open_tool_call(path):
+    """Whether the conversation's newest tool call has no result yet: the tool_use blocks of its newest assistant record,
+    and whether a record after it carries each one's tool_result. Claude's permission prompt stands while that result is
+    missing — a request the hook did not take shows as such a call and the desktop's own buttons (11-24). Only the tail
+    of the record is read, and nothing is written."""
+    if not path:return False
+    try:lines=chats.read_tail(path,2<<20)[0]
+    except OSError:return False
+    newest={}
+    for raw in lines:
+        if b'tool_use' not in raw and b'tool_result' not in raw:continue
+        try:data=json.loads(raw)
+        except ValueError:continue
+        content=(data.get('message') or {}).get('content') if isinstance(data,dict) else None
+        blocks=[b for b in content if isinstance(b,dict)] if isinstance(content,list) else []
+        used=[b for b in blocks if b.get('type')=='tool_use' and b.get('id')]
+        if used:  # a newer call: from here only its own results count
+            newest={b['id']:False for b in used}
+            continue
+        for block in blocks:
+            if block.get('type')=='tool_result' and block.get('tool_use_id') in newest:
+                newest[block['tool_use_id']]=True
+    return any(not given for given in newest.values())
+
+
 class Controller:
     ticket_lock=threading.Lock()  # 11-24: tickets are also handed out by a read in the background, outside self.lock
     window_sink=threading.local()  # 11-24: per thread, the dict a window read fills for _read_keeping
@@ -601,7 +649,7 @@ class Controller:
             # Bind execution/answer buttons to both the visible set and the latest transcript version.
             stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
             result['action_revision']=signature([item['id'],options,stamp])
-            if dock is not None and not chats.question_card(dock) and self.hooks is not None and not self._claude_waiting(item['id'],path):
+            if dock is not None and not chats.question_card(dock) and self.hooks is not None and not self._claude_waiting(item['id'],path,options):
                 prompt=None
                 result['prompt']=None
             else:
@@ -627,12 +675,15 @@ class Controller:
             hs=self._hook_status(item,path)
             if hs is not None:self._apply_hook_status(item,result,hs)
         return result
-    def _claude_waiting(self,tid,path):
+    def _claude_waiting(self,tid,path,options=None):
         """Whether Claude Code is known to be waiting on the user for this conversation: either the hook holds an open
-        request now, or the record has an unanswered AskUserQuestion / ExitPlanMode call."""
+        request now, the record has an unanswered AskUserQuestion / ExitPlanMode call, or the dock draws Claude's own
+        permission prompt (an allow and a deny button) while the record's newest tool call still has no result — a
+        permission request the hook did not take, answered by clicking the desktop's button (11-24)."""
         hooks=self.hooks
         if hooks is not None and hooks.layout(tid) is not None:return True
-        return has_pending_prompt(path)
+        if has_pending_prompt(path):return True
+        return permission_prompt(options) and has_open_tool_call(path)
     def _model_name(self,model_id):
         """The menu's name for a recorded model id ('Opus 5.5' for claude-opus-5-5), from a catalogue read on the PC
         before: the phone shows the model and its effort without the PC showing the conversation (10-12)."""
