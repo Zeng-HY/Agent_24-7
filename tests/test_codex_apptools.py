@@ -84,7 +84,7 @@ def _ok_tool(data: dict, req_id: int = 1) -> dict:
     }
 
 
-def _call_http(server, method: str, path: str, body=None, protocol: int = 2):
+def _call_http_raw(server, method: str, path: str, body=None, protocol: int = 2):
     handler = object.__new__(remote.Handler)
     sent = []
     sep = "&" if "?" in path else "?"
@@ -99,12 +99,17 @@ def _call_http(server, method: str, path: str, body=None, protocol: int = 2):
     handler.rfile = io.BytesIO(payload)
     handler.close_connection = False
     handler.server = server
-    handler._send = lambda code, data, ctype, extra=None: sent.append((code, json.loads(data.decode("utf-8"))))
+    handler._send = lambda code, data, ctype, extra=None: sent.append((code, data, ctype, extra))
     if method == "GET":
         handler.do_GET()
     else:
         handler.do_POST()
     return sent[0]
+
+
+def _call_http(server, method: str, path: str, body=None, protocol: int = 2):
+    code, data, _ctype, _extra = _call_http_raw(server, method, path, body=body, protocol=protocol)
+    return code, json.loads(data.decode("utf-8"))
 
 
 class RouteSelectionTests(unittest.TestCase):
@@ -423,9 +428,12 @@ class AppToolsBridgeTests(unittest.TestCase):
 
         self.legacy = codex_control.Bridge()
         self.legacy.data_root = self.root / "attachments"
+        self.data_dir = self.root / "data"
+        ca.set_default_data_dir_override(self.data_dir)
+        self.addCleanup(ca.set_default_data_dir_override, None)
         self.client = ca.AppToolsClient(transport_factory=lambda p, t: FakeTransport(rpc_handler, p))
         self.bridge = ca.AppToolsBridge(
-            self.legacy, client=self.client, data_dir=self.root / "data", enable_background_drain=False
+            self.legacy, client=self.client, data_dir=self.data_dir, enable_background_drain=False
         )
         self.addCleanup(self.bridge.close)
 
@@ -708,6 +716,317 @@ class ChatsDisplayStep1Tests(unittest.TestCase):
         plain_text, plain_imgs = chats._extract_codex_images(f"看图\n[附图] {outside_path}（请打开）")
         self.assertEqual(plain_imgs, [])
         self.assertIn("[附图]", plain_text)
+
+        # Compressed .jpg path inside codex-images also maps back to image id and /api/codex/image?id=
+        jpg_path = rf"C:\FakeData\codex-images\{TID}\{img_id}.jpg"
+        cleaned_jpg, jpg_imgs = chats._extract_codex_images(f"看压缩图\n\n[附图] {jpg_path}（请先用看图工具打开这张图片）")
+        self.assertEqual(cleaned_jpg, "看压缩图")
+        self.assertEqual(len(jpg_imgs), 1)
+        self.assertEqual(jpg_imgs[0]["id"], img_id)
+        self.assertEqual(jpg_imgs[0]["url"], f"/api/codex/image?id={img_id}")
+        self.assertEqual(jpg_imgs[0]["thumbnail"], f"/api/codex/image?thumb=1&id={img_id}")
+
+
+class ImageCompressionAndPairingTests(AppToolsBridgeTests):
+    """Tests for dev.48: new-route image compression and message source_id <-> request_id pairing."""
+
+    @staticmethod
+    def _make_textured_rgb(width: int, height: int, seed: int = 42):
+        import random
+        from PIL import Image
+
+        rng = random.Random(seed)
+        # Build a detailed 256x256 tile with gradients + fine noise, then tile & blend for fast multi-MP generation
+        tw, th = min(width, 256), min(height, 256)
+        raw = bytearray(tw * th * 3)
+        idx = 0
+        for y in range(th):
+            for x in range(tw):
+                raw[idx] = (x * 3 + y + rng.randint(0, 48)) & 255
+                raw[idx + 1] = (y * 2 + rng.randint(0, 64)) & 255
+                raw[idx + 2] = ((x ^ y) + rng.randint(0, 56)) & 255
+                idx += 3
+        tile = Image.frombytes("RGB", (tw, th), bytes(raw))
+        img = Image.new("RGB", (width, height))
+        for oy in range(0, height, th):
+            for ox in range(0, width, tw):
+                img.paste(tile, (ox, oy))
+        return img
+
+    @staticmethod
+    def _make_tall_screenshot_png(width: int, height: int):
+        from PIL import Image, ImageDraw
+
+        # Realistic long screenshot with alternating cards, stripes, and gradient header
+        img = Image.new("RGB", (width, height), (245, 247, 250))
+        draw = ImageDraw.Draw(img)
+        for y in range(0, height, 120):
+            tone = (y // 120) % 5
+            bg = [(255, 255, 255), (238, 244, 255), (246, 252, 244), (255, 248, 236), (248, 244, 255)][tone]
+            draw.rectangle([80, y + 12, width - 80, min(height - 1, y + 108)], fill=bg, outline=(190, 200, 215), width=3)
+            for bar in range(3):
+                by = y + 28 + bar * 22
+                if by + 10 < height:
+                    draw.rectangle([120, by, min(width - 140, 600 + ((y + bar * 173) % (width - 800))), by + 10], fill=(40 + tone * 20, 60, 90))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    @staticmethod
+    def _make_large_transparent_png(width: int, height: int):
+        import random
+        from PIL import Image
+
+        rng = random.Random(7)
+        tw, th = 256, 256
+        raw = bytearray(tw * th * 4)
+        idx = 0
+        for y in range(th):
+            for x in range(tw):
+                raw[idx] = (x * 2 + rng.randint(0, 40)) & 255
+                raw[idx + 1] = (y * 2 + rng.randint(0, 40)) & 255
+                raw[idx + 2] = ((x + y) + rng.randint(0, 40)) & 255
+                raw[idx + 3] = 0 if (x + y) % 11 == 0 else (180 if (x % 17 < 4) else 255)
+                idx += 4
+        tile = Image.frombytes("RGBA", (tw, th), bytes(raw))
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        for oy in range(0, height, th):
+            for ox in range(0, width, tw):
+                img.paste(tile, (ox, oy))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_store_codex_image_compresses_large_images_preserves_small_and_serves_http(self) -> None:
+        from PIL import Image
+
+        server = SimpleNamespace(
+            machine={"name": "测试电脑", "apps": ["codex"], "voice": False},
+            cfg={"token": "secret"},
+            codex=self.legacy,
+            log=SimpleNamespace(write=lambda t: None),
+        )
+
+        # 1) 4000x3000 large photo (uploaded as JPEG -> stored as large PNG in legacy.data_root)
+        photo_img = self._make_textured_rgb(4000, 3000, seed=11)
+        photo_buf = io.BytesIO()
+        photo_img.save(photo_buf, format="JPEG", quality=92)
+        up_photo = self.legacy.upload(TID, "big-photo.jpg", photo_buf.getvalue(), "codex")
+        meta_photo = self.legacy.attachment(up_photo["id"], TID)
+        saved_photo = ca.store_codex_image(self.bridge.images_root, TID, meta_photo)
+        self.assertEqual(saved_photo.stem, up_photo["id"])
+        self.assertEqual(saved_photo.suffix, ".jpg")
+        self.assertLessEqual(saved_photo.stat().st_size, ca.CODEX_IMAGE_MAX_BYTES)
+        with Image.open(saved_photo) as out_im:
+            self.assertEqual(out_im.format, "JPEG")
+            self.assertLessEqual(max(out_im.width, out_im.height), 1600)
+
+        # 2) 3000x6000 tall PNG screenshot
+        tall_bytes = self._make_tall_screenshot_png(3000, 6000)
+        up_tall = self.legacy.upload(TID, "tall-screen.png", tall_bytes, "codex")
+        meta_tall = self.legacy.attachment(up_tall["id"], TID)
+        saved_tall = ca.store_codex_image(self.bridge.images_root, TID, meta_tall)
+        self.assertEqual(saved_tall.stem, up_tall["id"])
+        self.assertEqual(saved_tall.suffix, ".jpg")
+        self.assertLessEqual(saved_tall.stat().st_size, ca.CODEX_IMAGE_MAX_BYTES)
+        with Image.open(saved_tall) as out_im:
+            self.assertLessEqual(max(out_im.width, out_im.height), 1600)
+            self.assertGreater(out_im.height, out_im.width)
+
+        # 3) Large transparent PNG (2400x1800 RGBA with alpha) -> stays PNG, keeps alpha, <=1600 & <=400 KB
+        alpha_bytes = self._make_large_transparent_png(2400, 1800)
+        up_alpha = self.legacy.upload(TID, "alpha-big.png", alpha_bytes, "codex")
+        meta_alpha = self.legacy.attachment(up_alpha["id"], TID)
+        saved_alpha = ca.store_codex_image(self.bridge.images_root, TID, meta_alpha)
+        self.assertEqual(saved_alpha.stem, up_alpha["id"])
+        self.assertEqual(saved_alpha.suffix, ".png")
+        self.assertLessEqual(saved_alpha.stat().st_size, ca.CODEX_IMAGE_MAX_BYTES)
+        with Image.open(saved_alpha) as out_im:
+            self.assertEqual(out_im.format, "PNG")
+            self.assertLessEqual(max(out_im.width, out_im.height), 1600)
+            lo, _ = out_im.convert("RGBA").getchannel("A").getextrema()
+            self.assertLess(lo, 255)
+
+        # 4) 200x200 small image -> copied verbatim without re-encoding
+        small_buf = io.BytesIO()
+        Image.new("RGB", (200, 200), (40, 120, 200)).save(small_buf, format="PNG")
+        up_small = self.legacy.upload(TID, "small.png", small_buf.getvalue(), "codex")
+        meta_small = self.legacy.attachment(up_small["id"], TID)
+        saved_small = ca.store_codex_image(self.bridge.images_root, TID, meta_small)
+        self.assertEqual(saved_small.stem, up_small["id"])
+        self.assertEqual(saved_small.suffix, ".png")
+        self.assertEqual(saved_small.read_bytes(), Path(meta_small["path"]).read_bytes())
+
+        # 5) EXIF orientation=6 (90 deg rotated) is transposed upright when compressing
+        rot_src = self.root / "rotated.jpg"
+        rot_img = self._make_textured_rgb(2000, 1000, seed=99)
+        exif = Image.Exif()
+        exif[274] = 6  # Rotate 90 CW
+        rot_img.save(rot_src, format="JPEG", quality=90, exif=exif.tobytes())
+        saved_rot = ca.store_codex_image(self.bridge.images_root, TID, {"id": "b" * 32, "path": str(rot_src)})
+        self.assertLessEqual(saved_rot.stat().st_size, ca.CODEX_IMAGE_MAX_BYTES)
+        with Image.open(saved_rot) as out_im:
+            self.assertGreater(out_im.height, out_im.width)
+            self.assertLessEqual(max(out_im.width, out_im.height), 1600)
+
+        # 6) All uploaded attachments remain fetchable via /api/codex/image?id= and ?thumb=1&id=
+        for up in (up_photo, up_tall, up_alpha, up_small):
+            code, raw_full, ctype, _ = _call_http_raw(server, "GET", f"/api/codex/image?id={up['id']}")
+            self.assertEqual(code, 200)
+            self.assertTrue(ctype.startswith("image/"))
+            self.assertGreater(len(raw_full), 100)
+            code_t, raw_thumb, ctype_t, _ = _call_http_raw(server, "GET", f"/api/codex/image?thumb=1&id={up['id']}")
+            self.assertEqual(code_t, 200)
+            self.assertTrue(ctype_t.startswith("image/"))
+            self.assertGreater(len(raw_thumb), 100)
+
+    def test_direct_image_send_persists_message_and_request_id_pairing_across_restart(self) -> None:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        self._make_textured_rgb(2000, 1500, seed=5).save(buf, format="JPEG", quality=90)
+        uploaded = self.legacy.upload(TID, "pic.jpg", buf.getvalue(), "codex")
+
+        rid = "req-img-pair-0001"
+        res = self.bridge.send({
+            "id": TID,
+            "request_id": rid,
+            "text": "请看看这张截图",
+            "attachments": [uploaded["id"]],
+        })
+        self.assertTrue(res["accepted"])
+        sent_prompt = self.sent_calls[-1]["arguments"]["prompt"]
+        self.assertIn(f"{uploaded['id']}.jpg", sent_prompt)
+
+        # Codex writes self-delegation into the rollout file
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "timestamp": TS2,
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "FunctionCallOutput",
+                        "id": "call-img-direct-1",
+                        "name": "send_message_to_thread",
+                        "namespace": "codex_app",
+                        "output": f"<codex_delegation><source_thread_id>{TID}</source_thread_id><input>{sent_prompt}</input></codex_delegation>",
+                    },
+                },
+            }, ensure_ascii=False) + "\n")
+
+        # Simulate SSE race: transcript is read BEFORE status/receipt reconciles delivery
+        history = chat_history.History()
+        page_before = history.conversation("codex", TID)
+        self.assertIsNone(page_before["messages"][-1].get("client_request_id"))
+
+        # Status reconciles delivery, records link on disk, and enriches control.images with message_id
+        st = self.bridge.status(TID, fresh=True)
+        img_rec = next(v for v in st["images"] if v["request_id"] == rid)
+        self.assertEqual(img_rec["message_id"], "call-img-direct-1")
+
+        # Same History instance immediately attaches client_request_id without rollout changing
+        page_after = history.conversation("codex", TID)
+        user_msg = page_after["messages"][-1]
+        self.assertEqual(user_msg["source_id"], "call-img-direct-1")
+        self.assertEqual(user_msg["client_request_id"], rid)
+        self.assertEqual(user_msg["text"], "请看看这张截图")
+
+        # Legacy chats.conversation() helper also attaches client_request_id
+        with patch("chats.codex_thread", return_value=self.item):
+            conv_direct = chats.conversation("codex", TID)
+        self.assertEqual(conv_direct["messages"][-1]["client_request_id"], rid)
+
+        # Survives restart (fresh AppToolsBridge + fresh History reading from disk)
+        restarted = ca.AppToolsBridge(
+            self.legacy, client=self.client, data_dir=self.data_dir, enable_background_drain=False
+        )
+        self.addCleanup(restarted.close)
+        st2 = restarted.status(TID, fresh=True)
+        img_rec2 = next(v for v in st2["images"] if v["request_id"] == rid)
+        self.assertEqual(img_rec2["message_id"], "call-img-direct-1")
+        page2 = chat_history.History().conversation("codex", TID)
+        self.assertEqual(page2["messages"][-1]["client_request_id"], rid)
+
+    def test_queued_hook_prompt_image_send_pairs_client_request_id_and_message_id(self) -> None:
+        from PIL import Image
+
+        self.pipe_status = {"type": "active", "activeFlags": []}
+
+        # Case A: queued with text + image, delivered via Stop hook <hook_prompt> UserMessage
+        buf1 = io.BytesIO()
+        Image.new("RGB", (120, 120), (10, 80, 160)).save(buf1, format="PNG")
+        up1 = self.legacy.upload(TID, "q1.png", buf1.getvalue(), "codex")
+        rid1 = "req-img-hook-0001"
+        q1 = self.bridge.send({
+            "id": TID,
+            "request_id": rid1,
+            "text": "排队发的图",
+            "attachments": [up1["id"]],
+            "intent": "queue",
+        })
+        self.assertEqual(q1["delivery_state"], "queued")
+        popped1 = self.bridge.pop_queued_for_stop_hook(TID)
+        self.assertIsNotNone(popped1)
+        prompt1 = popped1["prompt"]
+
+        # Case B: queued image-only (empty text), delivered via Stop hook HookPrompt item
+        buf2 = io.BytesIO()
+        Image.new("RGB", (100, 100), (180, 40, 20)).save(buf2, format="PNG")
+        up2 = self.legacy.upload(TID, "q2.png", buf2.getvalue(), "codex")
+        rid2 = "req-img-hook-0002"
+        q2 = self.bridge.send({
+            "id": TID,
+            "request_id": rid2,
+            "text": "",
+            "attachments": [up2["id"]],
+            "intent": "queue",
+        })
+        self.assertEqual(q2["delivery_state"], "queued")
+        popped2 = self.bridge.pop_queued_for_stop_hook(TID)
+        self.assertIsNotNone(popped2)
+        prompt2 = popped2["prompt"]
+
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "timestamp": TS2,
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": "um-hook-img-1",
+                        "content": [{"type": "text", "text": f'<hook_prompt id="hp1">{prompt1}</hook_prompt>'}],
+                    },
+                },
+            }, ensure_ascii=False) + "\n")
+            f.write(json.dumps({
+                "timestamp": "2026-01-02T03:04:15Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "HookPrompt",
+                        "id": "hp-hook-img-2",
+                        "fragments": [{"text": prompt2}],
+                    },
+                },
+            }, ensure_ascii=False) + "\n")
+
+        rec1 = self.bridge.receipt(TID, rid1)
+        self.assertEqual(rec1["result"]["text"], "已送达")
+        self.assertEqual(rec1["result"]["evidence"]["message_id"], "um-hook-img-1")
+
+        st = self.bridge.status(TID, fresh=True)
+        by_req = {v["request_id"]: v for v in st["images"]}
+        self.assertEqual(by_req[rid1]["message_id"], "um-hook-img-1")
+        self.assertEqual(by_req[rid2]["message_id"], "hp-hook-img-2")
+
+        page = chat_history.History().conversation("codex", TID)
+        by_src = {m.get("source_id"): m for m in page["messages"]}
+        self.assertEqual(by_src["um-hook-img-1"]["client_request_id"], rid1)
+        self.assertEqual(by_src["hp-hook-img-2"]["client_request_id"], rid2)
+        self.assertEqual(by_src["hp-hook-img-2"]["text"], "")
 
 
 if __name__ == "__main__":
