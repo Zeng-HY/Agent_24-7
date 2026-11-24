@@ -170,6 +170,41 @@ def claude_prompt_block_indices(rows) -> set[int]:
     return out
 
 
+def _folder_path_key(raw, require_absolute=True):
+    """A folder path in the one form two paths are compared in (resolved; without case on Windows), or None. A bare
+    name ('project') is no path when require_absolute: resolved against the current folder it would name another."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        path = Path(text)
+        if require_absolute and not path.is_absolute():
+            return None
+        resolved = str(path.resolve())
+    except (OSError, ValueError):
+        return None
+    return resolved.casefold() if os.name == "nt" else resolved
+
+
+def _folder_button_path(button_or_name):
+    """The folder a new-session page's 'Folder: …' button names (Claude 6.28899, 11-24): the full path after 'Folder: ',
+    or else the one in its HelpText; None for any other button or a name without a full path."""
+    if isinstance(button_or_name, str):
+        name, help_text = button_or_name, ""
+    else:
+        try:
+            name = button_or_name.Name or ""
+        except Exception:
+            name = ""
+        try:
+            help_text = getattr(button_or_name, "HelpText", "") or ""
+        except Exception:
+            help_text = ""
+    if not name.startswith("Folder: "):
+        return None
+    return _folder_path_key(name[len("Folder: "):]) or _folder_path_key(help_text)
+
+
 class ChatError(Exception):
     """Something the person can act on."""
 
@@ -2561,28 +2596,6 @@ class Desktop:
         # identity-checked new-session document instead of a fixed ancestor depth.
         return doc,[c for c in self._find(doc,'ButtonControl') if not c.IsOffscreen]
 
-    @staticmethod
-    def _claude_norm_path(raw, require_absolute=True):
-        text=(raw or '').strip()
-        if not text:return None
-        try:
-            path=Path(text)
-            if require_absolute and not path.is_absolute():return None
-            resolved=str(path.resolve())
-        except (OSError,ValueError):return None
-        return resolved.casefold() if os.name=='nt' else resolved
-
-    @classmethod
-    def _claude_folder_button_path(cls,button_or_name):
-        if isinstance(button_or_name,str):name,help_text=button_or_name,''
-        else:
-            try:name=button_or_name.Name or ''
-            except Exception:name=''
-            try:help_text=getattr(button_or_name,'HelpText','') or ''
-            except Exception:help_text=''
-        if not name.startswith('Folder: '):return None
-        return cls._claude_norm_path(name[len('Folder: '):],require_absolute=True) or cls._claude_norm_path(help_text,require_absolute=True)
-
     @classmethod
     def _claude_folder_ready(cls,names,expected,folder='',buttons=None):
         items=list(buttons) if buttons is not None else list(names)
@@ -2599,9 +2612,9 @@ class Desktop:
             return 'Local' in names and names.count(expected)==1
         if folder_items:
             if env_names!=['Environment: This computer'] or len(folder_items)!=1:return False
-            want=cls._claude_norm_path(folder,require_absolute=False)
+            want=_folder_path_key(folder,require_absolute=False)
             if want is None:return False
-            return cls._claude_folder_button_path(folder_items[0][1])==want
+            return _folder_button_path(folder_items[0][1])==want
         if env_names:
             return env_names==['Environment: '+expected]
         return 'Local' in names and names.count(expected)==1
@@ -2637,7 +2650,9 @@ class Desktop:
                 return self._claude_folder_ready(shown,CLAUDE_NO_FOLDER,buttons=buttons) and 'Add another folder' not in shown
             doc,buttons=bar(root)
             if any((c.Name or '').startswith('Folder: ') for c in buttons):
-                return self._claude_folder_ready([],expected,folder,buttons=buttons)
+                # Claude 6.28899 (11-24): Environment: This computer + Folder: <full path>; the path on the button is
+                # the proof, checked as ready() checks it (read again: no menu to open)
+                return ready(root)
             if any(c.Name=='Environment: '+expected for c in buttons):
                 # The selected recent environment shows its full path on the
                 # new page; other recent environments are only name buttons.
