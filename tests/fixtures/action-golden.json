@@ -2098,7 +2098,7 @@
     "ntfy": [
       {
         "title": "通知测试",
-        "message": "测试电脑 · Codex 好了\n已经完成。",
+        "message": "Codex · 测试电脑 · 好了\n已经完成。",
         "click": "https://pc.example.ts.net/?open=codex:c-n1"
       }
     ],

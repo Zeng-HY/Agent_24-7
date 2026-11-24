@@ -203,7 +203,8 @@ class Watcher(unittest.TestCase):
         self.assertEqual(self.sent[0][1]["url"], "https://pc.example.ts.net/")
         self.assertEqual(self.notifier.public(), {"configured": True, "server": "api.day.app", "recent": [],
                                                   "ntfy": {"on": False, "topic": "agent-remote", "server": "https://pc.example.ts.net",
-                                                           "listening": 0, "last_seen": ""}, "relay": {"listening": False}})
+                                                           "listening": 0, "last_seen": ""}, "relay": {"listening": False},
+                                                  "automations": "codex"})
 
         def refused(*a, **k):
             raise notify.NotifyError("Bark 没收下（400）：failed to get device token")
@@ -226,7 +227,7 @@ class Watcher(unittest.TestCase):
         self.assertEqual(self.sent, [])  # no Bark
         msg = self.notifier.feed.since("all")[0]
         self.assertEqual((msg["title"], msg["message"], msg["click"]),
-                         ("改通知", "家里电脑 · Codex 好了\n改好了，测试都过了。", "https://pc.example.ts.net/?open=codex:x1"))
+                         ("改通知", "Codex · 家里电脑 · 好了\n改好了，测试都过了。", "https://pc.example.ts.net/?open=codex:x1"))
         self.assertEqual(self.notifier.public()["recent"][0]["text"], "Codex「改通知」好了 · ntfy 现在没连着，连上后会收到")
         with self.notifier.feed.listener():  # a phone connected
             self.turn("task_complete", "t2", "又好了")
