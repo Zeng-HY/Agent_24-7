@@ -504,6 +504,21 @@ class CodexAgent(Agent):
         import codex_hooks
         return codex_hooks.remove_hooks(log=log)
 
+    def status_hint(self, cfg: dict) -> str:
+        """Pending trust on the app-tools route: the one thing the user must do on this PC. Cached reads."""
+        if cfg.get("codex_hooks") is False:
+            return ""
+        try:
+            import codex_apptools
+            if codex_apptools.current_route() != "apptools":
+                return ""
+            import codex_hooks
+            if codex_hooks.read_trust_status() == "pending_trust":
+                return codex_hooks.TRUST_HINT
+        except Exception:
+            pass
+        return ""
+
     def wait_update(self, bridge, tid: str, timeout: float) -> bool:
         route, backend = self._backend(bridge)
         if route == "apptools" and getattr(backend, "hooks", None) is not None:

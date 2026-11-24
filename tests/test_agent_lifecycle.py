@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import claude_hooks
+import codex_apptools
 import codex_hooks
 import codex_question_dismiss
 import deepseek_control
@@ -31,6 +32,7 @@ from agents.claude import ClaudeAgent
 from agents.codex import CodexAgent
 from agents.deepseek import DeepSeekAgent
 from agents.testing import TestingAgent as FakeTestingAgent
+from relay_controller import DesktopController
 
 
 class ServiceSlotTests(unittest.TestCase):
@@ -311,6 +313,60 @@ class AgentUninstallTests(unittest.TestCase):
             finally:
                 codex_hooks.set_default_codex_home_override(original)
             self.assertEqual(json.loads((home / "hooks.json").read_text(encoding="utf-8")), user)
+
+
+class FakeHintAgent:
+    def __init__(self, ident, hint="", *, fail=False):
+        self.id = ident
+        self.hint = hint
+        self.fail = fail
+        self.asked = 0
+
+    def status_hint(self, cfg):
+        self.asked += 1
+        if self.fail:
+            raise RuntimeError("fake hint failure")
+        return self.hint
+
+
+class StatusHintTests(unittest.TestCase):
+    def _controller(self):
+        controller = DesktopController.__new__(DesktopController)
+        controller.online = True
+        controller.cfg = {}
+        return controller
+
+    def test_the_first_non_empty_hint_wins_and_a_failure_is_skipped(self):
+        controller = self._controller()
+        first = FakeHintAgent("one")
+        broken = FakeHintAgent("two", fail=True)
+        hint = FakeHintAgent("three", "去信任钩子")
+        with patch.object(registry, "load", return_value=[first, broken, hint]):
+            self.assertEqual(controller._agent_hint(), "去信任钩子")
+        self.assertEqual([a.asked for a in (first, broken, hint)], [1, 1, 1])
+
+    def test_not_online_shows_nothing_and_asks_nobody(self):
+        controller = self._controller()
+        controller.online = False
+        agent = FakeHintAgent("one", "去信任钩子")
+        with patch.object(registry, "load", return_value=[agent]):
+            self.assertEqual(controller._agent_hint(), "")
+        self.assertEqual(agent.asked, 0)
+
+
+class CodexStatusHintTests(unittest.TestCase):
+    def test_pending_trust_on_the_apptools_route_shows_the_trust_hint(self):
+        with patch.object(codex_apptools, "current_route", return_value="apptools"), \
+                patch.object(codex_hooks, "read_trust_status", return_value="pending_trust"):
+            self.assertEqual(CodexAgent().status_hint({}), codex_hooks.TRUST_HINT)
+
+    def test_other_states_and_the_off_switch_show_nothing(self):
+        cases = [("legacy", "pending_trust", {}), ("apptools", "enabled", {}),
+                 ("apptools", "pending_trust", {"codex_hooks": False})]
+        for route, trust, cfg in cases:
+            with patch.object(codex_apptools, "current_route", return_value=route), \
+                    patch.object(codex_hooks, "read_trust_status", return_value=trust):
+                self.assertEqual(CodexAgent().status_hint(cfg), "")
 
 
 if __name__ == "__main__":

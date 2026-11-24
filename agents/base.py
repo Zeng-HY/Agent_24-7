@@ -538,6 +538,11 @@ class Agent:
         settings). True when done or when there is nothing to undo; False when it could not be undone."""
         return True
 
+    def status_hint(self, cfg: dict) -> str:
+        """One plain Chinese line for the desktop status window when the user must do something on this
+        PC, or "" when there is nothing. Called on every status refresh: cache any file read."""
+        return ""
+
     def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
         return {}
 
