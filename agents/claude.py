@@ -532,6 +532,10 @@ class ClaudeAgent(Agent):
     # -- desktop, lifecycle & delivery hooks
 
     def is_our_delivery(self, rec: dict, want: str) -> bool:
+        teleply = chats._teleply_hook_text(rec)
+        if teleply:
+            cleaned, _ = chats._extract_codex_images(teleply)
+            return want in chats.norm(cleaned)
         steered = chats._claude_steer_message(rec)
         if steered:
             return want in chats.norm(steered["text"])
@@ -566,6 +570,71 @@ class ClaudeAgent(Agent):
                     continue
         return ""
 
+    @staticmethod
+    def _hook_bridge(handler):
+        """The hook bridge when Teleply's Claude hooks are enabled for this server (not when the user turned them off)."""
+        controller = getattr(handler.server, "claude", None)
+        return getattr(controller, "hooks", None) if controller is not None else None
+
+    def _hook_running(self, handler, item: dict | None) -> bool:
+        """Hooks are active on this conversation and the turn is still running. The controller also looks at the
+        record, so a Stop hook that was missed (remote down, manual PC stop) does not keep messages waiting forever."""
+        hooks = self._hook_bridge(handler)
+        if hooks is None or item is None:
+            return False
+        status = getattr(getattr(handler.server, "claude", None), "_hook_status", None)
+        if callable(status):
+            try:
+                hs = status(item)
+            except Exception:
+                hs = None
+            if hs is not None:
+                return bool(hs.get("running"))
+        return bool(hooks.is_running(item["id"]))
+
+    def _queue_images(self, handler, tid: str, images: list) -> list[str]:
+        """Store queued/steered pictures under claude-images for Claude's Read tool; returns their [附图] lines."""
+        import claude_hooks
+        hooks = self._hook_bridge(handler)
+        lines = []
+        for image in images:
+            path = claude_hooks.store_claude_image(hooks.images_root, tid, image)
+            lines.append(claude_hooks.image_line(path))
+        return lines
+
+    def _hook_queue_send(self, handler, item: dict, tid: str, text: str, images: list, body: dict):
+        """A phone message sent while Claude runs, with hooks active: Teleply keeps it and the Stop hook hands it over.
+        Returns the send result, or None for the old desktop path (idle, hooks inactive, or a slash command)."""
+        import time
+        hooks = self._hook_bridge(handler)
+        if hooks is None or not text or text.lstrip().startswith("/") or not self._hook_running(handler, item):
+            return None
+        base = text
+        offset = chats.file_size(chats.conv_path(item))
+        request_id = str(body.get("request_id", ""))
+        if images:
+            previous = handler.server.codex._begin(request_id, tid, body)
+            if previous:
+                return previous
+            try:
+                lines = self._queue_images(handler, tid, images)
+            except (OSError, KeyError, ValueError) as exc:
+                raise chats.InputNotSubmitted("图片已移除或不存在，尚未发送") from exc
+            text = f"{base}\n\n" + "\n".join(lines) if base else "\n".join(lines)
+        try:
+            hooks.enqueue_message(tid, text, base, request_id)
+        except ValueError as exc:
+            raise chats.ChatError("请求编号已用于其他消息") from exc
+        result = {"ok": True, "pressed": True, "offset": offset, "running": True,
+                  "check_text": base, "text": "已交给遥应，等这一轮结束", "queued": True,
+                  "accepted_at": int(time.time() * 1000)}
+        if images:
+            for image in images:
+                image["used"] = True
+                handler.server.codex._write_meta(image)
+            handler.server.codex._finish(request_id, result)
+        return result
+
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
         import remote
         remote.hook_settings(cfg, self.id in apps, log)
@@ -596,6 +665,13 @@ class ClaudeAgent(Agent):
                 text = "请查看这些图片。"
         if body.get("references"):
             text, _ = handler.server.references.compose(self.id, tid, text, body["references"])
+        hooks = self._hook_bridge(handler)
+        if hooks is not None and text and not text.lstrip().startswith("/") and hooks.is_active(tid):
+            item = chats.find(self.id, tid)
+            if self._hook_running(handler, item):
+                queued = self._hook_queue_send(handler, item, tid, text, images, body)
+                if queued is not None:
+                    return queued
         if images:
             previous = handler.server.codex._begin(str(body.get("request_id", "")), tid, body)
             if previous:
@@ -680,9 +756,28 @@ class ClaudeAgent(Agent):
                 text = str(body.get("text", ""))
                 if body.get("references"):
                     text, _ = handler.server.references.compose(self.id, tid, text, body["references"])
+                display = text
+                hooks = self._hook_bridge(handler)
+                images = []
+                if body.get("attachments") and hooks is not None and hooks.is_active(tid):
+                    item = chats.find(self.id, tid)
+                    if self._hook_running(handler, item):
+                        ids = body["attachments"]
+                        if (not isinstance(ids, list) or len(ids) > 5
+                                or any(not isinstance(v, str) for v in ids) or len(set(ids)) != len(ids)):
+                            raise chats.InputNotSubmitted("图片请求无效，尚未发送")
+                        images = [handler.server.codex.attachment(v, tid) for v in ids]
+                        if any(v.get("app", "codex") != "claude" for v in images) or sum(v["original_size"] for v in images) > 50 << 20:
+                            raise chats.InputNotSubmitted("图片不属于此 Claude 会话或超过大小限制，尚未发送")
+                        if not text.strip():
+                            text = display = "请查看这些图片。"
+                        text = f"{text}\n\n" + "\n".join(self._queue_images(handler, tid, images))
+                        for image in images:
+                            image["used"] = True
+                            handler.server.codex._write_meta(image)
                 expected = str(body.get("expected_turn") or body.get("turn_id") or "")
-                result = handler.server.claude.send_steer(tid, text, expected, str(body.get("request_id", "")))
-                result["check_text"] = text
+                result = handler.server.claude.send_steer(tid, text, expected, str(body.get("request_id", "")), display=display)
+                result["check_text"] = display
                 return result
             self._run_claude_post(handler, "/api/claude/steer", run)
             return
