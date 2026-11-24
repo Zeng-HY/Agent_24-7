@@ -73,7 +73,7 @@ class ClaudeAgent(Agent):
             },
             params={"state_timeout_s": 20, "new_timeout_s": 70, "refresh_ms": 5000},
             ui={"card_layout": "claude.v1", "waiting_text": "等待你处理"},
-            sources={"catalog": "json-index", "transcript": "jsonl", "control": "ui-automation+hook", "live": "file-poll"},
+            sources={"catalog": "json-index", "transcript": "jsonl", "control": "hook+ui-automation", "live": "file-poll"},
         )
 
     def find(self, conv_id: str) -> dict:
@@ -555,6 +555,15 @@ class ClaudeAgent(Agent):
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
         import remote
         remote.hook_settings(cfg, self.id in apps, log)
+
+    def on_server_init(self, server) -> None:
+        import threading
+        hooks = getattr(server, "claude_hooks", None)
+        if hooks is not None and hasattr(hooks, "refresh_sessions"):
+            addr = getattr(server, "server_address", None)
+            if isinstance(addr, tuple) and len(addr) >= 2 and addr[1]:
+                hooks.server_port = int(addr[1])
+            threading.Thread(target=hooks.refresh_sessions, name="claude-hook-warm", daemon=True).start()
 
     def chat_send_with_references(self, handler, body: dict) -> dict:
         import time

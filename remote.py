@@ -436,7 +436,9 @@ class Handler(BaseHTTPRequestHandler):
         reply = None
         if not body.get("_bad"):
             try:
-                reply = self.server.claude_hooks.handle(body, self._hung_up)  # type: ignore[attr-defined]
+                peer = self.client_address[1] if isinstance(getattr(self, "client_address", None), tuple) and len(self.client_address) >= 2 else 0
+                port = self.server.server_address[1] if isinstance(getattr(self.server, "server_address", None), tuple) and len(self.server.server_address) >= 2 else 0
+                reply = claude_hooks.dispatch(self.server.claude_hooks, body, self._hung_up, peer, port)  # type: ignore[attr-defined]
             except Exception:
                 self.log.write(traceback.format_exc())
         self._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")

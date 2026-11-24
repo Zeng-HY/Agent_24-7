@@ -1,34 +1,32 @@
-"""Claude's questions and permission prompts, answered through Claude Code's own hook (10-27).
+"""Claude Code HTTP hooks: questions, permissions, live state, and stop (10-27; extended 11-24).
 
-Claude Code posts a PermissionRequest here the moment it would ask on the desktop (a question card of AskUserQuestion,
-or the prompt before a command or a file change) and shows the desktop's card at the same time. This service holds
-that request open: the phone sees the question (claude_control.Controller builds its prompt from here) and its
-answer goes back as the reply, which Claude Code takes and closes the desktop's card with. Answered on the PC first,
-Claude Code goes on with the PC's answer and leaves the request open: the record then holds the call's result, and the
-request is let go. Stop on the PC, the hook's timeout or Claude Code ending close it from that side.
-
-Tried 10-27 on Claude 3.6556.2.0 (Claude Code 2.1.308) in a throwaway conversation: the card closed when the hook
-answered, the PC's own answer won when it came first, and with nothing listening the cards worked as before (Claude
-Code notes a hook error in the record, nothing shows in the window). Claude's window is not clicked, not brought to
-the front and the pointer stays where it is, which the click of dev.23 needed.
-
-The hook is one entry in Claude's user settings (~/.claude/settings.json), put there when the service starts and
-taken out when Teleply is uninstalled (relay_desktop.py --remove-claude-hook); the user agreed to it on 10-27.
+Claude Code posts hook events to http://127.0.0.1:<port>/api/claude/hook/<key> (configured in
+~/.claude/settings.json).
+- PermissionRequest: held open until the phone answers (AskUserQuestion or tool permission), timeout 3600 s.
+- UserPromptSubmit / PreToolUse / PostToolUse / PostToolUseFailure / Stop / Notification:
+  fast-path events (timeout 10 s, target <5 ms in-process) that track live running/step state,
+  record session_id -> claude.exe PID from the TCP connection table, and stop the turn on request.
+- Never returns 'allow' from PreToolUse or any fast event; approvals stay strictly in PermissionRequest.
 """
 from __future__ import annotations
 
+import getpass
 import json
 import os
+import re
 import secrets
 import threading
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import chats
 
 PATH = "/api/claude/hook/"  # + the hook key (remote_config.json "claude_hook_key"); remote.Handler serves it
-HOOK_TIMEOUT = 3600         # seconds Claude Code waits on the hook; tried 10-27 with 700 (its default is 600)
+HOOK_TIMEOUT = 3600         # seconds Claude Code waits on PermissionRequest
+FAST_HOOK_TIMEOUT = 10      # seconds Claude Code waits on fast status/stop/queue hooks
 WAIT_SECONDS = HOOK_TIMEOUT - 60  # the service lets go first, so Claude Code never cuts a request it still holds
 NOT_HELD = {"ExitPlanMode"}  # a plan's approval wants its own input with "allow"; not tried, left to the desktop
 SHOWN_AFTER = 3.0           # seconds the desktop's card may still be drawn after an answer went back
@@ -37,9 +35,315 @@ DENIED = ("The user said no to this from their phone (Teleply). Do not try it an
 NAV = {"back": ("Show previous question", "上一题"), "skip": ("Skip", "跳过"),
        "next": ("Next", "下一题"), "submit": ("Submit", "提交")}
 
+# All 7 HTTP hook entries Teleply manages in Claude's user settings: (event, matcher_or_None, timeout)
+MANAGED_HOOKS: tuple[tuple[str, str | None, int], ...] = (
+    ("PermissionRequest", None, HOOK_TIMEOUT),
+    ("UserPromptSubmit", None, FAST_HOOK_TIMEOUT),
+    ("PreToolUse", "*", FAST_HOOK_TIMEOUT),
+    ("PostToolUse", "*", FAST_HOOK_TIMEOUT),
+    ("PostToolUseFailure", "*", FAST_HOOK_TIMEOUT),
+    ("Stop", None, FAST_HOOK_TIMEOUT),
+    ("Notification", None, FAST_HOOK_TIMEOUT),
+)
+FAST_EVENTS = frozenset({
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "Notification",
+})
+
+STOP_REASON = "用户在手机上停止了这一轮（遥应）"
+STOP_DENY_REASON = "用户在手机上按了停止（遥应）。不要再调用任何工具。"
+
+COMMAND_TOOLS = frozenset({"Bash", "PowerShell"})
+COMMAND_SHELLS = frozenset({"bash.exe", "sh.exe", "pwsh.exe", "powershell.exe", "cmd.exe"})
+SESSION_CACHE_RETRY_SECONDS = 2.0
+
 
 def settings_file() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+
+
+def _step_for_tool(tool_name: str) -> str:
+    from agents.claude import CLAUDE_STEPS
+    return CLAUDE_STEPS.get((tool_name or "").rsplit(".", 1)[-1]) or ""
+
+
+def is_claude_code_exe(exe_path: str) -> bool:
+    """Verify an executable path belongs to Claude desktop's embedded Claude Code binary."""
+    norm = str(exe_path or "").replace("/", "\\").lower()
+    return "\\claude\\claude-code\\" in norm and norm.endswith("\\claude.exe")
+
+
+def _short_user(owner: str) -> str:
+    text = str(owner or "").strip()
+    if "\\" in text:
+        text = text.rsplit("\\", 1)[-1]
+    return text.casefold()
+
+
+def lookup_tcp_owner_pid(client_port: int, server_port: int) -> int:
+    """Find the PID that owns the client end of a local IPv4 TCP connection to server_port via GetExtendedTcpTable."""
+    if client_port <= 0 or server_port <= 0:
+        return 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        iphlp = ctypes.windll.iphlpapi
+        af_inet, tcp_table_owner_pid_all = 2, 5
+        size = wintypes.DWORD(0)
+        iphlp.GetExtendedTcpTable(None, ctypes.byref(size), False, af_inet, tcp_table_owner_pid_all, 0)
+        if size.value == 0:
+            return 0
+        for _ in range(2):
+            alloc = size.value + 4096
+            size = wintypes.DWORD(alloc)
+            buf = ctypes.create_string_buffer(alloc)
+            rc = iphlp.GetExtendedTcpTable(buf, ctypes.byref(size), False, af_inet, tcp_table_owner_pid_all, 0)
+            if rc == 0:
+                break
+            if rc != 122:  # ERROR_INSUFFICIENT_BUFFER
+                return 0
+        else:
+            return 0
+        count = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0]
+        rows = ctypes.cast(ctypes.addressof(buf) + 4, ctypes.POINTER(wintypes.DWORD * 6))
+        for i in range(count):
+            _state, _laddr, lport, _raddr, rport, pid = rows[i]
+            local_port = ((lport & 0xFF) << 8) | ((lport >> 8) & 0xFF)
+            remote_port = ((rport & 0xFF) << 8) | ((rport >> 8) & 0xFF)
+            if local_port == client_port and remote_port == server_port:
+                return int(pid)
+    except Exception:
+        return 0
+    return 0
+
+
+def lookup_process_exe(pid: int) -> str:
+    """Return full executable path for [pid] via QueryFullProcessImageNameW, or '' on error."""
+    if pid <= 0:
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            n = wintypes.DWORD(1024)
+            ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(n))
+            return buf.value if ok else ""
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        return ""
+
+
+def _parse_creation_time(value: Any) -> float | None:
+    """Parse WMI DMTF datetime ('20261124113005.123456+480'), datetime, or numeric Unix timestamp."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, str):
+        text = value.strip()
+        m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})", text)
+        if m:
+            year, mon, day, hour, minute, sec, usec, sign, offset_min = m.groups()
+            minutes = int(offset_min) * (1 if sign == "+" else -1)
+            tz = timezone(timedelta(minutes=minutes))
+            return datetime(int(year), int(mon), int(day), int(hour), int(minute), int(sec), int(usec), tzinfo=tz).timestamp()
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _default_list_processes() -> list[dict[str, Any]]:
+    """List local processes (PID, PPID, Name, ExecutablePath, CreationDate, Owner) via WMI.
+
+    Never reads CommandLine: command termination relies strictly on process ancestry and start time.
+    """
+    out: list[dict[str, Any]] = []
+    try:
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            wmi = win32com.client.GetObject("winmgmts:")
+            rows = wmi.ExecQuery("SELECT ProcessId, ParentProcessId, Name, ExecutablePath, CreationDate FROM Win32_Process")
+            raw_list = []
+            for proc in rows:
+                pid = int(getattr(proc, "ProcessId", 0) or 0)
+                ppid = int(getattr(proc, "ParentProcessId", 0) or 0)
+                name = str(getattr(proc, "Name", "") or "")
+                exe = str(getattr(proc, "ExecutablePath", "") or "")
+                created = _parse_creation_time(getattr(proc, "CreationDate", None))
+                raw_list.append((proc, pid, ppid, name, exe, created))
+            # Only query GetOwner for shells and descendants of claude.exe to keep it fast.
+            claude_pids = {pid for _, pid, _, name, exe, _ in raw_list if name.lower() == "claude.exe" and is_claude_code_exe(exe)}
+            descendant_pids = set()
+            if claude_pids:
+                frontier = set(claude_pids)
+                while frontier:
+                    next_frontier = set()
+                    for _, pid, ppid, _, _, _ in raw_list:
+                        if ppid in frontier and pid not in descendant_pids and pid not in claude_pids:
+                            descendant_pids.add(pid)
+                            next_frontier.add(pid)
+                    frontier = next_frontier
+            for proc, pid, ppid, name, exe, created in raw_list:
+                owner = ""
+                if pid in descendant_pids or name.lower() in COMMAND_SHELLS:
+                    try:
+                        res = proc.ExecMethod_("GetOwner")
+                        user = getattr(res, "User", "") or ""
+                        domain = getattr(res, "Domain", "") or ""
+                        owner = f"{domain}\\{user}" if domain and user else str(user)
+                    except Exception:
+                        owner = ""
+                out.append({
+                    "pid": pid,
+                    "ppid": ppid,
+                    "name": name,
+                    "executable_path": exe,
+                    "created_at": created,
+                    "owner": owner,
+                })
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception:
+        return []
+    return out
+
+
+def _default_kill_process(pid: int) -> bool:
+    """Terminate one specific PID via Win32 TerminateProcess (never spawns a shell)."""
+    try:
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x0001, False, int(pid))  # PROCESS_TERMINATE
+        if not handle:
+            return False
+        try:
+            return bool(ctypes.windll.kernel32.TerminateProcess(handle, 1))
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        return False
+
+
+def kill_session_command(
+    session_pid: int,
+    since_ts: float,
+    *,
+    list_processes: Callable[[], list[dict[str, Any]]] | None = None,
+    kill_process: Callable[[int], Any] | None = None,
+    current_user: str | None = None,
+    log: Callable[[str], None] | None = None,
+) -> list[int]:
+    """Terminate ONLY the newest current-user command shell directly under this conversation's claude.exe
+    started at or after [since_ts - 1s], along with its current-user descendants.
+
+    Strictly forbidden:
+    - Never matches processes by command-line text (design 3.3).
+    - Never touches claude.exe itself or any other conversation's processes.
+    - Never touches processes belonging to other users or with unknown owner.
+    """
+    if not session_pid or session_pid <= 0 or not since_ts or since_ts <= 0:
+        return []
+    want_user = _short_user(current_user or os.environ.get("USERNAME") or getpass.getuser())
+    if not want_user:
+        return []
+
+    procs = (list_processes or _default_list_processes)()
+    if not procs:
+        return []
+
+    by_pid: dict[int, dict[str, Any]] = {}
+    for p in procs:
+        if isinstance(p, dict) and p.get("pid"):
+            by_pid[int(p["pid"])] = p
+
+    session = by_pid.get(int(session_pid))
+    if not session:
+        return []
+    if str(session.get("name") or "").lower() != "claude.exe":
+        return []
+    if not is_claude_code_exe(str(session.get("executable_path") or "")):
+        return []
+
+    threshold = float(since_ts) - 1.0
+    shells: list[tuple[float, int, dict[str, Any]]] = []
+    for p in procs:
+        if not isinstance(p, dict):
+            continue
+        pid = int(p.get("pid") or 0)
+        ppid = int(p.get("ppid") or 0)
+        name = str(p.get("name") or "").lower()
+        if not pid or pid == int(session_pid) or ppid != int(session_pid):
+            continue
+        if name not in COMMAND_SHELLS:
+            continue
+        owner = _short_user(str(p.get("owner") or ""))
+        if not owner or owner != want_user:
+            continue
+        created = _parse_creation_time(p.get("created_at"))
+        if created is None or created < threshold:
+            continue
+        shells.append((created, pid, p))
+
+    if not shells:
+        return []
+    shells.sort(key=lambda item: (item[0], item[1]))
+    top_pid = shells[-1][1]
+    top_name = str(shells[-1][2].get("name") or "")
+
+    # Walk descendants of the chosen shell; never include claude.exe or other users' processes.
+    tree_order: list[int] = [top_pid]
+    tree_set: set[int] = {top_pid}
+    grew = True
+    while grew:
+        grew = False
+        for p in procs:
+            if not isinstance(p, dict):
+                continue
+            pid = int(p.get("pid") or 0)
+            ppid = int(p.get("ppid") or 0)
+            if not pid or pid in tree_set or pid == int(session_pid):
+                continue
+            if ppid not in tree_set:
+                continue
+            if str(p.get("name") or "").lower() == "claude.exe":
+                continue
+            owner = _short_user(str(p.get("owner") or ""))
+            if not owner or owner != want_user:
+                continue
+            tree_order.append(pid)
+            tree_set.add(pid)
+            grew = True
+
+    killer = kill_process or _default_kill_process
+    killed: list[int] = []
+    # Kill deepest children first, then the shell itself.
+    for pid in reversed(tree_order):
+        if pid == int(session_pid):
+            continue
+        try:
+            if killer(pid) is not False:
+                killed.append(pid)
+        except Exception:
+            continue
+    if killed and callable(log):
+        log(f"手机停止 Claude：已结束命令进程 {top_name}#{top_pid} 及子进程（共 {len(killed)} 个）")
+    return killed
 
 
 class Ask:
@@ -69,19 +373,171 @@ class Ask:
         return [self.id, self.at, [[k, v] for k, v in sorted(self.answers.items())], list(self.picked)]
 
 
-class Bridge:
-    link_wait = 10  # seconds a request waits for its conversation to be linked to its record (find)
+class _ConvState:
+    """Live hook state tracked for one desktop Claude conversation."""
 
-    def __init__(self, log=print, notify=None, changed=None, sessions=None, record=None, clock=time.monotonic) -> None:
+    def __init__(self, tid: str, session_id: str = "") -> None:
+        self.tid = tid
+        self.session_id = session_id
+        self.running = False
+        self.step = ""
+        self.tool_name = ""
+        self.tool_use_id = ""
+        self.turn_started = 0
+        self.turn_ended = 0
+        self.step_started_at = 0.0
+        self.stop_requested = False
+        self.last_event_at: float | None = None
+        self.last_event_name = ""
+        self.last_notification: dict[str, Any] | None = None
+        self.pid = 0
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "tid": self.tid,
+            "session_id": self.session_id,
+            "running": self.running,
+            "step": self.step,
+            "tool_name": self.tool_name,
+            "tool_use_id": self.tool_use_id,
+            "turn_started": self.turn_started,
+            "turn_ended": self.turn_ended,
+            "step_started_at": self.step_started_at,
+            "stop_requested": self.stop_requested,
+            "last_event_at": self.last_event_at,
+            "last_event_name": self.last_event_name,
+            "last_notification": dict(self.last_notification) if self.last_notification else None,
+            "pid": self.pid,
+        }
+
+
+class Bridge:
+    link_wait = 10  # seconds a PermissionRequest waits for its conversation to be linked to its record (find)
+
+    def __init__(
+        self,
+        log=print,
+        notify=None,
+        changed=None,
+        sessions=None,
+        record=None,
+        clock=time.monotonic,
+        wall_clock=time.time,
+        tcp_owner=None,
+        process_exe=None,
+        list_processes=None,
+        kill_process=None,
+        current_user: str | None = None,
+        server_port: int = 0,
+    ) -> None:
         self.log = log
         self.notify = notify          # notify.Notifier.asking: the phone hears that Claude waits
         self.changed = changed or (lambda tid: None)  # the controller drops what it read of this conversation
         self.sessions = sessions or (lambda: chats.claude_sessions(100000))
         self.record = record or chats.conv_path
         self.clock = clock
+        self.wall_clock = wall_clock
+        self._tcp_owner = tcp_owner or lookup_tcp_owner_pid
+        self._process_exe = process_exe or lookup_process_exe
+        self._list_processes = list_processes
+        self._kill_process = kill_process
+        self._current_user = current_user
+        self.server_port = int(server_port or 0)
+
         self.lock = threading.Lock()
         self.asks: dict[str, Ask] = {}      # held now, oldest first
         self.answered: dict[str, float] = {}  # conversation -> when a phone answer last went back
+
+        # Fast-path caches and live state
+        self._session_map: dict[str, dict] = {}   # cliSessionId -> desktop item
+        self._last_refresh = -SESSION_CACHE_RETRY_SECONDS
+        self._refreshing = False
+        self._session_pids: dict[str, int] = {}   # cliSessionId -> verified claude.exe PID
+        self._states: dict[str, _ConvState] = {}  # desktop conv id -> _ConvState
+
+    # -- session cache
+
+    def refresh_sessions(self) -> None:
+        """Reload cliSessionId -> desktop conversation cache from self.sessions()."""
+        try:
+            items = self.sessions() or []
+            mapping = {str(s["cli"]): s for s in items if isinstance(s, dict) and s.get("cli") and s.get("id")}
+        except Exception:
+            mapping = None
+        now = self.clock()
+        with self.lock:
+            if mapping is not None:
+                self._session_map.update(mapping)
+            self._last_refresh = now
+            self._refreshing = False
+
+    def register_session(self, item: dict) -> None:
+        """Explicitly insert a desktop conversation into the session_id cache."""
+        if isinstance(item, dict) and item.get("cli") and item.get("id"):
+            with self.lock:
+                self._session_map[str(item["cli"])] = item
+
+    def _lookup_fast_session(self, session_id: str) -> dict | None:
+        """O(1) lookup of desktop conversation by session_id. On miss, schedules a background refresh and returns None."""
+        if not session_id:
+            return None
+        start_refresh = False
+        now = self.clock()
+        with self.lock:
+            item = self._session_map.get(session_id)
+            if item is not None:
+                return item
+            if not self._refreshing and (now - self._last_refresh) >= SESSION_CACHE_RETRY_SECONDS:
+                self._refreshing = True
+                start_refresh = True
+        if start_refresh:
+            threading.Thread(target=self.refresh_sessions, name="claude-hook-sessions", daemon=True).start()
+        return None
+
+    def _note_connection_pid(self, session_id: str, tid: str, client_port: int, server_port: int) -> int:
+        port = server_port or self.server_port
+        if not session_id or client_port <= 0 or port <= 0:
+            return 0
+        try:
+            pid = int(self._tcp_owner(client_port, port) or 0)
+        except Exception:
+            pid = 0
+        if pid <= 0:
+            return 0
+        try:
+            exe = str(self._process_exe(pid) or "")
+        except Exception:
+            exe = ""
+        if not is_claude_code_exe(exe):
+            return 0
+        with self.lock:
+            self._session_pids[session_id] = pid
+            st = self._states.get(tid)
+            if st is not None:
+                st.pid = pid
+        return pid
+
+    def session_pid(self, session_id: str) -> int:
+        with self.lock:
+            return self._session_pids.get(session_id, 0)
+
+    def conv_pid(self, tid: str) -> int:
+        with self.lock:
+            st = self._states.get(tid)
+            if st is None:
+                return 0
+            return st.pid or self._session_pids.get(st.session_id, 0)
+
+    def is_active(self, tid: str) -> bool:
+        """Whether this conversation has received at least one of the new hook events."""
+        with self.lock:
+            st = self._states.get(tid)
+            return st is not None and st.last_event_at is not None
+
+    def conv_state(self, tid: str) -> dict[str, Any] | None:
+        with self.lock:
+            st = self._states.get(tid)
+            return st.snapshot() if st is not None else None
 
     # -- Claude Code's side
 
@@ -90,23 +546,131 @@ class Bridge:
         after its first message (chats.claude_sessions), so it is looked for again for a moment."""
         deadline = self.clock() + self.link_wait
         while True:
-            item = next((s for s in self.sessions() if s.get("cli") == session), None)
-            if item is not None or self.clock() >= deadline:
+            items = self.sessions()
+            item = next((s for s in items if s.get("cli") == session), None)
+            if item is not None:
+                self.register_session(item)
                 return item
+            if self.clock() >= deadline:
+                return None
             time.sleep(1)
 
-    def handle(self, payload: dict, gone=lambda: False) -> dict | None:
-        """One hook request, on its own connection's thread: blocks until the phone answers or the request is let go.
-        gone(): whether Claude Code closed the connection. Returns the hook's reply, or None for no decision (the
-        desktop's card goes on as usual)."""
-        if payload.get("hook_event_name") != "PermissionRequest" or not isinstance(payload.get("tool_input"), dict):
+    def handle(self, payload: dict, gone=lambda: False, *, client_port: int = 0, server_port: int = 0) -> dict | None:
+        """One hook request from Claude Code.
+        - PermissionRequest: blocks until the phone answers or the request is let go (unchanged).
+        - Fast events (UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification):
+          handled in milliseconds without blocking; unknown sessions return None immediately.
+        """
+        event = str(payload.get("hook_event_name") or "") if isinstance(payload, dict) else ""
+        if event == "PermissionRequest":
+            return self._handle_permission(payload, gone, client_port=client_port, server_port=server_port)
+        if event in FAST_EVENTS:
+            return self._handle_fast(event, payload, client_port=client_port, server_port=server_port)
+        return None
+
+    def _handle_fast(self, event: str, payload: dict, *, client_port: int = 0, server_port: int = 0) -> dict | None:
+        session_id = str(payload.get("session_id") or "")
+        item = self._lookup_fast_session(session_id)
+        if item is None:
+            return None
+        tid = str(item["id"])
+        now_mono = self.clock()
+        now_wall = float(self.wall_clock())
+
+        pid = self._note_connection_pid(session_id, tid, client_port, server_port)
+
+        reply: dict | None = None
+        with self.lock:
+            st = self._states.get(tid)
+            if st is None:
+                st = _ConvState(tid, session_id)
+                self._states[tid] = st
+            elif session_id and st.session_id != session_id:
+                st.session_id = session_id
+            if pid > 0:
+                st.pid = pid
+            elif session_id in self._session_pids:
+                st.pid = self._session_pids[session_id]
+
+            st.last_event_at = now_mono
+            st.last_event_name = event
+
+            if event == "UserPromptSubmit":
+                st.running = True
+                st.turn_started = int(now_wall)
+                st.turn_ended = 0
+                st.step = ""
+                st.tool_name = ""
+                st.tool_use_id = ""
+                st.step_started_at = 0.0
+                st.stop_requested = False
+
+            elif event == "PreToolUse":
+                if st.stop_requested:
+                    st.running = False
+                    st.turn_ended = int(now_wall)
+                    st.step = ""
+                    st.tool_name = ""
+                    st.tool_use_id = ""
+                    st.step_started_at = 0.0
+                    reply = {
+                        "continue": False,
+                        "stopReason": STOP_REASON,
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": STOP_DENY_REASON,
+                        },
+                    }
+                else:
+                    tool_name = str(payload.get("tool_name") or "")
+                    st.running = True
+                    if not st.turn_started:
+                        st.turn_started = int(now_wall)
+                    st.turn_ended = 0
+                    st.tool_name = tool_name
+                    st.tool_use_id = str(payload.get("tool_use_id") or "")
+                    st.step = _step_for_tool(tool_name)
+                    st.step_started_at = now_wall
+
+            elif event in ("PostToolUse", "PostToolUseFailure"):
+                tuid = str(payload.get("tool_use_id") or "")
+                if not st.tool_use_id or not tuid or st.tool_use_id == tuid:
+                    st.tool_name = ""
+                    st.tool_use_id = ""
+                    st.step = ""
+                    st.step_started_at = 0.0
+
+            elif event == "Stop":
+                st.stop_requested = False
+                st.running = False
+                st.turn_ended = int(now_wall)
+                st.step = ""
+                st.tool_name = ""
+                st.tool_use_id = ""
+                st.step_started_at = 0.0
+
+            elif event == "Notification":
+                st.last_notification = {
+                    "type": str(payload.get("notification_type") or ""),
+                    "message": str(payload.get("message") or "")[:200],
+                    "at": now_wall,
+                }
+
+        self.changed(tid)
+        return reply
+
+    def _handle_permission(self, payload: dict, gone=lambda: False, *, client_port: int = 0, server_port: int = 0) -> dict | None:
+        if not isinstance(payload.get("tool_input"), dict):
             return None
         tool = str(payload.get("tool_name") or "")
         if not tool or tool in NOT_HELD or (tool == "AskUserQuestion" and not questions_ok(payload["tool_input"])):
             return None
-        item = self.find(str(payload.get("session_id") or ""))
+        session_id = str(payload.get("session_id") or "")
+        item = self.find(session_id)
         if item is None:  # Claude Code in a terminal or an editor, or a conversation this service does not list
             return None
+        self._note_connection_pid(session_id, str(item["id"]), client_port, server_port)
         ask = Ask(item, payload)
         with self.lock:
             self.asks[ask.id] = ask
@@ -157,6 +721,35 @@ class Bridge:
         return ask.call not in calls
 
     # -- the phone's side
+
+    def request_stop(self, tid: str) -> dict[str, Any]:
+        """Mark [tid] to stop on the next PreToolUse and immediately kill any running Bash/PowerShell child tree."""
+        with self.lock:
+            st = self._states.get(tid)
+            if st is None:
+                st = _ConvState(tid)
+                self._states[tid] = st
+            st.stop_requested = True
+            tool_name = st.tool_name
+            step_started_at = st.step_started_at
+            pid = st.pid or self._session_pids.get(st.session_id, 0)
+        killed: list[int] = []
+        if tool_name in COMMAND_TOOLS and pid > 0 and step_started_at > 0:
+            killed = kill_session_command(
+                pid,
+                step_started_at,
+                list_processes=self._list_processes,
+                kill_process=self._kill_process,
+                current_user=self._current_user,
+                log=self.log,
+            )
+        self.changed(tid)
+        return {
+            "ok": True,
+            "killed": bool(killed),
+            "killed_pids": killed,
+            "tool": tool_name,
+        }
 
     def layout(self, tid: str) -> tuple[str, dict, list] | None:
         """(request id, its prompt, the stamp its taps are bound to) for the oldest request held on this conversation,
@@ -266,6 +859,13 @@ class Bridge:
         return text
 
 
+def dispatch(bridge, payload: dict, gone=lambda: False, client_port: int = 0, server_port: int = 0) -> dict | None:
+    """Invoke [bridge.handle], passing TCP ports when supported (keeps 2-arg test stubs compatible)."""
+    if isinstance(bridge, Bridge):
+        return bridge.handle(payload, gone, client_port=client_port, server_port=server_port)
+    return bridge.handle(payload, gone)
+
+
 def allow(extra: dict) -> dict:
     return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow", **extra}}}
 
@@ -362,10 +962,18 @@ def _read(path: Path, log) -> dict | None:
     except (OSError, ValueError) as exc:
         log(f"Claude 的设置读不懂，没改（{path}）：{exc}")
         return None
-    if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict) \
-            or not isinstance(data.get("hooks", {}).get("PermissionRequest", []), list):
+    if not isinstance(data, dict):
         log(f"Claude 的设置不是常见的样子，没改（{path}）")
         return None
+    hooks = data.get("hooks")
+    if hooks is not None and not isinstance(hooks, dict):
+        log(f"Claude 的设置不是常见的样子，没改（{path}）")
+        return None
+    if isinstance(hooks, dict):
+        for event, _, _ in MANAGED_HOOKS:
+            if event in hooks and not isinstance(hooks[event], list):
+                log(f"Claude 的设置不是常见的样子，没改（{path}）")
+                return None
     return data
 
 
@@ -379,48 +987,85 @@ def _write(path: Path, data: dict, original: bytes | None) -> None:
     os.replace(temp, path)
 
 
+def _find_ours(data: dict) -> dict[str, list[tuple[Any, dict]]]:
+    """Return event -> [(matcher, handler), ...] for all Teleply HTTP hook entries across every event."""
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return {}
+    found: dict[str, list[tuple[Any, dict]]] = {}
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        items = []
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            handlers = group.get("hooks")
+            if not isinstance(handlers, list):
+                continue
+            for handler in handlers:
+                if _ours(handler):
+                    items.append((group.get("matcher"), handler))
+        if items:
+            found[str(event)] = items
+    return found
+
+
 def _strip(data: dict) -> None:
     hooks = data.get("hooks")
-    if not isinstance(hooks, dict) or not isinstance(hooks.get("PermissionRequest"), list):
+    if not isinstance(hooks, dict):
         return
-    groups = []
-    for group in hooks["PermissionRequest"]:
-        handlers = group.get("hooks") if isinstance(group, dict) else None
-        if isinstance(handlers, list) and any(_ours(h) for h in handlers):
-            group = {**group, "hooks": [h for h in handlers if not _ours(h)]}
-            if not group["hooks"]:
-                continue
-        groups.append(group)
-    if groups:
-        hooks["PermissionRequest"] = groups
-    else:
-        del hooks["PermissionRequest"]
-        if not hooks:
-            del data["hooks"]
+    for event in list(hooks.keys()):
+        raw_groups = hooks.get(event)
+        if not isinstance(raw_groups, list):
+            continue
+        groups = []
+        for group in raw_groups:
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            if isinstance(handlers, list) and any(_ours(h) for h in handlers):
+                group = {**group, "hooks": [h for h in handlers if not _ours(h)]}
+                if not group["hooks"]:
+                    continue
+            groups.append(group)
+        if groups:
+            hooks[event] = groups
+        else:
+            del hooks[event]
+    if not hooks:
+        data.pop("hooks", None)
+
+
+def _desired_group(url: str, matcher: str | None, timeout: int) -> dict:
+    entry = {"type": "http", "url": url, "timeout": timeout}
+    return {"matcher": matcher, "hooks": [entry]} if matcher is not None else {"hooks": [entry]}
 
 
 def install(url: str, log=print, path: Path | None = None) -> bool:
-    """Put this service's hook into Claude's user settings, or bring an older one up to date (another port or key).
-    The rest of the file stays as it is. Returns whether the file was written."""
+    """Put Teleply's 7 HTTP hooks into Claude's user settings, or bring older entries up to date.
+    The user's own hooks and settings stay untouched. Returns whether the file was written."""
     path = path or settings_file()
     data = _read(path, log)
     if data is None:
         return False
-    entry = {"type": "http", "url": url, "timeout": HOOK_TIMEOUT}
-    ours = [h for g in data.get("hooks", {}).get("PermissionRequest", []) if isinstance(g, dict)
-            for h in g.get("hooks") or [] if _ours(h)]
-    if ours == [entry]:
+    existing = _find_ours(data)
+    expected = {
+        event: [(matcher, {"type": "http", "url": url, "timeout": timeout})]
+        for event, matcher, timeout in MANAGED_HOOKS
+    }
+    if existing == expected:
         return False
-    original = path.read_bytes() if path.exists() and not ours else None  # kept once: the file before Teleply's hook
+    original = path.read_bytes() if path.exists() and not existing else None  # kept once: before Teleply first changed it
     _strip(data)
-    data.setdefault("hooks", {}).setdefault("PermissionRequest", []).append({"hooks": [entry]})
+    hooks = data.setdefault("hooks", {})
+    for event, matcher, timeout in MANAGED_HOOKS:
+        hooks.setdefault(event, []).append(_desired_group(url, matcher, timeout))
     _write(path, data, original)
-    log(f"Claude 的设置里加上了遥应的 hook（{path}）：Claude 问问题、要权限时先告诉遥应")
+    log(f"Claude 的设置里加上了遥应的 {len(MANAGED_HOOKS)} 条 hook（{path}）：同步状态、停止、提问与权限")
     return True
 
 
 def remove(log=print, path: Path | None = None) -> bool:
-    """Take this service's hook out of Claude's user settings (uninstall). Returns whether the file was written."""
+    """Take Teleply's hooks out of Claude's user settings (uninstall / disabled). Returns whether the file was written."""
     path = path or settings_file()
     data = _read(path, log)
     if not data:
