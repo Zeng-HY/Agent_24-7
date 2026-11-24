@@ -67,6 +67,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "deepseek/model", "deepseek/permission" -> JSONObject().put("ok", true).put("text", "本地示例：设置已记录")
         "notify" -> world.notifyState()
         "notify/ntfy" -> world.ntfy(body?.optBoolean("on") == true)
+        "notify/automations" -> world.automations(body?.string("mode").orEmpty())
         "notify/test" -> world.notifyTest()
         "voice/status" -> JSONObject().put("local", JSONObject().put("ready", true)).put("cloud", JSONObject().put("ready", true))
         "voice/terms" -> if (body == null) JSONObject().put("text", world.terms).put("count", world.terms.lines().count { it.isNotBlank() }) else { world.terms = body.string("text"); JSONObject().put("ok", true).put("count", world.terms.lines().count { it.isNotBlank() }) }
@@ -129,6 +130,14 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     override suspend fun revokeDevice(device: String) { if (!world.devices.removeIf { it.id == device }) throw ServiceFailure(404) }
     // The demo account's password is fixture (进入示例); another is turned down in the service's words.
     override suspend fun deleteAccount(password: String) { if (password != "fixture") throw ServiceFailure(400, detail = "当前密码错误"); world.signedIn = false }
+    // 遥应通知 in the demo: fixed answers, no network, no real key (the page is shown, nothing is registered anywhere).
+    override suspend fun pushRegister(token: String, label: String, version: String, language: String): JSONObject {
+        world.pushRegistered = token; world.pushLabel = label; world.pushLanguage = language
+        return JSONObject().put("ok", true).put("platform", "android")
+    }
+    override suspend fun pushState(token: String): JSONObject = JSONObject().put("ok", true).put("platform", "android").put("registered", world.pushRegistered == token)
+    override suspend fun pushUnregister(token: String): JSONObject { if (world.pushRegistered == token) world.pushRegistered = ""; return JSONObject().put("ok", true) }
+    override suspend fun pushTest(token: String): JSONObject = JSONObject().put("ok", true).put("text", "本地示例：已请中转发一条")
 
     override suspend fun chats(device: String, query: String, cursor: String?): Page<Chat> = chatList(device, source, query, cursor)
 
@@ -246,6 +255,11 @@ class FixtureWorld {
     private val archivedKeys = linkedSetOf<String>()
     private val deleted = mutableSetOf<String>()
     private var ntfyOn = false
+    private var automationMode = "codex"
+    /** The last phone registration the demo saw: fixed data, never a real key (demonstration only). */
+    var pushRegistered = ""
+    var pushLabel = ""
+    var pushLanguage = ""
     private val recent = ArrayDeque<JSONObject>()
     var terms = "遥应\nTeleply\nCodex"
     private var voiceChunks = 0
@@ -632,11 +646,18 @@ class FixtureWorld {
 
     fun notifyState(): JSONObject = JSONObject().put("configured", false).put("server", "")
         .put("ntfy", JSONObject().put("on", ntfyOn).put("topic", "agent-remote").put("server", "https://test-pc.example.ts.net").put("listening", if (ntfyOn) 1 else 0).put("last_seen", ""))
+        .put("automations", JSONObject().put("mode", automationMode))
         .put("recent", JSONArray(recent.toList()))
     fun ntfy(on: Boolean): JSONObject {
         ntfyOn = on
         if (on) remember("本地示例：试推了一条")
         return JSONObject().put("ok", true).put("text", if (on) "本地示例：已打开，刚推了一条" else "本地示例：已关掉")
+    }
+    /** 设置 → Codex 定时任务 (design-2 §3.5): 每次都通知 / 只在失败时通知 / 不通知. */
+    fun automations(mode: String): JSONObject {
+        if (mode !in setOf("codex", "failed", "off")) throw ServiceFailure(400, detail = "不认识的定时任务通知方式")
+        automationMode = mode
+        return JSONObject().put("ok", true).put("automations", JSONObject().put("mode", mode)).put("text", "本地示例：定时任务通知已改为$mode")
     }
     fun notifyTest(): JSONObject { remember("本地示例：试推了一条"); return JSONObject().put("ok", true).put("text", "本地示例：刚推了一条，看看手机") }
     private fun remember(text: String) { recent.addFirst(JSONObject().put("time", "12:00").put("text", text)); while (recent.size > 5) recent.removeLast() }

@@ -69,6 +69,12 @@ interface ReadApi {
     suspend fun revokeDevice(device: String) { error("当前服务不支持移除电脑") }
     /** 删除账号 (web account menu): the password again; the account, its email, computers and notices go for good. */
     suspend fun deleteAccount(password: String) { error("当前服务不支持删除账号") }
+    /** 遥应通知's phone registration (design-2 §1.1), with this phone's sign-in cookie; [token] is sha256 of its key. */
+    suspend fun pushRegister(token: String, label: String, version: String, language: String): JSONObject = throw ServiceFailure(404, detail = "这个服务还没有安卓通知")
+    suspend fun pushState(token: String): JSONObject = throw ServiceFailure(404, detail = "这个服务还没有安卓通知")
+    suspend fun pushUnregister(token: String): JSONObject = throw ServiceFailure(404, detail = "这个服务还没有安卓通知")
+    /** 试推一条: the relay pushes one notice down this phone's own WebSocket. */
+    suspend fun pushTest(token: String): JSONObject = throw ServiceFailure(404, detail = "这个服务还没有安卓通知")
     suspend fun account(): Account
     suspend fun select(device: String)
     suspend fun chats(device: String, query: String, cursor: String?): Page<Chat>
@@ -92,6 +98,11 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
     /** Saving or sharing a file: an hour in all, a minute of silence (11-15: the 40 s of every call cut big files off). */
     internal val fileClient = client.newBuilder().callTimeout(3600, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
+    /**
+     * The notification stream (design-2 §1.2): no call limit and no read timeout, a ping every 180 s, so the phone wakes
+     * for it three minutes apart. The relay answers pong itself.
+     */
+    internal val pushClient = client.newBuilder().callTimeout(0, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).pingInterval(180, TimeUnit.SECONDS).build()
     override fun close() { client.dispatcher.cancelAll() }
     private fun devicePath(device: String, route: String): String {
         require(Regex("[0-9a-f]{32}").matches(device)) { "电脑标识无效" }
@@ -157,6 +168,26 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
     override suspend fun revokeDevice(device: String) { devicePath(device, ""); request("/account/revoke", body = JSONObject().put("id", device)) }
     /** Done, the service has ended every sign-in of the account: the cookie here goes too, as for 退出登录. */
     override suspend fun deleteAccount(password: String) { request("/account/delete", body = JSONObject().put("password", password)); vault.write(key, null) }
+    // 遥应通知's phone registration (design-2 §1.1). The relay stores only the fingerprint; `platform` tells its records
+    // this is not an APNs token, so its iPhone paths never see it.
+    override suspend fun pushRegister(token: String, label: String, version: String, language: String): JSONObject = request(
+        "/account/push/register",
+        body = JSONObject().put("token", token).put("platform", "android").put("environment", "relay").put("label", label.take(40)).put("version", version).put("language", language),
+    )
+    override suspend fun pushState(token: String): JSONObject = request("/account/push/state", body = JSONObject().put("token", token))
+    override suspend fun pushUnregister(token: String): JSONObject = request("/account/push/unregister", body = JSONObject().put("token", token))
+    override suspend fun pushTest(token: String): JSONObject = request("/account/push/test", body = JSONObject().put("token", token))
+    /**
+     * One WebSocket to `wss://<service>/push/android` (design-2 §1.2): the key in `Authorization: Bearer`, the place it
+     * reached in `since`, nothing else. No cookie: the relay finds the account by sha256(key) in push_phones.
+     */
+    fun pushWebSocket(secret: String, since: String?, listener: WebSocketListener): WebSocket {
+        require(secret.isNotBlank()) { "推送钥匙为空" }
+        // An https address is what OkHttp upgrades to wss; HttpUrl itself only knows http and https.
+        val url = root.newBuilder().encodedPath("/push/android").apply { if (!since.isNullOrBlank()) addQueryParameter("since", since) }.build()
+        val request = Request.Builder().url(url).header("Authorization", "Bearer $secret").withProtocolHeaders().build()
+        return pushClient.newWebSocket(request, listener)
+    }
     override suspend fun agents(device: String): List<AgentInfo>? = try {
         val parsed = parseAgentsResponse(request(devicePath(device, "/api/agents")))
         catalog.put(device, parsed)
@@ -252,9 +283,9 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         /** Fields of DeepSeek's state that change on every read while it works and that the phone does not show. */
         val DeepSeekUnshown=listOf("seq","subagents","inbox")
         val DetailRoutes=setOf("chat/new/options","chat/folders","chat/new/draft","chat/new","chat/new/state","chat/new/retry","chat/new/references","composer/references","files/places","files/list","files/image","files/remove","codex/remove-attachment","codex/attachments","chat/files","chat/diff","file/text","file/meta","deepseek/models","deepseek/permissions","deepseek/model","deepseek/permission","deepseek/answer","deepseek/approval","claude/catalog","claude/setting","claude/choose","claude/menu","claude/close-menu","chat/projects","chat/open","chat/resolve",
-            "claude/next","claude/task","chat/check","chat/archive","chat/unarchive","chat/delete","chat/archived","chats/children","notify","notify/ntfy","notify/test","voice/status","voice/terms","voice/tidy","status","usage","usage/codex-reset")
+            "claude/next","claude/task","chat/check","chat/archive","chat/unarchive","chat/delete","chat/archived","chats/children","notify","notify/ntfy","notify/automations","notify/test","voice/status","voice/terms","voice/tidy","status","usage","usage/codex-reset")
         /** Seconds the computer may take: Claude's buttons wait for its window (web 65 s), archiving for its records. */
-        val SlowRoutes=mapOf("claude/next" to 65L,"claude/task" to 65L,"chat/archive" to 65L,"chat/unarchive" to 95L,"chat/delete" to 125L,"chat/archived" to 25L,"notify" to 35L,"notify/ntfy" to 35L,"notify/test" to 35L,"voice/tidy" to 65L,"status" to 10L,"usage" to 45L,"usage/codex-reset" to 75L)
+        val SlowRoutes=mapOf("claude/next" to 65L,"claude/task" to 65L,"chat/archive" to 65L,"chat/unarchive" to 95L,"chat/delete" to 125L,"chat/archived" to 25L,"notify" to 35L,"notify/ntfy" to 35L,"notify/automations" to 35L,"notify/test" to 35L,"voice/tidy" to 65L,"status" to 10L,"usage" to 45L,"usage/codex-reset" to 75L)
     }
     override suspend fun upload(device:String,chat:String,name:String,bytes:ByteArray,image:Boolean,draft:Boolean):JSONObject {
         require(bytes.isNotEmpty() && bytes.size <= if(image) 20*1024*1024 else 100*1024*1024) { "文件超过上传上限" }
