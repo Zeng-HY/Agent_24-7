@@ -64,7 +64,17 @@
 
 ## 结果（DeepSeek 填）
 
-- 提交：
-- 通知查到的情况：
+- 提交：本文件与代码同一提交（分支 `codex-approval-away`，说明「Codex 批准：电脑前没人也交给手机，一直等」）。改到的文件只有 `codex_hooks.py`、`deploy/windows/TeleplyCodexHook.cs`、`tests/test_codex_hooks.py`、本文件。
+- 通知查到的情况：**已经有推送，没有改 `notify.py`**。接住的卡片一建好就调 `on_waiting`（`codex_hooks.py:1388`），`agents/codex.py:460` 把它转成 `notifier.asking()`（`notify.py:835`）→ `_tell(..., asks=True)`（`notify.py:845`）：Bark 推一条（副标题「<电脑名> · Codex 在等你选」，正文是命令开头）；ntfy 打开时推「Codex · <电脑名> · 在等你选」＋命令开头；中转在线时发 `kind="waiting"`（`notify.py:949`），`relay_push.py:47` 写成「有个对话在等你处理」，iPhone 的遥应通知和岛都收得到。另外 `agents/codex.py:874` 的 `notify_check_approvals` 每轮轮询看到 `hooks.pending_cards` 非空会补报一次（`notify.py:616`），第一推漏了也还有。手机正开着这个对话时不另推（`_quiet`），只更新岛——那时它本来就看得到卡片。
 - 测试数字（基线 / 改后 / 完整 pytest）：
+  - 基线（改动前）：`tests/test_codex_hooks.py tests/test_codex_apptools.py tests/test_notify.py tests/test_codex_approvals.py tests/test_agents.py` → 129 passed（20.08 s）。
+  - 改后：同一组 → 143 passed（19.47 s）；加两份标准答案（`test_action_golden` 1 条、`test_read_golden` 1 条）→ 145 passed（19.64 s），标准答案原样通过。
+  - 完整 pytest（最终代码）：30 failed, 1231 passed, 6 skipped, 98 subtests passed（444.42 s）。
+  - 完整 pytest 的 30 条失败全是 Playwright 浏览器没装（`BrowserType.launch: Executable doesn't exist at …\ms-playwright\webkit-2359\Playwright.exe`），和这次改动无关：`test_list_status_filter` 7、`test_web_agents` 7、`test_page_parts` 6（含 4 个子测试）、`test_mobile_polish` 3（含 2 个子测试）、`test_home_startup` 3 个子测试、`test_dev6_navigation_links` 2、`test_relay_mobile_layout` 1、`test_web_antigravity` 1；交接里写的 3 条已知失败都在里面，`test_relay_push` 这次没超时。
+  - 验证那 8 条对应的新测试（都在 `tests/test_codex_hooks.py`）：电脑前没人 → 接住且卡片可回答是 `test_away_without_watching_holds_an_answerable_card_for_allow_and_deny`（同时核对 `on_waiting` 被调、卡片 `answerable`）；有人 → 立刻回空是 `test_someone_at_the_pc_gets_the_desktop_dialog_at_once`；接住期间有输入 → 回空是 `test_keyboard_input_during_the_hold_hands_the_approval_back_to_the_desktop` 和 `test_watching_also_hands_back_when_the_desktop_gets_input`（后者是手机在看着时也一样放手）；手机回答 allow / deny 原样传回同上；离超时 60 秒 → 回空且绝不自动批准是 `test_hold_ends_sixty_seconds_before_the_hook_timeout_and_never_approves`；hooks.json 超时 ≥ 86400 是安装测试里的断言加 `test_existing_ninety_second_permission_hook_is_upgraded_in_place`（老 90 秒的条目原地换成一条 86400，不重复）；内容变了 → `pending_trust` 是 `test_stale_hash_after_a_content_change_reads_as_pending_trust`，哈希口径另有 `test_hash_matches_the_published_codex_digests` 钉住公开的已知答案。
 - 风险和没做的：
+  - 没在真的 Codex 上试 24 小时：按要求不跑真 Codex、不碰 `C:\Users\39011\.codex`。`timeout = 86400` 是否被 Codex 26.1117 接受按设计给定，没有真机验证；C# 只验证了编译、管道往返、超时/断开仍回空（`HookExeTests`），以及读等待的毫秒数够 24 小时。
+  - 装好后必须在 Codex 设置 → Hooks 里重新信任 3 个遥应钩子（hooks.json 内容变了）。`trust_status()` 以前只看「有没有 trusted_hash」，现在真的比哈希：Codex 写 `sha256:<hex>`，按 codex-rs 的 `command_hook_hash` 复算并比对，内容变了就报 `pending_trust`，手机上出现现有的「去信任钩子」提示。口径来自两个公开复现（nodeterm 的 `codex-trust.ts`、reverie 的 `codex_hooks.rs`），测试里钉了它们发布的 3 条已知答案。为防口径差异把手机锁死，比哈希时接受「有/无 matcher」「有/无 async」几种身份形状；只有 `sha256:` 开头的才比对，老格式仍按「有没有记录」。**没在真机核对 Codex 26.1117 写出的哈希**——若它和公开口径不同，会一直显示 `pending_trust`（手机上的停止/批准/回答被挡住，但不会误批准）。
+  - 电脑上的程序也会产生键盘鼠标输入（`notify.py` 开头记过 10-26 的 UI 测试每秒打字），那种情况不算「电脑前没人」，批准仍走电脑框。没为它加特殊处理。
+  - 闲置判定读的是本会话的 `GetLastInputInfo`；远程桌面、锁屏、多会话这些没有单独验证。
+  - 没改 `notify.py`（已有推送）、没改 `codex_apptools.py`（接住时 `pending_cards` 原样带出可回答卡片，`answerable: False` 的兜底卡片只在钩子没接住时出现）。没推送、没合并、没打包、没升版本号；`git add` 是一个文件一个文件加的，没动别的工作树和分支。

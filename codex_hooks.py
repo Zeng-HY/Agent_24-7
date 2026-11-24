@@ -3,8 +3,10 @@
 Handles PreToolUse, PermissionRequest, and Stop events forwarded by TeleplyCodexHook.exe over a
 current-user-only Windows named pipe (\\\\.\\pipe\\teleply-codex-hooks-<username>).
 - Fast path: returns empty ({} for Stop) in <1 ms when a conversation is not managed by the phone.
-- Approval (PermissionRequest): waits up to 60 s ONLY while the phone is watching or initiated
-  the turn; never auto-approves; returns empty on timeout so the desktop dialog takes over.
+- Approval (PermissionRequest): held for the phone while the phone is watching (or began the turn)
+  OR while nobody is at the PC (no keyboard/mouse input for AWAY_SECONDS, via GetLastInputInfo).
+  It keeps waiting until the phone answers, the person touches the keyboard/mouse (the desktop dialog
+  appears at once), the turn is stopped, or 60 s before Codex's own hook timeout; never auto-approves.
 - Question (PreToolUse request_user_input): waits up to 120 s while watching; denies the tool call
   with the user's phone answers in permissionDecisionReason so Codex continues without a desktop card.
 - Stop: sets a per-thread deny flag for all subsequent PreToolUse calls AND, under Full Access,
@@ -34,9 +36,11 @@ import chats
 import codex_control
 
 HOOK_EXE_NAME = "TeleplyCodexHook.exe"
+# The hook timeout Codex allows (seconds). Codex has no "infinite": 24 hours is "keep waiting".
+PERMISSION_HOOK_TIMEOUT_SECONDS = 86400.0
 HOOK_EVENTS: tuple[tuple[str, int], ...] = (
     ("PreToolUse", 150),
-    ("PermissionRequest", 90),
+    ("PermissionRequest", int(PERMISSION_HOOK_TIMEOUT_SECONDS)),
     ("Stop", 10),
 )
 # Codex writes snake_case event names in config.toml [hooks.state.'<path>:<event>:<gi>:<hi>'],
@@ -49,7 +53,13 @@ HOOK_STATE_EVENT_NAMES: dict[str, tuple[str, ...]] = {
 TRUST_HINT = "在 Codex 设置 → Hooks 里打开并信任 3 个遥应钩子，手机才能批准、停止、回答"
 
 WATCH_WINDOW_SECONDS = 20.0
-APPROVAL_TIMEOUT_SECONDS = 60.0
+# How long without keyboard/mouse input counts as "nobody is at this PC" (11-24 night: 2 minutes).
+AWAY_SECONDS = 120.0
+# No cap of our own: hold almost as long as Codex lets the hook run, and give the last 60 s back so
+# the desktop dialog always appears before Codex kills the hook.
+APPROVAL_SAFETY_MARGIN_SECONDS = 60.0
+APPROVAL_HOLD_SECONDS = PERMISSION_HOOK_TIMEOUT_SECONDS - APPROVAL_SAFETY_MARGIN_SECONDS
+HOLD_POLL_SECONDS = 1.0
 QUESTION_TIMEOUT_SECONDS = 120.0
 TRUST_CACHE_TTL = 2.0
 MAX_FRAME_BYTES = 4 << 20
@@ -116,6 +126,42 @@ def hook_executable() -> Path | None:
         if path.is_file():
             return path.resolve()
     return None
+
+
+# ---------------------------------------------------------------- is anyone at this PC?
+#
+# Windows reports the last keyboard/mouse input as a 32-bit tick count (GetLastInputInfo().dwTime),
+# the same clock as GetTickCount(). The difference & 0xFFFFFFFF is the idle time in milliseconds, and
+# the same wrap-safe subtraction tells later whether new input came after a hold began. Wrapped in a
+# replaceable function so tests never depend on the real keyboard.
+
+
+def windows_input_ticks() -> tuple[int, int] | None:
+    """(GetTickCount(), last keyboard/mouse input tick), or None when Windows will not say."""
+    try:
+        import ctypes
+
+        class _LastInputInfo(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint32)]
+
+        info = _LastInputInfo(ctypes.sizeof(_LastInputInfo), 0)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return None
+        now_tick = int(ctypes.windll.kernel32.GetTickCount())
+        return now_tick, int(info.dwTime)
+    except Exception:
+        return None
+
+
+def idle_seconds(ticks: tuple[int, int] | None) -> float | None:
+    """Milliseconds without input from one (now, last input) pair, as seconds; None when unknown."""
+    if not ticks:
+        return None
+    try:
+        now_tick, last_tick = int(ticks[0]), int(ticks[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return ((now_tick - last_tick) & 0xFFFFFFFF) / 1000.0
 
 
 # ---------------------------------------------------------------- hooks.json & config.toml (read-only)
@@ -327,6 +373,82 @@ def _norm_state_key(key: str) -> str:
     return _norm_state_path(text)
 
 
+def _canonical_json(value: Any) -> str:
+    """Compact JSON with sorted keys: the form Codex hashes (serde_json canonical_json)."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _hook_event_label(event: str) -> str:
+    return (HOOK_STATE_EVENT_NAMES.get(event) or (str(event).strip().casefold(),))[0]
+
+
+def _identity_hash(event_name: str, body: dict[str, Any], matcher: Any) -> str:
+    identity: dict[str, Any] = {"event_name": event_name, "hooks": [body]}
+    if isinstance(matcher, str) and matcher:
+        identity["matcher"] = matcher
+    return "sha256:" + hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
+
+
+def _command_handler_body(handler: Any) -> tuple[str, int, Any] | None:
+    """(command, timeout seconds, async value) of one command handler; None for anything else."""
+    if not isinstance(handler, dict):
+        return None
+    command = handler.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+    try:
+        timeout = max(1, int(handler.get("timeout", 600)))
+    except (TypeError, ValueError):
+        timeout = 600
+    return command, timeout, handler.get("async")
+
+
+def command_hook_trusted_hash(event: str, handler: Any, matcher: Any = None) -> str | None:
+    """The exact `trusted_hash` Codex writes for this hook in hooks.json; None for a non-command handler.
+
+    Codex stores `sha256:<hex>` over the canonical JSON of the normalized hook identity
+    `{"event_name", "matcher"?, "hooks": [{type, command, timeout, async}]}`. The recipe reproduces the
+    digests published by two independent Codex integrators (codex-rs `command_hook_hash`), which are
+    checked in tests, so a hash that no longer matches means the hook changed after it was trusted.
+    """
+    body_parts = _command_handler_body(handler)
+    if body_parts is None:
+        return None
+    command, timeout, handler_async = body_parts
+    body: dict[str, Any] = {"type": "command", "command": command, "timeout": timeout,
+                            "async": bool(handler_async)}
+    return _identity_hash(_hook_event_label(event), body, matcher)
+
+
+def command_hook_trusted_hashes(event: str, handler: Any, matcher: Any = None) -> set[str]:
+    """Every `trusted_hash` Codex could have written for this handler (empty set when not a command hook).
+
+    Codex writes a stale hash after hooks.json changes, and then refuses to run the hook: the phone must
+    show its existing "go trust the hooks" hint instead of offering buttons that do nothing. Shapes with
+    and without `matcher`/`async` are accepted so a Codex version that folds either key out of the
+    identity does not lock the phone out for good; any real change (command, timeout, matcher) alters
+    every shape, so a stale hash still reads as untrusted.
+    """
+    body_parts = _command_handler_body(handler)
+    if body_parts is None:
+        return set()
+    command, timeout, handler_async = body_parts
+    event_name = _hook_event_label(event)
+    matchers: list[Any] = []
+    if isinstance(matcher, str) and matcher:
+        matchers.append(matcher)
+    matchers.append(None)  # a version that drops the matcher from the identity
+    hashes: set[str] = set()
+    for matcher_value in matchers:
+        with_async = {"type": "command", "command": command, "timeout": timeout,
+                      "async": bool(handler_async)}
+        hashes.add(_identity_hash(event_name, with_async, matcher_value))
+        if "async" in handler:
+            without_async = {"type": "command", "command": command, "timeout": timeout}
+            hashes.add(_identity_hash(event_name, without_async, matcher_value))
+    return hashes
+
+
 def _read_trust_status_uncached(home: Path) -> str:
     hooks_path = home / "hooks.json"
     if not hooks_path.is_file():
@@ -357,7 +479,7 @@ def _read_trust_status_uncached(home: Path) -> str:
     norm_state = {_norm_state_key(str(k)): v for k, v in state.items() if isinstance(v, dict)}
     path_candidates = {str(hooks_path), str(hooks_path.resolve())}
     for event, _ in HOOK_EVENTS:
-        gi, hi, _, _ = coords[event][0]
+        gi, hi, handler, matcher = coords[event][0]
         event_names = HOOK_STATE_EVENT_NAMES.get(event, (event,))
         matched = None
         for p_str in path_candidates:
@@ -376,6 +498,14 @@ def _read_trust_status_uncached(home: Path) -> str:
         trusted_hash = matched.get("trusted_hash")
         if not isinstance(trusted_hash, str) or not trusted_hash.strip():
             return "pending_trust"
+        # Codex writes `sha256:<hex>` over the handler it trusted. When the handler in hooks.json changed
+        # (this release raises PermissionRequest's timeout to a full day), that hash is stale: Codex
+        # wants the 3 hooks trusted again, so the phone must say so instead of offering dead buttons.
+        stored = trusted_hash.strip()
+        if stored.lower().startswith("sha256:"):
+            expected = command_hook_trusted_hashes(event, handler, matcher)
+            if expected and stored.lower() not in expected:
+                return "pending_trust"
     return "enabled"
 
 
@@ -739,7 +869,12 @@ class CodexHookServer:
         kill_process: Callable[[int], Any] | None = None,
         current_user: str | None = None,
         clock: Callable[[], float] = time.monotonic,
-        approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
+        approval_timeout: float = APPROVAL_HOLD_SECONDS,
+        hook_timeout: float = PERMISSION_HOOK_TIMEOUT_SECONDS,
+        approval_margin: float = APPROVAL_SAFETY_MARGIN_SECONDS,
+        away_seconds: float = AWAY_SECONDS,
+        input_ticks: Callable[[], tuple[int, int] | None] | None = None,
+        hold_poll: float = HOLD_POLL_SECONDS,
         question_timeout: float = QUESTION_TIMEOUT_SECONDS,
         watch_window: float = WATCH_WINDOW_SECONDS,
         log: Callable[[str], None] | None = None,
@@ -755,7 +890,12 @@ class CodexHookServer:
         self._kill_process = kill_process
         self._current_user = current_user
         self._clock = clock
+        self._input_ticks = input_ticks or windows_input_ticks
         self.approval_timeout = approval_timeout
+        self.hook_timeout = hook_timeout
+        self.approval_margin = approval_margin
+        self.away_seconds = away_seconds
+        self.hold_poll = max(0.01, float(hold_poll))
         self.question_timeout = question_timeout
         self.watch_window = watch_window
         self.log = log
@@ -881,6 +1021,37 @@ class CodexHookServer:
                 return True
             last = self._last_view.get(tid)
             return last is not None and (now - last) <= self.watch_window
+
+    # -- is anyone at this PC? (11-24 night: hold approvals for a phone when the desk is empty)
+
+    def desktop_input_ticks(self) -> tuple[int, int] | None:
+        """(now tick, last keyboard/mouse input tick) from the replaceable reader; None when unknown."""
+        try:
+            ticks = self._input_ticks()
+        except Exception:
+            return None
+        if not isinstance(ticks, (tuple, list)) or len(ticks) != 2:
+            return None
+        return int(ticks[0]), int(ticks[1])
+
+    def is_desktop_away(self) -> bool:
+        """True when nobody touched the keyboard/mouse for away_seconds; False when Windows cannot say."""
+        idle = idle_seconds(self.desktop_input_ticks())
+        return idle is not None and idle >= self.away_seconds
+
+    def desktop_input_since(self, start: tuple[int, int] | None) -> bool:
+        """True when keyboard/mouse input came after [start] (the ticks taken when a hold began)."""
+        if start is None:
+            return False
+        current = self.desktop_input_ticks()
+        if current is None:
+            return False
+        delta = (current[1] - start[1]) & 0xFFFFFFFF
+        return 0 < delta < 0x80000000
+
+    def _approval_hold_limit(self) -> float:
+        """Seconds to hold one PermissionRequest: never past the hook timeout minus the safety margin."""
+        return max(0.0, min(float(self.approval_timeout), float(self.hook_timeout) - float(self.approval_margin)))
 
     def wait_change(self, tid: str, timeout: float) -> bool:
         ev = threading.Event()
@@ -1057,11 +1228,18 @@ class CodexHookServer:
         if not tid:
             return "{}" if is_stop else ""
 
-        # Fast path: thread is not watched, not stopped, and has no queued messages -> instant empty.
         watching = self.is_watching(tid)
         with self._lock:
             has_stop = tid in self._stop_flags
         has_queue = bool(callable(self._has_queued) and self._has_queued(tid))
+
+        # An approval on a PC nobody is sitting at still belongs to the phone: hold it there. Every
+        # other event keeps the instant empty reply when the phone is not looking.
+        if event == "PermissionRequest" and not watching and not has_stop and self.is_desktop_away():
+            self._log("Codex 批准：电脑前没人，先把这次批准交给手机，一直等")
+            return self._handle_permission_request(tid, str(data.get("turn_id") or ""), data,
+                                                   watching=False, away=True)
+        # Fast path: thread is not watched, not stopped, and has no queued messages -> instant empty.
         if not watching and not has_stop and not has_queue:
             return "{}" if is_stop else ""
 
@@ -1153,8 +1331,15 @@ class CodexHookServer:
                 }
         return ""
 
-    def _handle_permission_request(self, tid: str, turn_id: str, data: dict[str, Any], *, watching: bool) -> str:
-        if not watching:
+    def _handle_permission_request(self, tid: str, turn_id: str, data: dict[str, Any], *,
+                                   watching: bool, away: bool = False) -> str:
+        """Hold one approval for the phone: while it watches, or while the PC's desk is empty.
+
+        Waiting ends on the phone's own answer, on new keyboard/mouse input at the PC (the desktop
+        dialog comes out at once), when the turn is stopped, or APPROVAL_SAFETY_MARGIN_SECONDS before
+        Codex's hook timeout. Nothing here ever answers on its own.
+        """
+        if not watching and not away:
             return ""
         with self._lock:
             if tid in self._stop_flags:
@@ -1193,6 +1378,7 @@ class CodexHookServer:
             "answer_revision": _card_revision({}),
             "editable": False,
         }
+        hold_start = self.desktop_input_ticks()
         pending = _PendingHook(tid=tid, kind="approval", card=card)
         with self._lock:
             self._pending[card_id] = pending
@@ -1202,8 +1388,20 @@ class CodexHookServer:
                 self._on_waiting(tid, card)
             except Exception:
                 pass
+        # The hold is timed on the real clock (the thread really waits); self._clock only decides watching.
+        deadline = time.monotonic() + self._approval_hold_limit()
+        answered = False
         try:
-            answered = pending.done.wait(self.approval_timeout)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if pending.done.wait(min(self.hold_poll, remaining)):
+                    answered = True
+                    break
+                if self.desktop_input_since(hold_start):
+                    self._log("Codex 批准：电脑前有人动了键盘鼠标，马上把批准框交回电脑")
+                    break
         finally:
             with self._lock:
                 self._pending.pop(card_id, None)
