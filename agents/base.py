@@ -240,6 +240,10 @@ class Agent:
     def watch(self, bridge, tid: str):
         return None
 
+    def wait_update(self, bridge, tid: str, timeout: float) -> bool:
+        """Wait up to [timeout] seconds for a live update; return False to fall back to time.sleep."""
+        return False
+
     def control(self, bridge, tid: str):
         return None
 
@@ -442,6 +446,12 @@ class Agent:
         pass
 
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
+        pass
+
+    def on_server_init(self, server) -> None:
+        pass
+
+    def on_server_close(self, server) -> None:
         pass
 
     def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:

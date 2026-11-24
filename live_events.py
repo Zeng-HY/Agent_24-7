@@ -142,7 +142,8 @@ def stream(handler,history,bridge,tasks,app,tid,lite=False):
                 previous={m['id']:copy.deepcopy(m) for m in messages};previous_control=copy.deepcopy(clean_control);previous_meta=copy.deepcopy(meta);previous_live_ids=list(live_ids)
             elif time.monotonic()-last_write>8:
                 handler.wfile.write(b': heartbeat\n\n');handler.wfile.flush();last_write=time.monotonic()
-            time.sleep(1)
+            if not agent.wait_update(bridge,tid,1):
+                time.sleep(1)
     except ConnectionError:pass  # the phone hung up: not a fault of the computer's
     except Exception as exc:log_stream_error(handler,app,tid,exc)
     finally:

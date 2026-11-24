@@ -532,6 +532,106 @@ def _codex_command(item: dict) -> str:
 
 
 _CODEX_IMAGE_LINE = re.compile(r"^\s*\[附图\]\s+(.+?)\s*(?:（[^）]*）|\([^)]*\))\s*$")
+_HOOK_PROMPT_TAG = re.compile(r"^\s*<hook_prompt\b[^>]*>([\s\S]*?)</hook_prompt>\s*$")
+_RUI_BLOCKED_ZH = re.compile(r"Tool call blocked by PreToolUse hook:\s*用户在手机上回答了：([\s\S]+?)(?:。按这个继续|\. Tool:|$)")
+_RUI_BLOCKED_EN = re.compile(r"Tool call blocked by PreToolUse hook:[\s\S]*?Their answer:\s*([\s\S]+?)(?:\s*--\s*Treat this|\. Tool:|$)")
+
+
+def _unwrap_hook_prompt(text: str) -> tuple[str, bool]:
+    m = _HOOK_PROMPT_TAG.match(text or "")
+    if not m:
+        return text, False
+    return m.group(1).strip(), True
+
+
+def _hook_prompt_item_text(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    fragments = item.get("fragments")
+    if isinstance(fragments, list) and fragments:
+        parts = []
+        for frag in fragments:
+            if isinstance(frag, str) and frag.strip():
+                parts.append(frag)
+            elif isinstance(frag, dict):
+                t = frag.get("text") or frag.get("content") or ""
+                if isinstance(t, str) and t.strip():
+                    parts.append(t)
+        if parts:
+            raw = "\n".join(parts).strip()
+            unwrapped, _ = _unwrap_hook_prompt(raw)
+            return unwrapped
+    raw = _join_text(item.get("content")) if item.get("content") is not None else str(item.get("text") or "")
+    unwrapped, _ = _unwrap_hook_prompt(raw.strip())
+    return unwrapped
+
+
+def _parse_rui_questions(raw_args: object) -> list[dict]:
+    data = raw_args
+    if isinstance(raw_args, str):
+        try:
+            data = json.loads(raw_args)
+        except ValueError:
+            return []
+    if not isinstance(data, dict):
+        return []
+    qs = data.get("questions")
+    if not isinstance(qs, list):
+        return []
+    out = []
+    for idx, q in enumerate(qs):
+        if isinstance(q, dict) and str(q.get("question") or "").strip():
+            out.append({
+                "id": str(q.get("id") or f"q{idx + 1}"),
+                "header": str(q.get("header") or "").strip(),
+                "question": str(q.get("question") or "").strip(),
+            })
+    return out
+
+
+def _extract_rui_hook_answer(output: object) -> str | None:
+    if not isinstance(output, str) or "PreToolUse hook" not in output:
+        return None
+    for pat in (_RUI_BLOCKED_ZH, _RUI_BLOCKED_EN):
+        m = pat.search(output)
+        if m:
+            ans = m.group(1).strip()
+            if ans:
+                return ans
+    return None
+
+
+def _format_rui_qa(questions: list[dict], raw_answer: str) -> tuple[str, str]:
+    """Build (question_text, answer_text) for a hook-answered request_user_input pair."""
+    if not questions:
+        return "", f"你在手机上的回答：{raw_answer}"
+    if len(questions) == 1:
+        q = questions[0]
+        label = f"{q['header']}：{q['question']}" if q["header"] and q["header"] != q["question"] else q["question"]
+        q_text = f"提问：{label}"
+        ans = raw_answer
+        prefix = q["id"] + "="
+        if ans.startswith(prefix):
+            ans = ans[len(prefix):].strip()
+        return q_text, f"你在手机上的回答：{ans}"
+
+    q_lines = ["提问："]
+    for q in questions:
+        label = f"{q['header']}：{q['question']}" if q["header"] and q["header"] != q["question"] else q["question"]
+        q_lines.append(f"- {label}")
+
+    parsed_map: dict[str, str] = {}
+    for seg in raw_answer.split("；"):
+        if "=" in seg:
+            k, v = seg.split("=", 1)
+            parsed_map[k.strip()] = v.strip()
+    if parsed_map:
+        a_lines = ["你在手机上的回答："]
+        for q in questions:
+            title = q["header"] or q["question"]
+            a_lines.append(f"- {title}：{parsed_map.get(q['id'], '')}")
+        return "\n".join(q_lines), "\n".join(a_lines)
+    return "\n".join(q_lines), f"你在手机上的回答：{raw_answer}"
 
 
 def _extract_codex_images(text: str) -> tuple[str, list[dict]]:
@@ -627,6 +727,7 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
     state = _LineState({"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}) \
         if context is not None else {"running": None, "turn_time": "", "turn_started": "", "turn_ended": "", "step": ""}
     tid = thread_id or (str(context.get("thread_id") or "") if isinstance(context, dict) else "")
+    rui_calls = context.setdefault("rui_calls", {}) if isinstance(context, dict) else {}
     saw_items = False
     for raw in lines:
         if (b"event_msg" not in raw[:160] and b"response_item" not in raw[:160]
@@ -655,8 +756,24 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
                 text=codex_answer(_join_text(payload.get('content')).strip())
                 if text:msgs.append({'role':'assistant','text':text,'time':ts,'phase':payload['phase'],'source_id':payload.get('id'),'public_response':True})
             elif kind in ('function_call','custom_tool_call'):
-                step=_step_of('codex',str(payload.get('name') or ''),str(payload.get('input') or ''))
+                name = str(payload.get('name') or '')
+                if kind == 'function_call' and name.rsplit('.', 1)[-1] == 'request_user_input' and payload.get('call_id'):
+                    qs = _parse_rui_questions(payload.get('arguments'))
+                    if qs:
+                        rui_calls[str(payload['call_id'])] = {'questions': qs, 'time': ts}
+                step=_step_of('codex',name,str(payload.get('input') or ''))
                 if step:state['step']=step
+            elif kind == 'function_call_output':
+                ans = _extract_rui_hook_answer(payload.get('output'))
+                if ans is not None:
+                    cid = str(payload.get('call_id') or ts or 'rui')
+                    info = rui_calls.pop(cid, None)
+                    q_text, a_text = _format_rui_qa(info['questions'] if info else [], ans)
+                    if q_text:
+                        msgs.append({'role': 'assistant', 'phase': 'commentary', 'text': q_text,
+                                     'time': (info['time'] if info and info.get('time') else ts),
+                                     'source_id': f'{cid}:question'})
+                    msgs.append({'role': 'user', 'text': a_text, 'time': ts, 'source_id': f'{cid}:answer'})
             continue
         if ts:
             state["latest_event_time"] = ts
@@ -665,12 +782,28 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
             t = item.get("type")
             if t == "UserMessage":
                 saw_items = True
-                cleaned, images = _extract_codex_images(clean_codex_user(_join_text(item.get("content"))))
+                raw_user, _ = _unwrap_hook_prompt(_join_text(item.get("content")))
+                cleaned, images = _extract_codex_images(clean_codex_user(raw_user))
                 row = {"role": "user", "text": cleaned, "time": ts,
                        "client_request_id": item.get("client_id"), "source_id": item.get("id")}
                 if images:
                     row["images"] = images
-                msgs.append(row)
+                if cleaned or images:
+                    msgs.append(row)
+            elif t == "HookPrompt":
+                saw_items = True
+                raw_hook = _hook_prompt_item_text(item)
+                cleaned, images = _extract_codex_images(clean_codex_user(raw_hook))
+                if cleaned or images:
+                    dup = any(
+                        m["role"] == "user" and m["text"] == cleaned and m.get("time") == ts
+                        for m in msgs[-3:]
+                    )
+                    if not dup:
+                        row = {"role": "user", "text": cleaned, "time": ts, "source_id": item.get("id")}
+                        if images:
+                            row["images"] = images
+                        msgs.append(row)
             elif t == "AgentMessage":
                 saw_items = True
                 text = codex_answer(_join_text(item.get("content")).strip())
@@ -698,12 +831,14 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
             state.update(running=False, turn_time=ts, turn_ended=ts, step='')
             if payload.get('turn_id'):state['current_turn_id']=payload['turn_id']
         elif kind == "user_message":  # older Codex versions
-            cleaned, images = _extract_codex_images(clean_codex_user(payload.get("message") or ""))
+            raw_user, _ = _unwrap_hook_prompt(payload.get("message") or "")
+            cleaned, images = _extract_codex_images(clean_codex_user(raw_user))
             row = {"role": "user", "text": cleaned, "time": ts, "legacy": True,
                    "source_id": payload.get("id"), "client_request_id": payload.get("client_id")}
             if images:
                 row["images"] = images
-            msgs.append(row)
+            if cleaned or images:
+                msgs.append(row)
         elif kind == "agent_message":
             if payload.get("phase") in (None, "commentary", "final_answer"):
                 msgs.append({"role": "assistant", "text": codex_answer(payload.get("message") or ""), "time": ts, "legacy": True,

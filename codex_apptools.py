@@ -536,7 +536,7 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
 
 
 def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> dict | None:
-    """Find a matching self-delegation entry in the transcript tail."""
+    """Find a matching self-delegation or Stop-hook <hook_prompt> entry in the transcript tail."""
     if path is None or not path.is_file():
         return None
     want_raw = chats.norm(prompt)
@@ -549,7 +549,7 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
     except OSError:
         return None
     for raw in reversed(lines):
-        if b"codex_delegation" not in raw:
+        if b"codex_delegation" not in raw and b"hook_prompt" not in raw and b"HookPrompt" not in raw:
             continue
         try:
             rec = json.loads(raw)
@@ -558,17 +558,55 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
         if rec.get("type") != "event_msg":
             continue
         payload = rec.get("payload") or {}
-        if payload.get("type") == "item_completed":
+        kind = payload.get("type")
+        if kind == "item_completed":
             item = payload.get("item") or {}
-            delegated = chats._codex_delegation(item, thread_id=thread_id)
-            if delegated and not delegated.get("origin"):
-                raw_input = chats._codex_delegation_raw_text(item)
-                if (want_raw and raw_input and chats.norm(raw_input) == want_raw) or (
-                    want_clean and chats.norm(delegated.get("text") or "") == want_clean
+            t = item.get("type")
+            if t == "FunctionCallOutput":
+                delegated = chats._codex_delegation(item, thread_id=thread_id)
+                if delegated and not delegated.get("origin"):
+                    raw_input = chats._codex_delegation_raw_text(item)
+                    if (want_raw and raw_input and chats.norm(raw_input) == want_raw) or (
+                        want_clean and chats.norm(delegated.get("text") or "") == want_clean
+                    ):
+                        return {
+                            "source": "conversation_record",
+                            "message_id": delegated.get("source_id"),
+                            "time": rec.get("timestamp"),
+                        }
+            elif t == "UserMessage":
+                raw_text, is_hook = chats._unwrap_hook_prompt(chats._join_text(item.get("content")))
+                if is_hook:
+                    cleaned, _ = chats._extract_codex_images(raw_text)
+                    if (want_raw and chats.norm(raw_text) == want_raw) or (
+                        want_clean and chats.norm(cleaned) == want_clean
+                    ):
+                        return {
+                            "source": "conversation_record",
+                            "message_id": item.get("id"),
+                            "time": rec.get("timestamp"),
+                        }
+            elif t == "HookPrompt":
+                raw_text = chats._hook_prompt_item_text(item)
+                cleaned, _ = chats._extract_codex_images(raw_text)
+                if (want_raw and chats.norm(raw_text) == want_raw) or (
+                    want_clean and chats.norm(cleaned) == want_clean
                 ):
                     return {
                         "source": "conversation_record",
-                        "message_id": delegated.get("source_id"),
+                        "message_id": item.get("id"),
+                        "time": rec.get("timestamp"),
+                    }
+        elif kind == "user_message":
+            raw_text, is_hook = chats._unwrap_hook_prompt(payload.get("message") or "")
+            if is_hook:
+                cleaned, _ = chats._extract_codex_images(raw_text)
+                if (want_raw and chats.norm(raw_text) == want_raw) or (
+                    want_clean and chats.norm(cleaned) == want_clean
+                ):
+                    return {
+                        "source": "conversation_record",
+                        "message_id": payload.get("id"),
                         "time": rec.get("timestamp"),
                     }
     return None
@@ -912,6 +950,10 @@ class AppToolsBridge:
                 result["hook_status"] = self.hooks.trust_status() if self.hooks is not None else "not_installed"
             elif self.hooks is not None:
                 result["hook_status"] = self.hooks.trust_status()
+            if self.hooks is not None:
+                prog = self.hooks.latest_progress(tid)
+                if prog:
+                    result["hook_progress"] = prog
             self._status_cache[tid] = (self._clock(), result)
             return dict(result)
         except (codex_control.ControlError, chats.ChatError, OSError) as exc:
@@ -944,6 +986,8 @@ class AppToolsBridge:
             cards.extend(self.hooks.pending_cards(tid))
         has_approval_card = any(c.get("kind") == "approval" and c.get("status") == "pending" for c in cards)
         has_question_card = any(c.get("kind") == "native" and c.get("status") == "pending" for c in cards)
+        notice = self._hook_notice()
+        suffix = f"（{notice}）" if notice else ""
         if "waitingOnApproval" in active_flags and not has_approval_card:
             cards.append({
                 "id": f"approval:{active_turn_id or 'active'}:desktop",
@@ -957,7 +1001,7 @@ class AppToolsBridge:
                 "cwd": "",
                 "files": [],
                 "answerable": False,
-                "question": "在等你在电脑上批准",
+                "question": "在等你在电脑上批准" + suffix,
                 "choices": [],
             })
         if "waitingOnUserInput" in active_flags and not has_question_card:
@@ -973,7 +1017,7 @@ class AppToolsBridge:
                 "cwd": "",
                 "files": [],
                 "answerable": False,
-                "question": "在等你在电脑上回答",
+                "question": "在等你在电脑上回答" + suffix,
                 "choices": [],
             })
         for q in cards:
@@ -1264,7 +1308,9 @@ class AppToolsBridge:
                 code="hooks_not_trusted",
                 not_submitted=True,
             )
-        return self.hooks.request_stop(tid, turn_id=str(body.get("turn_id") or body.get("expected_turn") or ""))
+        result = self.hooks.request_stop(tid, turn_id=str(body.get("turn_id") or body.get("expected_turn") or ""))
+        self._status_cache.pop(tid, None)
+        return result
 
     def answer(self, body: dict) -> dict:
         tid = str(body.get("id", ""))
@@ -1275,7 +1321,9 @@ class AppToolsBridge:
                 code="hooks_not_trusted",
                 not_submitted=True,
             )
-        return self.hooks.submit_answer(tid, body)
+        result = self.hooks.submit_answer(tid, body)
+        self._status_cache.pop(tid, None)
+        return result
 
     def confirm_open(self, tid: str, seconds: float = 5.0, step: float = 0.5) -> dict:
         deadline = self._clock() + seconds

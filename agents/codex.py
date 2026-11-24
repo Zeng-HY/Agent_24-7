@@ -36,13 +36,16 @@ class CodexAgent(Agent):
     archive_order = 10
     desktop_process = chats.CODEX_PROCESS
     desktop_send_text = "已按回车，等对话记录确认"
-    delivery_markers = (b"UserMessage", b"user_message", b"codex_delegation")
+    delivery_markers = (b"UserMessage", b"user_message", b"codex_delegation", b"hook_prompt", b"HookPrompt")
 
     def _route_state(self) -> tuple[str, bool]:
         """Return (route, hooks_trusted) for dynamic capability calculation."""
         import codex_apptools
         route = codex_apptools.current_route()
-        return route, False
+        if route != "apptools":
+            return route, False
+        import codex_hooks
+        return route, codex_hooks.read_trust_status() == "enabled"
 
     def build_manifest(self) -> dict:
         route, hooks_trusted = self._route_state()
@@ -356,12 +359,84 @@ class CodexAgent(Agent):
         import codex_apptools
         existing = getattr(bridge, "_apptools_bridge", None)
         if existing is None:
-            existing = codex_apptools.AppToolsBridge(bridge)
+            hooks = getattr(bridge, "_codex_hooks", None)
+            existing = codex_apptools.AppToolsBridge(bridge, hooks=hooks)
             try:
                 bridge._apptools_bridge = existing
             except Exception:
                 pass
+        elif existing.hooks is None and getattr(bridge, "_codex_hooks", None) is not None:
+            existing.hooks = bridge._codex_hooks
+        hooks = existing.hooks
+        if hooks is not None and getattr(hooks, "auto_install_enabled", False) and not getattr(hooks, "installed_once", False):
+            try:
+                hooks.ensure_installed()
+            except Exception:
+                pass
         return existing
+
+    def on_server_init(self, server) -> None:
+        import codex_apptools
+        import codex_hooks
+
+        cfg = getattr(server, "cfg", {}) or {}
+        apps = (getattr(server, "machine", {}) or {}).get("apps") or []
+        log = getattr(getattr(server, "log", None), "write", lambda _t: None)
+        bridge = getattr(server, "codex", None)
+        if bridge is None:
+            return
+        apptools = self._apptools_for(bridge)
+
+        def on_waiting(tid: str, card: dict) -> None:
+            notifier = getattr(server, "notifier", None)
+            if notifier is None:
+                return
+            try:
+                item = chats.find(self.id, tid)
+                what = str(card.get("question") or "Codex 在等你处理")[:90]
+                notifier.asking(item, what)
+            except Exception:
+                pass
+
+        hooks = codex_hooks.CodexHookServer(
+            pop_queued=apptools.pop_queued_for_stop_hook,
+            has_queued=apptools.queues.has_any,
+            on_change=lambda tid: apptools._status_cache.pop(tid, None),
+            on_waiting=on_waiting,
+            log=log,
+        )
+        bridge._codex_hooks = hooks
+        apptools.hooks = hooks
+        try:
+            if cfg.get("codex_hooks") is False:
+                hooks.enabled = False
+                codex_hooks.remove_hooks(log=log)
+            elif self.id in apps:
+                hooks.auto_install_enabled = True
+                hooks.start()
+                if codex_apptools.current_route() == "apptools":
+                    hooks.ensure_installed()
+        except Exception as exc:
+            log(f"Codex 钩子初始化未完成：{exc}")
+
+    def on_server_close(self, server) -> None:
+        bridge = getattr(server, "codex", None)
+        if bridge is None:
+            return
+        for attr in ("_apptools_bridge", "_codex_hooks"):
+            obj = getattr(bridge, attr, None)
+            if obj is not None:
+                try:
+                    obj.close()
+                except Exception:
+                    pass
+
+    def wait_update(self, bridge, tid: str, timeout: float) -> bool:
+        route, backend = self._backend(bridge)
+        if route == "apptools" and getattr(backend, "hooks", None) is not None:
+            backend.hooks.wait_change(tid, timeout)
+            return True
+        return False
 
     def _backend(self, bridge, *, force_route: bool = False):
         import codex_apptools
@@ -629,7 +704,38 @@ class CodexAgent(Agent):
         return rows, []
 
     def notify_check_approvals(self, notifier, item: dict, conv: tuple, title: str, found) -> bool:
-        return notifier._codex_approvals(item, conv, title, found)
+        import codex_apptools
+        route = codex_apptools.current_route()
+        if route == "legacy":
+            return notifier._codex_approvals(item, conv, title, found)
+        if route != "apptools":
+            return False
+        bridge = getattr(notifier, "bridge", None)
+        hooks = getattr(bridge, "_codex_hooks", None) if bridge is not None else None
+        if hooks is None:
+            return False
+        cards = hooks.pending_cards(item["id"])
+        if cards:
+            key = "pending:" + ",".join(sorted(str(v["request_id"]) for v in cards))
+            previous = notifier.running.get(conv) or {}
+            since = int(previous.get("since") or notifier.clock())
+            notifier.running.pop(conv, None)
+            notifier.waiting[conv] = {"since": since, "title": title, "item": item}
+            if notifier.reported_approvals.get(conv) != key:
+                notifier.reported_approvals[conv] = key
+                source = "记录" if previous.get("source") == "记录" else "电脑注意到"
+                notifier._tell(found, item, {
+                    "state": "done", "key": key, "time": "", "asks": True,
+                    "text": "Codex 在等你处理，请打开对话查看。",
+                    "started": since, "ended": int(notifier.clock()),
+                    "started_source": source,
+                })
+            return True
+        if notifier.reported_approvals.pop(conv, None) is not None:
+            notifier.waiting.pop(conv, None)
+            notifier.running.pop(conv, None)
+            notifier.reported_running.discard(conv)
+        return False
 
     # -- new conversation hooks
 
@@ -777,13 +883,17 @@ class CodexAgent(Agent):
         if payload.get("type") == "item_completed":
             item = payload.get("item") or {}
             if item.get("type") == "UserMessage":
-                return want in chats.norm(chats._join_text(item.get("content")))
+                raw_text, _ = chats._unwrap_hook_prompt(chats._join_text(item.get("content")))
+                return want in chats.norm(raw_text)
+            if item.get("type") == "HookPrompt":
+                return want in chats.norm(chats._hook_prompt_item_text(item))
             if item.get("type") == "FunctionCallOutput":
                 raw_text = chats._codex_delegation_raw_text(item)
                 if raw_text and want in chats.norm(raw_text):
                     return True
         if payload.get("type") == "user_message":
-            return want in chats.norm(payload.get("message") or "")
+            raw_text, _ = chats._unwrap_hook_prompt(payload.get("message") or "")
+            return want in chats.norm(raw_text)
         return False
 
     def desktop_send(self, desktop, item: dict, text: str, images=None, replace=None) -> None:

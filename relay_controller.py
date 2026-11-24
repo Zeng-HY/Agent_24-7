@@ -58,9 +58,23 @@ class DesktopController:
         self.migration='';self.migration_flash_until=0;self.ui_ready=threading.Event();self.ui_actions=threading.Event();self.exiting=False
         if (DATA/'migration-result.json').exists():self.migration='配置和附件已迁移；旧目录仍保留。实机验证后再处理旧版。'
 
+    def _codex_hook_hint(self):
+        if not self.online or self.cfg.get('codex_hooks') is False:
+            return ''
+        try:
+            import codex_apptools
+            if codex_apptools.current_route() != 'apptools':
+                return ''
+            import codex_hooks
+            if codex_hooks.read_trust_status() == 'pending_trust':
+                return codex_hooks.TRUST_HINT
+        except Exception:
+            pass
+        return ''
+
     def view(self):
         bound=bool(self.binding.get('device'))
-        return dict(name=self.cfg.get('name') or socket.gethostname(),state=self.state,detail=self.detail or ('迁移完成，旧目录已保留。' if time.monotonic()<self.migration_flash_until else ''),online=self.online,
+        return dict(name=self.cfg.get('name') or socket.gethostname(),state=self.state,detail=self.detail or ('迁移完成，旧目录已保留。' if time.monotonic()<self.migration_flash_until else '') or self._codex_hook_hint(),online=self.online,
             migration='',version='版本 '+self.version,startup=self.startup,settingsVisible=self.settings_open,
             bindVisible=(not bound and not self.auth_active) or self.state=='需要重新绑定',rebind=self.state=='需要重新绑定',retryVisible=bound and not self.online and self.state!='需要重新绑定',
             accountVisible=True,legacyVisible=not bound and not self.auth_active,updateVisible=bool(self.update_title),

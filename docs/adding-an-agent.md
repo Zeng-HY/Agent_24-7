@@ -29,7 +29,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ## 三、说明书（`manifest`）字段说明
 
-每个助手在 `build_manifest()` 里调用 `agents.base.make_manifest(...)` 生成说明书。`remote.py` 会在两个地方下发说明书：
+每个助手在 `build_manifest()` 里调用 `agents.base.make_manifest(...)` 生成说明书。若某家助手的能力会随电脑端运行状态动态变化（例如新版 Codex 在应用工具管道、钩子是否信任与未运行三种状态间切换），可覆写 `manifest()` 与 `can()` 在每次读取时按当前状态现算。`remote.py` 会在两个地方下发说明书：
 - `GET /api/agents`（协议 2 客户端按需拉取）；
 - 网页首屏注入 `window.MACHINE.agents`。
 

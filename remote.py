@@ -1215,6 +1215,7 @@ def main(argv: list[str] | None = None) -> int:
     server.claude.hooks = server.claude_hooks
     for agent in agent_registry.load():
         agent.on_server_start(cfg, server.machine["apps"], log.write)
+        agent.on_server_init(server)
     if server.machine["voice"]:
         server.voice = voice.Voice(cfg, log)  # type: ignore[attr-defined]
         server.local_asr = voice_local.LocalASR(cfg, log)  # type: ignore[attr-defined]  (loads in the background)
@@ -1240,6 +1241,11 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        for agent in agent_registry.load():
+            try:
+                agent.on_server_close(server)
+            except Exception:
+                pass
         server.notifier.close()
         server.tasks.close()
         server.codex.close()
