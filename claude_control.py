@@ -141,6 +141,30 @@ def pending_questions(path):
     return asked[1] if asked and isinstance(asked[1],list) else None
 
 
+PENDING_PROMPT_TOOLS=('AskUserQuestion','ExitPlanMode')
+
+
+def has_pending_prompt(path):
+    """Whether the conversation's record holds an unanswered AskUserQuestion or ExitPlanMode call: the newest such
+    call in the record with no matching tool_result yet."""
+    if not path:return False
+    try:lines=chats.read_tail(path,2<<20)[0]
+    except OSError:return False
+    asked=None
+    for raw in lines:
+        if b'AskUserQuestion' not in raw and b'ExitPlanMode' not in raw and b'tool_result' not in raw:continue
+        try:data=json.loads(raw)
+        except ValueError:continue
+        content=(data.get('message') or {}).get('content') if isinstance(data,dict) else None
+        for block in content if isinstance(content,list) else []:
+            if not isinstance(block,dict):continue
+            if block.get('type')=='tool_use' and block.get('name') in PENDING_PROMPT_TOOLS:
+                asked=(block.get('id'),block.get('name'))
+            elif block.get('type')=='tool_result' and asked and block.get('tool_use_id')==asked[0]:
+                asked=None
+    return asked is not None
+
+
 class Controller:
     def __init__(self,desktop):
         self.desktop=desktop;self.cache={};self.choices={};self.lock=threading.RLock();self.menu_context=None;self.steer_submissions={}
@@ -499,18 +523,30 @@ class Controller:
             # Bind execution/answer buttons to both the visible set and the latest transcript version.
             stamp=(path.stat().st_size,path.stat().st_mtime_ns) if path else None
             result['action_revision']=signature([item['id'],options,stamp])
-            for option in options[:30]:
-                result['actions'].append({**option,'token':self._ticket(item['id'],'action',option,result['action_revision'])})
-            if prompt:  # the same buttons, laid out for the phone; each part carries its action's token
-                tokens={a['name']:a['token'] for a in result['actions']}
-                for part in prompt['choices']+prompt['nav']+([prompt['other']] if prompt['other'] else []):part['token']=tokens.get(part['name'])
-                result['prompt']=prompt
-                # and only so: both phone apps drew the actions too, as a second card of raw button names under the
-                # question (iPhone 10-26 23:09: 计划与执行选项, Show previous question, 选项丙 随便选…); the web shows
-                # actions only when there is no prompt
-                result['actions']=[]
+            if dock is not None and not chats.question_card(dock) and self.hooks is not None and not self._claude_waiting(item['id'],path):
+                prompt=None
+                result['prompt']=None
+            else:
+                for option in options[:30]:
+                    result['actions'].append({**option,'token':self._ticket(item['id'],'action',option,result['action_revision'])})
+                if prompt:  # the same buttons, laid out for the phone; each part carries its action's token
+                    tokens={a['name']:a['token'] for a in result['actions']}
+                    for part in prompt['choices']+prompt['nav']+([prompt['other']] if prompt['other'] else []):part['token']=tokens.get(part['name'])
+                    result['prompt']=prompt
+                    # and only so: both phone apps drew the actions too, as a second card of raw button names under the
+                    # question (iPhone 10-26 23:09: 计划与执行选项, Show previous question, 选项丙 随便选…); the web shows
+                    # actions only when there is no prompt
+                    result['actions']=[]
+                else:
+                    result['prompt']=None
         except chats.ChatError as exc:result['reason']=str(exc)
         return result
+    def _claude_waiting(self,tid,path):
+        """Whether Claude Code is known to be waiting on the user for this conversation: either the hook holds an open
+        request now, or the record has an unanswered AskUserQuestion / ExitPlanMode call."""
+        hooks=self.hooks
+        if hooks is not None and hooks.layout(tid) is not None:return True
+        return has_pending_prompt(path)
     def _model_name(self,model_id):
         """The menu's name for a recorded model id ('Opus 5.5' for claude-opus-5-5), from a catalogue read on the PC
         before: the phone shows the model and its effort without the PC showing the conversation (10-12)."""

@@ -1212,7 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
     server.notifier.start()
     server.claude_hooks = claude_hooks.Bridge(log.write, notify=server.notifier.asking,  # type: ignore[attr-defined]
                                               changed=lambda tid: server.claude.cache.pop(tid, None))
-    server.claude.hooks = server.claude_hooks
+    server.claude.hooks = None if cfg.get("claude_hooks") is False else server.claude_hooks
     for agent in agent_registry.load():
         agent.on_server_start(cfg, server.machine["apps"], log.write)
         agent.on_server_init(server)
