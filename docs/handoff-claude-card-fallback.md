@@ -60,7 +60,7 @@
 
 ## 结果（DeepSeek 填）
 
-- 提交：本次提交（分支 `claude-card-fallback`，只含 `claude_control.py`、`claude_hooks.py`、`tests/test_claude_fake_prompt.py`、本文档）；没推送、没合并、没打包、没装、没升版本号。
+- 提交：`d646357`（分支 `claude-card-fallback`；代码和测试都在里面），本行是之后补的提交号，只改了本文档。没推送、没合并、没打包、没装、没升版本号。
 - 权限按钮的实际名字（出处）：英文取**这台电脑装着的 Claude 桌面版 6.28899.6.0** 的只读查证 —— `C:\Program Files\WindowsApps\Claude_6.28899.6.0_x64__pzs8sxrjxfjjc\app\resources\ion-dist.asar` 里权限/批准卡组件的字串（扫描脚本和摘录在本次工作区 `permission-strings.md`）：允许 `Allow once`（`8HA3JafrtA`）/ `Allow for this task`（`X2n9R87ZBD`）/ `Always allow`（`lr3QX/nctD`）/ `Allow for all tasks`（`0xIGAXr2i7`，同一下拉里的另一种写法）；拒绝 `Deny`（`htvX+Z11l+`）/ `Decline`（`pvtgR26QWY`）。`Reject` 在这一版不是这张卡的按钮（是行内编辑工具栏的），代码里只当兜底。中文（允许一次、总是允许、拒绝……）是按上表直译的，**没有核实**：这一版 bundle 里没有中文字串，也没有中文权限卡的录制。`research/` 里没有权限提示的窗口录制（只有空闲 dock、新建页、钩子事件），所以真机上那一排按钮到底怎么画，仍然没录到。
 - 测试数字（基线 / 改后 / 完整 pytest）：
   - 基线（改前，`test_claude_fake_prompt`、`test_claude_new_folder_layout`、`test_claude_hooks`、`test_action_golden`、`test_read_golden`）：73 passed。
