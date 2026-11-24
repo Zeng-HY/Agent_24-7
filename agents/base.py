@@ -533,6 +533,11 @@ class Agent:
         handler and then calls this."""
         handler._json({"error": "没有这个地址"}, 404)
 
+    def uninstall(self, log) -> bool:
+        """Undo what this assistant put outside the Teleply folder (for example hooks in another app's
+        settings). True when done or when there is nothing to undo; False when it could not be undone."""
+        return True
+
     def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
         return {}
 

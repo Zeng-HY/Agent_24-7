@@ -305,19 +305,18 @@ def main():
     parser.add_argument('--webview-smoke',action='store_true')
     parser.add_argument('--rebind',action='store_true')
     parser.add_argument('--status-smoke',action='store_true')
-    parser.add_argument('--remove-claude-hook',action='store_true')  # the uninstaller: Claude's settings as before (claude_hooks.py)
-    parser.add_argument('--remove-codex-hook',action='store_true')   # the uninstaller: Codex hooks.json as before (codex_hooks.py)
+    parser.add_argument('--remove-agent-hooks',action='store_true')  # the uninstaller: every assistant's own cleanup (agents/*.py)
+    parser.add_argument('--remove-claude-hook',action='store_true')  # old installers' uninstall step: same cleanup, per assistant
+    parser.add_argument('--remove-codex-hook',action='store_true')   # old installers' uninstall step: same cleanup, per assistant
     args=parser.parse_args()
-    if args.remove_claude_hook:
-        import claude_hooks
-        try:claude_hooks.remove(lambda text:None)
-        except Exception:return 1
-        return 0
-    if args.remove_codex_hook:
-        import codex_hooks
-        try:codex_hooks.remove_hooks(log=lambda text:None)
-        except Exception:return 1
-        return 0
+    if args.remove_agent_hooks or args.remove_claude_hook or args.remove_codex_hook:
+        from agents import registry
+        ok=True
+        for agent in registry.load():
+            try:
+                if not agent.uninstall(lambda text:None):ok=False
+            except Exception:ok=False
+        return 0 if ok else 1
     if args.status_smoke:
         from relay_controller import smoke
         return smoke()

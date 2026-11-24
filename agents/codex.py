@@ -500,6 +500,10 @@ class CodexAgent(Agent):
                 except Exception:
                     pass
 
+    def uninstall(self, log) -> bool:
+        import codex_hooks
+        return codex_hooks.remove_hooks(log=log)
+
     def wait_update(self, bridge, tid: str, timeout: float) -> bool:
         route, backend = self._backend(bridge)
         if route == "apptools" and getattr(backend, "hooks", None) is not None:

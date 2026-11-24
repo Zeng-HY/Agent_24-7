@@ -667,6 +667,9 @@ class ClaudeAgent(Agent):
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
         hook_settings(cfg, self.id in apps, log)
 
+    def uninstall(self, log) -> bool:
+        return claude_hooks.remove(log)
+
     def on_server_init(self, server) -> None:
         import threading
 

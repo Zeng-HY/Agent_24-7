@@ -24,6 +24,7 @@ import claude_hooks
 import codex_hooks
 import codex_question_dismiss
 import deepseek_control
+import relay_desktop
 import remote
 from agents import registry
 from agents.claude import ClaudeAgent
@@ -243,6 +244,73 @@ class HookAddressTests(unittest.TestCase):
 
     def test_other_paths_still_go_through_the_token(self):
         self.assertEqual(self.post("/api/nothing", {})[0], 403)
+
+
+class FakeUninstallAgent:
+    def __init__(self, ident, calls, *, result=True, fail=False):
+        self.id = ident
+        self.calls = calls
+        self.result = result
+        self.fail = fail
+
+    def uninstall(self, log):
+        self.calls.append(self.id)
+        if self.fail:
+            raise RuntimeError("fake uninstall failure")
+        return self.result
+
+
+class UninstallSwitchTests(unittest.TestCase):
+    def _run(self, flag, agents):
+        with patch.object(registry, "load", return_value=agents), patch.object(sys, "argv", ["AgentRemote.exe", flag]):
+            return relay_desktop.main()
+
+    def test_remove_agent_hooks_calls_every_agent_and_reports_a_failure(self):
+        calls = []
+        agents = [FakeUninstallAgent("one", calls), FakeUninstallAgent("two", calls, fail=True),
+                  FakeUninstallAgent("three", calls)]
+        self.assertEqual(self._run("--remove-agent-hooks", agents), 1)
+        self.assertEqual(calls, ["one", "two", "three"])
+
+    def test_a_false_result_is_a_failure_too(self):
+        calls = []
+        self.assertEqual(self._run("--remove-agent-hooks", [FakeUninstallAgent("one", calls, result=False)]), 1)
+
+    def test_both_old_switches_do_the_same_thing(self):
+        for flag in ("--remove-claude-hook", "--remove-codex-hook"):
+            calls = []
+            agents = [FakeUninstallAgent("one", calls), FakeUninstallAgent("two", calls)]
+            self.assertEqual(self._run(flag, agents), 0)
+            self.assertEqual(calls, ["one", "two"])
+
+
+class AgentUninstallTests(unittest.TestCase):
+    def test_claude_takes_out_only_its_own_hooks(self):
+        with tempfile.TemporaryDirectory() as td:
+            settings = Path(td) / "settings.json"
+            user = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "beep"}]}]}}
+            settings.write_text(json.dumps(user), encoding="utf-8")
+            notes = []
+            claude_hooks.install("http://127.0.0.1:8765" + claude_hooks.PATH + "k3y", notes.append, settings)
+            with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": td}):
+                self.assertTrue(ClaudeAgent().uninstall(notes.append))
+            self.assertEqual(json.loads(settings.read_text(encoding="utf-8")), user)
+
+    def test_codex_takes_out_only_its_own_hooks(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "codex"
+            home.mkdir()
+            user = {"hooks": {"Stop": [{"matcher": "*", "hooks": [
+                {"type": "command", "command": "beep.exe", "timeout": 10}]}]}}
+            (home / "hooks.json").write_text(json.dumps(user), encoding="utf-8")
+            codex_hooks.install_hooks(Path(td) / "TeleplyCodexHook.exe", codex_home=home, log=lambda _t: None)
+            original = codex_hooks.default_codex_home()
+            codex_hooks.set_default_codex_home_override(home)
+            try:
+                self.assertTrue(CodexAgent().uninstall(lambda _t: None))
+            finally:
+                codex_hooks.set_default_codex_home_override(original)
+            self.assertEqual(json.loads((home / "hooks.json").read_text(encoding="utf-8")), user)
 
 
 if __name__ == "__main__":
