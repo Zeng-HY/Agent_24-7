@@ -1497,6 +1497,44 @@ class ChatsHookQueueDisplayTests(unittest.TestCase):
         self.assertEqual(msgs[0]["text"], "看图")
         self.assertEqual(msgs[0]["images"][0]["id"], "e" * 32)
 
+    def test_delivery_stage_counts_a_hand_over_written_as_the_users_own_line(self):
+        """11-24: what Claude writes back after the Stop block is the user's own line, with Teleply's prefix in front
+        and, with pictures, our [附图] lines after. Compared whole, the phone said 送达状态待确认 for a message Claude
+        had already been given, and 核对 could not say more (22:23 that night: a queued phone message with pictures)."""
+        path = Path(tempfile.mkdtemp()) / "cli-1.jsonl"
+        image = "C:\\FakeData\\claude-images\\local_test\\" + "d" * 32 + ".png"
+        queued = {"type": "user", "uuid": "u-queued", "timestamp": "2026-11-24T14:23:50Z",
+                  "message": {"role": "user", "content": "用户在手机上发来下一条消息（遥应）：看图\n\n[附图] "
+                                                          + image + "（请先用 Read 工具打开这张图片）"}}
+        steered = {"type": "user", "uuid": "u-steer", "timestamp": "2026-11-24T14:32:59Z",
+                   "message": {"role": "user", "content": "用户刚在手机上补充（遥应）：先看第二个问题"}}
+        path.write_text(json.dumps(queued, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "看图"), "received")
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(steered, ensure_ascii=False) + "\n")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "先看第二个问题"), "received")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "别的话"), "unknown")
+        # a queued message without a picture, and (below) two words for two pictures
+        path.write_text(json.dumps({"type": "user", "uuid": "u-queued-plain",
+                                    "message": {"content": "用户在手机上发来下一条消息（遥应）：有空再看日志"}},
+                                   ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "有空再看日志"), "received")
+        # pictures only: the computer puts its own sentence in, and that sentence is not the user's words
+        path.write_text(json.dumps({"type": "user", "uuid": "u-pictures",
+                                    "message": {"content": "用户在手机上发来下一条消息（遥应）：请查看这些图片。\n\n[附图] "
+                                                           + image + "（请先用 Read 工具打开这张图片）"}},
+                                   ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "请查看这些图片。"), "received")
+
+    def test_a_record_that_only_quotes_a_hand_over_is_not_this_message(self):
+        # 11-24: a compaction summary and a tool's output quote our lines; they are not the phone's message
+        path = Path(tempfile.mkdtemp()) / "cli-1.jsonl"
+        summary = {"type": "user", "isCompactSummary": True, "timestamp": "2026-11-24T16:06:57Z",
+                   "message": {"role": "user", "content": "This session is being continued. " + "x" * 7000
+                                                         + " 用户在手机上发来下一条消息（遥应）：看图"}}
+        path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "看图"), "unknown")
+
 
 if __name__ == "__main__":
     unittest.main()
