@@ -106,3 +106,37 @@ def write(
         (folder / "transcript_full.jsonl").write_text(
             "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in records), encoding="utf-8")
     return root
+
+
+TOOL_OUTPUT = "工具输出：登录页 6 个测试都通过"
+FINISH_CUT = "这是被截短的总结"
+FINISH_FULL = "这是 finish 的完整总结：六条测试都通过，没有跳过的用例。"
+
+
+def real_transcript() -> list[dict]:
+    """One conversation in the shape the real records use: calls on PLANNER_RESPONSE, outputs on GENERIC."""
+    return [
+        record(1, "USER_INPUT", "USER_EXPLICIT", "帮我看看这个文件"),
+        record(2, "SYSTEM_MESSAGE", "SYSTEM", "内部提示"),
+        record(3, "PLANNER_RESPONSE", "MODEL", "看过了，没有问题。"),
+        record(4, "PLANNER_RESPONSE", "MODEL", None, tool_calls=[
+            {"name": "read_file", "args": {"Path": "C:\\测试\\a.txt", "StartLine": 1}},
+            {"name": "run_command", "args": {"CommandLine": "pytest -q", "toolSummary": "跑登录页的测试"}},
+            {"name": "edit_file", "args": {"Path": "C:\\测试\\b.py", "Replacement": "改好了"}},
+        ]),
+        record(5, "GENERIC", "MODEL", "工具输出：文件内容第一行，这一行不该显示"),
+        record(6, "GENERIC", "MODEL", TOOL_OUTPUT),
+        record(7, "GENERIC", "MODEL", "工具输出：b.py 已修改"),
+        record(8, "PLANNER_RESPONSE", "MODEL", "补充一句", tool_calls=[
+            {"name": "edit_file", "args": {"Path": "C:\\测试\\c.py", "Replacement": "也改好了"}},
+        ]),
+        record(9, "GENERIC", "MODEL", "工具输出：c.py 已修改"),
+        record(10, "ERROR_MESSAGE", "SYSTEM", None, error="被限流了"),
+        record(11, "CHECKPOINT", "SYSTEM", "检查点"),
+        record(12, "USER_INPUT", "USER_EXPLICIT", None, media=[{"kind": "image"}]),
+        record(13, "USER_INPUT", "USER_EXPLICIT", "显示的截断内容", truncated_fields=["content"]),
+        record(14, "PLANNER_RESPONSE", "MODEL", None, truncated_fields=["tool_calls"], tool_calls=[
+            {"name": "finish", "args": {"result": FINISH_CUT}},
+        ]),
+        record(15, "GENERIC", "MODEL", "工具输出：本轮结束"),
+    ]

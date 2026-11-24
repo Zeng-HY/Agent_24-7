@@ -130,7 +130,9 @@ class CatalogTests(Base):
             ],
             transcripts={
                 "a": [fake.record(1, "USER_INPUT", "USER_EXPLICIT", "你好"),
-                      fake.record(2, "GENERIC", "MODEL", tool_calls=[{"name": "edit_file", "args": {"Path": "C:\\测试\\a.py"}}])],
+                      fake.record(2, "PLANNER_RESPONSE", "MODEL", None,
+                                  tool_calls=[{"name": "edit_file", "args": {"Path": "C:\\测试\\a.py"}}]),
+                      fake.record(3, "GENERIC", "MODEL", "工具输出：a.py 已修改")],
             },
         )
 
@@ -220,35 +222,17 @@ class ErrorTests(Base):
         self.assertEqual((item["cwd"], item["updated"], item["status"]), ("", 0, "idle"))
 
 
-def transcript() -> list[dict]:
-    return [
-        fake.record(1, "USER_INPUT", "USER_EXPLICIT", "帮我看看这个文件"),
-        fake.record(2, "SYSTEM_MESSAGE", "SYSTEM", "内部提示"),
-        fake.record(3, "PLANNER_RESPONSE", "MODEL", "看过了，没有问题。"),
-        fake.record(4, "PLANNER_RESPONSE", "MODEL", None),
-        fake.record(5, "GENERIC", "MODEL", tool_calls=[
-            {"name": "read_file", "args": {"Path": "C:\\测试\\a.txt", "StartLine": 1}},
-            {"name": "run_command", "args": {"CommandLine": "pytest -q", "WaitMsBeforeAsync": 1000}},
-        ]),
-        fake.record(6, "GENERIC", "MODEL", "补充一句"),
-        fake.record(7, "ERROR_MESSAGE", "SYSTEM", None, error="被限流了"),
-        fake.record(8, "CHECKPOINT", "SYSTEM", "检查点"),
-        fake.record(9, "USER_INPUT", "USER_EXPLICIT", None, media=[{"kind": "image"}]),
-        fake.record(10, "USER_INPUT", "USER_EXPLICIT", "显示的截断内容", truncated_fields=["content"]),
-        fake.record(11, "GENERIC", "MODEL", tool_calls=[
-            {"name": "edit_file", "args": {"Path": "C:\\测试\\b.py"}, "status": "running"},
-        ], status="RUNNING"),
-    ]
-
-
 class ReadTests(Base):
     def setUp(self) -> None:
         super().setUp()
         self.build(
             rows=[fake.row("a", title="测试对话 A", workspace_uris=WORKSPACE),
                   fake.row("empty", title="没有记录文件")],
-            transcripts={"a": transcript()},
-            full={"a": [fake.record(10, "USER_INPUT", "USER_EXPLICIT", "完整的截断内容")]},
+            transcripts={"a": fake.real_transcript()},
+            full={"a": [fake.record(13, "USER_INPUT", "USER_EXPLICIT", "完整的截断内容"),
+                        fake.record(14, "PLANNER_RESPONSE", "MODEL", None, tool_calls=[
+                            {"name": "finish", "args": {"result": fake.FINISH_FULL}},
+                        ])]},
         )
         # One line the reader cannot parse: it is skipped, and the rest still reads.
         with (fake.data_root(self.home) / "brain" / "a" / ".system_generated" / "logs"
@@ -265,17 +249,34 @@ class ReadTests(Base):
         self.assertIn(("assistant", "看过了，没有问题。"), shown)
         self.assertIn(("assistant", "补充一句"), shown)
         self.assertIn(("event", "出错：被限流了"), shown)
-        self.assertIn(("assistant", "检查点"), shown)
         self.assertIn(("user", "[图片]"), shown)
         self.assertIn(("user", "完整的截断内容"), shown)
+        # finish's result is the turn's summary, not a step.
+        self.assertIn(("assistant", fake.FINISH_FULL), shown)
+        self.assertNotIn(("assistant", fake.FINISH_CUT), shown)
         self.assertNotIn("内部提示", [text for _role, text in shown])
+        self.assertNotIn("检查点", [text for _role, text in shown])
         self.assertTrue(any(role == "tool" and text.startswith("read_file：C:\\测试\\a.txt")
                             for role, text in shown))
-        self.assertTrue(any(role == "tool" and text.startswith("run_command：pytest -q")
+        self.assertTrue(any(role == "tool" and text == "run_command：跑登录页的测试"
                             for role, text in shown))
         self.assertTrue(any(role == "tool" and text.startswith("edit_file：C:\\测试\\b.py")
                             for role, text in shown))
-        self.assertEqual([message["role"] for message in page["messages"]].count("tool"), 3)
+        self.assertTrue(any(role == "tool" and text.startswith("edit_file：C:\\测试\\c.py")
+                            for role, text in shown))
+        self.assertEqual([message["role"] for message in page["messages"]].count("tool"), 4)
+
+    def test_a_tool_output_is_never_shown_as_an_answer(self):
+        page = self.page(limit=100)
+        texts = [message["text"] for message in page["messages"]]
+        self.assertNotIn(fake.TOOL_OUTPUT, texts)
+        self.assertFalse(any(text.startswith("工具输出") for text in texts))
+        self.assertNotIn(fake.TOOL_OUTPUT, " ".join(texts))
+
+    def test_a_finish_result_kept_as_an_object_is_serialized_in_full(self):
+        # The real full file keeps finish's result as an object; its compact JSON is the text the transcript cut.
+        self.assertEqual(antigravity._result_text({"items": [{"verdict": "pass"}]}),
+                         '{"items":[{"verdict":"pass"}]}')
 
     def test_a_picture_is_marked_and_no_file_is_offered(self):
         page = self.page(limit=100)
@@ -312,8 +313,9 @@ class ReadTests(Base):
 class SummaryStateTests(Base):
     def test_a_running_conversation_reports_its_island_step(self):
         self.build(rows=[fake.row("a", status="CASCADE_RUN_STATUS_RUNNING", last_modified_time=NEWEST)],
-                   transcripts={"a": [fake.record(1, "GENERIC", "MODEL",
-                                                  tool_calls=[{"name": "run_command", "args": {"CommandLine": "pytest"}}])]})
+                   transcripts={"a": [fake.record(1, "PLANNER_RESPONSE", "MODEL", None,
+                                                  tool_calls=[{"name": "run_command", "args": {"CommandLine": "pytest"}}]),
+                                      fake.record(2, "GENERIC", "MODEL", "工具输出：测试通过")]})
         agent = antigravity.AGENT()
         item = agent.find("a")
         self.assertEqual(agent.summary(item)["status"], "running")
@@ -377,9 +379,9 @@ class NotifyTests(Base):
 
     def test_a_running_turn_reports_the_last_tool_as_the_island_step(self):
         self.build(rows=[fake.row("a", status="CASCADE_RUN_STATUS_RUNNING")],
-                   transcripts={"a": [fake.record(1, "GENERIC", "MODEL",
+                   transcripts={"a": [fake.record(1, "PLANNER_RESPONSE", "MODEL", None,
                                                   tool_calls=[{"name": "read_file", "args": {"Path": "a"}}]),
-                                      fake.record(2, "GENERIC", "MODEL",
+                                      fake.record(2, "PLANNER_RESPONSE", "MODEL", None,
                                                   tool_calls=[{"name": "edit_file", "args": {"Path": "b"}}])]})
         agent = antigravity.AGENT()
         notifier = FakeNotifier()

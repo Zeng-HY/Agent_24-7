@@ -354,10 +354,14 @@ def _tool_message(call: dict, status: str) -> dict | None:
     args = call.get("args")
     value = ""
     if isinstance(args, dict):
-        for key in ARG_KEYS:
-            if isinstance(args.get(key), str) and args[key].strip():
-                value = _one_line(args[key])
-                break
+        # A command says what it does in its own one-line summary when Antigravity records one.
+        if name == "run_command" and isinstance(args.get("toolSummary"), str) and args["toolSummary"].strip():
+            value = _one_line(args["toolSummary"])
+        else:
+            for key in ARG_KEYS:
+                if isinstance(args.get(key), str) and args[key].strip():
+                    value = _one_line(args[key])
+                    break
     elif isinstance(args, str):
         value = _one_line(args)
     text = f"{name}：{value}" if value else name
@@ -365,6 +369,29 @@ def _tool_message(call: dict, status: str) -> dict | None:
     if status == "ERROR":
         message["tool_status"] = "failed"
     return message
+
+
+def _result_text(value) -> str:
+    """A finish result as words: its string, or the full compact JSON when the record keeps an object."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return ""
+    return ""
+
+
+def _finish_result(calls) -> str:
+    """The summary a finish call carries for the user, '' when this list has no finish call."""
+    for call in calls or []:
+        if isinstance(call, dict) and _text(call.get("name")) == "finish":
+            args = call.get("args")
+            if isinstance(args, dict):
+                return _result_text(args.get("result"))
+            return ""
+    return ""
 
 
 def _records(path: Path) -> list[dict]:
@@ -424,17 +451,39 @@ def _records_one(record: dict) -> list[dict]:
         return [message]
 
     if kind == "PLANNER_RESPONSE":
-        if not content:
-            return []
-        message = {"role": "assistant", "text": content + picture_text, "time": time_text}
-        if picture:
-            message["_picture"] = True
-        if "content" in cut_fields:
-            message["_truncated"] = True
-            message["_step"] = record.get("step_index")
-        return [message]
+        # Antigravity puts its answers and its tool calls on this same line: the words first, then each call.
+        found = []
+        if content:
+            message = {"role": "assistant", "text": content + picture_text, "time": time_text}
+            if picture:
+                message["_picture"] = True
+            if "content" in cut_fields:
+                message["_truncated"] = True
+                message["_step"] = record.get("step_index")
+            found.append(message)
+        calls = record.get("tool_calls")
+        if isinstance(calls, list):
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                if _text(call.get("name")) == "finish":
+                    # finish's result is the summary written for the user, not one more step.
+                    result = _finish_result([call])
+                    if result:
+                        message = {"role": "assistant", "text": result, "time": time_text}
+                        if "tool_calls" in cut_fields:
+                            message["_finish_cut"] = True
+                            message["_step"] = record.get("step_index")
+                        found.append(message)
+                    continue
+                message = _tool_message(call, status)
+                if message:
+                    message["time"] = time_text
+                    found.append(message)
+        return found
 
     if kind == "GENERIC":
+        # GENERIC is the tool's output. It is never an answer; only a future format's tool calls are steps.
         calls = record.get("tool_calls")
         if isinstance(calls, list) and calls:
             found = []
@@ -445,14 +494,6 @@ def _records_one(record: dict) -> list[dict]:
                         message["time"] = time_text
                         found.append(message)
             return found
-        if content:
-            message = {"role": "assistant", "text": content + picture_text, "time": time_text}
-            if picture:
-                message["_picture"] = True
-            if "content" in cut_fields:
-                message["_truncated"] = True
-                message["_step"] = record.get("step_index")
-            return [message]
         return []
 
     if kind == "ERROR_MESSAGE":
@@ -460,7 +501,7 @@ def _records_one(record: dict) -> list[dict]:
         text = "出错：" + (reason[:2000] if reason else "Antigravity 出错了")
         return [{"role": "event", "text": text, "time": time_text}]
 
-    if kind == "SYSTEM_MESSAGE":
+    if kind in ("SYSTEM_MESSAGE", "CHECKPOINT"):
         return []
 
     # An unknown type is shown as ordinary words when it has any; nothing else about it is guessed.
@@ -480,8 +521,8 @@ def _number_messages(messages: list[dict]) -> list[dict]:
     return messages
 
 
-def _full_contents(path: Path, steps: set[int]) -> dict:
-    """The full content of these steps from transcript_full.jsonl; only those steps are kept."""
+def _full_records(path: Path, steps: set[int]) -> dict:
+    """The full content and tool calls of these steps from transcript_full.jsonl; only those steps are kept."""
     try:
         stat = path.stat()
     except OSError:
@@ -491,7 +532,7 @@ def _full_contents(path: Path, steps: set[int]) -> dict:
         hit = _FULL_CACHE.get(key)
         if hit and hit[0] == stat.st_size and hit[1] == stat.st_mtime_ns and steps <= hit[2]:
             return hit[3]
-    found: dict[int, str] = {}
+    found: dict[int, dict] = {}
     try:
         with path.open("rb") as file:
             for raw in file:
@@ -506,8 +547,9 @@ def _full_contents(path: Path, steps: set[int]) -> dict:
                 index = record.get("step_index")
                 if isinstance(index, int) and index in steps:
                     content = record.get("content")
-                    if isinstance(content, str):
-                        found[index] = content
+                    calls = record.get("tool_calls")
+                    found[index] = {"content": content if isinstance(content, str) else None,
+                                    "tool_calls": calls if isinstance(calls, list) else None}
     except OSError:
         return {}
     with _LOCK:
@@ -519,15 +561,25 @@ def _full_contents(path: Path, steps: set[int]) -> dict:
 
 
 def _fill_cut(messages: list[dict], conv_id: str) -> None:
-    steps = {message.get("_step") for message in messages if message.get("_truncated")}
-    steps = {value for value in steps if isinstance(value, int)}
+    steps = set()
+    for message in messages:
+        if (message.get("_truncated") or message.get("_finish_cut")) and isinstance(message.get("_step"), int):
+            steps.add(message["_step"])
     if not steps:
         return
-    full = _full_contents(_full_path(conv_id), steps)
+    full = _full_records(_full_path(conv_id), steps)
     for message in messages:
-        content = full.get(message.get("_step"))
-        if content is not None:
-            message["text"] = content + ("\n[图片]" if message.get("_picture") else "")
+        record = full.get(message.get("_step")) if isinstance(message.get("_step"), int) else None
+        if not record:
+            continue
+        if message.get("_truncated"):
+            content = record.get("content")
+            if content is not None:
+                message["text"] = content + ("\n[图片]" if message.get("_picture") else "")
+        if message.get("_finish_cut"):
+            result = _finish_result(record.get("tool_calls") or [])
+            if result:
+                message["text"] = result
 
 
 # ---------------------------------------------------------------- the agent
@@ -650,6 +702,7 @@ class AntigravityAgent(Agent):
         _fill_cut(messages, item["id"])
         for message in messages:
             message.pop("_truncated", None)
+            message.pop("_finish_cut", None)
             message.pop("_step", None)
             message.pop("_picture", None)
         try:
@@ -703,6 +756,7 @@ class AntigravityAgent(Agent):
         _fill_cut(page, item["id"])
         for message in page:
             message.pop("_truncated", None)
+            message.pop("_finish_cut", None)
             message.pop("_step", None)
             message.pop("_picture", None)
             if len(message.get("text") or "") > MESSAGE_TEXT_LIMIT:
