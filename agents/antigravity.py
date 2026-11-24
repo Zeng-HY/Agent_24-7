@@ -1626,14 +1626,14 @@ class AntigravityAgent(Agent):
         """('error text' or '', whether the warm-up's first user message already has an answer)."""
         messages = _records(_transcript_path(conv_id), hide_warm_up=False)
         first = next((index for index, message in enumerate(messages) if message.get("role") == "user"), None)
-        if first is None:
-            return "", False
-        after = messages[first + 1:]
+        after = messages[first + 1:] if first is not None else messages
         error = next((message for message in after
                       if message.get("role") == "event"
                       and str(message.get("text") or "").startswith("出错：")), None)
         if error is not None:
             return str(error.get("text") or ""), False
+        if first is None:
+            return "", False
         return "", any(message.get("role") in ("assistant", "tool") for message in after)
 
     def _wait_warm_up(self, conv_id: str) -> None:
