@@ -38,100 +38,32 @@ class CodexAgent(Agent):
     desktop_send_text = "已按回车，等对话记录确认"
     delivery_markers = (b"UserMessage", b"user_message", b"codex_delegation", b"hook_prompt", b"HookPrompt")
 
-    def _route_state(self) -> tuple[str, bool]:
-        """Return (route, hooks_trusted) for dynamic capability calculation."""
-        import codex_apptools
-        route = codex_apptools.current_route()
-        if route != "apptools":
-            return route, False
-        import codex_hooks
-        return route, codex_hooks.read_trust_status() == "enabled"
-
     def build_manifest(self) -> dict:
-        route, hooks_trusted = self._route_state()
-        if route == "legacy":
-            caps = {
-                "list": True,
-                "read": True,
-                "search": True,
-                "open": True,
-                "stop": True,
-                "queue": True,
-                "steer": True,
-                "approve": True,
-                "answer": True,
-                "new": True,
-                "new_projectless": True,
-                "new_permission": False,
-                "archive": True,
-                "restore": True,
-                "delete": True,
-                "usage": True,
-                "waiting": True,
-                "attachments": True,
-                "slash_commands": True,
-                "settings": ["model", "effort"],
-                "send_modes": ["send", "steer", "queue"],
-                "statuses": ["running", "waiting", "idle", "unknown"],
-            }
-            sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "ipc", "live": "pipe+file"}
-        elif route == "apptools":
-            caps = {
-                "list": True,
-                "read": True,
-                "search": True,
-                "open": True,
-                "stop": bool(hooks_trusted),
-                "queue": True,
-                "steer": True,
-                "approve": bool(hooks_trusted),
-                "answer": bool(hooks_trusted),
-                "new": True,
-                "new_projectless": True,
-                "new_permission": False,
-                "archive": True,
-                "restore": True,
-                "delete": True,
-                "usage": True,
-                "waiting": True,
-                "attachments": True,
-                "slash_commands": False,
-                "settings": ["model", "effort"],
-                "send_modes": ["send", "steer", "queue"],
-                "statuses": ["running", "waiting", "idle", "unknown"],
-            }
-            sources = {
-                "catalog": "sqlite",
-                "transcript": "jsonl",
-                "control": "app-tools+hook" if hooks_trusted else "app-tools",
-                "live": "hook+file" if hooks_trusted else "poll+file",
-            }
-        else:
-            caps = {
-                "list": True,
-                "read": True,
-                "search": True,
-                "open": True,
-                "stop": False,
-                "queue": False,
-                "steer": False,
-                "approve": False,
-                "answer": False,
-                "new": True,
-                "new_projectless": True,
-                "new_permission": False,
-                "archive": True,
-                "restore": True,
-                "delete": True,
-                "usage": True,
-                "waiting": False,
-                "attachments": False,
-                "slash_commands": False,
-                "settings": [],
-                "send_modes": [],
-                "statuses": ["running", "waiting", "idle", "unknown"],
-            }
-            sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "none", "live": "file-poll"}
+        caps = {
+            "list": True,
+            "read": True,
+            "search": True,
+            "open": True,
+            "stop": True,
+            "queue": True,
+            "steer": True,
+            "approve": True,
+            "answer": True,
+            "new": True,
+            "new_projectless": True,
+            "new_permission": False,
+            "archive": True,
+            "restore": True,
+            "delete": True,
+            "usage": True,
+            "waiting": True,
+            "attachments": True,
+            "slash_commands": True,
+            "settings": ["model", "effort", "mode"],
+            "send_modes": ["send", "steer", "queue"],
+            "statuses": ["running", "waiting", "idle", "unknown"],
+        }
+        sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "ipc", "live": "pipe+file"}
         return make_manifest(
             ident="codex",
             zh="Codex",
@@ -147,12 +79,6 @@ class CodexAgent(Agent):
             ui={"card_layout": "codex.v1", "waiting_text": "等你处理"},
             sources=sources,
         )
-
-    def manifest(self) -> dict:
-        return self.build_manifest()
-
-    def can(self, capability: str) -> bool:
-        return bool(self.manifest()["capabilities"].get(capability))
 
     def find(self, conv_id: str) -> dict:
         item = chats.codex_thread(conv_id)

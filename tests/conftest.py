@@ -11,9 +11,11 @@ def _isolate_codex_pipes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(codex_apptools, "_list_pipes", lambda: ["codex-ipc"])
     codex_apptools.reset_route_cache()
+    codex_hooks.reset_trust_cache()
     codex_apptools.set_default_data_dir_override(tmp_path / "isolated-codex-data")
     codex_hooks.set_default_codex_home_override(tmp_path / "isolated-codex-home")
     yield
     codex_apptools.reset_route_cache()
+    codex_hooks.reset_trust_cache()
     codex_apptools.set_default_data_dir_override(None)
     codex_hooks.set_default_codex_home_override(None)

@@ -377,6 +377,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f"[hooks.state.'{hooks_literal}:stop:0:0']\ntrusted_hash = \"ghi789\"\n"
             )
             cfg_file.write_text(cfg_real, encoding="utf-8")
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "enabled")
 
             # Path case, forward slashes, and \\?\ extended prefix all match
@@ -388,6 +389,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f"[hooks.state.'{hooks_literal.lower()}:stop:0:0']\ntrusted_hash = \"ghi789\"\n",
                 encoding="utf-8",
             )
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "enabled")
 
             # Explicit enabled = false disables even when trusted_hash is present
@@ -397,6 +399,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f"[hooks.state.'{hooks_literal}:stop:0:0']\nenabled = false\ntrusted_hash = \"ghi789\"\n",
                 encoding="utf-8",
             )
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
 
             # Missing one of the 3 hooks in config.toml -> pending_trust
@@ -405,6 +408,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f"[hooks.state.'{hooks_literal}:permission_request:0:0']\ntrusted_hash = \"def456\"\n",
                 encoding="utf-8",
             )
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
 
             # Empty trusted_hash -> pending_trust
@@ -414,6 +418,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f"[hooks.state.'{hooks_literal}:stop:0:0']\ntrusted_hash = \"ghi789\"\n",
                 encoding="utf-8",
             )
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
 
             # Legacy/explicit PascalCase + enabled = true format remains supported
@@ -424,6 +429,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f'[hooks.state."{hooks_str}:Stop:0:0"]\nenabled = false\ntrusted_hash = "ghi789"\n',
                 encoding="utf-8",
             )
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
 
             cfg_content = (
@@ -432,12 +438,14 @@ class HookInstallerAndTrustTests(unittest.TestCase):
                 f'[hooks.state."{hooks_str}:Stop:0:0"]\nenabled = true\ntrusted_hash = "ghi789"\n'
             )
             cfg_file.write_text(cfg_content, encoding="utf-8")
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "enabled")
 
             # Missing one of the 3 hooks in hooks.json -> not_installed (even if config.toml has all 3)
             partial_hooks = json.loads(hooks_file.read_text(encoding="utf-8"))
             partial_hooks["hooks"].pop("Stop", None)
             hooks_file.write_text(json.dumps(partial_hooks, indent=2), encoding="utf-8")
+            ch.reset_trust_cache()
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "not_installed")
             # Restore full install before testing uninstall
             self.assertTrue(ch.install_hooks(exe, codex_home=fake_home, log=lambda _t: None))
@@ -448,6 +456,40 @@ class HookInstallerAndTrustTests(unittest.TestCase):
             self.assertEqual(after, user_initial)
             self.assertEqual(cfg_file.read_text(encoding="utf-8"), cfg_content)
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "not_installed")
+
+    def test_read_trust_status_caches_for_two_seconds_per_home_and_invalidates(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home_a = Path(td) / "home_a"
+            home_b = Path(td) / "home_b"
+            home_a.mkdir()
+            home_b.mkdir()
+            exe = Path(td) / "TeleplyCodexHook.exe"
+            now = [100.0]
+
+            ch.reset_trust_cache()
+            self.assertEqual(ch.read_trust_status(codex_home=home_a, clock=lambda: now[0]), "not_installed")
+            # install_hooks clears cache immediately
+            self.assertTrue(ch.install_hooks(exe, codex_home=home_a, log=lambda _t: None))
+            self.assertEqual(ch.read_trust_status(codex_home=home_a, clock=lambda: now[0]), "pending_trust")
+            # Separate home_b has its own cache entry
+            self.assertEqual(ch.read_trust_status(codex_home=home_b, clock=lambda: now[0]), "not_installed")
+
+            # Write trusted config.toml; within 2s cache still returns pending_trust
+            hp = home_a / "hooks.json"
+            (home_a / "config.toml").write_text(
+                f"[hooks.state.'{hp}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+                f"[hooks.state.'{hp}:permission_request:0:0']\ntrusted_hash = \"h2\"\n"
+                f"[hooks.state.'{hp}:stop:0:0']\ntrusted_hash = \"h3\"\n",
+                encoding="utf-8",
+            )
+            now[0] += 1.0
+            self.assertEqual(ch.read_trust_status(codex_home=home_a, clock=lambda: now[0]), "pending_trust")
+            # After 2s cache expires -> enabled
+            now[0] += 1.5
+            self.assertEqual(ch.read_trust_status(codex_home=home_a, clock=lambda: now[0]), "enabled")
+            # remove_hooks clears cache immediately
+            self.assertTrue(ch.remove_hooks(codex_home=home_a, log=lambda _t: None))
+            self.assertEqual(ch.read_trust_status(codex_home=home_a, clock=lambda: now[0]), "not_installed")
 
 
 class HookExeTests(unittest.TestCase):
@@ -622,13 +664,13 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 ca.reset_route_cache()
                 ch.set_default_codex_home_override(fake_home)
 
-                # Pending trust: manifest stop/approve/answer are False; status carries Chinese hint; desktop view shows hint
+                # Pending trust: static manifest stays fixed; status carries Chinese hint; desktop view shows hint
                 agent = registry.get("codex")
                 m_pending = agent.manifest()
-                self.assertFalse(m_pending["capabilities"]["stop"])
-                self.assertFalse(m_pending["capabilities"]["approve"])
-                self.assertFalse(m_pending["capabilities"]["answer"])
-                self.assertEqual(m_pending["sources"]["control"], "app-tools")
+                self.assertTrue(m_pending["capabilities"]["stop"])
+                self.assertTrue(m_pending["capabilities"]["approve"])
+                self.assertTrue(m_pending["capabilities"]["answer"])
+                self.assertEqual(m_pending["sources"]["control"], "ipc")
 
                 st_pending = bridge.status(TID, fresh=True)
                 self.assertEqual(st_pending["hook_status"], "pending_trust")
@@ -656,7 +698,7 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 self.assertIn("打开并信任 3 个遥应钩子", dc.view()["detail"])
 
                 # Now trust all 3 hooks using real Codex config.toml format (snake_case + trusted_hash only)
-                # -> manifest flips True, desktop & phone trust hints disappear
+                # -> desktop & phone trust hints disappear while manifest remains fixed
                 hp_literal = str(fake_home / "hooks.json")
                 (fake_home / "config.toml").write_text(
                     f"[hooks.state.'{hp_literal}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
@@ -665,19 +707,16 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 hooks._trust_cache = None
+                ch.reset_trust_cache()
                 m_enabled = agent.manifest()
-                self.assertTrue(m_enabled["capabilities"]["stop"])
-                self.assertTrue(m_enabled["capabilities"]["approve"])
-                self.assertTrue(m_enabled["capabilities"]["answer"])
-                self.assertEqual(m_enabled["sources"]["control"], "app-tools+hook")
-                self.assertEqual(m_enabled["sources"]["live"], "hook+file")
+                self.assertEqual(m_enabled, m_pending)
                 self.assertEqual(dc.view()["detail"], "")
                 st_enabled = bridge.status(TID, fresh=True)
                 self.assertEqual(st_enabled["hook_status"], "enabled")
                 self.assertNotIn("hook_notice", st_enabled)
                 self.assertNotIn("打开并信任 3 个遥应钩子", st_enabled["questions"][0]["question"])
 
-                # Disabling one hook with enabled = false turns hints back on and disables capabilities
+                # Disabling one hook with enabled = false turns hints back on while manifest remains fixed
                 (fake_home / "config.toml").write_text(
                     f"[hooks.state.'{hp_literal}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
                     f"[hooks.state.'{hp_literal}:permission_request:0:0']\nenabled = false\ntrusted_hash = \"h2\"\n"
@@ -685,10 +724,9 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 hooks._trust_cache = None
+                ch.reset_trust_cache()
                 m_disabled = agent.manifest()
-                self.assertFalse(m_disabled["capabilities"]["stop"])
-                self.assertFalse(m_disabled["capabilities"]["approve"])
-                self.assertFalse(m_disabled["capabilities"]["answer"])
+                self.assertEqual(m_disabled, m_pending)
                 self.assertIn("打开并信任 3 个遥应钩子", dc.view()["detail"])
                 st_disabled = bridge.status(TID, fresh=True)
                 self.assertEqual(st_disabled["hook_status"], "pending_trust")

@@ -149,32 +149,22 @@ class RouteSelectionTests(unittest.TestCase):
             m_legacy = agent.manifest()
             self.assertTrue(m_legacy["capabilities"]["stop"])
             self.assertTrue(m_legacy["capabilities"]["slash_commands"])
+            self.assertEqual(m_legacy["capabilities"]["settings"], ["model", "effort", "mode"])
             self.assertEqual(m_legacy["sources"]["control"], "ipc")
             self.assertEqual([c["name"] for c in composer_commands.catalog("codex", TID)["items"]], ["compact"])
 
-            # Mid-run switch to apptools on the SAME agent instance
+            # Mid-run switch to apptools on the SAME agent instance: manifest stays fixed, commands follow route
             pipes[0] = ["codex-app-tools-1111"]
             ca.reset_route_cache()
             m_new = agent.manifest()
-            self.assertFalse(m_new["capabilities"]["stop"])
-            self.assertFalse(m_new["capabilities"]["approve"])
-            self.assertFalse(m_new["capabilities"]["answer"])
-            self.assertFalse(m_new["capabilities"]["slash_commands"])
-            self.assertTrue(m_new["capabilities"]["queue"])
-            self.assertTrue(m_new["capabilities"]["steer"])
-            self.assertTrue(m_new["capabilities"]["attachments"])
-            self.assertEqual(m_new["capabilities"]["send_modes"], ["send", "steer", "queue"])
-            self.assertEqual(m_new["sources"]["control"], "app-tools")
+            self.assertEqual(m_new, m_legacy)
             self.assertEqual(composer_commands.catalog("codex", TID)["items"], [])
 
-            # Mid-run switch to none (Codex closed)
+            # Mid-run switch to none (Codex closed): manifest stays fixed
             pipes[0] = []
             ca.reset_route_cache()
             m_none = agent.manifest()
-            self.assertFalse(m_none["capabilities"]["queue"])
-            self.assertFalse(m_none["capabilities"]["steer"])
-            self.assertEqual(m_none["capabilities"]["send_modes"], [])
-            self.assertEqual(m_none["sources"]["control"], "none")
+            self.assertEqual(m_none, m_legacy)
 
 
 class ClientProtocolTests(unittest.TestCase):

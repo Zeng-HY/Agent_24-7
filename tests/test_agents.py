@@ -53,6 +53,54 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(UnknownAgent):
             registry.get("nope")
 
+    def test_codex_manifest_is_fixed_and_never_probes_route_or_trust(self):
+        import codex_apptools
+        import codex_hooks
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("manifest must not probe route or hook trust")
+
+        with patch.object(codex_apptools, "detect_route", side_effect=_boom), \
+             patch.object(codex_hooks, "read_trust_status", side_effect=_boom):
+            loaded = registry.load()
+            self.assertEqual([a.id for a in loaded], ["codex", "claude", "deepseek"])
+            manifest = registry.get("codex").manifest()
+            self.assertIn("mode", manifest["capabilities"]["settings"])
+
+        manifests = []
+        for pipes in (["codex-ipc"], ["codex-app-tools-0000"], []):
+            with patch.object(codex_apptools, "_list_pipes", return_value=pipes):
+                codex_apptools.reset_route_cache()
+                manifests.append(codex_agent.CodexAgent().manifest())
+        self.assertEqual(manifests[0], manifests[1])
+        self.assertEqual(manifests[1], manifests[2])
+
+    def test_registry_get_is_fast_on_apptools_route_with_trusted_hooks(self):
+        import codex_apptools
+        import codex_hooks
+
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td) / "codex_home"
+            fake_home.mkdir()
+            codex_hooks.install_hooks(r"C:\Fake\TeleplyCodexHook.exe", codex_home=fake_home, log=lambda _t: None)
+            hp = fake_home / "hooks.json"
+            (fake_home / "config.toml").write_text(
+                f"[hooks.state.'{hp}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+                f"[hooks.state.'{hp}:permission_request:0:0']\ntrusted_hash = \"h2\"\n"
+                f"[hooks.state.'{hp}:stop:0:0']\ntrusted_hash = \"h3\"\n",
+                encoding="utf-8",
+            )
+            codex_hooks.set_default_codex_home_override(fake_home)
+            codex_hooks.reset_trust_cache()
+            with patch.object(codex_apptools, "_list_pipes", return_value=["codex-app-tools-0000"]):
+                codex_apptools.reset_route_cache()
+                self.assertEqual(codex_hooks.read_trust_status(), "enabled")
+                t0 = time.perf_counter()
+                for _ in range(1000):
+                    registry.get("claude")
+                elapsed = time.perf_counter() - t0
+            self.assertLess(elapsed, 1.0, f"1000x registry.get('claude') took {elapsed:.3f}s")
+
 
 class DetectionTests(unittest.TestCase):
     def test_empty_computer_has_no_apps(self):
