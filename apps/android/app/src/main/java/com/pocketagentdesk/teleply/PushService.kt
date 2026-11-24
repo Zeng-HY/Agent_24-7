@@ -189,17 +189,19 @@ class PushService : Service() {
 
     /**
      * 电脑掉线 → its card says 电脑离线 and is taken away after 30 minutes even if nothing else arrives, so the phone
-     * does not keep a card that will never change again (design-2 §3.4.2).
+     * does not keep a card that will never change again (design-2 §3.4.2). With more than one computer offline, the
+     * next one to expire is scheduled after this one.
      */
     private fun scheduleOfflineSweep() {
-        val earliest = model.offlineAt.values.minOrNull()
+        val now = System.currentTimeMillis()
+        val next = model.nextOfflineExpiry(now)
         offlineSweep?.cancel()
         offlineSweep = null
-        if (earliest == null) return
-        val wait = (earliest + PushOfflineCardMillis) - System.currentTimeMillis()
+        if (next == null) return
         offlineSweep = scope.launch {
-            delay(wait.coerceAtLeast(0))
+            delay(next - now)
             notifier.showCards(model.liveCards(System.currentTimeMillis()))
+            scheduleOfflineSweep()
         }
     }
 

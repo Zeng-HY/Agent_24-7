@@ -134,6 +134,20 @@ class PushProtocolTest {
         assertEquals("在干活 · 编辑文件", online.liveCards(now + 1).cards.single().body)
     }
 
+    @Test fun eachOfflineComputerIsTakenAwayAtItsOwnHalfHour() {
+        val hello = PushProtocol.parse("""{"type":"hello","seq":1,"boot":"1a2b3c4d","computers":[{"device":"$device","label":"书房电脑","online":true},{"device":"$other","label":"客厅电脑","online":true}],"conversations":[{"device":"$device","label":"书房电脑","app":"codex","chat":"c1","title":"一","state":"working","since":1700000000,"turn":1700000000},{"device":"$other","label":"客厅电脑","app":"claude","chat":"c2","title":"二","state":"waiting","since":1700000001,"turn":1700000001}]}""")!!
+        var model = PushModel().apply(hello, now)
+        model = model.apply(PushProtocol.parse("""{"type":"computer","seq":2,"boot":"1a2b3c4d","device":"$device","label":"书房电脑","online":false}""")!!, now)
+        model = model.apply(PushProtocol.parse("""{"type":"computer","seq":3,"boot":"1a2b3c4d","device":"$other","label":"客厅电脑","online":false}""")!!, now + 10_000)
+        assertEquals(now + PushOfflineCardMillis, model.nextOfflineExpiry(now + 1))
+        assertEquals(now + PushOfflineCardMillis + 10_000, model.nextOfflineExpiry(now + PushOfflineCardMillis))
+        assertNull(model.nextOfflineExpiry(now + PushOfflineCardMillis + 10_000))
+        // Both cards say 电脑离线 while they last.
+        assertEquals(2, model.liveCards(now + 20_000).cards.size)
+        assertEquals(1, model.liveCards(now + PushOfflineCardMillis + 1).cards.size)
+        assertTrue(model.liveCards(now + PushOfflineCardMillis + 10_000).cards.isEmpty())
+    }
+
     @Test fun noticesShareADevicesGroupAndOneConversationIsOneTag() {
         val one = PushNotice(device, "codex", "c1", "done", "修好发布脚本", "Codex · 书房电脑", "做完了", true)
         val two = one.copy(chat = "c2", title = "另一个")

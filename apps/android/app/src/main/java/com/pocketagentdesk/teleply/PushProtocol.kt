@@ -167,8 +167,7 @@ data class PushModel(
      * A conversation on an offline computer says 电脑离线 and is dropped after 30 minutes; done, failed and gone have no
      * card (they are ordinary notices instead).
      */
-    fun liveCards(now: Long, limit: Int = 3): PushLiveCards {
-        val live = chats.values.filter { it.state == "working" || it.state == "waiting" }
+    fun liveCards(now: Long, limit: Int = 3): PushLiveCards {        val live = chats.values.filter { it.state == "working" || it.state == "waiting" }
             .sortedWith(compareByDescending<PushChat> { it.since ?: 0L }.thenByDescending { it.turn ?: 0L }.thenByDescending { it.ended ?: 0L })
         val shown = mutableListOf<PushLiveCard>()
         var overflow = 0
@@ -199,6 +198,13 @@ data class PushLiveCard(val device: String, val app: String, val chat: String, v
 
 /** The cards to show and how many working conversations did not fit (the relay's "还有 N 个在干活"). */
 data class PushLiveCards(val cards: List<PushLiveCard>, val overflow: Int)
+
+/**
+ * When the next 电脑离线 card is due to go, after [now]; null when no computer is offline or all their half hours have
+ * already passed. The service waits for this to take the card away when no other message comes.
+ */
+fun PushModel.nextOfflineExpiry(now: Long): Long? =
+    offlineAt.values.map { it + PushOfflineCardMillis }.filter { it > now }.minOrNull()
 
 /** 「在干活 · 编辑文件」/「在干活 · 跑命令」/「在干活 · 搜索」/「在干活 · 读文件」/「在等你」 (design-2 §3.4.2). */
 fun pushLiveBody(chat: PushChat): String = when (chat.state) {
