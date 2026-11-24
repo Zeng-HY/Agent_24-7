@@ -109,7 +109,8 @@ final class VoiceInput {
         var sender: Task<Void, Never>?
         var request: SFSpeechAudioBufferRecognitionRequest?
         var recognition: SFSpeechRecognitionTask?
-        var finalText: String?
+        /// What the phone's recogniser heard, every stretch of it: after a pause it starts afresh.
+        var stretches = HeardStretches()
 
         init(model: AppModel, chat: ChatKey, start: Int, end: Int, phone: Bool) {
             self.model = model
@@ -418,11 +419,17 @@ final class VoiceInput {
         request.shouldReportPartialResults = true
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         s.request = request
-        // The recogniser answers on a queue of its own: only plain words cross to the main actor.
+        // The recogniser answers on a queue of its own: only plain values cross to the main actor. With the words go
+        // whether the answer closes a stretch (it carries metadata) and when its words start and end, so that a
+        // fresh start after a pause is told from a revision (HeardStretches).
         s.recognition = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
             let text = result?.bestTranscription.formattedString
+            let closes = result?.speechRecognitionMetadata != nil
+            let segments = result?.bestTranscription.segments ?? []
+            let startsAt = segments.first?.timestamp ?? 0
+            let endsAt = segments.last.map { $0.timestamp + $0.duration } ?? 0
             let done = result?.isFinal == true || error != nil
-            Task { @MainActor in self?.heardOnPhone(s, text: text, done: done) }
+            Task { @MainActor in self?.heardOnPhone(s, text: text, closes: closes, start: startsAt, end: endsAt, done: done) }
         }
         show(recognizer.supportsOnDeviceRecognition ? "这台电脑没开语音，用 iPhone 自带的识别" : "这台电脑没开语音，用 iPhone 自带的识别（可能联网）")
         // The request takes audio from any thread (Speech framework).
@@ -430,11 +437,15 @@ final class VoiceInput {
         startCapture(s) { buffer in feed.append(buffer) }
     }
 
-    private func heardOnPhone(_ s: Session, text: String?, done: Bool) {
+    /// Each answer replaces only its own stretch; the stretches before a pause stay, shown as settled words.
+    private func heardOnPhone(_ s: Session, text: String?, closes: Bool, start: Double, end: Double, done: Bool) {
         guard session === s else { return }
         if let text {
-            s.finalText = text
-            if mode != .finishing { partial = text }
+            s.stretches.take(text, closes: closes, start: start, end: end)
+            if mode != .finishing {
+                heard = s.stretches.settled
+                partial = String(s.stretches.text.dropFirst(heard.count))
+            }
         }
         if done && mode == .finishing { settlePhone(s) }
     }
@@ -452,7 +463,7 @@ final class VoiceInput {
         guard session === s else { return }
         session = nil
         busy = false
-        let text = (s.finalText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = s.stretches.text
         s.recognition?.cancel()
         end()
         if text.isEmpty {
