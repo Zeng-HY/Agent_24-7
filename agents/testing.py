@@ -12,6 +12,80 @@ import time
 from .base import Agent, NotFound, Unsupported, make_manifest
 
 
+class AnswerError(Exception):
+    """A generic card answer the fake assistant turns away; the HTTP layer reads .status."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def _initial_cards() -> dict:
+    """Two pending cards in 测试对话 B: an approval and a question, in the format of design §3."""
+    return {
+        "test-waiting": [
+            {
+                "id": "approval-7",
+                "status": "pending",
+                "kind": "approval",
+                "turn_id": "turn-3",
+                "title": "测试助手想运行命令",
+                "detail": "npm test\n在 C:\\测试\\项目",
+                "questions": [
+                    {
+                        "id": "decision",
+                        "header": "",
+                        "question": "允许运行这条命令吗？",
+                        "options": [
+                            {"label": "允许一次", "description": ""},
+                            {"label": "拒绝", "description": ""},
+                        ],
+                        "isOther": False,
+                        "isSecret": False,
+                        "isMultiple": False,
+                    }
+                ],
+                "answer_revision": "",
+                "expires_at": 0,
+            },
+            {
+                "id": "question-8",
+                "status": "pending",
+                "kind": "question",
+                "turn_id": "turn-3",
+                "questions": [
+                    {
+                        "id": "plan",
+                        "header": "选方案",
+                        "question": "用哪个方案？",
+                        "options": [
+                            {"label": "方案 A", "description": "先改接口"},
+                            {"label": "方案 B", "description": "先改界面"},
+                        ],
+                        "isOther": True,
+                        "isSecret": False,
+                        "isMultiple": False,
+                    },
+                    {
+                        "id": "files",
+                        "header": "改哪些文件",
+                        "question": "这次要改哪些文件？",
+                        "options": [
+                            {"label": "a.py", "description": ""},
+                            {"label": "b.py", "description": ""},
+                        ],
+                        "isOther": False,
+                        "isSecret": False,
+                        "isMultiple": True,
+                    },
+                ],
+                "answer_revision": "rev-1",
+                "expires_at": 0,
+            },
+        ]
+    }
+
+
 def _initial_store() -> dict:
     now = int(time.time() * 1000)
     return {
@@ -35,6 +109,7 @@ def _initial_store() -> dict:
                 {"id": "m4", "role": "assistant", "time": now - 110_000, "text": "请选择 A 或 B", "kind": "question"},
             ],
         },
+        "cards": _initial_cards(),
         "created": 0,
         "created_by_rid": {},
     }
@@ -55,6 +130,7 @@ class TestingAgent(Agent):
     notify_uses_file = False
     new_requires_desktop = False
     new_managed = False
+    MAX_ANSWER = 8000
 
     def new_options(self, svc) -> dict:
         return {"models": [{"id": "test-model", "label": "测试模型", "efforts": [{"id": "high", "label": "高"}], "default_effort": "high"}], "note": ""}
@@ -113,6 +189,7 @@ class TestingAgent(Agent):
                 "waiting": True,
                 "attachments": True,
                 "slash_commands": True,
+                "skills": True,
                 "settings": ["model", "effort"],
                 "send_modes": ["send", "steer", "queue"],
                 "statuses": ["running", "waiting", "idle", "unknown"],
@@ -189,10 +266,12 @@ class TestingAgent(Agent):
 
     def state(self, conv_id: str, *, fresh: bool = False) -> dict:
         item = self.find(conv_id)
+        # 通用卡片（第二批设计 §3）：控制态只列还没答的卡片。
+        cards = [dict(card) for card in _STORE["cards"].get(conv_id, []) if card.get("status") == "pending"]
         return {"available": True, "running": item["status"] == "running", "status": item["status"],
                 "turn_id": "turn-1" if item["status"] == "running" else "",
                 "turn_started": item["turn_started"], "turn_ended": item["turn_ended"],
-                "step": item["step"], "settings": {}, "runtime": {}, "questions": [],
+                "step": item["step"], "settings": {}, "runtime": {}, "questions": cards,
                 "tasks": [], "queued": [], "queue_available": True, "stop_token": "stop-1"}
 
     def send(self, payload: dict) -> dict:
@@ -220,9 +299,47 @@ class TestingAgent(Agent):
         return {"ok": True, "action": payload.get("action", "")}
 
     def answer(self, payload: dict) -> dict:
-        item = self.find(str(payload.get("id", "")))
-        item.update(status="idle", preview="已选择", step="")
-        return {"ok": True, "text": "测试助手已收到回答"}
+        """答一张通用卡片（第二批设计 §3）：卡片要在、要答全、单选不能给多个、值不能空也不能太长。"""
+        conv_id = str(payload.get("id", ""))
+        item = self.find(conv_id)
+        cards = _STORE["cards"].setdefault(conv_id, [])
+        card = next((c for c in cards if c["id"] == str(payload.get("question_id", ""))), None)
+        if card is None or card.get("status") != "pending":
+            raise AnswerError("这个问题已回答或已失效，请刷新", 409)
+        answers = payload.get("answers")
+        if not isinstance(answers, dict):
+            raise AnswerError("回答为空，请刷新后重试", 400)
+        chosen: dict[str, list[str]] = {}
+        for question in card["questions"]:
+            given = answers.get(question["id"])
+            if not isinstance(given, list) or not given:
+                raise AnswerError("还有问题没有回答", 400)
+            if len(given) > 1 and not question.get("isMultiple"):
+                raise AnswerError("这道题只能选一个答案", 400)
+            labels = [str(option.get("label", "")) for option in question.get("options") or []]
+            values: list[str] = []
+            for value in given:
+                text = value.strip() if isinstance(value, str) else ""
+                if not text:
+                    raise AnswerError("答案不能是空的", 400)
+                if len(text) > self.MAX_ANSWER:
+                    raise AnswerError("答案太长（最多 8000 字）", 400)
+                if question.get("isOther") is not True and question.get("isSecret") is not True and text not in labels:
+                    raise AnswerError("这个选项不存在，请刷新后重选", 400)
+                if text not in values:
+                    values.append(text)
+            chosen[str(question["id"])] = values
+        if card.get("kind") == "approval":
+            decision = chosen[card["questions"][0]["id"]][0]
+            declined = any(word in decision for word in ("拒绝", "取消", "deny", "decline"))
+            text = "已拒绝本次操作" if declined else "已允许本次操作"
+        else:
+            text = "答案已提交"
+        card["status"] = "answered"
+        card["answers"] = chosen
+        if not [c for c in cards if c.get("status") == "pending"]:
+            item.update(status="idle", step="", preview=text)
+        return {"ok": True, "accepted": True, "text": text}
 
     def open(self, conv_id: str) -> dict:
         item = self.find(conv_id)
