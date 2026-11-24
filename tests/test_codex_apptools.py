@@ -795,6 +795,111 @@ class AppToolsBridgeTests(unittest.TestCase):
             code_cmd, _ = _call_http(server, "GET", f"/api/agents/codex/commands?id={TID}", protocol=2)
             self.assertEqual(code_cmd, 400)
 
+    def test_plan_mode_note_on_apptools_send_and_new_chat_only(self) -> None:
+        from unittest.mock import Mock
+        import new_conversations
+
+        expected_text = "已交给 Codex。新版 Codex 从手机发的消息跟着电脑上当前的模式走，这次选的「计划模式」没有生效。"
+
+        # 1) Normal send on apptools with mode="plan" carries explanation
+        res_plan = self.bridge.send({
+            "id": TID,
+            "request_id": "req-plan-00001",
+            "text": "请先出计划",
+            "settings": {"model": "gpt-test", "effort": "high", "mode": "plan"},
+        })
+        self.assertTrue(res_plan["accepted"])
+        self.assertEqual(res_plan["text"], expected_text)
+
+        # 2) Normal send on apptools with mode="default" does NOT carry explanation
+        res_default = self.bridge.send({
+            "id": TID,
+            "request_id": "req-plan-00002",
+            "text": "普通执行消息",
+            "settings": {"model": "gpt-test", "effort": "high", "mode": "default"},
+        })
+        self.assertTrue(res_default["accepted"])
+        self.assertEqual(res_default["text"], "已交给 Codex")
+
+        # 3) Queued send while running with mode="plan" also notes it
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        res_queued = self.bridge.send({
+            "id": TID,
+            "request_id": "req-plan-00003",
+            "text": "排队计划",
+            "intent": "queue",
+            "settings": {"model": "gpt-test", "effort": "high", "mode": "plan"},
+        })
+        self.assertEqual(res_queued["delivery_state"], "queued")
+        self.assertIn(ca.PLAN_MODE_IGNORED_NOTE, res_queued["text"])
+        self.pipe_status = {"type": "idle"}
+
+        # 4) New conversation first message on apptools: mode="plan" carries explanation, default does not
+        proj = self.root / "new_proj"
+        proj.mkdir()
+        history = SimpleNamespace(catalog=lambda: [{"app": "codex", "id": TID, "cwd": str(proj), "folder": "new_proj", "updated": 1}])
+        refs = composer_references.References(history, home=self.root)
+        self.legacy._apptools_bridge = self.bridge
+        svc = new_conversations.NewConversations(history, refs, self.legacy, Mock(), root=self.root / "new_db")
+
+        def run_new_case(mode: str, rid_tag: str) -> dict:
+            rid = svc.create_draft()["request_id"]
+            body = {
+                "request_id": rid,
+                "app": "codex",
+                "folder": str(proj),
+                "text": f"新建消息 {rid_tag}",
+                "attachments": [],
+                "references": [],
+                "settings": {"model": "gpt-test", "effort": "high", "mode": mode},
+            }
+            with patch("new_conversations.codex_control.catalog", return_value=self.catalog), \
+                 patch("new_conversations.threading.Thread"):
+                svc.submit(body)
+            with patch("new_conversations.chats.require_send_desktop"), \
+                 patch("new_conversations.os.startfile"), \
+                 patch.object(svc, "_empty_codex", side_effect=lambda _r, d: d.update(id=TID, title="新建测试", default_model="gpt-test", default_effort="medium")), \
+                 patch("new_conversations.codex_control.catalog", return_value=self.catalog):
+                svc._run(rid)
+            return svc.status(rid)
+
+        st_new_plan = run_new_case("plan", "plan")
+        self.assertEqual(st_new_plan["state"], "accepted")
+        self.assertEqual(st_new_plan["message"], expected_text)
+
+        st_new_default = run_new_case("default", "default")
+        self.assertEqual(st_new_default["state"], "accepted")
+        self.assertEqual(st_new_default["message"], "首条消息已送达")
+
+        # 5) Legacy route new chat does NOT add the apptools plan-mode explanation
+        with patch.object(ca, "_list_pipes", return_value=["codex-ipc"]):
+            ca.reset_route_cache()
+            rid_legacy = svc.create_draft()["request_id"]
+            with patch("new_conversations.codex_control.catalog", return_value=self.catalog), \
+                 patch("new_conversations.threading.Thread"):
+                svc.submit({
+                    "request_id": rid_legacy,
+                    "app": "codex",
+                    "folder": str(proj),
+                    "text": "老路线新建计划",
+                    "attachments": [],
+                    "references": [],
+                    "settings": {"model": "gpt-test", "effort": "high", "mode": "plan"},
+                })
+            fake_pipe = SimpleNamespace(snapshot=lambda tid, _t, timing=None: ("owner", {"id": tid}))
+            with patch("new_conversations.chats.require_send_desktop"), \
+                 patch("new_conversations.os.startfile"), \
+                 patch.object(svc, "_empty_codex", side_effect=lambda _r, d: d.update(id=TID, title="老路线新建", default_model="gpt-test", default_effort="medium")), \
+                 patch.object(self.legacy, "_pipe", return_value=fake_pipe), \
+                 patch("new_conversations.codex_control.selected_settings", return_value={"model": "gpt-test", "effort": "high", "mode": "default", "service_tier": None}), \
+                 patch("new_conversations.codex_control.catalog", return_value=self.catalog), \
+                 patch.object(self.legacy, "send", return_value={"accepted": True, "text": "已交给 Codex"}):
+                svc._run(rid_legacy)
+            st_legacy = svc.status(rid_legacy)
+            self.assertEqual(st_legacy["state"], "accepted")
+            self.assertEqual(st_legacy["message"], "首条消息已送达")
+            self.assertNotIn(ca.PLAN_MODE_IGNORED_NOTE, st_legacy["message"])
+
 
 class ChatsDisplayStep1Tests(unittest.TestCase):
     def test_self_delegation_counts_as_own_message_and_other_chat_keeps_origin(self) -> None:

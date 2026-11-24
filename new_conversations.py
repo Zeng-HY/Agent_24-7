@@ -353,7 +353,8 @@ class NewConversations:
             if agent.new_requires_desktop:chats.require_send_desktop()
             agent.run_new(self,rid,data,trace)
             trace.finish()
-            self._save(rid,'accepted',data,{'message':'首条消息已送达'})
+            message=data.pop('accepted_message',None) or '首条消息已送达'
+            self._save(rid,'accepted',data,{'message':message})
             self._log(data,trace,'送达')
         except Exception as exc:
             state,stored,_,_=self._read(rid);data.update(stored)

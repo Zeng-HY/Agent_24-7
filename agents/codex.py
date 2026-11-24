@@ -823,6 +823,12 @@ class CodexAgent(Agent):
             if data.get("settings"):
                 settings = svc._picked({"model": data.get("default_model"), "effort": data.get("default_effort"),
                                         "mode": "default", "service_tier": None}, data["settings"])
+            submitted_settings = (data.get("submitted") or {}).get("settings")
+            if (
+                codex_apptools._is_plan_mode_requested(data.get("settings"))
+                or codex_apptools._is_plan_mode_requested(submitted_settings)
+            ):
+                settings = {**settings, "mode": "plan"}
             trace.phase("bind", "准备首条消息与附件")
             svc._bind(rid, data)
             svc._save(rid, "dispatching", data, {"message": "正在提交首条消息…"})
@@ -839,6 +845,8 @@ class CodexAgent(Agent):
             )
             if not (answer.get("accepted") or answer.get("delivered")):
                 raise new_conversations.chats.ChatError(answer.get("text") or answer.get("message") or "首条消息结果尚未确认")
+            if codex_apptools.PLAN_MODE_IGNORED_NOTE in str(answer.get("text") or ""):
+                data["accepted_message"] = str(answer["text"])
             return
         new_conversations.chats.require_send_desktop()
         new_conversations.os.startfile("codex://threads/" + data["id"])
