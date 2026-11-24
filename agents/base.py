@@ -138,6 +138,39 @@ class Agent:
     def can(self, capability: str) -> bool:
         return bool(self._manifest["capabilities"].get(capability))
 
+    def capabilities_now(self, server, conv_id: str) -> dict | None:
+        """Runtime capabilities; None means identical to the fixed manifest.
+
+        Returns {"capabilities": {...same keys/types as manifest capabilities...},
+                 "notes": {"<capability>": "<plain Chinese reason>", ...}}.
+        Rule: every item must be at most as wide as the manifest (False cannot become
+        True; lists must be subsets). Must be cheap: open conversations call this every
+        second, so any file/pipe check must cache at least 2 seconds.
+        """
+        return None
+
+    def can_now(self, capability: str, server=None, conv_id: str = "") -> bool:
+        now = self.capabilities_now(server, conv_id) if server is not None else None
+        if now and isinstance(now.get("capabilities"), dict):
+            return bool(now["capabilities"].get(capability))
+        return self.can(capability)
+
+    def attach_capabilities_now(self, handler, conv_id: str, data: dict) -> dict:
+        """Attach capabilities_now / capability_notes for protocol 2; protocol 1 gets data untouched."""
+        if not isinstance(data, dict):
+            return data
+        proto_fn = getattr(handler, "_client_protocol", None)
+        if not callable(proto_fn) or proto_fn() < 2:
+            return data
+        now = self.capabilities_now(getattr(handler, "server", None), conv_id)
+        if not isinstance(now, dict) or not isinstance(now.get("capabilities"), dict):
+            return data
+        return {
+            **data,
+            "capabilities_now": now["capabilities"],
+            "capability_notes": now.get("notes") or {},
+        }
+
     # -- this computer
     def detect(self) -> bool:
         """Whether the desktop app is installed; a few folder checks, no UI."""
@@ -476,7 +509,9 @@ class Agent:
     def http_state(self, handler) -> None:
         q = handler._query()
         try:
-            handler._json(self.state(q.get("id", ""), fresh=q.get("fresh") == "1"))
+            tid = q.get("id", "")
+            data = self.state(tid, fresh=q.get("fresh") == "1")
+            handler._json(self.attach_capabilities_now(handler, tid, data))
         except Exception as exc:
             self._http_error(handler, exc)
 
@@ -503,7 +538,7 @@ class Agent:
         import deepseek_control
         q = handler._query()
         tid = q.get("id", "")
-        if not self.can("slash_commands"):
+        if not self.can_now("slash_commands", handler.server, tid):
             handler._json({"error": "这个助手还没有斜杠命令", "code": "unsupported"}, 400)
             return
         try:

@@ -121,6 +121,7 @@ def stream(handler,history,bridge,tasks,app,tid,lite=False):
             page=history.conversation(app,tid,60,lite=lite)
             control=agent.control(bridge,tid)
             if control is not None and tasks is not None:tasks.observe(tid,control)
+            control=agent.attach_capabilities_now(handler,tid,control)
             messages=page['messages'];live_ids=[];state=None
             if watcher is not None:
                 with watcher.condition:record=watcher.snapshots.get(tid);state=copy.deepcopy(record[2]) if record else None

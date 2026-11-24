@@ -80,6 +80,97 @@ class CodexAgent(Agent):
             sources=sources,
         )
 
+    def capabilities_now(self, server, conv_id: str) -> dict | None:
+        import codex_apptools
+        import codex_hooks
+
+        route = codex_apptools.current_route()
+        if route == "legacy":
+            base_caps = self.manifest()["capabilities"]
+            caps = {
+                **base_caps,
+                "settings": list(base_caps["settings"]),
+                "send_modes": list(base_caps["send_modes"]),
+                "statuses": list(base_caps["statuses"]),
+            }
+            return {"capabilities": caps, "notes": {}}
+        if route == "apptools":
+            trust = codex_hooks.read_trust_status()
+            hooks_trusted = trust == "enabled"
+            caps = {
+                "list": True,
+                "read": True,
+                "search": True,
+                "open": True,
+                "stop": bool(hooks_trusted),
+                "queue": True,
+                "steer": True,
+                "approve": bool(hooks_trusted),
+                "answer": bool(hooks_trusted),
+                "new": True,
+                "new_projectless": True,
+                "new_permission": False,
+                "archive": True,
+                "restore": True,
+                "delete": True,
+                "usage": True,
+                "waiting": True,
+                "attachments": True,
+                "slash_commands": False,
+                "settings": ["model", "effort"],
+                "send_modes": ["send", "steer", "queue"],
+                "statuses": ["running", "waiting", "idle", "unknown"],
+            }
+            notes = {
+                "slash_commands": "新版 Codex 不能从手机压缩对话（/compact）",
+                "mode": "新版 Codex 从手机发的消息跟着电脑上当前的模式走，手机上不能切换",
+            }
+            if not hooks_trusted:
+                hook_reason = (
+                    codex_hooks.TRUST_HINT
+                    if trust == "pending_trust"
+                    else "遥应的 Codex 钩子还没装上，手机暂时不能批准、停止、回答"
+                )
+                notes["stop"] = hook_reason
+                notes["approve"] = hook_reason
+                notes["answer"] = hook_reason
+            return {"capabilities": caps, "notes": notes}
+        caps = {
+            "list": True,
+            "read": True,
+            "search": True,
+            "open": True,
+            "stop": False,
+            "queue": False,
+            "steer": False,
+            "approve": False,
+            "answer": False,
+            "new": True,
+            "new_projectless": True,
+            "new_permission": False,
+            "archive": True,
+            "restore": True,
+            "delete": True,
+            "usage": True,
+            "waiting": False,
+            "attachments": False,
+            "slash_commands": False,
+            "settings": [],
+            "send_modes": [],
+            "statuses": ["running", "waiting", "idle", "unknown"],
+        }
+        reason = codex_apptools.NOT_RUNNING_REASON
+        notes = {
+            "send": reason,
+            "steer": reason,
+            "queue": reason,
+            "stop": reason,
+            "approve": reason,
+            "answer": reason,
+            "attachments": reason,
+        }
+        return {"capabilities": caps, "notes": notes}
+
     def find(self, conv_id: str) -> dict:
         item = chats.codex_thread(conv_id)
         if item is None:
@@ -901,7 +992,7 @@ class CodexAgent(Agent):
                 data = backend.status(tid, fresh=q.get("fresh") == "1")
             if hasattr(handler.server, "tasks"):
                 handler.server.tasks.observe(tid, data)
-            handler._json(data)
+            handler._json(self.attach_capabilities_now(handler, tid, data))
         self._run_codex_get(handler, run)
 
     def http_receipt(self, handler) -> None:

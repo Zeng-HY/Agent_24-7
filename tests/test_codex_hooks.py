@@ -664,13 +664,18 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 ca.reset_route_cache()
                 ch.set_default_codex_home_override(fake_home)
 
-                # Pending trust: static manifest stays fixed; status carries Chinese hint; desktop view shows hint
+                # Pending trust: static manifest stays fixed; capabilities_now disables stop/approve/answer
                 agent = registry.get("codex")
                 m_pending = agent.manifest()
                 self.assertTrue(m_pending["capabilities"]["stop"])
                 self.assertTrue(m_pending["capabilities"]["approve"])
                 self.assertTrue(m_pending["capabilities"]["answer"])
                 self.assertEqual(m_pending["sources"]["control"], "ipc")
+                now_pending = agent.capabilities_now(None, TID)
+                self.assertFalse(now_pending["capabilities"]["stop"])
+                self.assertFalse(now_pending["capabilities"]["approve"])
+                self.assertFalse(now_pending["capabilities"]["answer"])
+                self.assertEqual(now_pending["notes"]["stop"], ch.TRUST_HINT)
 
                 st_pending = bridge.status(TID, fresh=True)
                 self.assertEqual(st_pending["hook_status"], "pending_trust")
@@ -698,7 +703,7 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 self.assertIn("打开并信任 3 个遥应钩子", dc.view()["detail"])
 
                 # Now trust all 3 hooks using real Codex config.toml format (snake_case + trusted_hash only)
-                # -> desktop & phone trust hints disappear while manifest remains fixed
+                # -> capabilities_now flips True, desktop & phone trust hints disappear while manifest remains fixed
                 hp_literal = str(fake_home / "hooks.json")
                 (fake_home / "config.toml").write_text(
                     f"[hooks.state.'{hp_literal}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
@@ -710,13 +715,18 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 ch.reset_trust_cache()
                 m_enabled = agent.manifest()
                 self.assertEqual(m_enabled, m_pending)
+                now_enabled = agent.capabilities_now(None, TID)
+                self.assertTrue(now_enabled["capabilities"]["stop"])
+                self.assertTrue(now_enabled["capabilities"]["approve"])
+                self.assertTrue(now_enabled["capabilities"]["answer"])
+                self.assertNotIn("stop", now_enabled["notes"])
                 self.assertEqual(dc.view()["detail"], "")
                 st_enabled = bridge.status(TID, fresh=True)
                 self.assertEqual(st_enabled["hook_status"], "enabled")
                 self.assertNotIn("hook_notice", st_enabled)
                 self.assertNotIn("打开并信任 3 个遥应钩子", st_enabled["questions"][0]["question"])
 
-                # Disabling one hook with enabled = false turns hints back on while manifest remains fixed
+                # Disabling one hook with enabled = false turns hints back on and disables capabilities_now
                 (fake_home / "config.toml").write_text(
                     f"[hooks.state.'{hp_literal}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
                     f"[hooks.state.'{hp_literal}:permission_request:0:0']\nenabled = false\ntrusted_hash = \"h2\"\n"
@@ -727,10 +737,108 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 ch.reset_trust_cache()
                 m_disabled = agent.manifest()
                 self.assertEqual(m_disabled, m_pending)
+                now_disabled = agent.capabilities_now(None, TID)
+                self.assertFalse(now_disabled["capabilities"]["stop"])
+                self.assertFalse(now_disabled["capabilities"]["approve"])
+                self.assertFalse(now_disabled["capabilities"]["answer"])
+                self.assertEqual(now_disabled["notes"]["stop"], ch.TRUST_HINT)
                 self.assertIn("打开并信任 3 个遥应钩子", dc.view()["detail"])
                 st_disabled = bridge.status(TID, fresh=True)
                 self.assertEqual(st_disabled["hook_status"], "pending_trust")
                 self.assertIn("打开并信任 3 个遥应钩子", st_disabled["hook_notice"])
+
+    def test_sse_stream_updates_capabilities_now_mid_stream_for_protocol_two_only(self) -> None:
+        import io
+        from unittest.mock import Mock
+        import live_events
+
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td) / "codex_home"
+            fake_home.mkdir()
+            exe = Path(td) / "TeleplyCodexHook.exe"
+            ch.install_hooks(exe, codex_home=fake_home, log=lambda _t: None)
+
+            rollout = Path(td) / "rollout.jsonl"
+            rollout.write_text(
+                json.dumps({"timestamp": TS1, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}) + "\n",
+                encoding="utf-8",
+            )
+            item = {"app": "codex", "id": TID, "title": "测试流", "cwd": td, "path": str(rollout)}
+
+            class _FakeClient:
+                def read_thread(self, tid, **kw):
+                    return {"thread": {"id": tid, "status": {"type": "active", "activeFlags": []}}}
+
+            legacy = codex_control.Bridge()
+            legacy.data_root = Path(td) / "att"
+            hooks = ch.CodexHookServer(pipe_name=r"\\.\pipe\teleply-unused", codex_home=fake_home)
+            bridge = ca.AppToolsBridge(legacy, client=_FakeClient(), data_dir=Path(td) / "data", hooks=hooks, enable_background_drain=False)
+            self.addCleanup(bridge.close)
+            legacy._apptools_bridge = bridge
+            legacy._codex_hooks = hooks
+
+            entry = SimpleNamespace(lock=threading.RLock(), messages=[], by_id={}, offset=0, state={"running": True, "current_turn_id": "t1"})
+            page = {"id": TID, "status": "running", "runtime": {}, "title": "测试流", "folder": "", "activity_turns": [], "activity_current": None, "messages": []}
+            history = SimpleNamespace(transcript=lambda *a: (item, entry), conversation=lambda *a, **k: dict(page))
+
+            def run_stream(protocol: int, flip_trust: bool) -> list[dict]:
+                buf = io.BytesIO()
+                handler = SimpleNamespace(
+                    send_response=Mock(),
+                    send_header=Mock(),
+                    end_headers=Mock(),
+                    connection=Mock(),
+                    wfile=buf,
+                    server=SimpleNamespace(codex=legacy),
+                    _client_protocol=lambda: protocol,
+                )
+                ticks = []
+
+                def on_wait(_tid, _timeout):
+                    ticks.append(1)
+                    if len(ticks) == 1:
+                        if flip_trust:
+                            hp = str(fake_home / "hooks.json")
+                            (fake_home / "config.toml").write_text(
+                                f"[hooks.state.'{hp}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+                                f"[hooks.state.'{hp}:permission_request:0:0']\ntrusted_hash = \"h2\"\n"
+                                f"[hooks.state.'{hp}:stop:0:0']\ntrusted_hash = \"h3\"\n",
+                                encoding="utf-8",
+                            )
+                            hooks._trust_cache = None
+                            ch.reset_trust_cache()
+                            bridge._status_cache.clear()
+                        return True
+                    raise ConnectionError("done")
+
+                with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-sse"]), \
+                     patch("chats.find", return_value=item), \
+                     patch("codex_control.catalog", return_value={"models": []}), \
+                     patch("live_events.select.select", return_value=([], [], [])), \
+                     patch.object(hooks, "wait_change", side_effect=on_wait):
+                    ca.reset_route_cache()
+                    ch.set_default_codex_home_override(fake_home)
+                    ch.reset_trust_cache()
+                    hooks._trust_cache = None
+                    bridge._status_cache.clear()
+                    live_events.stream(handler, history, legacy, None, "codex", TID)
+                return [json.loads(line[6:]) for line in buf.getvalue().decode("utf-8").splitlines() if line.startswith("data: ")]
+
+            # Protocol 1 never receives capabilities_now or capability_notes
+            p1_events = run_stream(protocol=1, flip_trust=False)
+            self.assertEqual(len(p1_events), 1)
+            self.assertNotIn("capabilities_now", p1_events[0]["control"])
+            self.assertNotIn("capability_notes", p1_events[0]["control"])
+
+            # Protocol 2 gets snapshot with stop=False, then mid-stream update with stop=True once trusted
+            p2_events = run_stream(protocol=2, flip_trust=True)
+            self.assertEqual(len(p2_events), 2)
+            self.assertEqual(p2_events[0]["type"], "snapshot")
+            self.assertFalse(p2_events[0]["control"]["capabilities_now"]["stop"])
+            self.assertEqual(p2_events[0]["control"]["capability_notes"]["stop"], ch.TRUST_HINT)
+            self.assertEqual(p2_events[1]["type"], "update")
+            self.assertTrue(p2_events[1]["control"]["capabilities_now"]["stop"])
+            self.assertNotIn("stop", p2_events[1]["control"]["capability_notes"])
 
     def test_chats_hook_prompt_and_request_user_input_qa_display(self) -> None:
         img_id = "b" * 32
