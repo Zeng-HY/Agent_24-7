@@ -548,6 +548,7 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
         lines, _ = chats.read_tail(path, 2 << 20)
     except OSError:
         return None
+    fallback_hook_prompt: dict | None = None
     for raw in reversed(lines):
         if b"codex_delegation" not in raw and b"hook_prompt" not in raw and b"HookPrompt" not in raw:
             continue
@@ -586,13 +587,13 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
                             "message_id": item.get("id"),
                             "time": rec.get("timestamp"),
                         }
-            elif t == "HookPrompt":
+            elif t == "HookPrompt" and fallback_hook_prompt is None:
                 raw_text = chats._hook_prompt_item_text(item)
                 cleaned, _ = chats._extract_codex_images(raw_text)
                 if (want_raw and chats.norm(raw_text) == want_raw) or (
                     want_clean and chats.norm(cleaned) == want_clean
                 ):
-                    return {
+                    fallback_hook_prompt = {
                         "source": "conversation_record",
                         "message_id": item.get("id"),
                         "time": rec.get("timestamp"),
@@ -609,7 +610,7 @@ def find_delegation_delivery(path: Path | None, thread_id: str, prompt: str) -> 
                         "message_id": payload.get("id"),
                         "time": rec.get("timestamp"),
                     }
-    return None
+    return fallback_hook_prompt
 
 
 # ---------------------------------------------------------------- Teleply local queue

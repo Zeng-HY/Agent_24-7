@@ -587,22 +587,19 @@ class _PendingHook:
 
 
 def _current_user_security_attributes():
-    import win32con
+    import ntsecuritycon
+    import win32api
     import win32security
 
-    token = win32security.OpenProcessToken(
-        win32security.GetCurrentProcess(), win32security.TOKEN_QUERY
-    ) if hasattr(win32security, "GetCurrentProcess") else None
-    if token is None:
-        import win32api
-        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
     try:
         user_sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
     finally:
         token.Close()
     sd = win32security.SECURITY_DESCRIPTOR()
     dacl = win32security.ACL()
-    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.FILE_ALL_ACCESS, user_sid)
+    access = getattr(ntsecuritycon, "FILE_ALL_ACCESS", 0x001F01FF)
+    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, access, user_sid)
     sd.SetSecurityDescriptorDacl(1, dacl, 0)
     sa = win32security.SECURITY_ATTRIBUTES()
     sa.SECURITY_DESCRIPTOR = sd
@@ -618,18 +615,19 @@ def _read_pipe_exact(handle, count: int) -> bytes | None:
     while len(buf) < count:
         ov = pywintypes.OVERLAPPED()
         ov.hEvent = win32event.CreateEvent(None, True, False, None)
+        read_buf = win32file.AllocateReadBuffer(count - len(buf))
         try:
             try:
-                _, chunk = win32file.ReadFile(handle, count - len(buf), ov)
-            except pywintypes.error as exc:
-                if exc.winerror != 997:  # ERROR_IO_PENDING
+                rc, _ = win32file.ReadFile(handle, read_buf, ov)
+                if rc not in (0, 997):  # 0=completed, 997=ERROR_IO_PENDING
                     return None
-                chunk = None
+            except pywintypes.error as exc:
+                if exc.winerror != 997:
+                    return None
             got = win32file.GetOverlappedResult(handle, ov, True)
             if got <= 0:
                 return None
-            if chunk is not None:
-                buf.extend(chunk[:got])
+            buf.extend(bytes(read_buf[:got]))
         except Exception:
             return None
         finally:
@@ -1215,21 +1213,26 @@ class CodexHookServer:
             ov.hEvent = win32event.CreateEvent(None, True, False, None)
             connected = False
             try:
-                try:
-                    rc = win32pipe.ConnectNamedPipe(handle, ov)
-                    if rc == 0:
+                rc = win32pipe.ConnectNamedPipe(handle, ov)
+                if rc in (0, 535):  # 0=completed, 535=ERROR_PIPE_CONNECTED
+                    connected = True
+                elif rc == 997:  # ERROR_IO_PENDING
+                    wait_rc = win32event.WaitForMultipleObjects(
+                        [ov.hEvent, self._win_stop_event], False, win32event.INFINITE
+                    )
+                    if wait_rc == win32event.WAIT_OBJECT_0:
                         connected = True
-                except pywintypes.error as exc:
-                    if exc.winerror == 535:  # ERROR_PIPE_CONNECTED
+            except pywintypes.error as exc:
+                if exc.winerror == 535:  # ERROR_PIPE_CONNECTED
+                    connected = True
+                elif exc.winerror == 997:  # ERROR_IO_PENDING
+                    wait_rc = win32event.WaitForMultipleObjects(
+                        [ov.hEvent, self._win_stop_event], False, win32event.INFINITE
+                    )
+                    if wait_rc == win32event.WAIT_OBJECT_0:
                         connected = True
-                    elif exc.winerror == 997:  # ERROR_IO_PENDING
-                        wait_rc = win32event.WaitForMultipleObjects(
-                            [ov.hEvent, self._win_stop_event], False, win32event.INFINITE
-                        )
-                        if wait_rc == win32event.WAIT_OBJECT_0:
-                            connected = True
-                    else:
-                        connected = False
+                else:
+                    connected = False
             finally:
                 ov.hEvent.Close()
 

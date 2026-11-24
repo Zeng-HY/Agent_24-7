@@ -782,13 +782,15 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
             t = item.get("type")
             if t == "UserMessage":
                 saw_items = True
-                raw_user, _ = _unwrap_hook_prompt(_join_text(item.get("content")))
+                raw_user, is_hook = _unwrap_hook_prompt(_join_text(item.get("content")))
                 cleaned, images = _extract_codex_images(clean_codex_user(raw_user))
                 row = {"role": "user", "text": cleaned, "time": ts,
                        "client_request_id": item.get("client_id"), "source_id": item.get("id")}
                 if images:
                     row["images"] = images
                 if cleaned or images:
+                    if is_hook and isinstance(context, dict):
+                        context["last_hook_user"] = (ts, cleaned)
                     msgs.append(row)
             elif t == "HookPrompt":
                 saw_items = True
@@ -799,7 +801,11 @@ def parse_codex(lines: list[bytes], context: dict | None = None,
                         m["role"] == "user" and m["text"] == cleaned and m.get("time") == ts
                         for m in msgs[-3:]
                     )
+                    if not dup and isinstance(context, dict) and context.get("last_hook_user") == (ts, cleaned):
+                        dup = True
                     if not dup:
+                        if isinstance(context, dict):
+                            context["last_hook_user"] = (ts, cleaned)
                         row = {"role": "user", "text": cleaned, "time": ts, "source_id": item.get("id")}
                         if images:
                             row["images"] = images

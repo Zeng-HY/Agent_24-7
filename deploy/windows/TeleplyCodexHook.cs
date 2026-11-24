@@ -2,11 +2,10 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
-using Microsoft.Win32.SafeHandles;
 
 namespace TeleplyCodexHook {
     // Minimal native-speed bridge between Codex desktop hooks and Teleply's local named pipe.
+    // Uses direct Win32 P/Invoke (no FileStream, no ThreadPool/Timer) to stay near bare CLR startup.
     // Three iron laws:
     //   1. Never exit with code 2 (exit code 2 blocks PreToolUse and forces Stop continuation).
     //   2. Missing pipe, timeout, malformed input, or any exception -> exit 0 ({} for Stop, empty otherwise).
@@ -15,27 +14,73 @@ namespace TeleplyCodexHook {
         const uint GENERIC_READ = 0x80000000;
         const uint GENERIC_WRITE = 0x40000000;
         const uint OPEN_EXISTING = 3;
+        const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+        const int STD_INPUT_HANDLE = -10;
+        const int STD_OUTPUT_HANDLE = -11;
         const int ERROR_FILE_NOT_FOUND = 2;
         const int ERROR_PIPE_BUSY = 231;
+        const int ERROR_IO_PENDING = 997;
+        const uint WAIT_OBJECT_0 = 0;
         const int CONNECT_TIMEOUT_MS = 300;
         const int DEFAULT_READ_TIMEOUT_MS = 155000;
         const int MAX_BYTES = 4 * 1024 * 1024;
+        static readonly IntPtr INVALID_HANDLE = new IntPtr(-1);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct OVERLAPPED {
+            public IntPtr Internal;
+            public IntPtr InternalHigh;
+            public uint Offset;
+            public uint OffsetHigh;
+            public IntPtr hEvent;
+        }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        static extern SafeFileHandle CreateFileW(
-            string lpFileName,
-            uint dwDesiredAccess,
-            uint dwShareMode,
-            IntPtr lpSecurityAttributes,
-            uint dwCreationDisposition,
-            uint dwFlagsAndAttributes,
-            IntPtr hTemplateFile);
+        static extern IntPtr CreateFileW(
+            string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+            IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+            uint dwFlagsAndAttributes, IntPtr hTemplateFile);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         static extern bool WaitNamedPipeW(string lpNamedPipeName, int nTimeOut);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadFile(
+            IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToRead,
+            out uint lpNumberOfBytesRead, IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadFile(
+            IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToRead,
+            out uint lpNumberOfBytesRead, ref OVERLAPPED lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool WriteFile(
+            IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToWrite,
+            out uint lpNumberOfBytesWritten, IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool WriteFile(
+            IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToWrite,
+            out uint lpNumberOfBytesWritten, ref OVERLAPPED lpOverlapped);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr CreateEventW(IntPtr lpEventAttributes, bool bManualReset, bool bInitialState, string lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetOverlappedResult(IntPtr hFile, ref OVERLAPPED lpOverlapped, out uint lpNumberOfBytesTransferred, bool bWait);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool CancelIoEx(IntPtr hFile, IntPtr lpOverlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool CloseHandle(IntPtr hObject);
 
         static int Main(string[] args) {
             string eventName = (args != null && args.Length > 0 && args[0] != null) ? args[0].Trim() : "";
@@ -54,10 +99,21 @@ namespace TeleplyCodexHook {
         static void EmitStdout(string text) {
             if (string.IsNullOrEmpty(text)) return;
             byte[] bytes = Encoding.UTF8.GetBytes(text);
-            using (Stream stdout = Console.OpenStandardOutput()) {
-                stdout.Write(bytes, 0, bytes.Length);
-                stdout.Flush();
+            IntPtr hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (hOut == IntPtr.Zero || hOut == INVALID_HANDLE) return;
+            int offset = 0;
+            while (offset < bytes.Length) {
+                byte[] chunk = offset == 0 ? bytes : Slice(bytes, offset, bytes.Length - offset);
+                uint written;
+                if (!WriteFile(hOut, chunk, (uint)chunk.Length, out written, IntPtr.Zero) || written == 0) break;
+                offset += (int)written;
             }
+        }
+
+        static byte[] Slice(byte[] src, int offset, int count) {
+            byte[] dst = new byte[count];
+            Buffer.BlockCopy(src, offset, dst, 0, count);
+            return dst;
         }
 
         static void EmitFallback(string eventName) {
@@ -98,40 +154,94 @@ namespace TeleplyCodexHook {
         }
 
         static string ReadStdinText() {
-            using (Stream stdin = Console.OpenStandardInput())
+            IntPtr hIn = GetStdHandle(STD_INPUT_HANDLE);
+            if (hIn == IntPtr.Zero || hIn == INVALID_HANDLE) return "";
+            byte[] buf = new byte[8192];
             using (var ms = new MemoryStream()) {
-                byte[] buf = new byte[8192];
                 int total = 0;
-                int n;
-                while ((n = stdin.Read(buf, 0, buf.Length)) > 0) {
-                    if (total + n > MAX_BYTES) {
-                        ms.Write(buf, 0, MAX_BYTES - total);
-                        break;
+                while (true) {
+                    uint got;
+                    bool ok = ReadFile(hIn, buf, (uint)buf.Length, out got, IntPtr.Zero);
+                    if (!ok || got == 0) break;
+                    int take = (total + (int)got > MAX_BYTES) ? (MAX_BYTES - total) : (int)got;
+                    if (take > 0) {
+                        ms.Write(buf, 0, take);
+                        total += take;
                     }
-                    ms.Write(buf, 0, n);
-                    total += n;
+                    if (total >= MAX_BYTES) break;
                 }
                 if (ms.Length == 0) return "";
-                byte[] all = ms.ToArray();
-                int offset = (all.Length >= 3 && all[0] == 0xEF && all[1] == 0xBB && all[2] == 0xBF) ? 3 : 0;
-                return Encoding.UTF8.GetString(all, offset, all.Length - offset);
+                byte[] all = ms.GetBuffer();
+                int len = (int)ms.Length;
+                int offset = (len >= 3 && all[0] == 0xEF && all[1] == 0xBB && all[2] == 0xBF) ? 3 : 0;
+                return Encoding.UTF8.GetString(all, offset, len - offset);
             }
         }
 
-        static SafeFileHandle ConnectPipe(string pipePath, int timeoutMs) {
+        static IntPtr ConnectPipe(string pipePath, int timeoutMs) {
             int deadline = Environment.TickCount + timeoutMs;
             while (true) {
-                SafeFileHandle handle = CreateFileW(
-                    pipePath, GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-                if (!handle.IsInvalid) return handle;
+                IntPtr handle = CreateFileW(
+                    pipePath, GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero,
+                    OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
+                if (handle != INVALID_HANDLE && handle != IntPtr.Zero) return handle;
                 int err = Marshal.GetLastWin32Error();
-                handle.Dispose();
-                if (err == ERROR_FILE_NOT_FOUND) return null;
-                if (err != ERROR_PIPE_BUSY) return null;
+                if (err == ERROR_FILE_NOT_FOUND) return INVALID_HANDLE;
+                if (err != ERROR_PIPE_BUSY) return INVALID_HANDLE;
                 int remaining = deadline - Environment.TickCount;
-                if (remaining <= 0) return null;
-                if (!WaitNamedPipeW(pipePath, remaining)) return null;
+                if (remaining <= 0) return INVALID_HANDLE;
+                if (!WaitNamedPipeW(pipePath, remaining)) return INVALID_HANDLE;
             }
+        }
+
+        static bool WriteAllOverlapped(IntPtr handle, IntPtr ev, byte[] data, int timeoutMs) {
+            int offset = 0;
+            int deadline = Environment.TickCount + timeoutMs;
+            while (offset < data.Length) {
+                byte[] chunk = offset == 0 ? data : Slice(data, offset, data.Length - offset);
+                var ov = new OVERLAPPED { hEvent = ev };
+                uint written;
+                bool ok = WriteFile(handle, chunk, (uint)chunk.Length, out written, ref ov);
+                if (!ok) {
+                    int err = Marshal.GetLastWin32Error();
+                    if (err != ERROR_IO_PENDING) return false;
+                    int rem = deadline - Environment.TickCount;
+                    if (rem <= 0 || WaitForSingleObject(ev, (uint)rem) != WAIT_OBJECT_0) {
+                        CancelIoEx(handle, IntPtr.Zero);
+                        return false;
+                    }
+                    if (!GetOverlappedResult(handle, ref ov, out written, false)) return false;
+                }
+                if (written == 0) return false;
+                offset += (int)written;
+            }
+            return true;
+        }
+
+        static byte[] ReadExactOverlapped(IntPtr handle, IntPtr ev, int count, int deadline) {
+            byte[] result = new byte[count];
+            byte[] scratch = new byte[count];
+            int offset = 0;
+            while (offset < count) {
+                int need = count - offset;
+                var ov = new OVERLAPPED { hEvent = ev };
+                uint got;
+                bool ok = ReadFile(handle, scratch, (uint)need, out got, ref ov);
+                if (!ok) {
+                    int err = Marshal.GetLastWin32Error();
+                    if (err != ERROR_IO_PENDING) return null;
+                    int rem = deadline - Environment.TickCount;
+                    if (rem <= 0 || WaitForSingleObject(ev, (uint)rem) != WAIT_OBJECT_0) {
+                        CancelIoEx(handle, IntPtr.Zero);
+                        return null;
+                    }
+                    if (!GetOverlappedResult(handle, ref ov, out got, false)) return null;
+                }
+                if (got == 0) return null;
+                Buffer.BlockCopy(scratch, 0, result, offset, (int)got);
+                offset += (int)got;
+            }
+            return result;
         }
 
         static void Run(string eventName) {
@@ -139,38 +249,38 @@ namespace TeleplyCodexHook {
             string trimmed = rawPayload.Trim();
             string payloadJson = JsonMini.IsValidJsonObject(trimmed) ? trimmed : "{}";
 
-            SafeFileHandle handle = ConnectPipe(ResolvePipePath(), CONNECT_TIMEOUT_MS);
-            if (handle == null) {
+            IntPtr handle = ConnectPipe(ResolvePipePath(), CONNECT_TIMEOUT_MS);
+            if (handle == INVALID_HANDLE || handle == IntPtr.Zero) {
                 EmitFallback(eventName);
                 return;
             }
 
-            int readTimeoutMs = ResolveReadTimeoutMs();
-            using (handle)
-            using (var timer = new Timer(_ => {
-                try {
-                    if (!handle.IsClosed && !handle.IsInvalid) {
-                        CancelIoEx(handle.DangerousGetHandle(), IntPtr.Zero);
-                    }
-                } catch { }
-            }, null, readTimeoutMs, Timeout.Infinite))
-            using (var fs = new FileStream(handle, FileAccess.ReadWrite, 4096, false)) {
+            IntPtr ev = CreateEventW(IntPtr.Zero, true, false, null);
+            try {
+                if (ev == IntPtr.Zero) {
+                    EmitFallback(eventName);
+                    return;
+                }
                 string reqJson = "{\"event\":" + JsonMini.Quote(eventName) + ",\"payload\":" + payloadJson + "}";
                 byte[] reqBytes = Encoding.UTF8.GetBytes(reqJson);
                 if (reqBytes.Length > MAX_BYTES) {
                     EmitFallback(eventName);
                     return;
                 }
-                byte[] header = new byte[4];
-                header[0] = (byte)(reqBytes.Length & 0xFF);
-                header[1] = (byte)((reqBytes.Length >> 8) & 0xFF);
-                header[2] = (byte)((reqBytes.Length >> 16) & 0xFF);
-                header[3] = (byte)((reqBytes.Length >> 24) & 0xFF);
-                fs.Write(header, 0, 4);
-                fs.Write(reqBytes, 0, reqBytes.Length);
-                fs.Flush();
+                byte[] frame = new byte[4 + reqBytes.Length];
+                frame[0] = (byte)(reqBytes.Length & 0xFF);
+                frame[1] = (byte)((reqBytes.Length >> 8) & 0xFF);
+                frame[2] = (byte)((reqBytes.Length >> 16) & 0xFF);
+                frame[3] = (byte)((reqBytes.Length >> 24) & 0xFF);
+                Buffer.BlockCopy(reqBytes, 0, frame, 4, reqBytes.Length);
 
-                byte[] respHeader = ReadExact(fs, 4);
+                if (!WriteAllOverlapped(handle, ev, frame, 5000)) {
+                    EmitFallback(eventName);
+                    return;
+                }
+
+                int readDeadline = Environment.TickCount + ResolveReadTimeoutMs();
+                byte[] respHeader = ReadExactOverlapped(handle, ev, 4, readDeadline);
                 if (respHeader == null) {
                     EmitFallback(eventName);
                     return;
@@ -180,7 +290,7 @@ namespace TeleplyCodexHook {
                     EmitFallback(eventName);
                     return;
                 }
-                byte[] respBytes = ReadExact(fs, respLen);
+                byte[] respBytes = ReadExactOverlapped(handle, ev, respLen, readDeadline);
                 if (respBytes == null) {
                     EmitFallback(eventName);
                     return;
@@ -196,18 +306,10 @@ namespace TeleplyCodexHook {
                     return;
                 }
                 EmitStdout(stdoutText);
+            } finally {
+                if (ev != IntPtr.Zero) CloseHandle(ev);
+                CloseHandle(handle);
             }
-        }
-
-        static byte[] ReadExact(Stream stream, int count) {
-            byte[] buf = new byte[count];
-            int offset = 0;
-            while (offset < count) {
-                int n = stream.Read(buf, offset, count - offset);
-                if (n <= 0) return null;
-                offset += n;
-            }
-            return buf;
         }
     }
 
