@@ -44,11 +44,22 @@ class NativeApplication : android.app.Application() {
     val store by lazy { NativeReaderStore(SettingsStore(this),database.positions()) }
     val vault by lazy { SecureCookieVault(this) }
     val watch by lazy { WatchManager(this,store) { origin -> RelayApi(origin,vault) } }
+    /** 遥应通知 (安卓 1.0.10, design-2 §3.3): the switch, the registration and the one connection. */
+    val push by lazy { PushController(this,{ origin -> RelayApi(origin,vault) },BuildConfig.VERSION_NAME) }
     val updater by lazy { AppUpdater(this) }
 }
+/** A notification tapped: which computer, app and conversation to open once this phone's account is known (design-2 §3.4.1). */
+data class PushOpen(val device:String,val app:String,val chat:String)
 class MainActivity : ComponentActivity() {
     private var watchToken by mutableStateOf<String?>(null)
-    override fun onNewIntent(intent:android.content.Intent) { super.onNewIntent(intent);setIntent(intent);watchToken=intent.getStringExtra(WatchManager.EXTRA) }
+    private var pushOpen by mutableStateOf<PushOpen?>(null)
+    private fun readPush(intent:android.content.Intent?) {
+        val device=intent?.getStringExtra(PushExtraDevice).orEmpty()
+        val app=intent?.getStringExtra(PushExtraApp).orEmpty()
+        val chat=intent?.getStringExtra(PushExtraChat).orEmpty()
+        pushOpen=if(device.isNotBlank() && chat.isNotBlank() && app.isNotBlank()) PushOpen(device,app,chat) else null
+    }
+    override fun onNewIntent(intent:android.content.Intent) { super.onNewIntent(intent);setIntent(intent);watchToken=intent.getStringExtra(WatchManager.EXTRA);readPush(intent) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -56,11 +67,14 @@ class MainActivity : ComponentActivity() {
         val store=graph.store
         val vault=graph.vault
         watchToken=intent.getStringExtra(WatchManager.EXTRA)
+        readPush(intent)
+        // The switch is on: make sure the connection is running (the service is idempotent; a reboot starts it too).
+        runCatching { graph.push.ensureRunning() }
         setContent {
             val vm:ReaderViewModel=viewModel(factory=object:ViewModelProvider.Factory {
                 // 10-31: off the old default service (its IP) once, before the saved one is read (moveService); a deleted
                 // account takes its background check with it.
-                @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T = ReaderViewModel(store,prepare={ withContext(Dispatchers.IO) { moveService(store,vault) { from,to -> graph.watch.moved(from,to) } } },accountDeleted={ graph.watch.disable() }) { origin -> RelayApi(origin,vault) } as T
+                @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T = (ReaderViewModel(store,prepare={ withContext(Dispatchers.IO) { moveService(store,vault) { from,to -> graph.watch.moved(from,to);graph.push.moved(from,to) } } },accountDeleted={ graph.watch.disable() }) { origin -> RelayApi(origin,vault) }).also { it.pushSignedOut={ graph.push.signedOut() } } as T
             })
             val state by vm.state.collectAsStateWithLifecycle()
             LaunchedEffect(watchToken,state.busy,state.account) {
@@ -69,6 +83,14 @@ class MainActivity : ComponentActivity() {
                     watchToken=null;intent.removeExtra(WatchManager.EXTRA)
                     graph.watch.resolve(token)?.let { vm.openNotification(it) }
                 }
+            }
+            LaunchedEffect(pushOpen,state.busy,state.account) {
+                val target=pushOpen ?: return@LaunchedEffect
+                if(state.busy || state.account==null) return@LaunchedEffect
+                pushOpen=null;intent.removeExtra(PushExtraDevice);intent.removeExtra(PushExtraApp);intent.removeExtra(PushExtraChat)
+                // Only a computer still on this account opens its conversation (design-2 §3.4.1).
+                if(isValidAgentId(target.app) && state.account!!.devices.any { it.id==target.device })
+                    vm.openNotification(WatchTarget(state.origin,ChatKey(state.scope,target.device,target.chat,target.app),"push"))
             }
             val dark=state.theme=="dark" || state.theme=="system" && isSystemInDarkTheme()
             SideEffect {

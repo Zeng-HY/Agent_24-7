@@ -223,6 +223,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     }
     /** The local demo's API ([fixture]); tests may hand in one that also streams live frames (11-16). */
     internal var fixtureApi:() -> ReadApi = { FixtureApi() }
+    /** 退出登录/删除账号 before the cookie goes: 遥应通知 unregisters this phone (安卓 1.0.10); set by the app, empty in tests. */
+    internal var pushSignedOut: suspend () -> Unit = {}
     private var work: Job? = null
     private var generation = 0
     private var pendingRestore: Preferences? = null
@@ -318,6 +320,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     fun logout() = operation { g ->
         pendingNotification=null
         val s=state.value
+        // 遥应通知 first, while the sign-in still lets the relay forget this phone (design-2 §1.1).
+        runCatching { pushSignedOut() }
         try { api?.logout() } catch (e: CancellationException) { throw e } catch (_: Exception) { /* the cookie is gone here either way */ }
         signedOut(g,s)
     }
@@ -341,6 +345,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
         }
         // Gone for good, whatever happens to this page next.
         runCatching { accountDeleted() }
+        // 遥应通知's registration goes with the account (the relay already dropped its phones).
+        runCatching { pushSignedOut() }
         signedOut(g,s,"账号已删除")
     }
     /** What 退出登录 leaves: 登录 on the same service, nothing of the account or of where it was; [note] under the form. */
