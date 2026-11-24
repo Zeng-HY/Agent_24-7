@@ -337,5 +337,12 @@
       "老版 Codex 照旧走原通道，手机和网页不用更新。"
     ],
     "details": "新版 Codex 从手机发图时，交给 Codex 看图的副本会先转正方向并按长边不超过 1600 像素、文件不超过 400 KB 压缩（照片存 JPEG、带透明存 PNG，本来就小的图原样保存），避免原图过大被 Codex 看图工具丢掉。\n\n同时在确认送达时把对话记录里的消息编号和本次发送的请求编号配对存盘（含排队由 Stop 钩子交出的消息），读对话时补上 client_request_id、控制态图片列表补上 message_id，手机 App 和网页都能按编号直接显示发出的图片。\n\n安装\nWindows 0.27.0-dev.48 / build 48，测试版。装的时候电脑端会重启，登录和绑定沿用；手机和网页不用更新。"
+  },
+  "0.27.0-dev.49": {
+    "summary": [
+      "修好新版 Codex 钩子信任状态误判：在 Codex 里信任 3 个遥应钩子后，不再一直提示去信任，手机能力表也会正常打开停止、批准和回答。",
+      "老版 Codex 照旧走原通道，手机和网页不用更新。"
+    ],
+    "details": "Codex 实际写入 config.toml 的钩子信任记录使用小写加下划线事件名（pre_tool_use、permission_request、stop），且已信任时只写 trusted_hash、不写 enabled。上一版按大写事件名且要求 enabled = true 去查，导致已经信任的电脑也被误判成待信任，电脑窗口和手机一直提示去信任，并让能力表里的 stop、approve、answer 保持为 false。\n\n现在两种事件名写法以及路径大小写、斜杠差异都会兼容，只要有 trusted_hash 且没有显式 enabled = false 即认定已信任。\n\n安装\nWindows 0.27.0-dev.49 / build 49，测试版。装的时候电脑端会重启，登录和绑定沿用；手机和网页不用更新。"
   }
 }
