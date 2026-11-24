@@ -1,17 +1,26 @@
-"""Guardrail: shared computer-side modules must not hardcode assistant IDs.
+"""Guardrail: shared computer-side modules must not add new hardcoded assistant references.
 
-Scans the 14 shared Python files listed in plan.md §7.3 with `ast` for string
-constants matching any production assistant ID in `agents.registry` (case-insensitive).
-Excluded by design (per §7.3):
+What this test checks (using `ast`, IDs loaded from production `agents.registry`):
+  1. Exact string constants matching any production assistant ID (case-insensitive)
+     in `PYTHON_COMMON_FILES` (14 original shared files + `relay_controller.py`).
+     Every existing hit must match `ALLOW` exactly (no growth, no stale entries).
+     Note: `relay_desktop.py` is currently excluded from the string-literal scan
+     because `--self-test` (line 349) asserts `{'codex', 'claude', 'deepseek'} <= loaded_ids`;
+     it is still covered by checks (2) and (3) below.
+  2. Imports of per-assistant private modules (`import <id>_...` / `from <id>_... import ...`)
+     across all 16 shared files (`AST_COMMON_FILES`, including `relay_controller.py`
+     and `relay_desktop.py`), locked to exact per-file counts in `FROZEN_PRIVATE_IMPORTS`.
+  3. Attribute accesses matching `<id>`, `<id>_*`, or `_<id>*` (case-insensitive)
+     across all 16 shared files (`AST_COMMON_FILES`), locked to exact per-file
+     counts in `FROZEN_AGENT_ATTRS`.
+
+What this test does NOT check:
   - `agents/**` (each assistant's own adapter + `agents/legacy.py` legacy prefix table)
-  - Per-app low-level driver modules (`codex_control.py`, `claude_control.py`,
-    `deepseek_control.py`, `codex_pipe.py`, `claude_hooks.py`, etc.)
-  - `tests/**`
-  - Web / Android / iOS files (enabled in Steps 4 / 5 / 6 respectively)
-
-Every remaining hit in the 14 shared files must be explicitly listed in `ALLOW`
-with its enclosing scope, exact count, and reason. Adding a new hardcoded agent
-branch anywhere in shared code fails this test with `file:line`.
+  - Per-app low-level driver modules (`codex_*.py`, `claude_*.py`, `deepseek_*.py`)
+  - `tests/**`, packaging scripts (`deploy/**`, `setup.iss`)
+  - Web (`static/**`, `remote.html`), Android, and iOS files
+  - Substrings inside prose/UI text, comments, or bare local/function names that are
+    not exact ID string literals, private-module imports, or attribute accesses
 """
 
 from __future__ import annotations
@@ -40,7 +49,11 @@ PYTHON_COMMON_FILES = (
     "machines.py",
     "usage_limits.py",
     "activity.py",
+    "relay_controller.py",
 )
+
+# All 16 shared computer-side files scanned for private-module imports and agent-named attributes.
+AST_COMMON_FILES = PYTHON_COMMON_FILES + ("relay_desktop.py",)
 
 # (filename, enclosing_scope, literal) -> (exact_count, reason)
 # Zero entries are allowed in remote.py, chat_history.py, notify.py,
@@ -70,6 +83,71 @@ ALLOW: dict[tuple[str, str, str], tuple[int, str]] = {
     ("usage_limits.py", "_last_token_count", "codex"): (1, "Codex 用量原始协议字段 limit_id == 'codex'（仅由 CodexAgent 调用）"),
     ("usage_limits.py", "_live_snapshot", "codex"): (1, "Codex 用量原始协议字段 rateLimitsByLimitId['codex']（仅由 CodexAgent 调用）"),
 }
+
+# Frozen per-file counts for importing assistant-private modules (`import <id>_...` / `from <id>_... import ...`).
+# Adding a new import fails with every file:line; removing an old one also fails to remind shrinking this table.
+FROZEN_PRIVATE_IMPORTS: dict[str, tuple[int, str]] = {
+    "remote.py": (5, "启动时装配三家底层控制模块与 Codex 弹窗收起进程"),
+    "live_events.py": (3, "老路线 Codex 轮次排序与 DeepSeek 专属流辅助模块"),
+    "notify.py": (1, "Codex 老路线审批通知辅助引入 codex_control"),
+    "new_conversations.py": (3, "新建对话读取 Codex 模型目录与 DeepSeek 底层桥接"),
+    "archives.py": (2, "归档服务引入 DeepSeek 底层桥接"),
+    "activity.py": (1, "Codex 桌面任务状态跟踪引入 codex_control"),
+    "relay_controller.py": (2, "桌面状态窗读取 Codex 路线与钩子待信任提示"),
+    "relay_desktop.py": (3, "卸载清理 Claude/Codex 钩子与 Codex 弹窗收起入口"),
+}
+
+# Frozen per-file counts for attribute accesses matching `<id>`, `<id>_*`, or `_<id>*` (case-insensitive).
+FROZEN_AGENT_ATTRS: dict[str, tuple[int, str]] = {
+    "remote.py": (39, "启动与老兼容层装配及访问三家底层对象与常量"),
+    "chats.py": (63, "Desktop 类中遗留的 Claude 桌面自动化内部方法"),
+    "live_events.py": (2, "Codex 实时消息文本清洗调用 chats.codex_answer"),
+    "notify.py": (1, "通知器读取 DeepSeek 底层状态属性"),
+    "new_conversations.py": (11, "新建对话访问三家底层辅助属性与常量"),
+    "archives.py": (9, "归档服务访问三家底层桥接与数据库辅助方法"),
+    "chat_projects.py": (2, "Codex 项目目录布局读取 CODEX_HOME 与 codex_db"),
+    "usage_limits.py": (2, "用量读取访问 codex_db 与 CLAUDE_PROCESS"),
+    "relay_controller.py": (1, "桌面状态窗调用 _codex_hook_hint 显示钩子提示"),
+}
+
+
+def _is_private_module(module_name: str | None, agent_ids: set[str]) -> bool:
+    if not module_name:
+        return False
+    head = module_name.split(".", 1)[0].casefold()
+    return any(head.startswith(aid + "_") for aid in agent_ids)
+
+
+def _is_agent_attr(attr_name: str | None, agent_ids: set[str]) -> bool:
+    low = (attr_name or "").casefold()
+    return any(low == aid or low.startswith(aid + "_") or low.startswith("_" + aid) for aid in agent_ids)
+
+
+def _scan_private_imports(path: Path, agent_ids: set[str]) -> list[tuple[int, str]]:
+    """Return sorted [(lineno, module_name), ...] for assistant-private imports."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _is_private_module(alias.name, agent_ids):
+                    hits.append((node.lineno, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and _is_private_module(node.module, agent_ids):
+                hits.append((node.lineno, str(node.module)))
+    hits.sort()
+    return hits
+
+
+def _scan_agent_attrs(path: Path, agent_ids: set[str]) -> list[tuple[int, str]]:
+    """Return sorted [(lineno, attr_name), ...] for agent-named attribute accesses."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and _is_agent_attr(node.attr, agent_ids):
+            hits.append((node.lineno, node.attr))
+    hits.sort()
+    return hits
 
 
 def _scan_file(path: Path, agent_ids: set[str]) -> list[tuple[str, int, str, str]]:
@@ -169,6 +247,43 @@ class NoHardcodedAgentsTests(unittest.TestCase):
                 [],
                 f"{filename} must not contain any hardcoded agent IDs, found: {hits}",
             )
+
+    def _assert_frozen_table(
+        self,
+        label: str,
+        scanner,
+        frozen: dict[str, tuple[int, str]],
+    ) -> None:
+        agent_ids = {a.id.casefold() for a in registry.load()}
+        self.assertTrue(agent_ids, "production registry must not be empty")
+        problems: list[str] = []
+        seen_files: set[str] = set()
+
+        for filename in AST_COMMON_FILES:
+            path = ROOT / filename
+            self.assertTrue(path.is_file(), f"expected shared module missing: {filename}")
+            seen_files.add(filename)
+            hits = scanner(path, agent_ids)
+            expected = frozen.get(filename, (0, ""))[0]
+            if len(hits) != expected:
+                locs = ", ".join(f"{filename}:{ln} ({name})" for ln, name in hits) or "(none)"
+                direction = "exceeded frozen count" if len(hits) > expected else "below frozen count (shrink table)"
+                problems.append(
+                    f"{filename}: {direction} — found {len(hits)}, frozen {expected}; locations: {locs}"
+                )
+
+        for filename in frozen:
+            if filename not in seen_files:
+                problems.append(f"{filename}: listed in frozen table but not in AST_COMMON_FILES")
+
+        if problems:
+            self.fail(f"{label} check failed:\n  " + "\n  ".join(problems))
+
+    def test_shared_python_files_freeze_private_agent_imports(self):
+        self._assert_frozen_table("Private agent module imports", _scan_private_imports, FROZEN_PRIVATE_IMPORTS)
+
+    def test_shared_python_files_freeze_agent_named_attributes(self):
+        self._assert_frozen_table("Agent-named attribute accesses", _scan_agent_attrs, FROZEN_AGENT_ATTRS)
 
 
 if __name__ == "__main__":
