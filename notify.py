@@ -178,6 +178,29 @@ def sequence_id(app: str, conv_id: str) -> str:
     return cleaned[:40] + "-" + hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
 
 
+def agent_push_fields(app: str) -> dict:
+    """The name, colour, icon and protocol of an assistant newer than the three legacy ones.
+
+    The three legacy assistants' events keep every byte they had, so an older relay reads them as before.
+    A newer assistant's name is extra: a relay without these fields falls back to the id itself.
+    """
+    try:
+        from agents import registry
+        manifest = registry.get(app).manifest()
+    except Exception:
+        return {}
+    if manifest.get("legacy"):
+        return {}
+    names = manifest.get("name") if isinstance(manifest.get("name"), dict) else {}
+    icon = manifest.get("icon") if isinstance(manifest.get("icon"), dict) else {}
+    return {
+        "app_name": str(names.get("zh") or names.get("en") or ""),
+        "app_color": str(manifest.get("color") or ""),
+        "app_icon": str(icon.get("key") or ""),
+        "min_protocol": int(manifest.get("min_protocol") or 1),
+    }
+
+
 def _cdata(text: str) -> str:
     """[text] without the CDATA shell."""
     return re.sub(r"<!\[CDATA\[|\]\]>", "", text or "")
@@ -746,7 +769,8 @@ class Notifier:
         try:
             self.relay.publish("", "", extra={"kind": "running", "app": item["app"], "chat": item["id"],
                                               "since": int(since), "started": int(since), "started_source": source,
-                                              "title": chats.one_line(item.get("title") or "", 60)},
+                                              "title": chats.one_line(item.get("title") or "", 60),
+                                              **agent_push_fields(item["app"])},
                                keep=True)
             self.reported_running.add(conv)
         except Exception:
@@ -767,7 +791,8 @@ class Notifier:
         try:
             self.relay.publish("", "", extra={"kind": "step", "app": item["app"], "chat": item["id"], "step": action,
                                               "since": int(self.running.get(conv, {}).get("since") or self.clock()),
-                                              "title": chats.one_line(item.get("title") or "", 60)}, keep=False)
+                                              "title": chats.one_line(item.get("title") or "", 60),
+                                              **agent_push_fields(item["app"])}, keep=False)
         except Exception:
             self.log("通知：进度没报给中转\n" + traceback.format_exc())
 
@@ -785,11 +810,13 @@ class Notifier:
         for conv, info in self.running.items():
             items.append({"app": conv[0], "chat": conv[1], "state": "working", "started": int(info["since"]),
                           "since": int(info["since"]), "title": info.get("title", ""),
-                          "step": (self.steps.get(conv) or ("", ""))[0]})
+                          "step": (self.steps.get(conv) or ("", ""))[0],
+                          **agent_push_fields(conv[0])})
         for conv, info in self.waiting.items():
             items.append({"app": conv[0], "chat": conv[1], "state": "waiting", "started": int(info["since"]),
                           "since": int(info["since"]), "title": info.get("title", ""),
-                          "step": (self.steps.get(conv) or ("", ""))[0]})
+                          "step": (self.steps.get(conv) or ("", ""))[0],
+                          **agent_push_fields(conv[0])})
         if not items and self.last_snapshot_empty and not force:
             # 11-01: an older relay may have been reading nothing at the moment the first empty snapshot went; send it
             # once more a minute later, never again until something ran.
@@ -925,6 +952,7 @@ class Notifier:
                      "started": int(end.get("started") or 0),
                      "ended": int(end.get("ended") or self.clock()),
                      "started_source": end.get("started_source") or "不知道"}
+            event.update(agent_push_fields(item["app"]))
             if automation:
                 event["automation"] = True  # today's relay ignores it; the iPhone's words stay as they were
             # quiet: the phone has this conversation open (or Codex asked for none) — but its island still needs the state.

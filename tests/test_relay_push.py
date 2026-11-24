@@ -238,6 +238,30 @@ class WithoutAppleTests(RelayTests):
         self.assertEqual((await self.post('state', {}, cookie=False))[0], 401)
 
 
+class OldRelayTests(RelayTests):
+    """The relay deployed now knows the three legacy assistants only: a newer one's events are dropped quietly."""
+
+    async def test_an_antigravity_event_is_dropped_and_a_mixed_snapshot_keeps_codex(self):
+        push = self.service.push
+        await push.deliver(self.devices[0], {'id': 'ag-1', 'event': 'message', 'kind': 'running',
+                                             'app': 'antigravity', 'chat': 'a-1', 'app_name': 'Antigravity',
+                                             'min_protocol': 2})
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM push_events').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM push_conversations').fetchone()[0], 0)
+
+        await push.deliver(self.devices[0], {
+            'id': 'snap-1', 'event': 'message', 'kind': 'snapshot',
+            'items': [
+                {'app': 'antigravity', 'chat': 'a-1', 'state': 'working', 'started': 1761629700,
+                 'app_name': 'Antigravity', 'app_color': '#4285F4', 'app_icon': 'generic', 'min_protocol': 2},
+                {'app': 'codex', 'chat': 'c-1', 'state': 'working', 'started': 1761629700},
+            ]})
+        with self.store.connect() as db:
+            rows = [tuple(row) for row in db.execute('SELECT app, chat FROM push_conversations ORDER BY app')]
+        self.assertEqual(rows, [('codex', 'c-1')])
+
+
 class WithAppleTests(RelayTests):
     def setUp(self):
         self.sender = FakeSender()
