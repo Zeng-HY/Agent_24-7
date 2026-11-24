@@ -96,6 +96,7 @@ APPROVAL_CHOICES = {
 APPROVAL_OPTIONS = tuple({"label": label, "description": ""} for label in APPROVAL_CHOICES)
 
 APPROVAL_TITLES = {
+    "command": "Antigravity 想运行命令",
     "run_command": "Antigravity 想运行命令",
     "run_workflow": "Antigravity 想运行命令",
     "read_file": "Antigravity 想读文件",
@@ -105,6 +106,7 @@ APPROVAL_TITLES = {
     "webview_browser": "Antigravity 想打开网页",
 }
 APPROVAL_QUESTIONS = {
+    "command": "允许运行这条命令吗？",
     "run_command": "允许运行这条命令吗？",
     "run_workflow": "允许运行这条命令吗？",
     "read_file": "允许读取这个文件吗？",
@@ -528,13 +530,13 @@ def _finish_result(calls) -> str:
     return _plain_result(_finish_value(calls))
 
 
-def _records(path: Path) -> list[dict]:
+def _records(path: Path, hide_warm_up: bool = True) -> list[dict]:
     """Every step of the transcript, in file order; unreadable lines are left out."""
     try:
         stat = path.stat()
     except OSError:
         return []
-    key = str(path)
+    key = f"{path}|{int(hide_warm_up)}"
     with _LOCK:
         hit = _MESSAGE_CACHE.get(key)
         if hit and hit[0] == stat.st_size and hit[1] == stat.st_mtime_ns:
@@ -553,7 +555,8 @@ def _records(path: Path) -> list[dict]:
                     messages.extend(_records_one(record))
     except OSError:
         return []
-    _hide_warm_up(messages)
+    if hide_warm_up:
+        _hide_warm_up(messages)
     _number_messages(messages)
     with _LOCK:
         if len(_MESSAGE_CACHE) >= CACHE_LIMIT:
@@ -663,6 +666,22 @@ def _records_one(record: dict) -> list[dict]:
     if content:
         return [{"role": "assistant", "text": content, "time": time_text}]
     return []
+
+
+def _normalise_message(text) -> str:
+    """Whitespace runs become one space, so a wrapped or truncated record still compares with what we sent."""
+    return " ".join(str(text or "").split())
+
+
+def _same_start(record_text, wanted) -> bool:
+    """Whether the record's message begins with what we sent (long sends compare their first 200 characters)."""
+    head = _normalise_message(wanted)
+    got = _normalise_message(record_text)
+    if not head:
+        return False
+    if len(head) >= 200:
+        return got[:200] == head[:200]
+    return got.startswith(head)
 
 
 def _hide_warm_up(messages: list[dict]) -> None:
@@ -1190,9 +1209,9 @@ class AntigravityAgent(Agent):
     sidebar_without_chats = False
     # The list's search box looks in the preview too (Antigravity's list has the user's first words there).
     search_in_preview = True
-    # A new conversation is created here, not by the shared NewConversations state machine.
-    new_managed = False
+    # A new conversation is created by the shared NewConversations worker, with only Antigravity's projects.
     new_requires_desktop = False
+    new_folder_list_own_only = True
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -1439,8 +1458,14 @@ class AntigravityAgent(Agent):
             raise ControlError(f"{NOT_OPEN}，开了再发", 409)
         # The newest database, not the 2-second list cache: a turn that just ended must be able to take a message.
         item = self._find(conv_id, fresh=True)
+        warning = ""
         if not _turbo_stored(str(item["id"])):
-            _set_turbo(str(item["id"]))
+            try:
+                _set_turbo(str(item["id"]))
+            except ControlError as exc:
+                # A changed app must not make sending impossible: say so and send anyway.
+                _log_once("全自动没有打开", str(exc))
+                warning = "；全自动没打开，命令可能要你在手机上批准"
         busy = item.get("status") != "idle"
         before = _records(_transcript_path(item["id"]))
         _send_user_message(str(item["id"]), text, media=media, busy=busy)
@@ -1448,7 +1473,7 @@ class AntigravityAgent(Agent):
             _SENT[str(item["id"])] = {"at": time.time(), "count": len(before), "text": text}
         return {"ok": True, "accepted": True, "pressed": False, "offset": 0,
                 "request_id": str(payload.get("request_id") or ""),
-                "text": QUEUED_SEND if busy else "已交给 Antigravity",
+                "text": (QUEUED_SEND if busy else "已交给 Antigravity") + warning,
                 "delivery_state": "queued" if busy else "accepted",
                 "accepted_at": int(time.time() * 1000)}
 
@@ -1489,7 +1514,7 @@ class AntigravityAgent(Agent):
                 later = index >= start or bool(sent_at and _seconds(message.get("time")) >= sent_at)
                 if not later:
                     continue
-            if (message.get("text") or "").strip().startswith(wanted):
+            if _same_start(message.get("text"), wanted):
                 return {"delivered": True, "queued": False, "stage": "received"}
         return {"delivered": False, "queued": False, "stage": "sent"}
 
@@ -1572,13 +1597,18 @@ class AntigravityAgent(Agent):
         conv_id = str(created.get("conversationId") or "").strip()
         if not conv_id:
             raise ControlError("Antigravity 没给出新对话的编号，请到电脑上看看", 502)
-        self._wait_idle(conv_id)
-        _set_turbo(conv_id)
+        self._wait_warm_up(conv_id)
+        warning = ""
+        try:
+            _set_turbo(conv_id)
+        except ControlError as exc:
+            _log_once("全自动没有打开", str(exc))
+            warning = "；全自动没打开，命令可能要你在手机上批准"
         _send_user_message(conv_id, text, busy=False)
         shown_folder = folder or (project["folders"][0] if project["folders"] else "")
         result = {"request_id": request_id, "state": "accepted", "app": self.id, "id": conv_id,
                   "title": title, "folder": Path(shown_folder).name if shown_folder else "",
-                  "message": "Antigravity 已建好对话"}
+                  "message": "Antigravity 已建好对话" + warning}
         if request_id:
             with _LOCK:
                 _CREATED[request_id] = dict(result)
@@ -1592,20 +1622,123 @@ class AntigravityAgent(Agent):
         return {"request_id": str(request_id or ""), "state": "unconfirmed",
                 "message": "没有这次新建的记录，请到电脑上看对话列表"}
 
-    def _wait_idle(self, conv_id: str) -> None:
-        """Wait up to two minutes for the warm-up turn to finish."""
+    def _warm_up_answer(self, conv_id: str) -> tuple[str, bool]:
+        """('error text' or '', whether the warm-up's first user message already has an answer)."""
+        messages = _records(_transcript_path(conv_id), hide_warm_up=False)
+        first = next((index for index, message in enumerate(messages) if message.get("role") == "user"), None)
+        if first is None:
+            return "", False
+        after = messages[first + 1:]
+        error = next((message for message in after
+                      if message.get("role") == "event"
+                      and str(message.get("text") or "").startswith("出错：")), None)
+        if error is not None:
+            return str(error.get("text") or ""), False
+        return "", any(message.get("role") in ("assistant", "tool") for message in after)
+
+    def _wait_warm_up(self, conv_id: str) -> None:
+        """Wait up to two minutes for the warm-up turn: idle and its first user message already answered."""
         deadline = _now() + NEW_WAIT_SECONDS
         while True:
             try:
                 status = self._find(conv_id, fresh=True).get("status")
             except NotFound:
                 status = ""
-            if status == "idle":
+            error, answered = self._warm_up_answer(conv_id)
+            if error:
+                raise ControlError(f"新建的 Antigravity 对话在预热时出错：{error}", 502)
+            if status == "idle" and answered:
                 return
             if _now() >= deadline:
                 raise ControlError(
                     f"新建的 Antigravity 对话在 {int(NEW_WAIT_SECONDS)} 秒内没有空闲，请到电脑上看看", 502)
             time.sleep(NEW_POLL_SECONDS)
+
+    def _message_seen(self, conv_id: str, text: str) -> bool:
+        return any(message.get("role") == "user" and _same_start(message.get("text"), text)
+                   for message in _records(_transcript_path(conv_id)))
+
+    def validate_new_references(self, refs: list) -> None:
+        import chats
+        if refs:
+            raise chats.ChatError("新建 Antigravity 对话暂不支持带图片（引用），请建好后再发")
+
+    def prepare_new_submission(self, svc, rid: str, data: dict, body: dict) -> None:
+        import chats
+        if data.get("attachments") or data.get("references"):
+            raise chats.ChatError("新建 Antigravity 对话暂不支持带图片（引用），请建好后再发")
+
+    def run_new(self, svc, rid: str, data: dict, trace) -> None:
+        """The shared new-conversation worker: warm-up, wait for its answer, full auto, then the real words."""
+        import chats
+        text = str(data.get("compiled") or data.get("text") or "").strip()
+        if not text:
+            raise chats.SendNotSubmitted("没有要发的第一句话，尚未创建对话")
+        conv_id = str(data.get("id") or "").strip()
+        if not conv_id:
+            app = _hub(0)
+            if app is None:
+                raise chats.SendNotSubmitted(f"{NOT_OPEN}，没有建对话")
+            if not _projects():
+                raise chats.SendNotSubmitted("电脑上没有 Antigravity 项目，不能新建对话")
+            project = _project_for_folder(str(data.get("folder") or ""))
+            if project is None:
+                raise chats.SendNotSubmitted("这个文件夹不属于任何 Antigravity 项目，请重新选择")
+            first_line = next((line.strip() for line in text.splitlines() if line.strip()), text)
+            title = _one_line(first_line, 40) or TITLE_FALLBACK
+            trace.phase("antigravity_create", "在 Antigravity 里建对话")
+            try:
+                answer = _agentapi(["new-conversation", f"--model={MODEL}", f"--title={title}", WARM_UP],
+                                   app, timeout=SEND_TIMEOUT, project=project["id"])
+            except ControlError as exc:
+                if "超时" in str(exc):
+                    raise
+                raise chats.SendNotSubmitted(f"Antigravity 没有建好对话：{exc}") from None
+            response = answer.get("response") if isinstance(answer.get("response"), dict) else {}
+            created = response.get("newConversation") if isinstance(response.get("newConversation"), dict) else {}
+            conv_id = str(created.get("conversationId") or "").strip()
+            if not conv_id:
+                raise chats.SendNotSubmitted("Antigravity 没给出新对话的编号，没有建好")
+            data.update(id=conv_id, title=title)
+            svc._save(rid, "prepared", data, {"message": "对话已建好，正在准备…"})
+        trace.phase("antigravity_warm_up", "等预热这一轮答完")
+        self._wait_warm_up(conv_id)
+        warning = ""
+        if not _turbo_stored(conv_id):
+            try:
+                _set_turbo(conv_id)
+            except ControlError as exc:
+                _log_once("全自动没有打开", str(exc))
+                warning = "；全自动没打开，命令可能要你在手机上批准"
+        trace.phase("antigravity_dispatch", "发出第一句话")
+        svc._save(rid, "dispatching", data, {"message": "正在发出第一句话…"})
+        _send_user_message(conv_id, text, busy=False)
+        data["accepted_message"] = "首条消息已送达" + warning
+
+    def handle_new_error(self, svc, rid: str, state: str, data: dict, trace, exc: Exception) -> tuple[bool, bool]:
+        import chats
+        if state == "prepared":
+            return False, True
+        if state == "dispatching" and data.get("id"):
+            text = str(data.get("compiled") or data.get("text") or "")
+            if self._message_seen(str(data["id"]), text):
+                data["accepted_message"] = "首条消息已送达"
+                svc._save(rid, "accepted", data, {"message": "首条消息已送达"})
+                return True, False
+            return False, False
+        return False, isinstance(exc, chats.SendNotSubmitted) and state != "dispatching"
+
+    def reconcile_new_status(self, svc, rid: str, state: str, data: dict, result: dict) -> tuple[str, dict]:
+        if data.get("id") and state in ("dispatching", "unconfirmed"):
+            text = str(data.get("compiled") or data.get("text") or "")
+            if self._message_seen(str(data["id"]), text):
+                state, result = "accepted", {"message": "首条消息已送达"}
+                svc._save(rid, state, data, result)
+        if state == "prepared":
+            state, result = "failed", {"message": "对话已建好，第一句话还没发出；可以继续发送",
+                                       "not_submitted": True}
+            svc._save(rid, state, data, result)
+        return state, result
 
     # -- pictures
 

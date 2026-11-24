@@ -18,7 +18,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import chat_history
 import chat_projects
@@ -26,6 +26,8 @@ import chats
 import codex_control
 import machines
 import remote
+from composer_references import References
+from new_conversations import NewConversations
 from agents import antigravity, claude as claude_agent, codex as codex_agent, deepseek as deepseek_agent, registry
 from agents.base import NotFound
 import antigravity_fixtures as fake
@@ -659,7 +661,7 @@ class SendTests(ControlBase):
     def test_media_rides_with_the_message(self):
         hub = self.hub()
         media = [{"mimeType": "image/png", "inlineData": "AAAA"}]
-        antigravity.AGENT().send({"id": "a", "text": "看图", "media": media})
+        antigravity.AGENT().send({"id": "a", "text": "看图"}, media=media)
         self.assertEqual(hub.calls("SendUserCascadeMessage")[-1]["body"]["media"], media)
 
     def test_no_antigravity_is_refused(self):
@@ -687,6 +689,24 @@ class SendTests(ControlBase):
         self.assertEqual(caught.exception.status, 502)
         self.assertIn("没接受", str(caught.exception))
         self.assertNotIn(fake.TOKEN, str(caught.exception))
+
+    def test_a_receipt_matches_a_long_message_the_record_cut_short(self):
+        self.hub()
+        agent = antigravity.AGENT()
+        text = "很长的消息 " * 800
+        agent.send({"id": "a", "text": text})
+        path = self.transcript_path("a")
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(fake.record(99, "USER_INPUT", "USER_EXPLICIT",
+                                              " ".join(text.split())[:2000]), ensure_ascii=False) + "\n")
+        self.assertTrue(agent.check("a", 0, text)["delivered"])
+
+    def test_a_failed_full_auto_does_not_stop_the_message(self):
+        hub = self.hub()
+        hub.fail = "UpdateConversationAnnotations"
+        result = antigravity.AGENT().send({"id": "a", "text": "在吗"})
+        self.assertEqual(result["text"], "已交给 Antigravity；全自动没打开，命令可能要你在手机上批准")
+        self.assertEqual(len(hub.calls("SendUserCascadeMessage")), 1)
 
     def test_a_receipt_is_confirmed_when_a_new_user_input_appears(self):
         self.hub()
@@ -752,6 +772,12 @@ class ApprovalTests(ControlBase):
         self.assertEqual((question["id"], question["isMultiple"], question["isOther"]), ("decision", False, False))
         self.assertEqual([option["label"] for option in question["options"]],
                          ["允许一次", "本对话里这条都允许", "拒绝"])
+
+    def test_the_real_command_action_has_the_command_words(self):
+        self.hub([fake.waiting_step(action="command")])
+        card = antigravity.AGENT().state("a")["questions"][0]
+        self.assertEqual(card["title"], "Antigravity 想运行命令")
+        self.assertEqual(card["questions"][0]["question"], "允许运行这条命令吗？")
 
     def test_a_non_command_step_has_its_own_words(self):
         self.hub([fake.waiting_step(action="read_file", target="C:\\测试\\说明.txt")])
@@ -996,7 +1022,9 @@ class NewConversationTests(ControlBase):
         self.assertEqual([project["name"] for project in options["projects"]], ["Personal", "Work"])
 
     def test_create_sends_the_warm_up_waits_turns_on_full_auto_then_sends_the_words(self):
-        self.build([fake.row("new-1", status="CASCADE_RUN_STATUS_IDLE")])
+        self.build([fake.row("new-1", status="CASCADE_RUN_STATUS_IDLE")], transcripts={"new-1": [
+            fake.record(1, "USER_INPUT", "USER_EXPLICIT", antigravity.WARM_UP),
+            fake.record(2, "PLANNER_RESPONSE", "MODEL", "好的。")]})
         hub = self.hub()
         runner = self.agentapi(stdout=json.dumps(
             {"response": {"newConversation": {"conversationId": "new-1"}}}))
@@ -1016,12 +1044,21 @@ class NewConversationTests(ControlBase):
         self.assertEqual(antigravity.AGENT().create_status("req-1")["id"], "new-1")
 
     def test_without_a_folder_the_personal_project_is_used(self):
-        self.build([fake.row("new-1", status="CASCADE_RUN_STATUS_IDLE")])
+        self.build([fake.row("new-1", status="CASCADE_RUN_STATUS_IDLE")], transcripts={"new-1": [
+            fake.record(1, "USER_INPUT", "USER_EXPLICIT", antigravity.WARM_UP),
+            fake.record(2, "PLANNER_RESPONSE", "MODEL", "好的。")]})
         self.hub()
         runner = self.agentapi(stdout=json.dumps(
             {"response": {"newConversation": {"conversationId": "new-1"}}}))
         antigravity.AGENT().create({"text": "你好"})
         self.assertEqual(runner.calls[0]["env"]["ANTIGRAVITY_PROJECT_ID"], "proj-personal")
+
+    def test_idle_without_the_warm_up_answer_does_not_count_as_done(self):
+        self.build([fake.row("new-1", status="CASCADE_RUN_STATUS_IDLE")], transcripts={"new-1": [
+            fake.record(1, "USER_INPUT", "USER_EXPLICIT", antigravity.WARM_UP)]})
+        with patch.object(antigravity, "NEW_WAIT_SECONDS", 0.0):
+            with self.assertRaises(antigravity.ControlError):
+                antigravity.AGENT()._wait_warm_up("new-1")
 
     def test_a_warm_up_that_never_finishes_in_time_is_an_error(self):
         self.build([fake.row("new-1", status="CASCADE_RUN_STATUS_RUNNING")])
@@ -1056,6 +1093,117 @@ class NewConversationTests(ControlBase):
             antigravity.AGENT().create({"text": "你好", "attachments": ["a" * 32]})
         self.assertEqual(caught.exception.status, 400)
         self.assertIn("不支持带图片", str(caught.exception))
+
+
+class NewWorkerTests(ControlBase):
+    """The shared new-conversation worker, with Antigravity's projects and the fake hub."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.personal = self.home / "Personal"
+        self.work = self.home / "Work"
+        self.personal.mkdir()
+        self.work.mkdir()
+        projects = self.home / ".gemini" / "config" / "projects"
+        projects.mkdir(parents=True)
+        (projects / "personal.json").write_text(json.dumps({
+            "id": "proj-personal", "name": "Personal",
+            "projectResources": {"resources": [{"folderUri": self.personal.as_uri()}]}}), encoding="utf-8")
+        (projects / "work.json").write_text(json.dumps({
+            "id": "proj-work", "name": "Work",
+            "projectResources": {"resources": [{"folderUri": self.work.as_uri()}]}}), encoding="utf-8")
+        self.bridge = codex_control.Bridge()
+        self.bridge.data_root = self.home / "attachments"
+        self.bridge.data_root.mkdir()
+        self.addCleanup(self.bridge.close)
+        history = SimpleNamespace(catalog=lambda: [])
+        service_root = self.home / "service"
+        self.service = NewConversations(history, References(history, self.home), self.bridge, Mock(),
+                                        service_root)
+        self.service.root.mkdir(parents=True, exist_ok=True)
+
+    def build_new(self, status: str = "CASCADE_RUN_STATUS_IDLE", answered: bool = True) -> None:
+        transcript = [fake.record(1, "USER_INPUT", "USER_EXPLICIT", antigravity.WARM_UP)]
+        if answered:
+            transcript.append(fake.record(2, "PLANNER_RESPONSE", "MODEL", "好的。"))
+        fake.write(self.home, [fake.row("new-1", status=status)], transcripts={"new-1": transcript})
+        antigravity.reset()
+
+    def submit(self, text: str = "帮我看登录页", folder: str | None = None, **extra) -> str:
+        rid = self.service.create_draft()["request_id"]
+        body = {"request_id": rid, "app": "antigravity",
+                "folder": str(self.personal if folder is None else folder),
+                "text": text, "attachments": [], "references": [], **extra}
+        with patch("new_conversations.threading.Thread"):
+            self.service.submit(body)
+        return rid
+
+    def test_the_worker_makes_the_conversation_and_sends_the_first_words(self):
+        self.build_new()
+        hub = self.hub()
+        runner = self.agentapi(stdout=json.dumps(
+            {"response": {"newConversation": {"conversationId": "new-1"}}}))
+        rid = self.submit()
+        self.service._run(rid)
+        status = self.service.status(rid)
+        self.assertEqual((status["state"], status["id"], status["title"]),
+                         ("accepted", "new-1", "帮我看登录页"))
+        self.assertEqual(runner.calls[0]["args"], ["new-conversation", f"--model={antigravity.MODEL}",
+                                                   "--title=帮我看登录页", antigravity.WARM_UP])
+        self.assertEqual(runner.calls[0]["env"]["ANTIGRAVITY_PROJECT_ID"], "proj-personal")
+        order = [row["method"] for row in hub.requests
+                 if row["method"] in ("UpdateConversationAnnotations", "SendUserCascadeMessage")]
+        self.assertEqual(order, ["UpdateConversationAnnotations", "SendUserCascadeMessage"])
+        self.assertEqual(hub.calls("SendUserCascadeMessage")[-1]["body"]["items"],
+                         [{"text": "帮我看登录页"}])
+
+    def test_closed_antigravity_fails_before_anything_is_made(self):
+        runner = self.agentapi()
+        rid = self.submit()
+        self.service._run(rid)
+        status = self.service.status(rid)
+        self.assertEqual(status["state"], "failed")
+        self.assertTrue(status["not_submitted"])
+        self.assertIn("没开", status["message"])
+        self.assertEqual(runner.calls, [])
+
+    def test_a_timed_out_warm_up_can_continue_without_making_a_second_conversation(self):
+        self.build_new(status="CASCADE_RUN_STATUS_RUNNING", answered=False)
+        self.hub()
+        runner = self.agentapi(stdout=json.dumps(
+            {"response": {"newConversation": {"conversationId": "new-1"}}}))
+        rid = self.submit()
+        with patch.object(antigravity, "NEW_WAIT_SECONDS", 0.0):
+            self.service._run(rid)
+        status = self.service.status(rid)
+        self.assertEqual((status["state"], status["id"]), ("failed", "new-1"))
+        self.assertTrue(status["not_submitted"])
+        self.build_new(status="CASCADE_RUN_STATUS_IDLE", answered=True)
+        with patch("new_conversations.threading.Thread"):
+            self.service.retry(rid)
+        self.service._run(rid)
+        self.assertEqual(self.service.status(rid)["state"], "accepted")
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_a_folder_outside_the_projects_is_refused_at_submit(self):
+        rid = self.service.create_draft()["request_id"]
+        body = {"request_id": rid, "app": "antigravity", "folder": str(self.home / "别处"),
+                "text": "你好", "attachments": [], "references": []}
+        with patch("new_conversations.threading.Thread"):
+            with self.assertRaises(chats.ChatError):
+                self.service.submit(body)
+        self.assertEqual(self.service._read(rid)[0], "draft")
+
+    def test_the_sheet_lists_only_antigravity_projects(self):
+        self.assertEqual([row["name"] for row in self.service.folders("antigravity")],
+                         ["Personal", "Work"])
+
+    def test_pictures_and_references_are_refused_at_submit(self):
+        agent = antigravity.AGENT()
+        with self.assertRaises(chats.ChatError):
+            agent.validate_new_references([{"kind": "chat", "id": "x"}])
+        with self.assertRaises(chats.ChatError):
+            agent.prepare_new_submission(self.service, "r", {"attachments": ["a" * 32]}, {})
 
 
 class PictureTests(ControlBase):

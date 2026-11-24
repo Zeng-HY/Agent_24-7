@@ -66,6 +66,7 @@ class WebAntigravityTests(unittest.TestCase):
 
         self.sent: list[dict] = []
         self.answered: list[dict] = []
+        self.folder_queries: list[str] = []
         self.build_scene()
         antigravity.reset()
 
@@ -115,6 +116,10 @@ class WebAntigravityTests(unittest.TestCase):
         if path == "/api/chat":
             cid = q.get("id", [""])[0]
             return js(antigravity.AGENT().read(cid, limit=100))
+        if path == "/api/chat/folders":
+            self.folder_queries.append(q.get("app", [""])[0])
+            return js({"items": [{"path": str(self.home / "Personal"), "name": "Personal",
+                                  "sources": ["Antigravity 项目"]}]})
         if path == "/api/agents/antigravity/state":
             return js(self.state_payload(q.get("id", [""])[0]))
         if path == "/api/agents/antigravity/send":
@@ -190,6 +195,15 @@ class WebAntigravityTests(unittest.TestCase):
             self.assertEqual(self.runner.calls, [])
             body = self.hub.calls("SendUserCascadeMessage")[-1]["body"]
             self.assertEqual(body["items"], [{"text": "手机发来的消息"}])
+            self.assertEqual(errors, [])
+
+    def test_the_new_sheet_asks_for_antigravity_projects(self):
+        for _engine, browser in self.engines():
+            page, errors = self.page_for(browser)
+            page.evaluate("openNewSheet({app:'antigravity'})")
+            page.wait_for_selector("#newSheet", state="visible")
+            page.wait_for_function("document.getElementById('newFolderName').textContent === 'Personal'")
+            self.assertEqual(self.folder_queries[-1], "antigravity")
             self.assertEqual(errors, [])
 
     def test_a_running_conversation_takes_a_queued_message(self):

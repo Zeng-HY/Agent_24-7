@@ -233,7 +233,7 @@
     if((Agents.cardLayout(was)==='deepseek.v1')!==(Agents.cardLayout(app)==='deepseek.v1'))loadFolders();};
   async function loadFolders(){
     const app=d.app;
-    try{const r=await api('/api/chat/folders'+(app==='deepseek'?'?app=deepseek':''));if(app!==d.app)return;folders=r.items||r.folders.map(path=>({path,name:path.split(/[\\/]/).pop(),sources:[]}));
+    try{const r=await api('/api/chat/folders'+(app?'?app='+app:''));if(app!==d.app)return;folders=r.items||r.folders.map(path=>({path,name:path.split(/[\\/]/).pop(),sources:[]}));
       if(!d.projectless&&!folders.some(v=>v.path===d.folder)){let previous='';try{previous=localStorage.getItem('lbr_new_folder')||'';}catch{}d.folder=folders.find(v=>v.path===previous)?.path||folders[0]?.path||'';d.label='';save();}
       paint();grow();}catch(e){$('newStatus').textContent='文件夹读取失败：'+e.message;}}
   $('newAdd').onclick=()=>openSheet('newAddMenu',$('newAdd'));$('newCamera').onclick=()=>{closeSheet('newAddMenu');camera.click();};$('newPhoto').onclick=()=>{closeSheet('newAddMenu');photo.click();};$('newChatRef').onclick=()=>{closeSheet('newAddMenu');openPicker('chat');};$('newSkillRef').onclick=()=>{closeSheet('newAddMenu');openPicker('skill');};$('newFolderChoice').onclick=()=>openPicker('folder');$('newModelChoice').onclick=openModels;$('newModelDone').onclick=()=>closeSheet('newModelSheet');$('newSearch').oninput=e=>{if(!e.isComposing){clearTimeout(debounce);debounce=setTimeout(()=>loadPicker(),180);}};$('newSearch').oncompositionend=()=>loadPicker();$('newMore').onclick=()=>loadPicker(true);
