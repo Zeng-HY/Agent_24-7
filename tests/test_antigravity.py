@@ -36,6 +36,10 @@ def epoch(text: str) -> int:
     return int(datetime.fromisoformat(text[:26] + text[-6:]).timestamp())
 
 
+def millis(text: str) -> int:
+    return int(datetime.fromisoformat(text[:26] + text[-6:]).timestamp() * 1000)
+
+
 class FakeNotifier:
     """The parts of notify.Notifier an Antigravity poll touches, without a phone or a relay."""
 
@@ -172,7 +176,7 @@ class CatalogTests(Base):
     def test_a_seven_digit_time_with_a_timezone_and_a_title_fallback(self):
         agent = antigravity.AGENT()
         rows = {row["id"]: row for row in agent.catalog()["items"]}
-        self.assertEqual(rows["a"]["updated"], epoch(NEWEST) * 1000)
+        self.assertEqual(rows["a"]["updated"], millis(NEWEST))
         self.assertEqual(rows["a"]["turn_started"], epoch("2026-11-20 09:59:00.0000001+08:00"))
         self.assertEqual(rows["b"]["title"], "另一个 Test 对话的预览内容")
         self.build([fake.row("x", title="", preview="")])

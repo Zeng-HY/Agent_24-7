@@ -110,6 +110,15 @@ def _iso(value) -> str:
     return _ISO_FRACTION.sub(r"\1", text.replace("Z", "+00:00"))
 
 
+def _millis(value) -> int:
+    """A recorded time as Unix milliseconds, so rows less than a second apart still sort correctly."""
+    text = _TIME_FRACTION.sub(r"\1", str(value or ""))
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _text(value) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -179,9 +188,9 @@ def _item_of(row) -> dict:
     preview = _one_line(_text(_row_value(row, "preview")), PREVIEW_LIMIT)
     folder = _folder_of(_row_value(row, "workspace_uris"))
     status = _status_of(_row_value(row, "status"))
-    modified = _seconds(_row_value(row, "last_modified_time"))
+    modified = _millis(_row_value(row, "last_modified_time"))
     started = _seconds(_row_value(row, "last_user_input_time"))
-    ended = modified if status != "running" else 0
+    ended = modified // 1000 if status != "running" else 0
     title = _title_of(row)
     return {
         "app": "antigravity",
@@ -190,7 +199,7 @@ def _item_of(row) -> dict:
         "preview": preview or title,
         "folder": Path(folder).name if folder else "",
         "cwd": folder,
-        "updated": modified * 1000,
+        "updated": modified,
         "created": 0,
         "pinned": False,
         "status": status,
@@ -573,7 +582,7 @@ class AntigravityAgent(Agent):
             rows = [row for row in rows
                     if needle in (row.get("title") or "").casefold()
                     or needle in (row.get("preview") or "").casefold()]
-        if status in ("running", "idle", "unknown"):
+        if status and status != "all":
             rows = [row for row in rows if row.get("status") == status]
         rows.sort(key=lambda row: (-int(row.get("updated") or 0), row.get("id") or ""))
         try:
