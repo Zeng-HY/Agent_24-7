@@ -371,27 +371,34 @@ def _tool_message(call: dict, status: str) -> dict | None:
     return message
 
 
-def _result_text(value) -> str:
-    """A finish result as words: its string, or the full compact JSON when the record keeps an object."""
-    if isinstance(value, str):
-        return value
+def _is_structured(value) -> bool:
+    """A finish result handed back to a program: an object, an array, or cut JSON text that starts like one."""
     if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        except (TypeError, ValueError):
-            return ""
-    return ""
+        return True
+    return isinstance(value, str) and value.lstrip().startswith(("{", "["))
 
 
-def _finish_result(calls) -> str:
-    """The summary a finish call carries for the user, '' when this list has no finish call."""
+def _plain_result(value) -> str:
+    """A finish result written for a person; '' for a structured one."""
+    if not isinstance(value, str) or _is_structured(value):
+        return ""
+    return value
+
+
+def _finish_value(calls):
+    """The finish call's result, whatever its shape, or None when this list has no finish call."""
     for call in calls or []:
         if isinstance(call, dict) and _text(call.get("name")) == "finish":
             args = call.get("args")
             if isinstance(args, dict):
-                return _result_text(args.get("result"))
-            return ""
-    return ""
+                return args.get("result")
+            return None
+    return None
+
+
+def _finish_result(calls) -> str:
+    """A finish result written for a person, '' when it is structured or absent."""
+    return _plain_result(_finish_value(calls))
 
 
 def _records(path: Path) -> list[dict]:
@@ -467,8 +474,14 @@ def _records_one(record: dict) -> list[dict]:
                 if not isinstance(call, dict):
                     continue
                 if _text(call.get("name")) == "finish":
-                    # finish's result is the summary written for the user, not one more step.
-                    result = _finish_result([call])
+                    # A structured result goes back to a program, not to a person: one step, never the JSON.
+                    value = _finish_value([call])
+                    if _is_structured(value):
+                        message = {"role": "tool", "text": "finish：交回了结构化结果",
+                                   "activity_title": "finish：交回了结构化结果", "time": time_text}
+                        found.append(message)
+                        continue
+                    result = _plain_result(value)
                     if result:
                         message = {"role": "assistant", "text": result, "time": time_text}
                         if "tool_calls" in cut_fields:

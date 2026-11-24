@@ -231,7 +231,10 @@ class ReadTests(Base):
             transcripts={"a": fake.real_transcript()},
             full={"a": [fake.record(13, "USER_INPUT", "USER_EXPLICIT", "完整的截断内容"),
                         fake.record(14, "PLANNER_RESPONSE", "MODEL", None, tool_calls=[
-                            {"name": "finish", "args": {"result": fake.FINISH_FULL}},
+                            {"name": "finish", "args": {"result": fake.STRUCTURED_FULL}},
+                        ]),
+                        fake.record(16, "PLANNER_RESPONSE", "MODEL", None, tool_calls=[
+                            {"name": "finish", "args": {"result": fake.PLAIN_FULL}},
                         ])]},
         )
         # One line the reader cannot parse: it is skipped, and the rest still reads.
@@ -251,9 +254,10 @@ class ReadTests(Base):
         self.assertIn(("event", "出错：被限流了"), shown)
         self.assertIn(("user", "[图片]"), shown)
         self.assertIn(("user", "完整的截断内容"), shown)
-        # finish's result is the turn's summary, not a step.
-        self.assertIn(("assistant", fake.FINISH_FULL), shown)
-        self.assertNotIn(("assistant", fake.FINISH_CUT), shown)
+        # A structured result is one step, never JSON; a plain result is the answer and gets completed.
+        self.assertIn(("tool", "finish：交回了结构化结果"), shown)
+        self.assertIn(("assistant", fake.PLAIN_FULL), shown)
+        self.assertNotIn(("assistant", fake.PLAIN_CUT), shown)
         self.assertNotIn("内部提示", [text for _role, text in shown])
         self.assertNotIn("检查点", [text for _role, text in shown])
         self.assertTrue(any(role == "tool" and text.startswith("read_file：C:\\测试\\a.txt")
@@ -264,7 +268,31 @@ class ReadTests(Base):
                             for role, text in shown))
         self.assertTrue(any(role == "tool" and text.startswith("edit_file：C:\\测试\\c.py")
                             for role, text in shown))
-        self.assertEqual([message["role"] for message in page["messages"]].count("tool"), 4)
+        self.assertEqual([message["role"] for message in page["messages"]].count("tool"), 5)
+
+    def test_a_structured_finish_result_never_shows_its_json(self):
+        page = self.page(limit=100)
+        texts = [message["text"] for message in page["messages"]]
+        self.assertFalse(any("{" in text for text in texts))
+        self.assertNotIn("batch", " ".join(texts))
+        self.assertNotIn(fake.STRUCTURED_CUT, texts)
+        step = next(message for message in page["messages"] if message["text"] == "finish：交回了结构化结果")
+        self.assertEqual(step["role"], "tool")
+
+    def test_a_structured_finish_result_does_not_read_the_full_file(self):
+        seen = []
+        real = antigravity._full_records
+
+        def spy(path, steps):
+            seen.append(set(steps))
+            return real(path, steps)
+
+        with patch.object(antigravity, "_full_records", spy):
+            self.page(limit=100)
+        self.assertTrue(seen)
+        self.assertNotIn(14, seen[0])  # the structured finish step
+        self.assertIn(13, seen[0])     # the cut user message
+        self.assertIn(16, seen[0])     # the cut plain finish result
 
     def test_a_tool_output_is_never_shown_as_an_answer(self):
         page = self.page(limit=100)
@@ -272,11 +300,6 @@ class ReadTests(Base):
         self.assertNotIn(fake.TOOL_OUTPUT, texts)
         self.assertFalse(any(text.startswith("工具输出") for text in texts))
         self.assertNotIn(fake.TOOL_OUTPUT, " ".join(texts))
-
-    def test_a_finish_result_kept_as_an_object_is_serialized_in_full(self):
-        # The real full file keeps finish's result as an object; its compact JSON is the text the transcript cut.
-        self.assertEqual(antigravity._result_text({"items": [{"verdict": "pass"}]}),
-                         '{"items":[{"verdict":"pass"}]}')
 
     def test_a_picture_is_marked_and_no_file_is_offered(self):
         page = self.page(limit=100)

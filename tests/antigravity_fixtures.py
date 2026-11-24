@@ -109,8 +109,10 @@ def write(
 
 
 TOOL_OUTPUT = "工具输出：登录页 6 个测试都通过"
-FINISH_CUT = "这是被截短的总结"
-FINISH_FULL = "这是 finish 的完整总结：六条测试都通过，没有跳过的用例。"
+STRUCTURED_CUT = '{"batch":"示例","items":[{"verdict":"pass"'
+STRUCTURED_FULL = {"batch": "示例", "items": [{"verdict": "pass", "reason": "编的"}]}
+PLAIN_CUT = "这是被截短的普通总结"
+PLAIN_FULL = "这是写给人看的完整总结。"
 
 
 def real_transcript() -> list[dict]:
@@ -136,7 +138,11 @@ def real_transcript() -> list[dict]:
         record(12, "USER_INPUT", "USER_EXPLICIT", None, media=[{"kind": "image"}]),
         record(13, "USER_INPUT", "USER_EXPLICIT", "显示的截断内容", truncated_fields=["content"]),
         record(14, "PLANNER_RESPONSE", "MODEL", None, truncated_fields=["tool_calls"], tool_calls=[
-            {"name": "finish", "args": {"result": FINISH_CUT}},
+            {"name": "finish", "args": {"result": STRUCTURED_CUT}},
         ]),
-        record(15, "GENERIC", "MODEL", "工具输出：本轮结束"),
+        record(15, "GENERIC", "MODEL", "工具输出：结构化结果已交回"),
+        record(16, "PLANNER_RESPONSE", "MODEL", None, truncated_fields=["tool_calls"], tool_calls=[
+            {"name": "finish", "args": {"result": PLAIN_CUT}},
+        ]),
+        record(17, "GENERIC", "MODEL", "工具输出：普通总结已交回"),
     ]
