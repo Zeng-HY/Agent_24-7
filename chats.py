@@ -2562,11 +2562,49 @@ class Desktop:
         return doc,[c for c in self._find(doc,'ButtonControl') if not c.IsOffscreen]
 
     @staticmethod
-    def _claude_folder_ready(names,expected):
+    def _claude_norm_path(raw, require_absolute=True):
+        text=(raw or '').strip()
+        if not text:return None
+        try:
+            path=Path(text)
+            if require_absolute and not path.is_absolute():return None
+            resolved=str(path.resolve())
+        except (OSError,ValueError):return None
+        return resolved.casefold() if os.name=='nt' else resolved
+
+    @classmethod
+    def _claude_folder_button_path(cls,button_or_name):
+        if isinstance(button_or_name,str):name,help_text=button_or_name,''
+        else:
+            try:name=button_or_name.Name or ''
+            except Exception:name=''
+            try:help_text=getattr(button_or_name,'HelpText','') or ''
+            except Exception:help_text=''
+        if not name.startswith('Folder: '):return None
+        return cls._claude_norm_path(name[len('Folder: '):],require_absolute=True) or cls._claude_norm_path(help_text,require_absolute=True)
+
+    @classmethod
+    def _claude_folder_ready(cls,names,expected,folder='',buttons=None):
+        items=list(buttons) if buttons is not None else list(names)
+        if buttons is not None:
+            names=[]
+            for item in items:
+                try:names.append(item.Name or '')
+                except Exception:names.append('')
+        env_names=[n for n in names if isinstance(n,str) and n.startswith('Environment: ')]
+        folder_items=[(n,item) for n,item in zip(names,items) if isinstance(n,str) and n.startswith('Folder: ')]
         if expected==CLAUDE_NO_FOLDER:
-            modern=names.count('Environment: This computer')==1 and names.count('Folder: Choose folder…')==1
-        else:modern=names.count('Environment: '+expected)==1
-        return modern or ('Local' in names and names.count(expected)==1)
+            if env_names or folder_items:
+                return env_names==['Environment: This computer'] and [n for n,_ in folder_items]==['Folder: Choose folder…']
+            return 'Local' in names and names.count(expected)==1
+        if folder_items:
+            if env_names!=['Environment: This computer'] or len(folder_items)!=1:return False
+            want=cls._claude_norm_path(folder,require_absolute=False)
+            if want is None:return False
+            return cls._claude_folder_button_path(folder_items[0][1])==want
+        if env_names:
+            return env_names==['Environment: '+expected]
+        return 'Local' in names and names.count(expected)==1
 
     def _new_claude_now(self,folder,text,images,dispatched,folder_unique=False,timing=None,prepare=None):
         """A fresh Code composer; never invoke a workspace-trust or permission button.
@@ -2594,10 +2632,12 @@ class Desktop:
                 winctl.press(hwnd,'Escape');time.sleep(.15)
         def exact_folder(root,hwnd):
             if not folder:  # the folder button reads No folder; a second folder (Add another folder) needs a first one
-                try:names=[c.Name for c in bar(root)[1]]
+                try:buttons=bar(root)[1];shown=[c.Name for c in buttons]
                 except Exception:return False
-                return self._claude_folder_ready(names,CLAUDE_NO_FOLDER) and 'Add another folder' not in names
+                return self._claude_folder_ready(shown,CLAUDE_NO_FOLDER,buttons=buttons) and 'Add another folder' not in shown
             doc,buttons=bar(root)
+            if any((c.Name or '').startswith('Folder: ') for c in buttons):
+                return self._claude_folder_ready([],expected,folder,buttons=buttons)
             if any(c.Name=='Environment: '+expected for c in buttons):
                 # The selected recent environment shows its full path on the
                 # new page; other recent environments are only name buttons.
@@ -2620,27 +2660,36 @@ class Desktop:
         def names(root):
             try:return [c.Name for c in bar(root)[1]]
             except Exception:return []
-        def ready(root):return self._claude_folder_ready(names(root),expected)
+        def ready(root):
+            try:buttons=bar(root)[1]
+            except Exception:return False
+            return self._claude_folder_ready([],expected,folder,buttons=buttons)
         def pick_no_folder(root,hwnd):
             # The folder button sits right after Local; its menu starts with No folder (no path), then recent folders.
             doc,buttons=bar(root);shown=[c.Name for c in buttons]
-            if self._claude_folder_ready(shown,CLAUDE_NO_FOLDER):return
+            if self._claude_folder_ready(shown,CLAUDE_NO_FOLDER,buttons=buttons):return
+            def fail(message):
+                kept=[n for n in shown if isinstance(n,str) and n.startswith(('Environment: ','Folder: ','Model: ','Permissions: '))]
+                log=getattr(self,'log',None)
+                if callable(log):
+                    log('Claude 新建无文件夹失败，当前按钮：'+(' | '.join(kept) if kept else '（无匹配）'))
+                raise InputNotSubmitted(message)
             modern=[c for c in buttons if (c.Name or '').startswith('Environment: ')]
             if modern:
-                if len(modern)!=1:raise InputNotSubmitted('Claude 环境选择器不唯一，首条消息未发送')
+                if len(modern)!=1:fail('Claude 环境选择器不唯一，首条消息未发送')
                 trigger=modern[0];menu=doc.MenuControl(Name=trigger.Name,searchDepth=85)
                 if not menu.Exists(.1) or menu.IsOffscreen:
                     pattern=trigger.GetExpandCollapsePattern()
                     if pattern is not None:pattern.Expand()
                     else:trigger.GetInvokePattern().Invoke()
-                if not menu.Exists(1,.1):raise InputNotSubmitted('Claude 环境菜单没有打开，首条消息未发送')
+                if not menu.Exists(1,.1):fail('Claude 环境菜单没有打开，首条消息未发送')
                 # Default must be under Local, never a similarly named cloud environment.
                 groups=[c for c in self._find(menu,'GroupControl','Local') if not c.IsOffscreen]
                 rows=[]
                 for group in groups:
                     rows.extend(c for c in self._find(group,'MenuItemControl')+self._find(group,'RadioButtonControl') if c.Name=='Default' and not c.IsOffscreen and c.IsEnabled)
                 if len(rows)!=1:
-                    close_menu(menu,hwnd);raise InputNotSubmitted('Claude 没有唯一的本机 Default 环境，首条消息未发送')
+                    close_menu(menu,hwnd);fail('Claude 没有唯一的本机 Default 环境，首条消息未发送')
                 selected=rows[0].GetSelectionItemPattern()
                 if selected is not None:selected.Select()
                 else:rows[0].GetInvokePattern().Invoke()
@@ -2648,12 +2697,12 @@ class Desktop:
                 return
             at=shown.index('Local')+1 if 'Local' in shown else len(shown)
             pattern=buttons[at].GetExpandCollapsePattern() if at<len(buttons) else None
-            if pattern is None:raise InputNotSubmitted('没找到 Claude 新建页的文件夹按钮，首条消息未发送')
+            if pattern is None:fail('没找到 Claude 新建页的文件夹按钮，首条消息未发送')
             name=buttons[at].Name;pattern.Expand();menu=doc.MenuControl(Name=name,searchDepth=70)
-            if not menu.Exists(1,.1):raise InputNotSubmitted('Claude 的文件夹菜单没有打开，首条消息未发送')
+            if not menu.Exists(1,.1):fail('Claude 的文件夹菜单没有打开，首条消息未发送')
             rows=[c for c,_ in self.auto.WalkControl(menu,maxDepth=6) if c.ControlTypeName=='RadioButtonControl' and c.Name==CLAUDE_NO_FOLDER and not c.HelpText]
             if len(rows)!=1:
-                close_menu(menu,hwnd);raise InputNotSubmitted('Claude 的文件夹菜单里没有 No folder，首条消息未发送')
+                close_menu(menu,hwnd);fail('Claude 的文件夹菜单里没有 No folder，首条消息未发送')
             rows[0].GetSelectionItemPattern().Select();time.sleep(.3)  # picking closes the menu
             close_menu(menu,hwnd)
         hwnd,root=self._claude_root()
