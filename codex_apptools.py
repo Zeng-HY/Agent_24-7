@@ -129,6 +129,15 @@ def unpack_frame_size(header: bytes) -> int:
     return size
 
 
+def is_matching_jsonrpc_response(frame: Any, req_id: Any) -> bool:
+    """Return True only when [frame] is a JSON-RPC response whose id matches [req_id]."""
+    if not isinstance(frame, dict):
+        return False
+    if "id" not in frame or frame.get("id") != req_id:
+        return False
+    return "result" in frame or "error" in frame
+
+
 class WindowsPipeTransport:
     """Overlapped Windows named-pipe transport for one JSON-RPC request/response cycle."""
 
@@ -143,21 +152,33 @@ class WindowsPipeTransport:
         self._win32file = win32file
         self.pipe_path = pipe_path
         self.timeout = timeout
-        try:
-            self.handle = win32file.CreateFile(
-                pipe_path,
-                win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-                0,
-                None,
-                win32con.OPEN_EXISTING,
-                win32con.FILE_FLAG_OVERLAPPED,
-                None,
-            )
-        except Exception as exc:
-            raise AppToolsError(NOT_RUNNING_REASON, 409, code="pipe_open_failed", not_submitted=True) from exc
+        import win32pipe
+        deadline = time.monotonic() + min(timeout, 3.0)
+        while True:
+            try:
+                self.handle = win32file.CreateFile(
+                    pipe_path,
+                    win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                    0,
+                    None,
+                    win32con.OPEN_EXISTING,
+                    win32con.FILE_FLAG_OVERLAPPED,
+                    None,
+                )
+                break
+            except pywintypes.error as exc:
+                if exc.winerror == 231 and time.monotonic() < deadline:  # ERROR_PIPE_BUSY
+                    try:
+                        win32pipe.WaitNamedPipe(pipe_path, max(50, int((deadline - time.monotonic()) * 1000)))
+                        continue
+                    except Exception:
+                        pass
+                raise AppToolsError(NOT_RUNNING_REASON, 409, code="pipe_open_failed", not_submitted=True) from exc
+            except Exception as exc:
+                raise AppToolsError(NOT_RUNNING_REASON, 409, code="pipe_open_failed", not_submitted=True) from exc
 
     def _wait_overlapped(self, ov, timeout_ms: int, label: str) -> int:
-        rc = self._win32event.WaitForSingleObject(ov.hEvent, timeout_ms)
+        rc = self._win32event.WaitForSingleObject(ov.hEvent, max(1, int(timeout_ms)))
         if rc == self._win32event.WAIT_TIMEOUT:
             self.close()
             raise AppToolsError(f"Codex {label}超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
@@ -167,14 +188,17 @@ class WindowsPipeTransport:
         ov = self._pywintypes.OVERLAPPED()
         ov.hEvent = self._win32event.CreateEvent(None, True, False, None)
         try:
-            self._win32file.WriteFile(self.handle, data, ov)
-            self._wait_overlapped(ov, max(1000, int(timeout * 1000)), "请求发送")
+            try:
+                self._win32file.WriteFile(self.handle, data, ov)
+            except self._pywintypes.error as exc:
+                if exc.winerror != 997:  # ERROR_IO_PENDING
+                    raise AppToolsError("Codex 管道连接已断开", 409, code="pipe_closed") from exc
+            self._wait_overlapped(ov, max(100, int(timeout * 1000)), "请求发送")
         finally:
             ov.hEvent.Close()
 
-    def _read_exact(self, n: int, timeout: float) -> bytes:
+    def _read_exact(self, n: int, deadline: float) -> bytes:
         buf = bytearray()
-        deadline = time.monotonic() + timeout
         while len(buf) < n:
             rem = deadline - time.monotonic()
             if rem <= 0:
@@ -182,21 +206,26 @@ class WindowsPipeTransport:
                 raise AppToolsError("Codex 响应超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
             ov = self._pywintypes.OVERLAPPED()
             ov.hEvent = self._win32event.CreateEvent(None, True, False, None)
+            read_buf = self._win32file.AllocateReadBuffer(n - len(buf))
             try:
-                _, chunk = self._win32file.ReadFile(self.handle, n - len(buf), ov)
-                got = self._wait_overlapped(ov, max(500, int(rem * 1000)), "响应读取")
+                try:
+                    rc, _ = self._win32file.ReadFile(self.handle, read_buf, ov)
+                    if rc not in (0, 997):
+                        raise AppToolsError("Codex 管道连接已断开", 409, code="pipe_closed")
+                except self._pywintypes.error as exc:
+                    if exc.winerror != 997:
+                        raise AppToolsError("Codex 管道连接已断开", 409, code="pipe_closed") from exc
+                got = self._wait_overlapped(ov, max(1, int(rem * 1000)), "响应读取")
                 if got <= 0:
                     raise AppToolsError("Codex 管道连接已断开", 409, code="pipe_closed")
-                buf.extend(chunk[:got])
+                buf.extend(bytes(read_buf[:got]))
             finally:
                 ov.hEvent.Close()
         return bytes(buf)
 
-    def request(self, payload: dict, timeout: float = 30.0) -> dict:
-        frame = pack_frame(payload)
-        self._write_all(frame, min(timeout, 15.0))
-        size = unpack_frame_size(self._read_exact(4, timeout))
-        body = self._read_exact(size, timeout)
+    def _read_frame(self, deadline: float) -> dict:
+        size = unpack_frame_size(self._read_exact(4, deadline))
+        body = self._read_exact(size, deadline)
         try:
             data = json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeError) as exc:
@@ -204,6 +233,20 @@ class WindowsPipeTransport:
         if not isinstance(data, dict):
             raise AppToolsError("Codex 返回了格式异常的响应", 502, code="invalid_json")
         return data
+
+    def request(self, payload: dict, timeout: float = 30.0) -> dict:
+        frame = pack_frame(payload)
+        self._write_all(frame, min(timeout, 15.0))
+        expected_id = payload.get("id")
+        deadline = time.monotonic() + timeout
+        while True:
+            if time.monotonic() >= deadline:
+                self.close()
+                raise AppToolsError("Codex 响应超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
+            data = self._read_frame(deadline)
+            if expected_id is None or is_matching_jsonrpc_response(data, expected_id):
+                return data
+            # Skip notifications or responses for other request IDs and keep reading until match or timeout.
 
     def close(self) -> None:
         if getattr(self, "handle", None) is not None:
@@ -305,8 +348,12 @@ class AppToolsClient:
     def _rpc_once(self, pipe_name: str, method: str, params: dict, timeout: float = 30.0) -> dict:
         transport = self._transport_factory(PIPE_DIR + pipe_name, timeout)
         try:
-            payload = {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params}
-            return transport.request(payload, timeout=timeout)
+            req_id = self._next_id()
+            payload = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
+            resp = transport.request(payload, timeout=timeout)
+            if not is_matching_jsonrpc_response(resp, req_id):
+                raise AppToolsError("Codex 响应超时，结果未确认；不会自动重试", 504, code="timeout", not_submitted=False)
+            return resp
         finally:
             try:
                 transport.close()

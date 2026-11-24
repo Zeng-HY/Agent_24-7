@@ -73,10 +73,10 @@ class FakeTransport:
         self.closed = True
 
 
-def _ok_tool(data: dict) -> dict:
+def _ok_tool(data: dict, req_id: int = 1) -> dict:
     return {
         "jsonrpc": "2.0",
-        "id": 1,
+        "id": req_id,
         "result": {
             "success": True,
             "contentItems": [{"type": "inputText", "text": json.dumps(data, ensure_ascii=False)}],
@@ -200,7 +200,7 @@ class ClientProtocolTests(unittest.TestCase):
             calls.append((path, req["method"]))
             if req["method"] == "tools/list":
                 return {"jsonrpc": "2.0", "id": req["id"], "result": {"tools": bad_tools if "bad" in path else VALID_TOOLS}}
-            return _ok_tool({"thread": {"status": {"type": "idle"}}})
+            return _ok_tool({"thread": {"status": {"type": "idle"}}}, req["id"])
 
         client = ca.AppToolsClient(transport_factory=lambda p, t: FakeTransport(handler, p))
         with patch.object(ca, "_list_pipes", side_effect=lambda: list(pipes[0])):
@@ -231,7 +231,7 @@ class ClientProtocolTests(unittest.TestCase):
             attempts[0] += 1
             if attempts[0] == 1:
                 return {"jsonrpc": "2.0", "id": req["id"], "error": {"code": -32000, "message": "No ready app window supports app tools"}}
-            return _ok_tool({"threadId": TID})
+            return _ok_tool({"threadId": TID}, req["id"])
 
         client = ca.AppToolsClient(
             transport_factory=lambda p, t: FakeTransport(handler, p),
@@ -265,6 +265,133 @@ class ClientProtocolTests(unittest.TestCase):
             self.assertIn("窗口没准备好", str(caught.exception))
             self.assertTrue(caught.exception.not_submitted)
 
+    def test_pipe_transport_skips_notifications_and_wrong_ids_until_match(self) -> None:
+        import secrets
+        import threading
+        import win32file
+        import win32pipe
+
+        pipe_short = "codex-app-tools-idtest-" + secrets.token_hex(6)
+        pipe_path = ca.PIPE_DIR + pipe_short
+        ready = threading.Event()
+        errors: list[Exception] = []
+
+        def read_exact(handle, n: int) -> bytes:
+            buf = bytearray()
+            while len(buf) < n:
+                _, chunk = win32file.ReadFile(handle, n - len(buf))
+                if not chunk:
+                    raise EOFError("pipe closed")
+                buf.extend(chunk)
+            return bytes(buf)
+
+        def fake_server():
+            handles = [
+                win32pipe.CreateNamedPipe(
+                    pipe_path, win32pipe.PIPE_ACCESS_DUPLEX,
+                    win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+                    2, 65536, 65536, 0, None,
+                )
+                for _ in range(2)
+            ]
+            ready.set()
+            try:
+                for h in handles:  # 1: tools/list, 2: tools/call
+                    try:
+                        win32pipe.ConnectNamedPipe(h, None)
+                        hdr = read_exact(h, 4)
+                        size = struct.unpack("<I", hdr)[0]
+                        req = json.loads(read_exact(h, size).decode("utf-8"))
+                        rid = req["id"]
+                        # 1) Server notification (no id)
+                        win32file.WriteFile(h, ca.pack_frame({"jsonrpc": "2.0", "method": "notifications/ping", "params": {}}))
+                        # 2) Response with a different id
+                        win32file.WriteFile(h, ca.pack_frame({"jsonrpc": "2.0", "id": rid + 999, "result": {"wrong": True}}))
+                        # 3) Server-initiated request with same id but no result/error
+                        win32file.WriteFile(h, ca.pack_frame({"jsonrpc": "2.0", "id": rid, "method": "server/ping"}))
+                        # 4) Matching response
+                        if req["method"] == "tools/list":
+                            reply = {"jsonrpc": "2.0", "id": rid, "result": {"tools": VALID_TOOLS}}
+                        else:
+                            reply = _ok_tool({"thread": {"id": TID, "status": {"type": "idle"}}}, rid)
+                        win32file.WriteFile(h, ca.pack_frame(reply))
+                        win32file.FlushFileBuffers(h)
+                    finally:
+                        try:
+                            win32pipe.DisconnectNamedPipe(h)
+                        except Exception:
+                            pass
+                        win32file.CloseHandle(h)
+            except Exception as exc:
+                errors.append(exc)
+
+        th = threading.Thread(target=fake_server, daemon=True)
+        th.start()
+        ready.wait(timeout=2.0)
+
+        client = ca.AppToolsClient()
+        with patch.object(ca, "_list_pipes", return_value=[pipe_short]):
+            ca.reset_route_cache()
+            data = client.read_thread(TID, timeout=5.0)
+        th.join(timeout=3.0)
+        self.assertEqual(errors, [])
+        self.assertEqual(data["thread"]["status"]["type"], "idle")
+
+    def test_pipe_transport_times_out_when_id_never_matches(self) -> None:
+        import secrets
+        import threading
+        import win32file
+        import win32pipe
+
+        pipe_short = "codex-app-tools-idtimeout-" + secrets.token_hex(6)
+        pipe_path = ca.PIPE_DIR + pipe_short
+        ready = threading.Event()
+        stop_srv = threading.Event()
+
+        def fake_server():
+            h = win32pipe.CreateNamedPipe(
+                pipe_path, win32pipe.PIPE_ACCESS_DUPLEX,
+                win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+                1, 65536, 65536, 0, None,
+            )
+            ready.set()
+            try:
+                win32pipe.ConnectNamedPipe(h, None)
+                _, hdr = win32file.ReadFile(h, 4)
+                size = struct.unpack("<I", hdr)[0]
+                _, body = win32file.ReadFile(h, size)
+                req = json.loads(body.decode("utf-8"))
+                # Send only a notification and a mismatched id, then wait without answering req["id"]
+                win32file.WriteFile(h, ca.pack_frame({"jsonrpc": "2.0", "method": "notifications/status"}))
+                win32file.WriteFile(h, ca.pack_frame({"jsonrpc": "2.0", "id": req["id"] + 42, "result": {}}))
+                win32file.FlushFileBuffers(h)
+                stop_srv.wait(2.0)
+            except Exception:
+                pass
+            finally:
+                try:
+                    win32pipe.DisconnectNamedPipe(h)
+                except Exception:
+                    pass
+                win32file.CloseHandle(h)
+
+        th = threading.Thread(target=fake_server, daemon=True)
+        th.start()
+        ready.wait(timeout=2.0)
+        try:
+            transport = ca.WindowsPipeTransport(pipe_path, timeout=0.35)
+            try:
+                with self.assertRaises(ca.AppToolsError) as caught:
+                    transport.request({"jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": {}}, timeout=0.35)
+                self.assertEqual(caught.exception.code, "timeout")
+                self.assertFalse(caught.exception.not_submitted)
+                self.assertIn("结果未确认；不会自动重试", str(caught.exception))
+            finally:
+                transport.close()
+        finally:
+            stop_srv.set()
+            th.join(timeout=3.0)
+
 
 class AppToolsBridgeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -288,10 +415,10 @@ class AppToolsBridgeTests(unittest.TestCase):
                 return {"jsonrpc": "2.0", "id": req["id"], "result": {"tools": VALID_TOOLS}}
             params = req["params"]
             if params["tool"] == "read_thread":
-                return _ok_tool({"thread": {"id": TID, "status": self.pipe_status}})
+                return _ok_tool({"thread": {"id": TID, "status": self.pipe_status}}, req["id"])
             if params["tool"] == "send_message_to_thread":
                 self.sent_calls.append(params)
-                return _ok_tool({"threadId": TID})
+                return _ok_tool({"threadId": TID}, req["id"])
             raise AssertionError(f"unexpected tool {params['tool']}")
 
         self.legacy = codex_control.Bridge()
