@@ -48,7 +48,19 @@
 
 ## 结果（DeepSeek 填）
 
-- 提交：
+- 提交：`claude-steer-main-only` 的「手机插话只交给主对话自己的工具调用」一条，含 `claude_hooks.py`、`tests/test_claude_hooks.py` 和这一节；本节和代码在同一个提交里，所以自己的短哈希写在会话汇报里。
 - 子代理字段查到的情况（出处）：
+  - `agent_id` 有文档出处：Claude Code 的 Agent SDK 参考里，`HookInput` 的 `agent_id` 写作「子代理标识符，当 hook 在子代理内触发时存在」（https://code.claude.com/docs/zh-CN/agent-sdk/python）。
+  - 它在 PreToolUse / PostToolUse 这类**工具事件**上带不带，没有准信：anthropics/claude-code#29068（要求所有 hook 事件都带 `agent_id`）和 #40140（要求 PreToolUse/PostToolUse 带 `agent_id`）都还开着，说明至少有些版本的工具事件上没有这个字段。`agent_type` 没找到文档出处，按防御多认一个。
+  - 这两个字段都只在请求真带了非空值时才当作子代理，所以字段名对不上也不会把主对话误判成子代理，只会退回记录判断；真正兜底的是记录判断。11-24 那次实测没有子代理，仓库里也没有子代理的钩子样本，所以「子代理事件带不带这些字段」这次仍没有实测数据（设计里也说没实测过）。
 - 测试数字（基线 / 改后 / 完整 pytest）：
+  - 基线（改前 `tests/test_claude_hooks.py tests/test_action_golden.py tests/test_read_golden.py`，含两份标准答案测试）：**53 项全过**，6.27 s（`baseline-hooks.log`）。
+  - 改后同一条命令：**61 项全过**，5.63 s，多出的 8 项是新增的 `SteerMainOnlyTests`（`after-hooks-4.log`）。
+  - 完整 pytest：**1252 passed、30 failed、6 skipped、100 subtests passed**，484.68 s（`full-pytest.log`）。这 30 条和这次改动无关：29 条报 `BrowserType.launch: Executable doesn't exist … ms-playwright\webkit-2359\Playwright.exe`（这台电脑没装 WebKit），分布在 `test_web_agents`、`test_web_antigravity`、`test_page_parts`、`test_list_status_filter`、`test_dev6_navigation_links`、`test_home_startup` 和设计里点名的 `test_mobile_polish`（2 条）、`test_relay_mobile_layout`（1 条）。为了坐实不是这次改出来的，把 HEAD（`bc5965c`）用 `git archive` 解到工作区的干净副本（`head-copy`），只跑这 8 个文件：同样 **30 failed、10 passed、8 subtests passed**，失败清单与改后逐条一致（`Compare-Object` 无输出，日志 `head-failures.log`）。`test_relay_push` 这次没有超时。
 - 风险和没做的：
+  - 记录判断按设计看 `tool_use` 块，另外多看一眼 `isSidechain`：同一文件里带这个标记的调用是子代理的，不算主对话的。如果 Claude Code 把子代理的调用写进主记录、却既不带这个标记、`tool_use_id` 又能对上，这条判断就会放过去（现在手上没有这种样本）。
+  - 记录读不到、或主记录路径解析不出（例如会话刚建、`cliSessionId` 还没和记录对上）时**不交**：插话留到这一轮 Stop 再交（Stop 钩子照旧）。最坏是晚交一会儿，不会交错人。
+  - 快通道没有变慢：插话位空时一次记录都不读（`HookQueues.has_steer` 只看插话位，有测试 `test_an_empty_steer_slot_reads_no_record` 守着）；真有插话时才读主记录末尾 512 KB，结果按 `tool_use_id` 缓存（上限 512 条）。
+  - 只动了交插话这一处：`_handle_fast` 的 PostToolUse/PostToolUseFailure 分支加了一个条件，新加 `Bridge._steer_goes_to_main`、模块级 `is_main_conversation_call` / `_record_holds_call` / `_same_record`、`HookQueues.has_steer`（新方法，没改别的函数）。PreToolUse 的停止拒绝、Stop 分支、`_handle_permission` 都照旧，`remote.py`、`agents/*`、`chat_history.py`、`claude_control.py`、`chats.py`、`codex_*.py`、`relay_*.py`、`static/`、`apps/`、`tests/fixtures/*`、`tests/conftest.py`、版本号和更新说明文件都没碰。
+  - 没做的：没有在真的 Claude 上跑子代理（不碰真的 Claude 设置和窗口），没有推送、合并、打包。
+

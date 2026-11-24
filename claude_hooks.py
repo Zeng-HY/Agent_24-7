@@ -62,6 +62,11 @@ QUEUE_PREFIX = "用户在手机上发来下一条消息（遥应）："
 STEER_PREFIX = "用户刚在手机上补充（遥应）："
 MAX_BLOCKS_PER_TURN = 8  # Stop blocks Teleply sends in one user turn (Claude Code's own cap is also 8)
 
+# A phone steer goes back only with the main conversation's own tool call (11-24): a subagent's call would take it
+# and the main conversation would never see it. How much of the conversation's record is read to recognize that call.
+STEER_RECORD_TAIL = 512 * 1024
+SUBAGENT_KEYS = ("agent_id", "agent_type")  # what Claude Code adds to a hook event raised inside a subagent
+
 COMMAND_TOOLS = frozenset({"Bash", "PowerShell"})
 COMMAND_SHELLS = frozenset({"bash.exe", "sh.exe", "pwsh.exe", "powershell.exe", "cmd.exe"})
 SESSION_BACKOFF_START = 2.0   # seconds before an unknown session is looked for again: 2, 4, 8 … 60
@@ -502,6 +507,11 @@ class HookQueues:
             data = self._load(tid)
             return bool(data["queue"] or data["steer"])
 
+    def has_steer(self, tid: str) -> bool:
+        """Whether anything waits in the steer slot (asked before the more expensive checks that hand it over)."""
+        with self.lock:
+            return bool(self._load(tid)["steer"])
+
 
 def cleanup_claude_images(images_root: Path, *, now: float | None = None) -> None:
     """Remove image files older than 7 days under <data_dir>/claude-images."""
@@ -680,6 +690,7 @@ class Bridge:
         self._pid_checked_at: dict[str, float] = {}  # cliSessionId -> when that PID was last verified
         self._session_ports: dict[str, int] = {}     # cliSessionId -> its hook connection's client port
         self._states: dict[str, _ConvState] = {}  # desktop conv id -> _ConvState
+        self._main_calls: dict[str, bool] = {}   # tool_use_id -> whether the main conversation made that call
 
     # -- session cache
 
@@ -947,7 +958,8 @@ class Bridge:
                     st.tool_use_id = ""
                     st.step = ""
                     st.step_started_at = 0.0
-                if not st.stop_requested:  # a steer waits in Teleply's slot until this step is done
+                if not st.stop_requested and self._steer_goes_to_main(tid, item, payload):
+                    # only the main conversation's own call takes the steer: a subagent's call would swallow it
                     pending = self.queues.take_steer(tid)
                     if pending:
                         text = "\n\n".join(str(v.get("text") or "") for v in pending)
@@ -996,6 +1008,19 @@ class Bridge:
 
         self.changed(tid)
         return reply
+
+    def _steer_goes_to_main(self, tid: str, item: dict, payload: dict) -> bool:
+        """Whether the steer waiting in this conversation's slot goes back with this tool event (11-24).
+
+        Cheap when nothing waits (no steer slot, no record read). The record looked at is the conversation's own
+        (self.record), never the request's transcript_path, which may be a subagent's record."""
+        if not self.queues.has_steer(tid):
+            return False
+        try:
+            path = self.record(item)
+        except Exception:
+            return False
+        return is_main_conversation_call(payload, path, self._main_calls)
 
     def _handle_permission(self, payload: dict, gone=lambda: False, *, client_port: int = 0, server_port: int = 0) -> dict | None:
         if not isinstance(payload.get("tool_input"), dict):
@@ -1287,6 +1312,75 @@ def open_calls(lines: list[bytes], tool: str) -> dict[str, dict]:
             elif block.get("type") == "tool_result":
                 calls.pop(block.get("tool_use_id"), None)
     return calls
+
+
+def _same_record(left: str, right: Path) -> bool:
+    """Whether these two names are one file on disk (Windows: case and separators do not matter)."""
+    def norm(value) -> str:
+        text = str(value or "")
+        if text.startswith("\\\\?\\"):  # the extended-length form of the same path
+            text = text[4:]
+        text = os.path.expanduser(text)
+        try:
+            return os.path.normcase(os.path.realpath(text))
+        except (OSError, ValueError):
+            return os.path.normcase(os.path.abspath(text))
+    return norm(left) == norm(right)
+
+
+def _record_holds_call(path: Path, tool_use_id: str) -> bool:
+    """Whether the last part of this Claude record holds an assistant `tool_use` block with this id.
+
+    Only the record's own side: a subagent's call written into the same file is marked isSidechain."""
+    needle = tool_use_id.encode("utf-8", "ignore")
+    try:
+        lines, _ = chats.read_tail(path, STEER_RECORD_TAIL)
+    except (OSError, ValueError):
+        return False
+    for raw in lines:
+        if needle not in raw or b'"tool_use"' not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeError):
+            continue
+        if not isinstance(rec, dict) or rec.get("isSidechain"):
+            continue
+        message = rec.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_use" \
+                    and str(block.get("id") or "") == tool_use_id:
+                return True
+    return False
+
+
+def is_main_conversation_call(payload: dict, record: Path | None, cache: dict[str, bool] | None = None) -> bool:
+    """Whether this tool event is the main conversation's own call, not one a subagent it started made (11-24).
+
+    A subagent's tool events reach the same conversation's hooks (same session_id), so a phone steer handed back on
+    one of them lands in the subagent's tool result and the main conversation never sees it. Three signs, in order:
+    the request names the subagent (`agent_id` / `agent_type`); its `transcript_path` is not the conversation's
+    record; the end of that record holds no assistant `tool_use` block with this `tool_use_id`. Anything unreadable
+    counts as another's: a steer waits for the main conversation's next call rather than going to the wrong one."""
+    if not isinstance(payload, dict):
+        return False
+    if any(str(payload.get(key) or "") for key in SUBAGENT_KEYS):
+        return False
+    tool_use_id = str(payload.get("tool_use_id") or "")
+    if not tool_use_id or record is None:
+        return False
+    elsewhere = str(payload.get("transcript_path") or "")
+    if elsewhere and not _same_record(elsewhere, record):
+        return False
+    if cache is not None and tool_use_id in cache:
+        return cache[tool_use_id]
+    found = _record_holds_call(record, tool_use_id)
+    if cache is not None:  # one id is asked about once: the cache only saves a repeated request
+        if len(cache) >= 512:
+            cache.clear()
+        cache[tool_use_id] = found
+    return found
 
 
 # ---------------------------------------------------------------- Claude's settings

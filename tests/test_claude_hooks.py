@@ -995,15 +995,25 @@ class HookQueueTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         self.mono = [100.0]
+        self.record_path = self.dir / "cli-1.jsonl"
+        self.record_path.write_text("", encoding="utf-8")
 
     def bridge(self, sessions=None):
         bridge = claude_hooks.Bridge(
             log=lambda text: None, sessions=sessions or (lambda: [ITEM]),
             clock=lambda: self.mono[0], wall_clock=lambda: 1767323000.0 + self.mono[0],
             server_port=8765, queue_root=self.dir / "queues", images_root=self.dir / "claude-images",
+            record=lambda item: self.record_path,
         )
         bridge.refresh_sessions()
         return bridge
+
+    def note_call(self, tool_use_id, sidechain=False):
+        """Put this call in the conversation's record, as Claude Code does when it is the main conversation's own."""
+        with self.record_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "assistant", "uuid": "a-" + tool_use_id, "isSidechain": sidechain,
+                                "message": {"role": "assistant", "content": [
+                                    {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {}}]}}) + "\n")
 
     def event(self, bridge, name, client_port=0, **extra):
         return bridge.handle({"hook_event_name": name, "session_id": "cli-1", **extra}, client_port=client_port)
@@ -1057,12 +1067,14 @@ class HookQueueTests(unittest.TestCase):
         bridge = self.bridge()
         self.event(bridge, "UserPromptSubmit")
         bridge.enqueue_steer("local_test", "补充甲")
+        self.note_call("t1")
         reply = self.event(bridge, "PostToolUse", tool_name="Bash", tool_use_id="t1")
         self.assertEqual(reply, {"hookSpecificOutput": {
             "hookEventName": "PostToolUse",
             "additionalContext": claude_hooks.STEER_PREFIX + "补充甲"}})
         self.assertIsNone(self.event(bridge, "PostToolUse", tool_name="Bash", tool_use_id="t1"))
         bridge.enqueue_steer("local_test", "补充乙")
+        self.note_call("t2")
         failed = self.event(bridge, "PostToolUseFailure", tool_name="Bash", tool_use_id="t2")
         self.assertEqual(failed["hookSpecificOutput"]["hookEventName"], "PostToolUseFailure")
         self.assertEqual(failed["hookSpecificOutput"]["additionalContext"],
@@ -1131,6 +1143,117 @@ class HookQueueTests(unittest.TestCase):
         self.assertEqual(cleaned, "看图")
         self.assertEqual(len(images), 1)
         self.assertEqual(images[0]["url"], "/api/codex/image?id=" + "b" * 32)
+
+
+class SteerMainOnlyTests(unittest.TestCase):
+    """A phone steer goes back only with the main conversation's own tool call, never with a subagent's (11-24).
+
+    A subagent's tool events reach the same conversation's hooks (same session_id); a steer handed back on one of
+    them lands in the subagent's tool result and the main conversation never sees it."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.record_path = self.dir / "cli-1.jsonl"
+        self.record_path.write_text("", encoding="utf-8")
+        self.bridge = claude_hooks.Bridge(
+            log=lambda text: None, sessions=lambda: [ITEM], record=lambda item: self.record_path,
+            server_port=8765, queue_root=self.dir / "queues", images_root=self.dir / "claude-images")
+        self.bridge.refresh_sessions()
+        self.event("UserPromptSubmit")
+
+    def event(self, name, **extra):
+        return self.bridge.handle({"hook_event_name": name, "session_id": "cli-1", **extra})
+
+    def calls(self, *tool_use_ids, sidechain=False, into=None):
+        """Put these calls in a record, as Claude Code writes an assistant turn's tool_use blocks."""
+        with (into or self.record_path).open("a", encoding="utf-8") as f:
+            for tool_use_id in tool_use_ids:
+                f.write(json.dumps({"type": "assistant", "uuid": "a-" + tool_use_id, "isSidechain": sidechain,
+                                    "message": {"role": "assistant", "content": [
+                                        {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {}}]}}) + "\n")
+
+    def waiting(self):
+        return [v["text"] for v in self.bridge.queues._load("local_test")["steer"]]
+
+    def test_a_subagents_call_keeps_the_steer_until_the_main_conversations_own_call_ends(self):
+        self.bridge.enqueue_steer("local_test", "请查看这些图片")
+        self.calls("toolu_task")  # the main conversation's Task call; the subagent's calls stay in its own record
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="toolu_sub_bash"))
+        self.assertEqual(self.waiting(), ["请查看这些图片"])
+        self.assertIsNone(self.event("PostToolUseFailure", tool_name="Read", tool_use_id="toolu_sub_read"))
+        self.assertEqual(self.waiting(), ["请查看这些图片"])
+        reply = self.event("PostToolUse", tool_name="Task", tool_use_id="toolu_task")
+        self.assertEqual(reply, {"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": claude_hooks.STEER_PREFIX + "请查看这些图片"}})
+        self.assertEqual(self.waiting(), [])
+
+    def test_a_request_that_names_the_subagent_keeps_the_steer(self):
+        self.bridge.enqueue_steer("local_test", "图")
+        self.calls("t1")
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1", agent_id="agent-7"))
+        self.assertEqual(self.waiting(), ["图"])
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1",
+                                     agent_type="general-purpose"))
+        self.assertEqual(self.waiting(), ["图"])
+
+    def test_a_request_from_another_transcript_keeps_the_steer(self):
+        self.bridge.enqueue_steer("local_test", "图")
+        other = self.dir / "subagents" / "agent-7.jsonl"
+        other.parent.mkdir()
+        self.calls("t1", into=other)  # that subagent's record holds the call, the conversation's own does too
+        self.calls("t1")
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1",
+                                     transcript_path=str(other)))
+        self.assertEqual(self.waiting(), ["图"])
+        self.assertTrue(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1",
+                                   transcript_path=str(self.record_path)))
+
+    def test_a_subagents_call_written_into_the_same_record_keeps_the_steer(self):
+        self.bridge.enqueue_steer("local_test", "图")
+        self.calls("t1", sidechain=True)
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1"))
+        self.assertEqual(self.waiting(), ["图"])
+
+    def test_an_unreadable_record_keeps_the_steer_and_raises_nothing(self):
+        self.bridge.enqueue_steer("local_test", "图")
+        self.bridge.record = lambda item: self.dir / "missing.jsonl"
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1"))
+        self.bridge.record = lambda item: self.dir  # a directory: opening it fails
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t2"))
+
+        def broken(item):
+            raise OSError("读不到")
+
+        self.bridge.record = broken
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t3"))
+        self.assertEqual(self.waiting(), ["图"])
+        self.bridge.record = lambda item: self.record_path
+        self.calls("t4")
+        self.assertTrue(self.event("PostToolUse", tool_name="Bash", tool_use_id="t4"))
+
+    def test_an_empty_steer_slot_reads_no_record(self):
+        reads = []
+        self.bridge.record = lambda item: reads.append(item) or self.record_path
+        self.assertIsNone(self.event("PostToolUse", tool_name="Bash", tool_use_id="t1"))
+        self.assertEqual(reads, [])
+
+    def test_a_phone_stop_still_denies_a_subagents_tool_call(self):
+        self.bridge.enqueue_steer("local_test", "先别交")
+        self.bridge.request_stop("local_test")
+        denied = self.event("PreToolUse", tool_name="Bash", tool_use_id="toolu_sub_bash")
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertFalse(denied["continue"])
+        self.assertEqual(self.waiting(), ["先别交"])
+
+    def test_the_answer_is_cached_by_tool_use_id(self):
+        cache = {}
+        self.calls("t1")
+        self.assertTrue(claude_hooks.is_main_conversation_call({"tool_use_id": "t1"}, self.record_path, cache))
+        self.assertFalse(claude_hooks.is_main_conversation_call({"tool_use_id": "t2"}, self.record_path, cache))
+        self.record_path.unlink()
+        self.assertTrue(claude_hooks.is_main_conversation_call({"tool_use_id": "t1"}, self.record_path, cache))
+        self.assertFalse(claude_hooks.is_main_conversation_call({"tool_use_id": "t3"}, self.record_path, cache))
 
 
 class HookQueueStateAndSendTests(unittest.TestCase):
@@ -1279,7 +1402,12 @@ class HookQueueStateAndSendTests(unittest.TestCase):
     def test_steer_while_running_goes_to_the_slot_and_is_handed_over_by_the_next_tool(self):
         path = self.dir / "cli-1.jsonl"
         path.write_text(json.dumps({"type": "user", "uuid": "turn-1", "isSidechain": False,
-                                    "message": {"role": "user", "content": "开始"}}) + "\n", encoding="utf-8")
+                                    "message": {"role": "user", "content": "开始"}}) + "\n" + json.dumps(
+            {"type": "assistant", "uuid": "a-1", "isSidechain": False,
+             "message": {"role": "assistant",
+                         "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]}}) + "\n",
+            encoding="utf-8")
+        self.bridge.record = lambda item: path
         self.run_event("UserPromptSubmit")
         ctrl = claude_control.Controller(SimpleNamespace(run=lambda fn, *a, **kw: fn(*a)))
         ctrl.hooks = self.bridge
