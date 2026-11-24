@@ -135,7 +135,8 @@
 
   function paintQuestion(me, control, card, st, direct) {
     const wrap = el('div', 'codex-card');
-    const title = el('div', 'card-title', titleOf(me, card));
+    const heading = titleOf(me, card);
+    const title = el('div', 'card-title', heading);
     title.append(el('span', 'card-state', '等你回答'));
     wrap.append(title);
     const detail = detailBlock(card);
@@ -144,7 +145,8 @@
     const busy = !!st.busy;
     for (const q of card.questions || []) {
       const block = el('div', 'gc-q');
-      if (q.header && q.header !== q.question) block.append(el('div', 'gc-head', q.header));
+      // 标题已经用了第一题的 header 时不再重复一遍。
+      if (q.header && q.header !== q.question && q.header !== heading) block.append(el('div', 'gc-head', q.header));
       block.append(el('b', '', q.question || ''));
       const multiple = !!q.isMultiple;
       const chosen = st.labels[q.id] || [];
