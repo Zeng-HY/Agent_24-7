@@ -377,6 +377,130 @@ class WebAgentsTests(unittest.TestCase):
         self.assertTrue(page.evaluate("document.getElementById('cvBtn').disabled"))
         self.assertEqual(errors, [])
 
+    def test_codex_capabilities_now_hides_stop_and_mode_in_both_engines(self):
+        apps = ["codex", "claude", "deepseek"]
+        manifests = agent_registry.manifests_for(apps)
+        machine = {
+            "name": "测试电脑", "apps": apps, "voice": False, "version": "0.27.0-test",
+            "agents": manifests, **agent_legacy.page_capabilities(apps),
+        }
+        base_caps = next(m for m in manifests if m["id"] == "codex")["capabilities"]
+        apptools_untrusted_caps = {
+            **base_caps,
+            "stop": False, "approve": False, "answer": False, "slash_commands": False,
+            "settings": ["model", "effort"],
+        }
+        apptools_trusted_caps = {
+            **apptools_untrusted_caps,
+            "stop": True, "approve": True, "answer": True,
+        }
+
+        def make_state(mode_case: str) -> dict:
+            state = {
+                "available": True, "running": True, "status": "running", "active_turn_id": "turn-1",
+                "settings": {"model": "gpt-5", "effort": "high", "mode": "default"},
+                "catalog": {"models": [{"id": "gpt-5", "name": "GPT-5", "efforts": ["low", "high"]}]},
+                "questions": [],
+                "queued": [{"id": "q-1", "text": "下一条排队消息", "status": "queued"}],
+                "queue_available": True,
+                "images": [],
+            }
+            if mode_case == "apptools_untrusted":
+                state["capabilities_now"] = apptools_untrusted_caps
+                state["capability_notes"] = {
+                    "stop": "在 Codex 设置 → Hooks 里打开并信任 3 个遥应钩子，手机才能批准、停止、回答",
+                    "mode": "新版 Codex 从手机发的消息跟着电脑上当前的模式走，手机上不能切换",
+                }
+            elif mode_case == "apptools_trusted":
+                state["capabilities_now"] = apptools_trusted_caps
+                state["capability_notes"] = {
+                    "mode": "新版 Codex 从手机发的消息跟着电脑上当前的模式走，手机上不能切换",
+                }
+            elif mode_case == "legacy":
+                state["capabilities_now"] = base_caps
+                state["capability_notes"] = {}
+            return state
+
+        for engine in ("webkit", "chromium"):
+            with self.subTest(engine=engine):
+                browser = (
+                    self.browser
+                    if engine == "webkit"
+                    else self.pw.chromium.launch(channel="chrome", headless=True)
+                )
+                try:
+                    for case in ("apptools_untrusted", "legacy", "no_field"):
+                        current_state = [make_state(case)]
+
+                        def router(route, request, box=current_state):
+                            path = urlsplit(request.url).path
+                            js = lambda obj: route.fulfill(
+                                status=200, content_type="application/json; charset=utf-8",
+                                body=json.dumps(obj, ensure_ascii=False),
+                            )
+                            if path == "/":
+                                return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=render_page(machine))
+                            if path == "/api/chats":
+                                return js({"items": [
+                                    {"app": "codex", "id": "c-1", "title": "Codex 能力测试", "folder": "demo", "cwd": "C:\\demo",
+                                     "updated": NOW, "created": NOW, "status": "running", "preview": "正在执行"},
+                                ], "total": 1, "has_more": False, "next_cursor": ""})
+                            if path == "/api/chat":
+                                return js({
+                                    "app": "codex", "id": "c-1", "title": "Codex 能力测试", "folder": "demo", "cwd": "C:\\demo",
+                                    "status": "running", "size": 1, "note": "", "has_more": False, "next_cursor": "",
+                                    "runtime": {}, "messages": [{"id": "m1", "role": "assistant", "time": NOW, "text": "运行中"}],
+                                })
+                            if path == "/api/codex/state":
+                                return js(box[0])
+                            if path == "/api/events":
+                                return route.fulfill(status=404, body="{}")
+                            if path.startswith("/api/"):
+                                return js({})
+                            if serve_static(route, path):
+                                return
+                            route.fulfill(status=404, body="")
+
+                        ctx = browser.new_context(viewport={"width": 390, "height": 844}, reduced_motion="reduce")
+                        try:
+                            page = ctx.new_page()
+                            errors = []
+                            page.on("pageerror", lambda e: errors.append(str(e)))
+                            page.route(ORIGIN + "/**", router)
+                            page.goto(ORIGIN, wait_until="load")
+                            page.wait_for_function("document.querySelectorAll('#convList .conv').length === 1")
+                            page.locator('#convList .conv[data-key="codex:c-1"]').click()
+                            page.wait_for_function("!document.getElementById('codexComposerTools').hidden && !document.getElementById('codexQueue').hidden")
+
+                            stop_hidden = page.evaluate("document.querySelector('.cv-top button[aria-label=\"停止当前轮\"]').hidden")
+                            mode_hidden = page.evaluate("document.getElementById('modeChoice').hidden")
+                            queue_hidden = page.evaluate("document.getElementById('codexQueue').hidden")
+                            self.assertFalse(queue_hidden, (engine, case))
+
+                            if case == "apptools_untrusted":
+                                self.assertTrue(stop_hidden, (engine, case))
+                                self.assertTrue(mode_hidden, (engine, case))
+                                # openModes() is blocked when 'mode' is absent from settingsNow
+                                page.evaluate("codexUI.openModes()")
+                                self.assertFalse(page.evaluate("document.getElementById('modeSheet').classList.contains('is-open')"))
+                                # noteNow / modesNow helpers work as designed
+                                self.assertIn("打开并信任", page.evaluate("Agents.noteNow('codex', 'stop', codexUI.observations())"))
+                                self.assertEqual(page.evaluate("Agents.modesNow('codex', codexUI.observations())"), ["send", "steer", "queue"])
+                                # Live control update (hooks trusted mid-conversation) reveals Stop without page reload
+                                trusted_state = make_state("apptools_trusted")
+                                page.evaluate("s => codexUI.applyState(cur, s)", trusted_state)
+                                self.assertFalse(page.evaluate("document.querySelector('.cv-top button[aria-label=\"停止当前轮\"]').hidden"))
+                                self.assertTrue(page.evaluate("document.getElementById('modeChoice').hidden"))
+                            else:
+                                self.assertFalse(stop_hidden, (engine, case))
+                                self.assertFalse(mode_hidden, (engine, case))
+                            self.assertEqual(errors, [])
+                        finally:
+                            ctx.close()
+                finally:
+                    if engine != "webkit":
+                        browser.close()
+
 
 if __name__ == "__main__":
     unittest.main()

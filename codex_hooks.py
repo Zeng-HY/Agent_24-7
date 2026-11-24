@@ -59,6 +59,8 @@ STOP_DENY_REASON = "用户在手机上按了停止。不要再调用任何工具
 APPROVAL_DENY_MESSAGE = "用户在手机上拒绝了这次操作。"
 
 _CODEX_HOME_OVERRIDE: Path | None = None
+_TRUST_CACHE_LOCK = threading.Lock()
+_TRUST_CACHE: dict[str, tuple[float, str]] = {}
 
 _HOOK_STEPS = {
     "bash": "run",
@@ -267,6 +269,7 @@ def install_hooks(
             return False
         groups.append({"matcher": "*", "hooks": [desired[event]]})
     _write_hooks_json(path, data, original)
+    reset_trust_cache()
     if callable(log):
         log(f"已将遥应的 3 条 Codex 钩子写入 {path}（原有用户钩子保持不变）")
     return True
@@ -287,9 +290,23 @@ def remove_hooks(*, codex_home: Path | None = None, log: Callable[[str], None] =
     if not _strip_teleply(data):
         return False
     _write_hooks_json(path, data, None)
+    reset_trust_cache()
     if callable(log):
         log(f"已从 {path} 移除遥应的 Codex 钩子")
     return True
+
+
+def _trust_cache_key(home: Path) -> str:
+    try:
+        return str(home.resolve()).casefold()
+    except OSError:
+        return str(home).casefold()
+
+
+def reset_trust_cache() -> None:
+    """Clear the 2-second read_trust_status cache (used after hook edits and in tests)."""
+    with _TRUST_CACHE_LOCK:
+        _TRUST_CACHE.clear()
 
 
 def _norm_state_path(raw_path: str) -> str:
@@ -310,9 +327,7 @@ def _norm_state_key(key: str) -> str:
     return _norm_state_path(text)
 
 
-def read_trust_status(*, codex_home: Path | None = None) -> str:
-    """Read-only check of Teleply hooks status: 'not_installed' | 'pending_trust' | 'enabled'."""
-    home = Path(codex_home) if codex_home is not None else default_codex_home()
+def _read_trust_status_uncached(home: Path) -> str:
     hooks_path = home / "hooks.json"
     if not hooks_path.is_file():
         return "not_installed"
@@ -362,6 +377,29 @@ def read_trust_status(*, codex_home: Path | None = None) -> str:
         if not isinstance(trusted_hash, str) or not trusted_hash.strip():
             return "pending_trust"
     return "enabled"
+
+
+def read_trust_status(
+    *,
+    codex_home: Path | None = None,
+    force: bool = False,
+    clock: Callable[[], float] = time.monotonic,
+) -> str:
+    """Read-only check of Teleply hooks status: 'not_installed' | 'pending_trust' | 'enabled' (cached 2 s)."""
+    home = Path(codex_home) if codex_home is not None else default_codex_home()
+    key = _trust_cache_key(home)
+    now = clock()
+    if not force:
+        with _TRUST_CACHE_LOCK:
+            cached = _TRUST_CACHE.get(key)
+            if cached is not None and now - cached[0] < TRUST_CACHE_TTL:
+                return cached[1]
+    result = _read_trust_status_uncached(home)
+    with _TRUST_CACHE_LOCK:
+        _TRUST_CACHE[key] = (clock(), result)
+        if len(_TRUST_CACHE) > 32:
+            _TRUST_CACHE.pop(next(iter(_TRUST_CACHE)))
+    return result
 
 
 # ---------------------------------------------------------------- safe immediate command stop
@@ -814,7 +852,7 @@ class CodexHookServer:
         now = self._clock()
         if not fresh and self._trust_cache is not None and now - self._trust_cache[0] < TRUST_CACHE_TTL:
             return self._trust_cache[1]
-        status = read_trust_status(codex_home=self.codex_home)
+        status = read_trust_status(codex_home=self.codex_home, force=fresh)
         self._trust_cache = (now, status)
         return status
 

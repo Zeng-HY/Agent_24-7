@@ -13,7 +13,7 @@
 3. 在 `agents/registry.py` 的 `AGENT_MODULES` 元组里加一行 `"agents.<id>"`。
 4. 补齐单元测试并跑过 `tests/test_agents.py`、`tests/test_no_hardcoded_agents.py` 等检查。
 
-Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodules('agents', filter=lambda name: name != 'agents.testing')` 自动收集 `agents/` 下的模块，因此不用改 `.spec`。打包后的自检（`AgentRemote.exe --self-test`，见 `relay_desktop.py`）会自动验证 `AGENT_MODULES` 中的每个模块都能加载、`agent.id` 与文件名一致，且 `testing` 不在正式包里。
+Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodules('agents', filter=lambda name: name != 'agents.testing')` 自动收集 `agents/` 下的模块，因此不用改 `.spec`。打包后的自检（`AgentRemote.exe --self-test`，见 `relay_desktop.py`）会自动验证 `AGENT_MODULES` 中的每个模块都能加载、`agent.id` 与文件名一致，且 `testing` 不在正式包里。如果新助手带额外小程序，或需要在卸载时清理本机文件，目前还要改 `deploy/windows/version.py`、`setup.iss`、`relay_desktop.py`（以后会改成按名单统一处理）。
 
 ---
 
@@ -29,7 +29,13 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 ## 三、说明书（`manifest`）字段说明
 
-每个助手在 `build_manifest()` 里调用 `agents.base.make_manifest(...)` 生成说明书。若某家助手的能力会随电脑端运行状态动态变化（例如新版 Codex 在应用工具管道、钩子是否信任与未运行三种状态间切换），可覆写 `manifest()` 与 `can()` 在每次读取时按当前状态现算。`remote.py` 会在两个地方下发说明书：
+每个助手在 `build_manifest()` 里调用 `agents.base.make_manifest(...)` 生成说明书。能力分成两层：
+- **说明书（`manifest()`）固定、便宜**：只写这一版电脑程序能做什么，由基类在 `__init__` 里算一次，**不许读文件、查管道或走网络**，也不要为了动态能力覆写 `manifest()` 或 `can()`。
+- **此刻的能力（`capabilities_now(server, conv_id)`）**：如果某家助手的能力会在运行中变化，覆写 `capabilities_now()`，返回 `{"capabilities": {...}, "notes": {"<能力名>": "<中文原因>"}}`（不变的助手保持默认返回 `None`）。它只在协议 2 的控制态接口和实时推送里下发 `capabilities_now` 与 `capability_notes`；`capabilities` 的键和类型必须和说明书一致，且每一项只能比说明书更窄（说明书为 `False` 的不能变 `True`，列表只能是子集），并附上不能做的中文原因。因为每个打开着的对话每秒都会调一次，读文件或管道的结果必须自己缓存（至少 2 秒）。服务端判断会变的能力时，改用 `can_now(capability, server, conv_id)`。
+
+以 Codex 为例：说明书固定保留老路线的完整能力；运行时在老路线、新版应用工具路线（按钩子是否已信任区分停止、批准、回答）和未运行三条状态间切换时，由 `capabilities_now()` 返回此刻可用能力与中文原因。
+
+`remote.py` 会在两个地方下发说明书：
 - `GET /api/agents`（协议 2 客户端按需拉取）；
 - 网页首屏注入 `window.MACHINE.agents`。
 
@@ -48,7 +54,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 | `ui` | `dict` | `{"card_layout": "generic.v1", "waiting_text": "等待你处理"}`。 |
 | `sources` | `dict` | 可选的诊断信息（例如 `{"catalog": "sqlite", "transcript": "jsonl", "control": "none", "live": "file-poll"}`）。 |
 
-> 关于 `icon` 的当前实现：网页端 `static/agents.js` 内置了 `codex`、`claude`、`deepseek` 三个矢量图标和一套通用图标（`key: "generic"` 或任何未知 key 都会回退到通用图标），同时也已经支持渲染 `kind: "url"` 的图片地址。电脑端目前没有自带 `/api/agents/<id>/icon.png` 静态路由；如果新助手暂时只需要通用图标，直接填 `{"kind": "builtin", "key": "generic"}` 即可；如果以后需要下发自定义 PNG，可以把图标放到 `static/` 并在 `remote.py` 的 `STATIC_FILES` 注册，或在模块里按需提供对应路由，再把 `icon` 指过去。
+> 关于 `icon` 的当前实现：网页端 `static/agents.js` 内置了 `codex`、`claude`、`deepseek` 三个矢量图标和一套通用图标（`key: "generic"` 或任何未知 key 都会回退到通用图标）。自定义图标目前没有按助手提供的图标地址，新助手先用通用图标（`{"kind": "builtin", "key": "generic"}`）；**不要为了某一家助手去改 `remote.py` 的 `STATIC_FILES`**。
 
 ### 2. 能力位（`capabilities`）
 
@@ -109,8 +115,9 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 
 先让手机能「看到并读到」对话，只需实现：
 
-- `build_manifest(self) -> dict`：返回说明书。
+- `build_manifest(self) -> dict`：返回固定的说明书（不读文件、管道或网络）。
 - `detect(self) -> bool`：检查本机是否安装了该助手（只做轻量目录/文件存在性检查，**绝不启动程序或碰桌面窗口**）。
+- **测试隔离路径**：`detect()` 和所有读取本地文件的路径，都必须通过 `machines.HOME`、`machines.LOCALAPPDATA`、`machines.APPDATA` 这类测试能替换的变量拼接，不要直接用 `Path.home()` 或硬编码用户目录；开发用的电脑上可能真装着那个桌面应用，直接读用户目录会让测试读到真东西。
 - `catalog(self, *, limit=40, cursor="", query="", sort="updated", status="all") -> dict`：分页列出对话，返回 `{"items", "has_more", "next_cursor", "total"}`。
 - `catalog_entries(self, limit: int) -> list[dict]`：给统一列表/项目树读取近期对话行（通常直接调 `self.catalog(limit=limit)["items"]`）。
 - `find(self, conv_id: str) -> dict`：按 ID 找到单条记录，找不到抛 `NotFound`。
@@ -128,7 +135,10 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 - **停止 / 队列 / 回答 / 电脑上打开**：`stop(payload)`、`queue(payload)`、`answer(payload)`、`open(conv_id)`
 - **新建对话**：`new_options(svc)`、`create(payload)`、`create_status(request_id)`（若直接自己管理新建流程而非走 `new_conversations.NewConversations` 状态机，将类属性设为 `new_managed = False`，参考 `agents/testing.py`）
 - **归档 / 恢复 / 删除**：`archive(conv_id)`、`restore(conv_id)`、`delete(conv_id)`、`archived_list(svc)`
-- **用量 / 附件 / 命令**：`usage(live=False)`、`upload(conv_id, name, raw)`、`commands(conv_id, references=None, deepseek=None)`
+- **用量 / 附件 / 命令**：`usage(live=False)`、`upload(conv_id, name, raw)`、`commands(conv_id, *, references=None, deepseek=None)`（其中 `deepseek` 参数是历史遗留，新助手忽略它即可）
+- **运行中变化的能力**：`capabilities_now(server, conv_id)` 返回此刻的能力字典与中文原因（不变返回 `None`），并自带至少 2 秒缓存；服务端检查会变的能力用 `can_now(capability, server, conv_id)`。
+- **服务生命周期**：`on_server_start(cfg, apps, log)`（服务启动前准备）、`on_server_init(server)`（HTTP 服务建好后启动后台任务或连接）、`on_server_close(server)`（服务退出时清理关闭）。
+- **实时推送（SSE）**：`watch(bridge, tid)`、`control(bridge, tid)`、`wait_update(bridge, tid, timeout)`。注意：这三个方法收到的 `bridge` 参数目前总是 Codex 的连接对象（见 `remote.py:928`），**新助手不要用它**；需要一直开着的后台东西（例如本地监听、长连接），应在 `on_server_init(server)` 里建立、存在自己模块的模块级对象里，并在 `on_server_close(server)` 里关闭，不要挂在 `self` 上，也不要挂在 `server.codex` 上。
 - **通知监控**：非文件扫描类助手将类属性设为 `notify_uses_file = False`，实现 `notify_conversations(limit)` 和 `notify_poll(notifier, found, item)`；文件扫描类助手实现 `notify_turn_end(lines)` / `notify_scan_record(scan, rec)`
 
 ### 3. 统一 HTTP 地址自动接好
@@ -176,12 +186,13 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 ## 七、网页和手机怎么显示新助手与不认识的助手
 
 - **网页版（`static/agents.js` + `remote.html`）**：
-  - 打开页面时从 `window.MACHINE.agents` 读取说明书，动态渲染筛选标签、侧栏图标、新建面板按钮、归档说明以及各操作按钮的显隐。
+  - 打开页面时从 `window.MACHINE.agents` 读取说明书（只在打开时读一次），动态渲染筛选标签、侧栏图标、新建面板按钮、归档说明以及各操作按钮的显隐；运行中会变的能力从控制态里的 `capabilities_now` 读取（`Agents.canNow` / `settingsNow` / `modesNow` / `noteNow`）。
   - `card_layout` 不是三家专属布局时，自动走通用面板 `window.genericAgentUI`（调用 `/api/agents/<id>/state|send|stop|receipt`）；如果 `send_modes` 为空，发送按钮自动禁用，只读不出错。
   - 遇到说明书里没有的未知助手 ID 时，不会冒充 Claude 或 Codex，而是直接用 ID 作为显示名、使用中性灰 `#6b7280` 和通用图标，可以正常阅读且禁用发送、打开、停止按钮。
   - 如果网页连上的是还没下发 `window.MACHINE.agents` 的老电脑，`static/agents.js` 会自动启用内置三家兜底。
 - **手机端（安卓 / iOS）**：
-  - 启动或切换电脑时拉取 `/api/agents` 并按说明书显示名字、颜色、图标和能力；未知布局走通用面板，未知助手用通用样式且不崩溃；连老电脑时回退内置三家与老路由。
+  - 按电脑版本号缓存 `/api/agents` 说明书（App 重开、在手机上点「重试」或电脑升级后才重新拉取），并按说明书显示名字、颜色、图标和能力；未知布局走通用面板，未知助手用通用样式且不崩溃；连老电脑时回退内置三家与老路由。
+  - 因为网页和手机都会按电脑版本缓存说明书，**运行中会变的能力必须走控制态的 `capabilities_now`，不能靠改说明书**。
 
 ---
 
@@ -213,7 +224,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
    ```powershell
    python -m pytest tests/test_no_hardcoded_agents.py
    ```
-   - 自动用 `ast` 扫描电脑端 14 个公共 Python 文件。只要公共分发代码里出现任何正式助手 ID 就会失败。**不要为了过测试往 `ALLOW` 白名单里加新条目**，应把按家差异收进 `agents/<id>.py`。
+   - 自动用 `ast` 扫描电脑端公共 Python 文件中的助手 ID 字符串、私有模块导入与按助手名取属性。只要公共分发代码里出现新增的写死分支就会失败。**不要为了过测试往白名单或冻结表里加新条目**，应把按家差异收进 `agents/<id>.py`。
 3. **三家老行为回归测试**：
    ```powershell
    python -m pytest tests/test_read_golden.py tests/test_read_compat.py tests/test_action_golden.py

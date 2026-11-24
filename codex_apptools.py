@@ -48,6 +48,11 @@ STATUS_CACHE_TTL = 1.5
 INCOMPATIBLE_REASON = "电脑上的 Codex 升级了，遥应暂时不能从手机发给 Codex"
 NOT_RUNNING_REASON = "Codex 没在运行，请先在电脑上打开 Codex"
 WINDOW_NOT_READY_REASON = "Codex 窗口没准备好，请先在电脑上打开 Codex 窗口再试"
+PLAN_MODE_IGNORED_NOTE = "新版 Codex 从手机发的消息跟着电脑上当前的模式走，这次选的「计划模式」没有生效。"
+
+
+def _is_plan_mode_requested(settings: Any) -> bool:
+    return isinstance(settings, dict) and str(settings.get("mode") or "").strip().lower() == "plan"
 
 _ROUTE_LOCK = threading.Lock()
 _ROUTE_CACHE: tuple[float, str, str | None] | None = None
@@ -1427,6 +1432,7 @@ class AppToolsBridge:
 
             # Only send model/thinking when explicitly selected or known
             wanted = body.get("settings") or {}
+            plan_mode_ignored = _is_plan_mode_requested(wanted)
             send_model = desired.get("model") if wanted.get("model") else None
             send_thinking = desired.get("effort") if wanted.get("effort") else None
 
@@ -1455,7 +1461,7 @@ class AppToolsBridge:
                     "request_id": rid,
                     "queue_message_id": rid,
                     "intent": "queue",
-                    "text": "已排队",
+                    "text": f"已排队。{PLAN_MODE_IGNORED_NOTE}" if plan_mode_ignored else "已排队",
                     "compiled_prompt": prompt,
                     "evidence": {"source": "teleply_queue"},
                 }
@@ -1490,7 +1496,7 @@ class AppToolsBridge:
                 "delivery_state": "accepted",
                 "intent": actual_intent,
                 "request_id": rid,
-                "text": "已交给 Codex",
+                "text": f"已交给 Codex。{PLAN_MODE_IGNORED_NOTE}" if plan_mode_ignored else "已交给 Codex",
                 "settings": desired,
                 "compiled_prompt": prompt,
                 "evidence": {"source": "app_tools_ack"},
