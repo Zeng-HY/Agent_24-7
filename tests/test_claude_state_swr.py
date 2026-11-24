@@ -143,6 +143,13 @@ class StaleWhileRead(unittest.TestCase):
         self.desktop.fail=None;self.age(10);self.c.state(TID)
         self.assertEqual(self.desktop.reads,['now','now'])
 
+    def test_a_failed_read_behind_leaves_the_older_one_answering(self):
+        self.c.state(TID,True);self.age(10);old=self.c.cache[TID]
+        self.desktop.fail=TimeoutError('the desktop worker was busy')
+        self.assertNotIn('reason',self.c.state(TID));self.join()
+        self.assertIs(self.c.cache[TID],old)
+        self.assertEqual(self.desktop.reads,['now','background'])
+
     def test_one_read_behind_per_conversation_and_one_from_before_an_action_is_not_kept(self):
         self.c.state(TID,True);self.age(10);self.desktop.gate=threading.Event()
         self.c.state(TID);self.c.state(TID)  # two polls while the window is read behind

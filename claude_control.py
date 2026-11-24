@@ -695,15 +695,16 @@ class Controller:
         return self._settle(item,data,path)
     def _revalidate(self,tid,item,old):
         """Read the window again in the background for the next poll, through the same desktop worker; one read per
-        conversation at a time. What it reads is kept only if the entry it renews is still there: an action drops the
-        entry, and a read from before an action is not kept after it."""
+        conversation at a time. What it reads is kept only if the entry it renews is still there (an action drops the
+        entry: a read from before an action is not kept after it), and only if the read worked: while the desktop worker
+        is busy the older read keeps answering, until it is STATE_STALE old and a poll reads in the foreground."""
         running=self.revalidating.get(tid)
         if running is not None and running.is_alive():return
         def run():
             try:
                 data,window=self._read_state(item)
                 with self.lock:
-                    if self.cache.get(tid) is old:self._keep(tid,(time.monotonic(),data,window))
+                    if window is not None and self.cache.get(tid) is old:self._keep(tid,(time.monotonic(),data,window))
             except Exception:pass  # the next poll reads it in the foreground, as before
             finally:
                 with self.lock:
