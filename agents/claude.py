@@ -5,10 +5,34 @@ from __future__ import annotations
 from datetime import datetime
 import difflib
 import json
+import secrets
+import traceback
 
 import chats
+import claude_hooks
 
 from .base import Agent, NotFound, make_manifest
+
+
+def hook_settings(cfg: dict, claude: bool, log) -> None:
+    """Claude Code's hook to this service in Claude's user settings (claude_hooks.py), kept to this port and key; taken
+    out again with "claude_hooks": false in remote_config.json. A computer without Claude is left alone."""
+    import secrets
+    import traceback
+
+    import claude_hooks
+    try:
+        if cfg.get("claude_hooks") is False:
+            claude_hooks.remove(log)
+        elif claude:
+            if not cfg.get("claude_hook_key"):
+                cfg["claude_hook_key"] = secrets.token_urlsafe(18)
+                import remote
+                remote.save_config(cfg)
+            claude_hooks.install(f"http://127.0.0.1:{cfg['port']}{claude_hooks.PATH}{cfg['claude_hook_key']}", log)
+    except Exception:
+        log("Claude 的 hook 设置没改成\n" + traceback.format_exc())
+
 
 CLAUDE_STEPS = {
     "Bash": "run",
@@ -27,6 +51,7 @@ CLAUDE_STEPS = {
 
 class ClaudeAgent(Agent):
     id = "claude"
+    hook_path = claude_hooks.PATH
     home_list = True
     requires_running_state = False
     relative_links = True
@@ -640,17 +665,53 @@ class ClaudeAgent(Agent):
         return result
 
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
-        import remote
-        remote.hook_settings(cfg, self.id in apps, log)
+        hook_settings(cfg, self.id in apps, log)
+
+    def uninstall(self, log) -> bool:
+        # False from remove() means "nothing of ours was there", not a failure: the old switch exited 0 too.
+        claude_hooks.remove(log)
+        return True
 
     def on_server_init(self, server) -> None:
         import threading
-        hooks = getattr(server, "claude_hooks", None)
-        if hooks is not None and hasattr(hooks, "refresh_sessions"):
+
+        import claude_hooks
+        log = getattr(getattr(server, "log", None), "write", lambda _t: None)
+        bridge = claude_hooks.Bridge(
+            log,
+            notify=server.notifier.asking,
+            changed=lambda tid: server.claude.cache.pop(tid, None),
+        )
+        # The old attribute names stay (tests and the rest of the service read them); the module sets them now.
+        server.claude_hooks = bridge
+        server.claude.hooks = None if (getattr(server, "cfg", {}) or {}).get("claude_hooks") is False else bridge
+        self.set_service(server, bridge)
+        # Warm-up comes after the bridge exists and is reachable through server.claude_hooks.
+        if hasattr(bridge, "refresh_sessions"):
             addr = getattr(server, "server_address", None)
             if isinstance(addr, tuple) and len(addr) >= 2 and addr[1]:
-                hooks.server_port = int(addr[1])
-            threading.Thread(target=hooks.refresh_sessions, name="claude-hook-warm", daemon=True).start()
+                bridge.server_port = int(addr[1])
+            threading.Thread(target=bridge.refresh_sessions, name="claude-hook-warm", daemon=True).start()
+
+    def handle_hook(self, handler, path: str) -> None:
+        """A hook request from Claude Code on this computer (claude_hooks.py). Let in by the hook key in the address
+        (remote_config.json "claude_hook_key"), never through Tailscale; held open until the phone answers. Anything
+        else than a decision is an empty 200, which Claude Code reads as no decision."""
+        key = str(handler.cfg.get("claude_hook_key") or "")
+        if not key or not secrets.compare_digest(path[len(claude_hooks.PATH):], key) or handler.headers.get("Tailscale-User-Login"):
+            handler.close_connection = True
+            handler._json({"error": "口令不对"}, 403)
+            return
+        body = handler._body()
+        reply = None
+        if not body.get("_bad"):
+            try:
+                peer = handler.client_address[1] if isinstance(getattr(handler, "client_address", None), tuple) and len(handler.client_address) >= 2 else 0
+                port = handler.server.server_address[1] if isinstance(getattr(handler.server, "server_address", None), tuple) and len(handler.server.server_address) >= 2 else 0
+                reply = claude_hooks.dispatch(handler.server.claude_hooks, body, handler._hung_up, peer, port)  # type: ignore[attr-defined]
+            except Exception:
+                handler.log.write(traceback.format_exc())
+        handler._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
 
     def chat_send_with_references(self, handler, body: dict) -> dict:
         import time

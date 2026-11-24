@@ -65,7 +65,6 @@ import chat_history
 import chat_projects  # the sidebar: conversations by app and project, as the desktop apps group them
 import live_events
 import claude_control
-import claude_hooks  # Claude Code asks this service first before a question card or a permission prompt (10-27)
 import composer_references
 import composer_commands  # what the box offers after / and how a typed command runs (0.6.6)
 import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
@@ -234,6 +233,15 @@ class Log:
 
 
 # ---------------------------------------------------------------- http
+
+
+def hook_agent(path: str):
+    """The assistant whose hook address this path belongs to, or None (decided by the registry, not by name)."""
+    for agent in agent_registry.load():
+        prefix = getattr(agent, "hook_path", "")
+        if prefix and path.startswith(prefix):
+            return agent
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -423,26 +431,6 @@ class Handler(BaseHTTPRequestHandler):
             return bool(ready) and not self.connection.recv(1, socket.MSG_PEEK)
         except OSError:
             return True
-
-    def _claude_hook(self, path: str) -> None:
-        """A hook request from Claude Code on this computer (claude_hooks.py). Let in by the hook key in the address
-        (remote_config.json "claude_hook_key"), never through Tailscale; held open until the phone answers. Anything
-        else than a decision is an empty 200, which Claude Code reads as no decision."""
-        key = str(self.cfg.get("claude_hook_key") or "")
-        if not key or not secrets.compare_digest(path[len(claude_hooks.PATH):], key) or self.headers.get("Tailscale-User-Login"):
-            self.close_connection = True
-            self._json({"error": "口令不对"}, 403)
-            return
-        body = self._body()
-        reply = None
-        if not body.get("_bad"):
-            try:
-                peer = self.client_address[1] if isinstance(getattr(self, "client_address", None), tuple) and len(self.client_address) >= 2 else 0
-                port = self.server.server_address[1] if isinstance(getattr(self.server, "server_address", None), tuple) and len(self.server.server_address) >= 2 else 0
-                reply = claude_hooks.dispatch(self.server.claude_hooks, body, self._hung_up, peer, port)  # type: ignore[attr-defined]
-            except Exception:
-                self.log.write(traceback.format_exc())
-        self._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
 
     # -- GET
 
@@ -715,8 +703,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self) -> None:
         path = urlsplit(self.path).path
-        if path.startswith(claude_hooks.PATH):  # Claude Code itself, with the hook key instead of the token
-            self._claude_hook(path)
+        hook = hook_agent(path)  # an assistant's own hook address, with its key instead of the phone token
+        if hook is not None:
+            if self.headers.get("Tailscale-User-Login"):
+                self.close_connection = True
+                self._json({"error": "口令不对"}, 403)
+                return
+            hook.handle_hook(self, path)
             return
         if not self._authorized():
             self.close_connection = True
@@ -1143,18 +1136,12 @@ def machine_facts(cfg: dict) -> dict:
 
 
 def hook_settings(cfg: dict, claude: bool, log) -> None:
-    """Claude Code's hook to this service in Claude's user settings (claude_hooks.py), kept to this port and key; taken
-    out again with "claude_hooks": false in remote_config.json. A computer without Claude is left alone."""
-    try:
-        if cfg.get("claude_hooks") is False:
-            claude_hooks.remove(log)
-        elif claude:
-            if not cfg.get("claude_hook_key"):
-                cfg["claude_hook_key"] = secrets.token_urlsafe(18)
-                save_config(cfg)
-            claude_hooks.install(f"http://127.0.0.1:{cfg['port']}{claude_hooks.PATH}{cfg['claude_hook_key']}", log)
-    except Exception:
-        log("Claude 的 hook 设置没改成\n" + traceback.format_exc())
+    """Compatibility wrapper: Claude's own module installs/removes its hook now (agents/claude.py).
+
+    Kept because older code and existing tests call remote.hook_settings; the body lives in the module
+    with the rest of Claude's lifecycle, so a new assistant never needs a line here."""
+    from agents.claude import hook_settings as apply_claude_hook_settings
+    apply_claude_hook_settings(cfg, claude, log)
 
 
 class Server(ThreadingHTTPServer):
@@ -1163,6 +1150,22 @@ class Server(ThreadingHTTPServer):
     # script never ran: no Claude buttons, no microphone (10-11; a burst of 36 lost 5, with 128 none).
     request_queue_size = 128
     daemon_threads = True
+
+
+def start_agents(server, cfg: dict, log) -> None:
+    """Every registered assistant: its pre-start hook, then its init hook (after the notifier exists)."""
+    for agent in agent_registry.load():
+        agent.on_server_start(cfg, server.machine["apps"], log)
+        agent.on_server_init(server)
+
+
+def close_agents(server) -> None:
+    """Every registered assistant closes; one failure never skips the rest."""
+    for agent in agent_registry.load():
+        try:
+            agent.on_server_close(server)
+        except Exception:
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1191,11 +1194,6 @@ def main(argv: list[str] | None = None) -> int:
     server.deepseek = deepseek_control.bridge()
     server.deepseek.log = log  # "回答：…" lines in the day's file, beside "通知：…"
     server.deepseek.uploads = server.codex
-    if deepseek_control.HOME.is_dir():server.deepseek.events.start()
-    import codex_question_dismiss
-    server.codex.dismiss_manager = codex_question_dismiss.DismissManager(
-        server.codex, enabled=cfg.get("codex_auto_dismiss_answered_questions", False),
-        verified_version=cfg.get("codex_dismiss_verified_version", ""), log=log.write)
     server.claude = claude_control.Controller(server.desktop)
     server.claude_reads = collections.deque(maxlen=60)  # when the page last read Claude's state, and from what (10-12)
     server.tasks = activity.TaskCenter(server.codex)
@@ -1215,12 +1213,10 @@ def main(argv: list[str] | None = None) -> int:
     server.computers.spawn(server.computers.look)  # the first tap on the computer's name need not wait for it
     server.notifier = notify.Notifier(cfg, server.machine["name"], log, lambda: save_config(cfg), bridge=server.codex)  # type: ignore[attr-defined]
     server.notifier.start()
-    server.claude_hooks = claude_hooks.Bridge(log.write, notify=server.notifier.asking,  # type: ignore[attr-defined]
-                                              changed=lambda tid: server.claude.cache.pop(tid, None))
-    server.claude.hooks = None if cfg.get("claude_hooks") is False else server.claude_hooks
-    for agent in agent_registry.load():
-        agent.on_server_start(cfg, server.machine["apps"], log.write)
-        agent.on_server_init(server)
+    # Long-lived per-assistant things live here (base.Agent.service/set_service); it must exist before any
+    # on_server_init runs.
+    server.agent_services = {}  # type: ignore[attr-defined]
+    start_agents(server, cfg, log.write)
     if server.machine["voice"]:
         server.voice = voice.Voice(cfg, log)  # type: ignore[attr-defined]
         server.local_asr = voice_local.LocalASR(cfg, log)  # type: ignore[attr-defined]  (loads in the background)
@@ -1246,15 +1242,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        for agent in agent_registry.load():
-            try:
-                agent.on_server_close(server)
-            except Exception:
-                pass
+        close_agents(server)
         server.notifier.close()
         server.tasks.close()
         server.codex.close()
-        server.deepseek.events.close()
         server.server_close()
     return 0
 

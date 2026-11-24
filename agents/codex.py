@@ -68,6 +68,7 @@ def output_text(value) -> str:
 
 class CodexAgent(Agent):
     id = "codex"
+    helpers = (("deploy/windows/TeleplyCodexHook.cs", "TeleplyCodexHook.exe"),)
     home_list = True
     requires_running_state = True
     dedupe_twins = True
@@ -450,6 +451,10 @@ class CodexAgent(Agent):
         bridge = getattr(server, "codex", None)
         if bridge is None:
             return
+        import codex_question_dismiss
+        bridge.dismiss_manager = codex_question_dismiss.DismissManager(
+            bridge, enabled=cfg.get("codex_auto_dismiss_answered_questions", False),
+            verified_version=cfg.get("codex_dismiss_verified_version", ""), log=log)
         apptools = self._apptools_for(bridge)
 
         def on_waiting(tid: str, card: dict) -> None:
@@ -495,6 +500,27 @@ class CodexAgent(Agent):
                     obj.close()
                 except Exception:
                     pass
+
+    def uninstall(self, log) -> bool:
+        import codex_hooks
+        # False from remove_hooks() means "nothing of ours was there", not a failure: the old switch exited 0 too.
+        codex_hooks.remove_hooks(log=log)
+        return True
+
+    def status_hint(self, cfg: dict) -> str:
+        """Pending trust on the app-tools route: the one thing the user must do on this PC. Cached reads."""
+        if cfg.get("codex_hooks") is False:
+            return ""
+        try:
+            import codex_apptools
+            if codex_apptools.current_route() != "apptools":
+                return ""
+            import codex_hooks
+            if codex_hooks.read_trust_status() == "pending_trust":
+                return codex_hooks.TRUST_HINT
+        except Exception:
+            pass
+        return ""
 
     def wait_update(self, bridge, tid: str, timeout: float) -> bool:
         route, backend = self._backend(bridge)

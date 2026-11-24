@@ -15,7 +15,7 @@
 
 只读助手的真实例子是 `agents/antigravity.py`：它只列对话、读内容、报一轮跑完，不发送、不停止、不批准。
 
-Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodules('agents', filter=lambda name: name != 'agents.testing')` 自动收集 `agents/` 下的模块，因此不用改 `.spec`。打包后的自检（`AgentRemote.exe --self-test`，见 `relay_desktop.py`）会自动验证 `AGENT_MODULES` 中的每个模块都能加载、`agent.id` 与文件名一致，且 `testing` 不在正式包里。如果新助手带额外小程序，或需要在卸载时清理本机文件，目前还要改 `deploy/windows/version.py`、`setup.iss`、`relay_desktop.py`（以后会改成按名单统一处理）。
+Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodules('agents', filter=lambda name: name != 'agents.testing')` 自动收集 `agents/` 下的模块，因此不用改 `.spec`。打包后的自检（`AgentRemote.exe --self-test`，见 `relay_desktop.py`）会自动验证 `AGENT_MODULES` 中的每个模块都能加载、`agent.id` 与文件名一致，且 `testing` 不在正式包里。如果新助手带额外小程序，在自己的模块里写 `helpers`；如果需要在卸载时清理本机文件，写 `uninstall()`。打包、安装清单和卸载入口都按 `agents.registry` 的名单自动处理，不用改 `deploy/windows/version.py`、`setup.iss` 或 `relay_desktop.py`。
 
 ---
 
@@ -141,7 +141,39 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 - **用量 / 附件 / 命令**：`usage(live=False)`、`upload(conv_id, name, raw)`、`commands(conv_id, *, references=None, deepseek=None)`（其中 `deepseek` 参数是历史遗留，新助手忽略它即可）
 - **运行中变化的能力**：`capabilities_now(server, conv_id)` 返回此刻的能力字典与中文原因（不变返回 `None`），并自带至少 2 秒缓存；服务端检查会变的能力用 `can_now(capability, server, conv_id)`。
 - **服务生命周期**：`on_server_start(cfg, apps, log)`（服务启动前准备）、`on_server_init(server)`（HTTP 服务建好后启动后台任务或连接）、`on_server_close(server)`（服务退出时清理关闭）。
-- **实时推送（SSE）**：`watch(bridge, tid)`、`control(bridge, tid)`、`wait_update(bridge, tid, timeout)`。注意：这三个方法收到的 `bridge` 参数目前总是 Codex 的连接对象（见 `remote.py:928`），**新助手不要用它**；需要一直开着的后台东西（例如本地监听、长连接），应在 `on_server_init(server)` 里建立、存在自己模块的模块级对象里，并在 `on_server_close(server)` 里关闭，不要挂在 `self` 上，也不要挂在 `server.codex` 上。
+  - **一直开着的东西放在 `server.agent_services`**：`remote.main()` 在调用任何 `on_server_init` 之前建好这个字典；用 `self.set_service(server, obj)` 放进 `server.agent_services[<id>]`，用 `self.service(server)` 取出，并在 `on_server_close` 里关掉。三家老助手的老对象（`server.codex`、`server.claude`、`server.deepseek`）只为老路由保留，新助手不要用。
+  - **钩子地址**：类属性 `hook_path` 是这家助手收钩子请求的地址前缀，空字符串表示没有。`remote` 在验手机口令之前按名单匹配这个前缀，命中后交给 `handle_hook(handler, path)`；默认回 404，有钩子的助手要在里面核对钩子自己的口令。
+  - **状态窗提示**：`status_hint(cfg)` 返回一句中文，说明用户要在这台电脑上做什么；没有就返回空字符串。状态窗刷新时会调用它，读文件的结果要自己缓存。
+  - **卸载清理**：`uninstall(log)` 撤掉这家助手放在遥应文件夹以外的东西（例如别的软件设置里的钩子），默认什么都不做并返回 `True`；卸载程序按名单挨个调用，一家失败不影响后面的。
+  - **随包小程序**：类属性 `helpers` 是 `((源文件相对仓库根目录的路径, 编出来的 exe 文件名), ...)`；打包时按名单编译并生成安装清单，不用改 `version.py` 或 `setup.iss`。
+  - **例**：一家用钩子的助手 `example` 只需要写自己的模块：
+    ```python
+    class ExampleAgent(Agent):
+        id = "example"
+        hook_path = "/api/example/hook/"
+        helpers = (("deploy/windows/ExampleHook.cs", "ExampleHook.exe"),)
+
+        def on_server_init(self, server):
+            self.set_service(server, start_my_listener(server))
+
+        def on_server_close(self, server):
+            listener = self.service(server)
+            if listener is not None:
+                listener.close()
+
+        def handle_hook(self, handler, path):
+            if not correct_hook_key(handler, path):
+                handler._json({"error": "口令不对"}, 403)
+                return
+            handler._json(handle_example_event(handler._body()))
+
+        def status_hint(self, cfg):
+            return "去 Example 设置里信任遥应钩子" if needs_trust() else ""
+
+        def uninstall(self, log):
+            return remove_example_hooks(log)
+    ```
+- **实时推送（SSE）**：`watch(bridge, tid)`、`control(bridge, tid)`、`wait_update(bridge, tid, timeout)`。注意：这三个方法收到的 `bridge` 参数目前总是 Codex 的连接对象（见 `remote.py:926`），**新助手不要用它**；需要一直开着的后台东西（例如本地监听、长连接），应在 `on_server_init(server)` 里建立、用 `self.set_service(server, ...)` 存在 `server.agent_services` 里，并在 `on_server_close(server)` 里关闭，不要挂在 `self` 上，也不要挂在 `server.codex` 上。
 - **通知监控**：非文件扫描类助手将类属性设为 `notify_uses_file = False`，实现 `notify_conversations(limit)` 和 `notify_poll(notifier, found, item)`；文件扫描类助手实现 `notify_turn_end(lines)` / `notify_scan_record(scan, rec)`
 
 ### 3. 统一 HTTP 地址自动接好

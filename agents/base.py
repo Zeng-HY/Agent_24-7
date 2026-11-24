@@ -106,6 +106,13 @@ class Agent:
     """The questions one assistant answers. Unimplemented ones raise Unsupported."""
 
     id = ""
+    # Prefix of the HTTP address this assistant's own hooks arrive on; "" means it has none.
+    # remote._post() checks this before the phone token, so the hook's own key must be checked in
+    # handle_hook().
+    hook_path: str = ""
+    # Small programs packaged next to AgentRemote.exe: (source path from the repo root, exe file name).
+    # deploy/windows/agent_helpers.py compiles these and writes the installer include from this list.
+    helpers: tuple[tuple[str, str], ...] = ()
     # Reading hooks the shared transcript reader asks about.
     home_list = False            # appears in chats.list_conversations (the old home list)
     requires_running_state = True  # a transcript without a running flag cannot be called idle
@@ -491,6 +498,25 @@ class Agent:
         return ""
 
     # -- server lifecycle & request-resolution hooks used by remote.py
+    #
+    # server.agent_services is a dict keyed by agent id, created by remote.main() before any
+    # on_server_start/on_server_init runs. An assistant keeps everything it leaves running for the
+    # whole service lifetime there (event listeners, bridges, background workers), and closes it in
+    # on_server_close. The legacy three keep their old objects (server.codex, server.claude,
+    # server.deepseek) for old routes; new assistants use server.agent_services only.
+    def service(self, server):
+        """This assistant's long-lived service object from server.agent_services, or None."""
+        return (getattr(server, "agent_services", None) or {}).get(self.id)
+
+    def set_service(self, server, obj):
+        """Store this assistant's long-lived service object in server.agent_services[self.id]."""
+        services = getattr(server, "agent_services", None)
+        if not isinstance(services, dict):
+            services = {}
+            server.agent_services = services
+        services[self.id] = obj
+        return obj
+
     def on_apps_rechecked(self, server, apps: list[str]) -> None:
         pass
 
@@ -502,6 +528,23 @@ class Agent:
 
     def on_server_close(self, server) -> None:
         pass
+
+    def handle_hook(self, handler, path: str) -> None:
+        """A request under this assistant's hook_path, before the phone token is checked.
+
+        The default answer is 404; an assistant with a hook address checks its own key in its
+        handler and then calls this."""
+        handler._json({"error": "没有这个地址"}, 404)
+
+    def uninstall(self, log) -> bool:
+        """Undo what this assistant put outside the Teleply folder (for example hooks in another app's
+        settings). True when done or when there is nothing to undo; False when it could not be undone."""
+        return True
+
+    def status_hint(self, cfg: dict) -> str:
+        """One plain Chinese line for the desktop status window when the user must do something on this
+        PC, or "" when there is nothing. Called on every status refresh: cache any file read."""
+        return ""
 
     def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
         return {}

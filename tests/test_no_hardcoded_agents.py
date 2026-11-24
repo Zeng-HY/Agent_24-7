@@ -91,19 +91,18 @@ ALLOW: dict[tuple[str, str, str], tuple[int, str]] = {
 # Frozen per-file counts for importing assistant-private modules (`import <id>_...` / `from <id>_... import ...`).
 # Adding a new import fails with every file:line; removing an old one also fails to remind shrinking this table.
 FROZEN_PRIVATE_IMPORTS: dict[str, tuple[int, str]] = {
-    "remote.py": (5, "启动时装配三家底层控制模块与 Codex 弹窗收起进程"),
+    "remote.py": (3, "启动时装配三家底层控制模块（服务生命周期与钩子已交给 agents/*）"),
     "live_events.py": (3, "老路线 Codex 轮次排序与 DeepSeek 专属流辅助模块"),
     "notify.py": (1, "Codex 老路线审批通知辅助引入 codex_control"),
     "new_conversations.py": (3, "新建对话读取 Codex 模型目录与 DeepSeek 底层桥接"),
     "archives.py": (2, "归档服务引入 DeepSeek 底层桥接"),
     "activity.py": (1, "Codex 桌面任务状态跟踪引入 codex_control"),
-    "relay_controller.py": (2, "桌面状态窗读取 Codex 路线与钩子待信任提示"),
-    "relay_desktop.py": (3, "卸载清理 Claude/Codex 钩子与 Codex 弹窗收起入口"),
+    "relay_desktop.py": (1, "Codex 弹窗收起进程入口"),
 }
 
 # Frozen per-file counts for attribute accesses matching `<id>`, `<id>_*`, or `_<id>*` (case-insensitive).
 FROZEN_AGENT_ATTRS: dict[str, tuple[int, str]] = {
-    "remote.py": (39, "启动与老兼容层装配及访问三家底层对象与常量"),
+    "remote.py": (29, "启动与老兼容层装配及访问三家底层对象与常量（钩子服务与提示已交给 agents/*）"),
     "chats.py": (63, "Desktop 类中遗留的 Claude 桌面自动化内部方法"),
     "live_events.py": (2, "Codex 实时消息文本清洗调用 chats.codex_answer"),
     "notify.py": (1, "通知器读取 DeepSeek 底层状态属性"),
@@ -111,7 +110,6 @@ FROZEN_AGENT_ATTRS: dict[str, tuple[int, str]] = {
     "archives.py": (9, "归档服务访问三家底层桥接与数据库辅助方法"),
     "chat_projects.py": (2, "Codex 项目目录布局读取 CODEX_HOME 与 codex_db"),
     "usage_limits.py": (2, "用量读取访问 codex_db 与 CLAUDE_PROCESS"),
-    "relay_controller.py": (1, "桌面状态窗调用 _codex_hook_hint 显示钩子提示"),
 }
 
 

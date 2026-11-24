@@ -9,6 +9,8 @@ import sys
 
 root=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(root))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import agent_helpers
 import relay_updates
 version=json.loads((root/'windows-version.json').read_text(encoding='utf-8'))
 notes=json.loads((root/'windows-release-notes.json').read_text(encoding='utf-8')).get(version['version'],{})
@@ -39,5 +41,9 @@ if '--manifest' not in sys.argv:
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     subprocess.run([str(compiler),'/nologo','/target:library','/optimize+','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll',
         '/out:'+str(root/'build/AgentRemote.Chrome.dll'),str(root/'deploy/windows/ChromeRenderer.cs')],check=True)
-    subprocess.run([str(compiler),'/nologo','/target:exe','/optimize+',
-        '/out:'+str(root/'build/TeleplyCodexHook.exe'),str(root/'deploy/windows/TeleplyCodexHook.cs')],check=True)
+    for source,exe in agent_helpers.helpers():
+        subprocess.run([str(compiler),'/nologo','/target:exe','/optimize+',
+            '/out:'+str(root/'build'/exe),str(root/source)],check=True)
+
+# The installer's [Files] list for every assistant's helper; written with or without --manifest.
+agent_helpers.write_iss(root/'build/agent-helpers.iss')

@@ -27,7 +27,7 @@ SetupIconFile=..\..\static\app.ico
 UninstallDisplayIcon={app}\AgentRemote.exe
 [Files]
 Source: "..\..\dist\AgentRemote\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\build\TeleplyCodexHook.exe"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
+#include "..\..\build\agent-helpers.iss"
 Source: "..\..\.toolchain\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView
 [Icons]
 Name: "{group}\Agent Remote"; Filename: "{app}\AgentRemote.exe"; IconFilename: "{app}\AgentRemote.exe"; AppUserModelID: "AgentRemote.Desktop"
@@ -71,10 +71,8 @@ ConfirmUninstall=卸载 %1？
 UninstallStatusLabel=正在卸载 %1…
 UninstalledAll=%1 已卸载。
 [UninstallRun]
-; Claude's settings as they were: the service put a hook to itself there (claude_hooks.py)
-Filename: "{app}\AgentRemote.exe"; Parameters: "--remove-claude-hook"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveClaudeHook"
-; Codex's hooks.json as it was: remove only Teleply's entries; TeleplyCodexHook.exe stays in {app} (uninsneveruninstall)
-Filename: "{app}\AgentRemote.exe"; Parameters: "--remove-codex-hook"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveCodexHook"
+; Take out what every assistant put outside this folder (its hooks in another program's settings)
+Filename: "{app}\AgentRemote.exe"; Parameters: "--remove-agent-hooks"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAgentHooks"
 [UninstallDelete]
 Type: files; Name: "{userstartup}\Agent Remote 027.lnk"
 [Code]
