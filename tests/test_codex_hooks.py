@@ -369,7 +369,54 @@ class HookInstallerAndTrustTests(unittest.TestCase):
             self.assertFalse(ch.install_hooks(exe, codex_home=fake_home, log=lambda _t: None))
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
 
-            # Partial trust in config.toml -> still pending_trust
+            # Real Codex config.toml format: single-quoted literal path, snake_case event names, only trusted_hash (no enabled key)
+            hooks_literal = str(hooks_file)
+            cfg_real = (
+                f"[hooks.state.'{hooks_literal}:pre_tool_use:1:0']\ntrusted_hash = \"abc123\"\n"
+                f"[hooks.state.'{hooks_literal}:permission_request:0:0']\ntrusted_hash = \"def456\"\n"
+                f"[hooks.state.'{hooks_literal}:stop:0:0']\ntrusted_hash = \"ghi789\"\n"
+            )
+            cfg_file.write_text(cfg_real, encoding="utf-8")
+            self.assertEqual(ch.read_trust_status(codex_home=fake_home), "enabled")
+
+            # Path case, forward slashes, and \\?\ extended prefix all match
+            hooks_slash_upper = str(hooks_file).replace("\\", "/").upper()
+            hooks_ext = r"\\?\\"[:-1] + str(hooks_file).lower()
+            cfg_file.write_text(
+                f"[hooks.state.'{hooks_slash_upper}:pre_tool_use:1:0']\ntrusted_hash = \"abc123\"\n"
+                f"[hooks.state.'{hooks_ext}:permission_request:0:0']\ntrusted_hash = \"def456\"\n"
+                f"[hooks.state.'{hooks_literal.lower()}:stop:0:0']\ntrusted_hash = \"ghi789\"\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(ch.read_trust_status(codex_home=fake_home), "enabled")
+
+            # Explicit enabled = false disables even when trusted_hash is present
+            cfg_file.write_text(
+                f"[hooks.state.'{hooks_literal}:pre_tool_use:1:0']\ntrusted_hash = \"abc123\"\n"
+                f"[hooks.state.'{hooks_literal}:permission_request:0:0']\ntrusted_hash = \"def456\"\n"
+                f"[hooks.state.'{hooks_literal}:stop:0:0']\nenabled = false\ntrusted_hash = \"ghi789\"\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
+
+            # Missing one of the 3 hooks in config.toml -> pending_trust
+            cfg_file.write_text(
+                f"[hooks.state.'{hooks_literal}:pre_tool_use:1:0']\ntrusted_hash = \"abc123\"\n"
+                f"[hooks.state.'{hooks_literal}:permission_request:0:0']\ntrusted_hash = \"def456\"\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
+
+            # Empty trusted_hash -> pending_trust
+            cfg_file.write_text(
+                f"[hooks.state.'{hooks_literal}:pre_tool_use:1:0']\ntrusted_hash = \"abc123\"\n"
+                f"[hooks.state.'{hooks_literal}:permission_request:0:0']\ntrusted_hash = \"\"\n"
+                f"[hooks.state.'{hooks_literal}:stop:0:0']\ntrusted_hash = \"ghi789\"\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
+
+            # Legacy/explicit PascalCase + enabled = true format remains supported
             hooks_str = str(hooks_file).replace("\\", "\\\\")
             cfg_file.write_text(
                 f'[hooks.state."{hooks_str}:PreToolUse:1:0"]\nenabled = true\ntrusted_hash = "abc123"\n'
@@ -379,7 +426,6 @@ class HookInstallerAndTrustTests(unittest.TestCase):
             )
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "pending_trust")
 
-            # All 3 enabled with trusted_hash -> enabled
             cfg_content = (
                 f'[hooks.state."{hooks_str}:PreToolUse:1:0"]\nenabled = true\ntrusted_hash = "abc123"\n'
                 f'[hooks.state."{hooks_str}:PermissionRequest:0:0"]\nenabled = true\ntrusted_hash = "def456"\n'
@@ -387,6 +433,14 @@ class HookInstallerAndTrustTests(unittest.TestCase):
             )
             cfg_file.write_text(cfg_content, encoding="utf-8")
             self.assertEqual(ch.read_trust_status(codex_home=fake_home), "enabled")
+
+            # Missing one of the 3 hooks in hooks.json -> not_installed (even if config.toml has all 3)
+            partial_hooks = json.loads(hooks_file.read_text(encoding="utf-8"))
+            partial_hooks["hooks"].pop("Stop", None)
+            hooks_file.write_text(json.dumps(partial_hooks, indent=2), encoding="utf-8")
+            self.assertEqual(ch.read_trust_status(codex_home=fake_home), "not_installed")
+            # Restore full install before testing uninstall
+            self.assertTrue(ch.install_hooks(exe, codex_home=fake_home, log=lambda _t: None))
 
             # Uninstall removes ONLY Teleply entries and leaves config.toml byte-identical
             self.assertTrue(ch.remove_hooks(codex_home=fake_home, log=lambda _t: None))
@@ -601,14 +655,16 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 dc.percent = 0
                 self.assertIn("打开并信任 3 个遥应钩子", dc.view()["detail"])
 
-                # Now trust all 3 hooks in fake config.toml -> manifest flips True, desktop hint disappears
-                hp = str(fake_home / "hooks.json").replace("\\", "\\\\")
+                # Now trust all 3 hooks using real Codex config.toml format (snake_case + trusted_hash only)
+                # -> manifest flips True, desktop & phone trust hints disappear
+                hp_literal = str(fake_home / "hooks.json")
                 (fake_home / "config.toml").write_text(
-                    f'[hooks.state."{hp}:PreToolUse:0:0"]\nenabled = true\ntrusted_hash = "h1"\n'
-                    f'[hooks.state."{hp}:PermissionRequest:0:0"]\nenabled = true\ntrusted_hash = "h2"\n'
-                    f'[hooks.state."{hp}:Stop:0:0"]\nenabled = true\ntrusted_hash = "h3"\n',
+                    f"[hooks.state.'{hp_literal}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+                    f"[hooks.state.'{hp_literal}:permission_request:0:0']\ntrusted_hash = \"h2\"\n"
+                    f"[hooks.state.'{hp_literal}:stop:0:0']\ntrusted_hash = \"h3\"\n",
                     encoding="utf-8",
                 )
+                hooks._trust_cache = None
                 m_enabled = agent.manifest()
                 self.assertTrue(m_enabled["capabilities"]["stop"])
                 self.assertTrue(m_enabled["capabilities"]["approve"])
@@ -616,6 +672,27 @@ class IntegrationAndChatsStep2Tests(unittest.TestCase):
                 self.assertEqual(m_enabled["sources"]["control"], "app-tools+hook")
                 self.assertEqual(m_enabled["sources"]["live"], "hook+file")
                 self.assertEqual(dc.view()["detail"], "")
+                st_enabled = bridge.status(TID, fresh=True)
+                self.assertEqual(st_enabled["hook_status"], "enabled")
+                self.assertNotIn("hook_notice", st_enabled)
+                self.assertNotIn("打开并信任 3 个遥应钩子", st_enabled["questions"][0]["question"])
+
+                # Disabling one hook with enabled = false turns hints back on and disables capabilities
+                (fake_home / "config.toml").write_text(
+                    f"[hooks.state.'{hp_literal}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+                    f"[hooks.state.'{hp_literal}:permission_request:0:0']\nenabled = false\ntrusted_hash = \"h2\"\n"
+                    f"[hooks.state.'{hp_literal}:stop:0:0']\ntrusted_hash = \"h3\"\n",
+                    encoding="utf-8",
+                )
+                hooks._trust_cache = None
+                m_disabled = agent.manifest()
+                self.assertFalse(m_disabled["capabilities"]["stop"])
+                self.assertFalse(m_disabled["capabilities"]["approve"])
+                self.assertFalse(m_disabled["capabilities"]["answer"])
+                self.assertIn("打开并信任 3 个遥应钩子", dc.view()["detail"])
+                st_disabled = bridge.status(TID, fresh=True)
+                self.assertEqual(st_disabled["hook_status"], "pending_trust")
+                self.assertIn("打开并信任 3 个遥应钩子", st_disabled["hook_notice"])
 
     def test_chats_hook_prompt_and_request_user_input_qa_display(self) -> None:
         img_id = "b" * 32

@@ -39,6 +39,13 @@ HOOK_EVENTS: tuple[tuple[str, int], ...] = (
     ("PermissionRequest", 90),
     ("Stop", 10),
 )
+# Codex writes snake_case event names in config.toml [hooks.state.'<path>:<event>:<gi>:<hi>'],
+# while earlier/manual configs may use PascalCase; recognize both.
+HOOK_STATE_EVENT_NAMES: dict[str, tuple[str, ...]] = {
+    "PreToolUse": ("pre_tool_use", "PreToolUse"),
+    "PermissionRequest": ("permission_request", "PermissionRequest"),
+    "Stop": ("stop", "Stop"),
+}
 TRUST_HINT = "在 Codex 设置 → Hooks 里打开并信任 3 个遥应钩子，手机才能批准、停止、回答"
 
 WATCH_WINDOW_SECONDS = 20.0
@@ -285,8 +292,22 @@ def remove_hooks(*, codex_home: Path | None = None, log: Callable[[str], None] =
     return True
 
 
+def _norm_state_path(raw_path: str) -> str:
+    text = str(raw_path or "").strip().replace("/", "\\")
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    text = re.sub(r"\\{2,}", r"\\", text)
+    return text.casefold()
+
+
 def _norm_state_key(key: str) -> str:
-    return key.replace("/", "\\").casefold()
+    """Normalize '<path>:<event>:<group_idx>:<hook_idx>' across slashes, case, and \\\\?\\ prefix."""
+    text = str(key or "").strip()
+    parts = text.rsplit(":", 3)
+    if len(parts) == 4:
+        path_part, event_part, gi_part, hi_part = parts
+        return f"{_norm_state_path(path_part)}:{event_part.strip().casefold()}:{gi_part.strip()}:{hi_part.strip()}"
+    return _norm_state_path(text)
 
 
 def read_trust_status(*, codex_home: Path | None = None) -> str:
@@ -322,16 +343,23 @@ def read_trust_status(*, codex_home: Path | None = None) -> str:
     path_candidates = {str(hooks_path), str(hooks_path.resolve())}
     for event, _ in HOOK_EVENTS:
         gi, hi, _, _ = coords[event][0]
+        event_names = HOOK_STATE_EVENT_NAMES.get(event, (event,))
         matched = None
         for p_str in path_candidates:
-            candidate_key = _norm_state_key(f"{p_str}:{event}:{gi}:{hi}")
-            if candidate_key in norm_state:
-                matched = norm_state[candidate_key]
+            for ev_name in event_names:
+                candidate_key = _norm_state_key(f"{p_str}:{ev_name}:{gi}:{hi}")
+                if candidate_key in norm_state:
+                    matched = norm_state[candidate_key]
+                    break
+            if matched is not None:
                 break
         if matched is None:
             return "pending_trust"
+        # Codex omits `enabled` when trusted (only writes `trusted_hash`); explicit `enabled = false` disables it.
+        if matched.get("enabled") is False:
+            return "pending_trust"
         trusted_hash = matched.get("trusted_hash")
-        if matched.get("enabled") is not True or not isinstance(trusted_hash, str) or not trusted_hash.strip():
+        if not isinstance(trusted_hash, str) or not trusted_hash.strip():
             return "pending_trust"
     return "enabled"
 
