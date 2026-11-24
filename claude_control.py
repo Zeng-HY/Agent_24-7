@@ -1188,9 +1188,11 @@ class Controller:
                 if hs is not None and hs.get('running'):
                     if expected_anchor and hs.get('anchor') and expected_anchor!=hs['anchor']:
                         raise chats.InputNotSubmitted('Claude 当前轮次已变化，尚未发送补充指令')
-                    try:hooks.enqueue_steer(tid,text,display if display is not None else text,request_id)
+                    try:_,duplicate=hooks.enqueue_steer(tid,text,display if display is not None else text,request_id)
                     except ValueError:raise chats.ChatError('请求编号已用于其他消息') from None
-                    result={'ok':True,'steer_requested':True,'offset':chats.file_size(chats.conv_path(item)),
+                    offset=chats.file_size(chats.conv_path(item))
+                    if duplicate:offset=max(0,offset-(1<<20))
+                    result={'ok':True,'steer_requested':True,'offset':offset,
                             'check_text':display if display is not None else text,
                             'text':'已交给遥应，会在当前这一步做完后交给 Claude',
                             'accepted_at':int(time.time()*1000)}

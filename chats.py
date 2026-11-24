@@ -1343,6 +1343,7 @@ def parse_claude(lines: list[bytes], context: dict | None = None,
             ts = teleply["time"]
             msgs.append(teleply)
             last_kind, last_stop = "user", None
+            state["running"] = True
             state["turn_ended"] = ""
             if ts:
                 state["latest_event_time"] = ts

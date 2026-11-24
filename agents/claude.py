@@ -622,9 +622,11 @@ class ClaudeAgent(Agent):
                 raise chats.InputNotSubmitted("图片已移除或不存在，尚未发送") from exc
             text = f"{base}\n\n" + "\n".join(lines) if base else "\n".join(lines)
         try:
-            hooks.enqueue_message(tid, text, base, request_id)
+            _, duplicate = hooks.enqueue_message(tid, text, base, request_id)
         except ValueError as exc:
             raise chats.ChatError("请求编号已用于其他消息") from exc
+        if duplicate:  # a retry of something already handed over: let the receipt look at the recent record too
+            offset = max(0, offset - (1 << 20))
         result = {"ok": True, "pressed": True, "offset": offset, "running": True,
                   "check_text": base, "text": "已交给遥应，等这一轮结束", "queued": True,
                   "accepted_at": int(time.time() * 1000)}
