@@ -1,4 +1,4 @@
-#include "..\..\build\windows-version.iss"
+﻿#include "..\..\build\windows-version.iss"
 [Setup]
 AppId={{A8AB7016-CAD6-4E34-88A6-41C1E465F737}
 AppName=Agent Remote

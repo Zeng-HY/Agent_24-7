@@ -668,7 +668,9 @@ class ClaudeAgent(Agent):
         hook_settings(cfg, self.id in apps, log)
 
     def uninstall(self, log) -> bool:
-        return claude_hooks.remove(log)
+        # False from remove() means "nothing of ours was there", not a failure: the old switch exited 0 too.
+        claude_hooks.remove(log)
+        return True
 
     def on_server_init(self, server) -> None:
         import threading
@@ -695,7 +697,7 @@ class ClaudeAgent(Agent):
         """A hook request from Claude Code on this computer (claude_hooks.py). Let in by the hook key in the address
         (remote_config.json "claude_hook_key"), never through Tailscale; held open until the phone answers. Anything
         else than a decision is an empty 200, which Claude Code reads as no decision."""
-        key = str((getattr(handler, "server", None).cfg or {}).get("claude_hook_key") or "")
+        key = str(handler.cfg.get("claude_hook_key") or "")
         if not key or not secrets.compare_digest(path[len(claude_hooks.PATH):], key) or handler.headers.get("Tailscale-User-Login"):
             handler.close_connection = True
             handler._json({"error": "口令不对"}, 403)

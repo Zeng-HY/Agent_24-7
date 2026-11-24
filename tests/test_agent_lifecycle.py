@@ -369,5 +369,17 @@ class CodexStatusHintTests(unittest.TestCase):
                 self.assertEqual(CodexAgent().status_hint(cfg), "")
 
 
+    def test_nothing_to_remove_is_still_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": td}):
+                self.assertTrue(ClaudeAgent().uninstall(lambda _t: None))
+            original = codex_hooks.default_codex_home()
+            codex_hooks.set_default_codex_home_override(Path(td) / "empty-codex")
+            try:
+                self.assertTrue(CodexAgent().uninstall(lambda _t: None))
+            finally:
+                codex_hooks.set_default_codex_home_override(original)
+
+
 if __name__ == "__main__":
     unittest.main()

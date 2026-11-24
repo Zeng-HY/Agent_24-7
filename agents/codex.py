@@ -503,7 +503,9 @@ class CodexAgent(Agent):
 
     def uninstall(self, log) -> bool:
         import codex_hooks
-        return codex_hooks.remove_hooks(log=log)
+        # False from remove_hooks() means "nothing of ours was there", not a failure: the old switch exited 0 too.
+        codex_hooks.remove_hooks(log=log)
+        return True
 
     def status_hint(self, cfg: dict) -> str:
         """Pending trust on the app-tools route: the one thing the user must do on this PC. Cached reads."""
