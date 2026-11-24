@@ -361,12 +361,13 @@ class Controller:
         card=chats.question_card(dock)
         options,buttons,texts,stack,box_top=[],[],[],[],None
         rows=list(self.desktop.auto.WalkControl(dock,maxDepth=30))
+        composer=set() if card else chats.claude_prompt_block_indices(rows)
         attachment_names=set()
         for ctrl,_ in rows:
             try:
                 if ctrl.ControlTypeName=='ButtonControl' and (ctrl.Name or '').startswith('Remove '):attachment_names.add(ctrl.Name[7:])
             except COMError:continue
-        for ctrl,depth in rows:
+        for idx,(ctrl,depth) in enumerate(rows):
             try:kind=ctrl.ControlTypeName;name=(ctrl.Name or '').strip();off=ctrl.IsOffscreen
             except Exception:continue
             del stack[max(depth-1,0):];stack.append((kind,name))
@@ -375,12 +376,13 @@ class Controller:
                 try:box_top=ctrl.BoundingRectangle.top
                 except Exception:pass
                 continue
+            if idx in composer:continue
             try:top=ctrl.BoundingRectangle.top
             except Exception:top=None
             if chats.in_notice([k for k,_ in stack[:-1]]):continue  # a notice bar (the usage limit, 10-16), not a question
             if kind in self.OPTION_TYPES:
                 if not name or not self._enabled(ctrl):continue
-                if name in attachment_names or name in chats.CLAUDE_FIXED_BUTTONS or name.startswith(chats.CLAUDE_FIXED_PREFIXES) or name in ('Plan','Manual','Ask','Ask permissions','Accept edits'):continue
+                if name in attachment_names or name in chats.CLAUDE_FIXED_BUTTONS or name.startswith(chats.CLAUDE_FIXED_PREFIXES) or chats.claude_session_control(name) or name in ('Plan','Manual','Ask','Ask permissions','Accept edits'):continue
                 option={'type':kind,'name':name};options.append(option);buttons.append({'option':option,'top':top,'texts':[],'pressed':self._pressed(ctrl)})
             elif kind=='TextControl' and name:
                 if name.startswith('Claude thinks longer with Max effort'):continue

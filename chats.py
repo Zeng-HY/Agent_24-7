@@ -136,6 +136,40 @@ def approval_dock(ctrl) -> bool:
         return False
 
 
+def claude_session_control(name: str) -> bool:
+    """Whether a control name is Claude's own session-stopping button (Stop, Stop N nested sessions, ...), never a question."""
+    text = (name or "").strip()
+    if not text:
+        return False
+    return "nested session" in text.casefold() or text == "Stop" or text.startswith("Stop ")
+
+
+def claude_prompt_block_indices(rows) -> set[int]:
+    """Row indices belonging to the first-level block(s) under the approval dock that hold EditControl 'Prompt'.
+    Controls inside Claude's composer block (Add, Stop, Stop N nested sessions, dictation, ...) are never question options."""
+    blocks: list[list[int]] = []
+    prompt_blocks: set[int] = set()
+    current = -1
+    for idx, (ctrl, depth) in enumerate(rows):
+        if depth == 1:
+            current = len(blocks)
+            blocks.append([idx])
+        elif depth > 1 and current >= 0:
+            blocks[current].append(idx)
+        else:
+            current = -1
+            continue
+        try:
+            if ctrl.ControlTypeName == "EditControl" and (ctrl.Name or "").strip() == "Prompt":
+                prompt_blocks.add(current)
+        except Exception:
+            continue
+    out: set[int] = set()
+    for b in prompt_blocks:
+        out.update(blocks[b])
+    return out
+
+
 class ChatError(Exception):
     """Something the person can act on."""
 
@@ -2694,7 +2728,9 @@ class Desktop:
         if card:  # Stop stays in the dock, below the card
             dock = self._claude_dock(root)
             running = dock is not None and bool(self._find(dock, "ButtonControl", "Stop"))
-        for ctrl, depth in auto.WalkControl(box, maxDepth=30):
+        rows = list(auto.WalkControl(box, maxDepth=30))
+        composer = set() if card else claude_prompt_block_indices(rows)
+        for idx, (ctrl, depth) in enumerate(rows):
             ctype = ctrl.ControlTypeName
             del kinds[max(depth - 1, 0):]
             kinds.append(ctype)
@@ -2703,10 +2739,12 @@ class Desktop:
             name = (ctrl.Name or "").strip()
             if ctype == "ButtonControl" and name == "Stop":
                 running = True
+            if idx in composer:
+                continue
             if ctype == "EditControl":
                 if name == "Prompt":
                     continue
-            elif not name or name in CLAUDE_FIXED_BUTTONS or name.startswith(CLAUDE_FIXED_PREFIXES):
+            elif not name or name in CLAUDE_FIXED_BUTTONS or name.startswith(CLAUDE_FIXED_PREFIXES) or claude_session_control(name):
                 continue
             try:
                 if ctrl.IsOffscreen and not card:  # a card scrolled out of view still asks
@@ -2734,6 +2772,9 @@ class Desktop:
         return {"on_screen": True, "shown": shown, "options": options, "running": running}
 
     def claude_press(self, conv_id: str, option: dict, text: str = "", enter: bool = False) -> dict:
+        target_name = str((option or {}).get("name", "")).strip() if isinstance(option, dict) else ""
+        if claude_session_control(target_name):
+            raise ChatError("这是 Claude 停止会话的按钮，不是提问，没有按")
         item = find("claude", conv_id)
         titles = [item["title"], conversation_title(item)]
         hwnd, root = self._claude_root()
