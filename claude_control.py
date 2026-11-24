@@ -474,11 +474,73 @@ class Controller:
         except COMError as exc:  # twice in a row: say so, the phone reads again in 5 s
             return {'settings':settings(item),'available':False,'on_screen':False,'actions':[],'reason':plain_error(exc),
                     'observed_at':int(time.time()*1000),'mode_options':self.modes}
+    def _hook_status(self,item,path=None):
+        """Live running/step/timer snapshot when Claude Code's new hooks are active on this conversation, cross-checked
+        against the conversation record (a manual PC Stop emits no Stop hook). None when hooks are inactive."""
+        hooks=self.hooks
+        if hooks is None or not hooks.is_active(item['id']):return None
+        hstate=hooks.conv_state(item['id']) or {}
+        try:info=chats.summary(item)
+        except (OSError,chats.ChatError):info={}
+        hook_running=bool(hstate.get('running'))
+        h_started=int(hstate.get('turn_started') or 0)
+        r_ended=int(info.get('turn_ended') or 0)
+        continued_at=int(hstate.get('continued_at') or 0)
+        # A Stop block before this one may have left an older "end" in the record; only an end written after the block
+        # (a manual PC stop, or the turn really finishing with the hook missing) means the turn is over.
+        if (hook_running and info.get('status')=='idle' and h_started>0 and r_ended>=h_started
+                and (not hstate.get('continued') or (continued_at and r_ended>=continued_at))):
+            hook_running=False
+        path=path if path is not None else chats.conv_path(item)
+        anchor=turn_anchor(path) or (f"hook:{h_started}" if h_started else f"hook:{item['id']}")
+        return {
+            'running':hook_running,
+            'step':str(hstate.get('step') or '') if hook_running else '',
+            'turn_started':max(int(info.get('turn_started') or 0),h_started),
+            'turn_ended':0 if hook_running else max(r_ended,int(hstate.get('turn_ended') or 0)),
+            'anchor':anchor,
+            'state':hstate,
+        }
+    def _hook_queued(self,item,result):
+        """The phone messages Teleply holds for this conversation, after the desktop's own queue (design 3.5/3.8).
+        Their ticket means 'make this a steer', not 'send it now'."""
+        hooks=self.hooks
+        if hooks is None:return
+        try:stored=hooks.list_queued(item['id'])
+        except Exception:return
+        if not stored:return
+        queued=result.setdefault('queued',[])
+        have={str(q.get('id')) for q in queued if isinstance(q,dict)}
+        for entry in stored:
+            ident=str(entry.get('id') or '')
+            if not ident or ident in have:continue
+            have.add(ident)
+            queued.append({'id':ident,'text':str(entry.get('display') or entry.get('text') or ''),
+                           'token':self._ticket(item['id'],'hook_steer',{'id':ident},signature([item['id'],ident]))})
+    def _apply_hook_status(self,item,result,hs):
+        result['available']=True
+        result['running']=hs['running']
+        result['step']=hs['step']
+        result['turn_started']=hs['turn_started']
+        result['turn_ended']=hs['turn_ended']
+        result.setdefault('queued',[])
+        self._hook_queued(item,result)
+        anchor=result.get('turn_anchor') or hs['anchor']
+        result['turn_anchor']=anchor
+        if hs['running'] and anchor:
+            result['stop_revision']=signature([item['id'],anchor])
+            result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
+        else:
+            result.pop('stop_revision',None)
+            result.pop('stop_token',None)
+        return result
     def _read_once(self,item):
+        hook_active=self.hooks is not None and self.hooks.is_active(item['id'])
         # The phone open on a Claude conversation reads this every 5 s. Minimised, the window does not update what is read
-        # here (questions, Stop); it is restored first, without being made active or put over other windows (10-12).
-        try:self.desktop._claude_unminimize()
-        except Exception:pass
+        # here (questions, Stop); only restore it when hooks are not yet active on this conversation (design 3.8).
+        if not hook_active:
+            try:self.desktop._claude_unminimize()
+            except Exception:pass
         recorded=settings(item);path=chats.conv_path(item);runtime=chats.runtime_info('claude',path) if path else {}
         # The model and effort the session's record names go with every read, the desktop's context only when it is read
         # (10-26: the context was not read, and the effort the phone shows went missing with it).
@@ -507,6 +569,7 @@ class Controller:
             for _,queued in self._queued(doc,buttons):
                 revision=signature([item['id'],anchor,queued['id']])
                 result['queued'].append({'id':queued['id'],'text':queued['text'],'token':self._ticket(item['id'],'steer_queued',{'id':queued['id']},revision)})
+            self._hook_queued(item,result)
             if result['running'] and anchor:
                 result['stop_revision']=signature([item['id'],anchor]);result['stop_token']=self._ticket(item['id'],'stop',{'name':'Stop'},result['stop_revision'])
             if usage:
@@ -540,6 +603,9 @@ class Controller:
                 else:
                     result['prompt']=None
         except chats.ChatError as exc:result['reason']=str(exc)
+        if hook_active:
+            hs=self._hook_status(item,path)
+            if hs is not None:self._apply_hook_status(item,result,hs)
         return result
     def _claude_waiting(self,tid,path):
         """Whether Claude Code is known to be waiting on the user for this conversation: either the hook holds an open
@@ -562,11 +628,15 @@ class Controller:
             item=chats.find('claude',tid)
             try:data=self.desktop.run(self._read,item,timeout=12)
             except Exception as exc:data={'available':False,'reason':plain_error(exc),'settings':settings(item),'actions':[]}
-            try:
-                info=chats.summary(item)
-                data={**data,'turn_started':info.get('turn_started',0),'turn_ended':info.get('turn_ended',0),
-                      'step':info.get('step','') if data.get('running') else ''}
-            except (OSError,chats.ChatError):pass
+            hs=self._hook_status(item)
+            if hs is not None:
+                data=self._apply_hook_status(item,dict(data),hs)
+            else:
+                try:
+                    info=chats.summary(item)
+                    data={**data,'turn_started':info.get('turn_started',0),'turn_ended':info.get('turn_ended',0),
+                          'step':info.get('step','') if data.get('running') else ''}
+                except (OSError,chats.ChatError):pass
             self.cache[tid]=(time.monotonic(),data)
             if len(self.cache)>20:self.cache.pop(next(iter(self.cache)))
             return self._held(tid,data)
@@ -930,6 +1000,41 @@ class Controller:
                 try:return {'ok':True,'text':text,'state':self.state(tid,True)}
                 except Exception:return {'ok':True,'text':text}  # the answer went; the phone reads the state again itself
             item=chats.find('claude',tid)
+            if ticket['kind']=='hook_steer':
+                if self.hooks is None:raise chats.ChatError('选项已过期，请重新打开面板')
+                try:self.hooks.promote_to_steer(tid,ticket['option']['id'])
+                except KeyError:raise chats.ChatError('这条消息已经不在队列里了，刷新看看') from None
+                self.cache.pop(tid,None)
+                text=('已改为插话，这一步做完后交给 Claude' if self.hooks.is_running(tid)
+                      else '已改为插话，等下一次交给 Claude')
+                try:return {'ok':True,'text':text,'state':self.state(tid,True)}
+                except Exception:return {'ok':True,'text':text}
+            if ticket['kind']=='stop' and self.hooks is not None and self.hooks.is_active(tid):
+                hs=self._hook_status(item)
+                cur_rev=signature([tid,hs['anchor']]) if hs and hs['running'] and hs['anchor'] else None
+                if not hs or not hs['running'] or cur_rev!=ticket['revision']:
+                    raise chats.ChatError('该轮已经结束或进入下一轮，未执行停止')
+                stop_info=self.hooks.request_stop(tid)
+                clicked_window=False
+                if winctl.input_desktop_ready():
+                    def try_window_stop():
+                        try:
+                            _,_,doc=self._document(item,False)
+                            targets=[c for c in self._buttons(doc) if c.Name=='Stop' and self._enabled(c) and self._own(c)]
+                            if len(targets)==1:
+                                self._invoke(targets[0])
+                                return True
+                        except Exception:
+                            return False
+                        return False
+                    try:clicked_window=bool(self.desktop.run(try_window_stop,timeout=5))
+                    except Exception:clicked_window=False
+                self.cache.pop(tid,None)
+                text=('已结束当前命令并请求停止' if stop_info.get('killed')
+                      else '已在电脑上停止' if clicked_window
+                      else '已请求停止，等待当前步骤结束后停下')
+                try:return {'ok':True,'text':text,'killed':bool(stop_info.get('killed')),'state':self.state(tid,True)}
+                except Exception:return {'ok':True,'text':text,'killed':bool(stop_info.get('killed'))}
             def run():
                 dock=None;went=None;started=time.monotonic()
                 if ticket['kind'] in ('steer_queued','stop','action'):  # what is clicked must be what Claude shows now
@@ -1070,7 +1175,7 @@ class Controller:
             item=chats.find('claude',tid)
             self.desktop.run(self._dismiss_popup,item,timeout=12);self.menu_context=None;return {'ok':True}
 
-    def send_steer(self,tid,text,expected_anchor,request_id):
+    def send_steer(self,tid,text,expected_anchor,request_id,display=None):
         """Submit once, then promote only the newly observed exact-text queued item."""
         with self.lock:
             if not re.fullmatch(r'[a-zA-Z0-9_-]{12,80}',request_id):raise chats.InputNotSubmitted('无效补充请求编号，尚未发送')
@@ -1080,6 +1185,22 @@ class Controller:
                 if previous.get('result'):return previous['result']
                 raise chats.ChatError('这条补充指令已有提交记录，尚未确认，不会重复发送')
             item=chats.find('claude',tid);text=chats.clean_text(text)
+            hooks=self.hooks
+            if hooks is not None and text and not text.lstrip().startswith('/'):
+                hs=self._hook_status(item)
+                if hs is not None and hs.get('running'):
+                    if expected_anchor and hs.get('anchor') and expected_anchor!=hs['anchor']:
+                        raise chats.InputNotSubmitted('Claude 当前轮次已变化，尚未发送补充指令')
+                    try:_,duplicate=hooks.enqueue_steer(tid,text,display if display is not None else text,request_id)
+                    except ValueError:raise chats.ChatError('请求编号已用于其他消息') from None
+                    offset=chats.file_size(chats.conv_path(item))
+                    if duplicate:offset=max(0,offset-(1<<20))
+                    result={'ok':True,'steer_requested':True,'offset':offset,
+                            'check_text':display if display is not None else text,
+                            'text':'已交给遥应，会在当前这一步做完后交给 Claude',
+                            'accepted_at':int(time.time()*1000)}
+                    self.steer_submissions[request_id]={'fingerprint':fingerprint,'result':result}
+                    return result
             def run():
                 state=self._read(item)
                 if not state.get('on_screen') or not state.get('running') or not expected_anchor or state.get('turn_anchor')!=expected_anchor:
