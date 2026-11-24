@@ -83,6 +83,10 @@ MAX_PICTURES = 5
 MAX_PICTURE_BYTES = 20 << 20
 MAX_PICTURE_SIDE = 8000
 BAD_PICTURE = "这张图片打不开，没有发给 Antigravity"
+# What actually goes out: a freshly encoded copy, never the stored file.
+SEND_PICTURE_SIDE = 3072
+SEND_PICTURE_PNG_LIMIT = 3 << 20
+SEND_PICTURE_TOTAL_LIMIT = 15 << 20
 
 # The three answers a phone may give to one approval step.
 APPROVAL_CHOICES = {
@@ -1137,6 +1141,46 @@ def picture_info(raw: bytes) -> tuple[str, int, int]:
     return mime, size[0], size[1]
 
 
+def send_picture(image: dict) -> tuple[dict, int]:
+    """A fresh PNG or JPEG copy of a stored picture, fully decoded first; (media item, byte size).
+
+    The stored file is never sent as it is: a file whose header looked right but whose data was broken
+    would make Antigravity fail every later turn of that conversation.
+    """
+    from PIL import Image, ImageOps
+
+    name = image.get("name") or "图片"
+    try:
+        raw = Path(image["path"]).read_bytes()
+        with Image.open(io.BytesIO(raw)) as source:
+            source.load()  # decode the whole picture, not just its header
+            picture = ImageOps.exif_transpose(source)
+            if max(picture.size) > SEND_PICTURE_SIDE:
+                picture.thumbnail((SEND_PICTURE_SIDE, SEND_PICTURE_SIDE), Image.LANCZOS)
+            if picture.mode not in ("RGB", "RGBA"):
+                picture = picture.convert("RGBA" if "A" in picture.getbands() else "RGB")
+            picture.info.clear()
+            png = io.BytesIO()
+            picture.save(png, format="PNG")
+            outgoing = png.getvalue()
+            mime = "image/png"
+            if len(outgoing) > SEND_PICTURE_PNG_LIMIT:
+                if picture.mode == "RGBA":
+                    white = Image.new("RGB", picture.size, (255, 255, 255))
+                    white.paste(picture, mask=picture.getchannel("A"))
+                    picture = white
+                else:
+                    picture = picture.convert("RGB")
+                jpeg = io.BytesIO()
+                picture.save(jpeg, format="JPEG", quality=90)
+                outgoing = jpeg.getvalue()
+                mime = "image/jpeg"
+    except (OSError, ValueError, KeyError, TypeError, Image.DecompressionBombError):
+        raise ControlError(f"「{name}」{BAD_PICTURE}", 400) from None
+    picture_info(outgoing)  # the freshly encoded copy must pass the same checks
+    return {"mimeType": mime, "inlineData": base64.b64encode(outgoing).decode("ascii")}, len(outgoing)
+
+
 def _save_picture(codex, tid: str, name: str, raw: bytes, info: tuple[str, int, int]) -> dict:
     """Store a checked picture in the shared attachment folder, normalized to PNG like codex.upload does."""
     from PIL import Image, ImageOps
@@ -1407,15 +1451,15 @@ class AntigravityAgent(Agent):
 
     # -- acting
 
-    def send(self, payload: dict) -> dict:
+    def send(self, payload: dict, *, media: list[dict] | None = None) -> dict:
         """Send the user's words through the app's own SendUserCascadeMessage (not agentapi send-message).
 
-        Full auto is turned on for the conversation first, so the commands of this message do not stop for
-        approval. A running turn takes the message with WHEN_IDLE instead of refusing it.
+        Only pictures that http_send checked and re-encoded reach this method; a `media` field in the phone's
+        own request is never used. Full auto is turned on first, and a running turn takes the message queued.
         """
         conv_id = str(payload.get("id") or "").strip()
         text = str(payload.get("text") or "")
-        media = payload.get("media") if isinstance(payload.get("media"), list) else []
+        media = list(media or [])
         if not text.strip() and not media:
             raise ControlError("消息不能为空", 400)
         if len(text) > SEND_LIMIT:
@@ -1627,11 +1671,12 @@ class AntigravityAgent(Agent):
             handler._json({"error": str(exc) or "图片没有收到"}, getattr(exc, "status", 400))
 
     def http_send(self, handler, body: dict) -> None:
-        """A message with pictures: every picture is checked before any of them is sent."""
+        """A message with pictures: every picture is decoded and re-encoded before any of them is sent."""
         images = []
         try:
             ids = body.get("attachments")
             media = []
+            total = 0
             if ids:
                 if (not isinstance(ids, list) or len(ids) > MAX_PICTURES
                         or any(not isinstance(value, str) or not value for value in ids)
@@ -1639,20 +1684,17 @@ class AntigravityAgent(Agent):
                     raise ControlError(f"一次最多发 {MAX_PICTURES} 张图片，这条没有发出去", 400)
                 images = [handler.server.codex.attachment(value, str(body.get("id") or "")) for value in ids]
                 for image in images:
-                    try:
-                        raw = Path(image["path"]).read_bytes()
-                        mime, _, _ = picture_info(raw)
-                    except ControlError as exc:
-                        raise ControlError(f"「{image.get('name') or '图片'}」{exc}", exc.status) from None
-                    except (OSError, KeyError, TypeError):
-                        raise ControlError(f"「{image.get('name') or '图片'}」{BAD_PICTURE}", 400) from None
-                    media.append({"mimeType": mime, "inlineData": base64.b64encode(raw).decode("ascii")})
-            payload = dict(body)
+                    item, size = send_picture(image)
+                    media.append(item)
+                    total += size
+                if total > SEND_PICTURE_TOTAL_LIMIT:
+                    raise ControlError("图片合计太大，这条没有发出去", 400)
+            # The phone's own media field is never forwarded: only the pictures prepared just above may go out.
+            payload = {key: value for key, value in body.items() if key != "media"}
             if media:
-                payload["media"] = media
                 if not str(payload.get("text") or "").strip():
                     payload["text"] = "请查看这些图片。"
-            result = self.send(payload)
+            result = self.send(payload, media=media)
             for image in images:
                 image["used"] = True
                 try:

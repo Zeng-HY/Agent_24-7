@@ -1148,6 +1148,43 @@ class PictureTests(ControlBase):
         self.assertIn("最多发 5 张", self.handler.sent[-1][1]["error"])
         self.assertEqual(len(self.app_hub.calls("SendUserCascadeMessage")), before)
 
+    def test_a_file_that_only_looks_like_a_png_is_refused_before_anything_is_sent(self):
+        good = self.store(fake.picture("PNG"))
+        broken = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + (2).to_bytes(4, "big") + (2).to_bytes(4, "big") \
+            + b"\x08\x02\x00\x00\x00" + b"garbage" * 20
+        (self.codex.data_root / good["id"] / "image.png").write_bytes(broken)
+        before = len(self.app_hub.calls("SendUserCascadeMessage"))
+        antigravity.AGENT().http_send(self.handler, {
+            "id": "a", "text": "坏图", "attachments": [good["id"]]})
+        self.assertEqual(self.handler.sent[-1][0], 400)
+        self.assertIn(antigravity.BAD_PICTURE, self.handler.sent[-1][1]["error"])
+        self.assertEqual(len(self.app_hub.calls("SendUserCascadeMessage")), before)
+        self.assertEqual(self.app_hub.requests, [])
+
+    def test_a_big_picture_is_sent_as_a_smaller_jpeg(self):
+        from PIL import Image
+        noise = Image.effect_noise((3200, 2400), 60).convert("RGB")
+        buffer = io.BytesIO()
+        noise.save(buffer, format="PNG")
+        meta = self.store(buffer.getvalue(), "大图.png")
+        stored_size = (self.codex.data_root / meta["id"] / "image.png").stat().st_size
+        self.handler.sent.clear()
+        antigravity.AGENT().http_send(self.handler, {
+            "id": "a", "text": "大图", "attachments": [meta["id"]]})
+        self.assertEqual(self.handler.sent[0][0], 200)
+        item = self.app_hub.calls("SendUserCascadeMessage")[-1]["body"]["media"][0]
+        raw = base64.b64decode(item["inlineData"])
+        self.assertEqual(item["mimeType"], "image/jpeg")
+        self.assertEqual(antigravity.picture_info(raw), ("image/jpeg", 3072, 2304))
+        self.assertLess(len(raw), stored_size)
+
+    def test_a_phone_media_field_is_never_sent(self):
+        antigravity.AGENT().http_send(self.handler, {
+            "id": "a", "text": "没有附件",
+            "media": [{"mimeType": "image/png", "inlineData": "AAAA"}]})
+        self.assertEqual(self.handler.sent[0][0], 200)
+        self.assertNotIn("media", self.app_hub.calls("SendUserCascadeMessage")[-1]["body"])
+
     def test_picture_info_reads_each_header(self):
         png = fake.picture("PNG", 11, 13)
         jpeg = fake.picture("JPEG", 17, 19)
