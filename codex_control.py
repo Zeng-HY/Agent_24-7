@@ -1611,7 +1611,8 @@ class Bridge:
             pillow_heif.register_heif_opener()
         except ImportError:
             pass
-        if app not in ('codex','claude','deepseek'):raise ControlError('未知客户端',400)
+        from agents import registry
+        if app not in registry.ids():raise ControlError('未知客户端',400)
         if new_draft:
             if not re.fullmatch(r'new:[a-f0-9]{32}',tid):raise ControlError('新对话草稿无效',400)
         else:chats.find(app,tid)

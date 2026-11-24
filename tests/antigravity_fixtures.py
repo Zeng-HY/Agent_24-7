@@ -6,9 +6,14 @@ the words, folders and conversation ids are invented. Nothing here touches a rea
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import sqlite3
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 # The columns Antigravity writes into conversation_summaries (2026-11-24).
 COLUMNS = (
@@ -146,3 +151,158 @@ def real_transcript() -> list[dict]:
         ]),
         record(17, "GENERIC", "MODEL", "工具输出：普通总结已交回"),
     ]
+
+
+# ---------------------------------------------------------------- the app's local service, made up
+
+
+TOKEN = "test-csrf-token-8f3a"
+
+
+def picture(fmt: str = "PNG", width: int = 2, height: int = 2) -> bytes:
+    """A real, tiny picture of the named format (made in memory, never read from a user folder)."""
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (200, 30, 30)).save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+def waiting_step(trajectory: str = "traj-1", index: int = 3, action: str = "run_command",
+                 target: str = "npm test") -> dict:
+    """One GetCascadeTrajectorySteps entry that is waiting for an approval."""
+    return {
+        "status": "CORTEX_STEP_STATUS_WAITING",
+        "requestedInteraction": {"permission": {"resource": {"action": action, "target": target}}},
+        "metadata": {"sourceTrajectoryStepInfo": {"trajectoryId": trajectory, "stepIndex": index}},
+    }
+
+
+class FakeHub:
+    """A tiny HTTP service on 127.0.0.1 standing in for the language server.
+
+    It checks the CSRF header, answers the two methods this batch may call, and records every request.
+    The hub file is written under the fake machines.HOME, with this test process's pid (which is alive).
+    """
+
+    def __init__(self, home: Path, token: str = TOKEN, steps: list[dict] | None = None) -> None:
+        self.home = Path(home)
+        self.token = token
+        self.steps = list(steps or [])
+        self.requests: list[dict] = []
+        self.fail = ""            # a method name that answers HTTP 500
+        self.server: ThreadingHTTPServer | None = None
+        self.thread: threading.Thread | None = None
+        self.port = 0
+
+    def __enter__(self) -> "FakeHub":
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw or b"{}")
+                except ValueError:
+                    body = {}
+                method = self.path.rstrip("/").rsplit("/", 1)[-1]
+                owner.requests.append({"method": method, "body": body,
+                                       "token": self.headers.get("x-codeium-csrf-token"),
+                                       "connect": self.headers.get("Connect-Protocol-Version")})
+                if self.headers.get("x-codeium-csrf-token") != owner.token:
+                    return self._send(403, {"error": "token"})
+                if owner.fail and method == owner.fail:
+                    return self._send(500, {"error": "boom"})
+                if method == "GetCascadeTrajectorySteps":
+                    return self._send(200, {"steps": owner.steps})
+                if method == "HandleCascadeUserInteraction":
+                    owner.steps = []  # answered: the app no longer asks
+                    return self._send(200, {"ok": True})
+                if method == "SendUserCascadeMessage":
+                    return self._send(200, {})
+                if method == "UpdateConversationAnnotations":
+                    cascade = str((body or {}).get("cascadeId") or "")
+                    folder = data_root(owner.home) / "annotations"
+                    folder.mkdir(parents=True, exist_ok=True)
+                    (folder / f"{cascade}.pbtxt").write_text(
+                        "permission_preset:AGENT_PERMISSION_PRESET_TURBO", encoding="utf-8")
+                    return self._send(200, {})
+                if method == "CancelCascadeInvocation":
+                    return self._send(200, {})
+                return self._send(404, {"error": "no such method"})
+
+            def _send(self, code: int, obj: dict) -> None:
+                body = json.dumps(obj).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.port = int(self.server.server_address[1])
+        self.thread = threading.Thread(target=self.server.serve_forever, name="fake-antigravity", daemon=True)
+        self.thread.start()
+        daemon = data_root(self.home) / "daemon"
+        daemon.mkdir(parents=True, exist_ok=True)
+        (daemon / f"hub_{self.port}.json").write_text(json.dumps(
+            {"pid": os.getpid(), "httpPort": self.port, "csrfToken": self.token}), encoding="utf-8")
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=3)
+
+    def calls(self, method: str) -> list[dict]:
+        return [row for row in self.requests if row["method"] == method]
+
+
+class FakeAgentapi:
+    """Stands in for running language_server.exe: records argv/environment, returns made-up JSON."""
+
+    def __init__(self, stdout: str = '{"ok": true}', returncode: int = 0, exc: Exception | None = None) -> None:
+        self.stdout = stdout
+        self.returncode = returncode
+        self.exc = exc
+        self.calls: list[dict] = []
+
+    def __call__(self, exe, args: list[str], env: dict, timeout: float):
+        self.calls.append({"exe": str(exe), "args": list(args), "env": dict(env), "timeout": timeout})
+        if self.exc is not None:
+            raise self.exc
+        return SimpleNamespace(returncode=self.returncode, stdout=self.stdout, stderr="")
+
+
+class FakeAttachments:
+    """The shared attachment folder, made small: stores the meta codex.public_attachment would read."""
+
+    def __init__(self, root: Path) -> None:
+        self.data_root = Path(root)
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        self.metas: dict[str, dict] = {}
+
+    def _write_meta(self, meta: dict) -> None:
+        self.metas[meta["id"]] = dict(meta)
+
+    @staticmethod
+    def public_attachment(meta: dict) -> dict:
+        return {key: meta[key] for key in ("id", "name", "original_size", "width", "height")} | {
+            "url": "/api/codex/image?id=" + meta["id"],
+            "thumbnail": "/api/codex/image?thumb=1&id=" + meta["id"]}
+
+    def attachment(self, ident: str, tid: str | None = None) -> dict:
+        meta = dict(self.metas[ident])
+        meta["path"] = str(self.data_root / ident / "image.png")
+        return meta
+
+    def cleanup_drafts(self) -> None:
+        pass
+
+

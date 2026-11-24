@@ -13,7 +13,7 @@
 3. 在 `agents/registry.py` 的 `AGENT_MODULES` 元组里加一行 `"agents.<id>"`。
 4. 补齐单元测试并跑过 `tests/test_agents.py`、`tests/test_no_hardcoded_agents.py` 等检查。
 
-只读助手的真实例子是 `agents/antigravity.py`：它只列对话、读内容、报一轮跑完，不发送、不停止、不批准。
+真实例子是 `agents/antigravity.py`：它能读对话和记录，也能从手机给已有的 Antigravity 对话发消息、发图片、批准 Antigravity 在电脑上等你批准的步骤（`approve`）、停止正在跑的一轮（`stop`），还能从手机新建对话（`new`，默认打开全自动）。它的「此刻能力」会随情况变化：Antigravity 没开时不能发、不能批准、不能停；对话空闲时不能停；这些变化走 `capabilities_now()`，说明书本身不变。对话在跑时发消息会排队，等这一轮做完再交给它。
 
 Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodules('agents', filter=lambda name: name != 'agents.testing')` 自动收集 `agents/` 下的模块，因此不用改 `.spec`。打包后的自检（`AgentRemote.exe --self-test`，见 `relay_desktop.py`）会自动验证 `AGENT_MODULES` 中的每个模块都能加载、`agent.id` 与文件名一致，且 `testing` 不在正式包里。如果新助手带额外小程序，在自己的模块里写 `helpers`；如果需要在卸载时清理本机文件，写 `uninstall()`。打包、安装清单和卸载入口都按 `agents.registry` 的名单自动处理，不用改 `deploy/windows/version.py`、`setup.iss` 或 `relay_desktop.py`。
 
