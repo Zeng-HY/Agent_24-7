@@ -38,44 +38,65 @@ class CodexAgent(Agent):
     desktop_send_text = "已按回车，等对话记录确认"
     delivery_markers = (b"UserMessage", b"user_message", b"codex_delegation", b"hook_prompt", b"HookPrompt")
 
-    def _route_state(self) -> tuple[str, bool]:
-        """Return (route, hooks_trusted) for dynamic capability calculation."""
-        import codex_apptools
-        route = codex_apptools.current_route()
-        if route != "apptools":
-            return route, False
-        import codex_hooks
-        return route, codex_hooks.read_trust_status() == "enabled"
-
     def build_manifest(self) -> dict:
-        route, hooks_trusted = self._route_state()
+        caps = {
+            "list": True,
+            "read": True,
+            "search": True,
+            "open": True,
+            "stop": True,
+            "queue": True,
+            "steer": True,
+            "approve": True,
+            "answer": True,
+            "new": True,
+            "new_projectless": True,
+            "new_permission": False,
+            "archive": True,
+            "restore": True,
+            "delete": True,
+            "usage": True,
+            "waiting": True,
+            "attachments": True,
+            "slash_commands": True,
+            "settings": ["model", "effort", "mode"],
+            "send_modes": ["send", "steer", "queue"],
+            "statuses": ["running", "waiting", "idle", "unknown"],
+        }
+        sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "ipc", "live": "pipe+file"}
+        return make_manifest(
+            ident="codex",
+            zh="Codex",
+            en="Codex",
+            order=10,
+            color="#1E222A",
+            color_dark="#FFFFFF",
+            icon={"kind": "builtin", "key": "codex"},
+            legacy=True,
+            min_protocol=1,
+            capabilities=caps,
+            params={"refresh_ms": 2500},
+            ui={"card_layout": "codex.v1", "waiting_text": "等你处理"},
+            sources=sources,
+        )
+
+    def capabilities_now(self, server, conv_id: str) -> dict | None:
+        import codex_apptools
+        import codex_hooks
+
+        route = codex_apptools.current_route()
         if route == "legacy":
+            base_caps = self.manifest()["capabilities"]
             caps = {
-                "list": True,
-                "read": True,
-                "search": True,
-                "open": True,
-                "stop": True,
-                "queue": True,
-                "steer": True,
-                "approve": True,
-                "answer": True,
-                "new": True,
-                "new_projectless": True,
-                "new_permission": False,
-                "archive": True,
-                "restore": True,
-                "delete": True,
-                "usage": True,
-                "waiting": True,
-                "attachments": True,
-                "slash_commands": True,
-                "settings": ["model", "effort"],
-                "send_modes": ["send", "steer", "queue"],
-                "statuses": ["running", "waiting", "idle", "unknown"],
+                **base_caps,
+                "settings": list(base_caps["settings"]),
+                "send_modes": list(base_caps["send_modes"]),
+                "statuses": list(base_caps["statuses"]),
             }
-            sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "ipc", "live": "pipe+file"}
-        elif route == "apptools":
+            return {"capabilities": caps, "notes": {}}
+        if route == "apptools":
+            trust = codex_hooks.read_trust_status()
+            hooks_trusted = trust == "enabled"
             caps = {
                 "list": True,
                 "read": True,
@@ -100,59 +121,55 @@ class CodexAgent(Agent):
                 "send_modes": ["send", "steer", "queue"],
                 "statuses": ["running", "waiting", "idle", "unknown"],
             }
-            sources = {
-                "catalog": "sqlite",
-                "transcript": "jsonl",
-                "control": "app-tools+hook" if hooks_trusted else "app-tools",
-                "live": "hook+file" if hooks_trusted else "poll+file",
+            notes = {
+                "slash_commands": "新版 Codex 不能从手机压缩对话（/compact）",
+                "mode": "新版 Codex 从手机发的消息跟着电脑上当前的模式走，手机上不能切换",
             }
-        else:
-            caps = {
-                "list": True,
-                "read": True,
-                "search": True,
-                "open": True,
-                "stop": False,
-                "queue": False,
-                "steer": False,
-                "approve": False,
-                "answer": False,
-                "new": True,
-                "new_projectless": True,
-                "new_permission": False,
-                "archive": True,
-                "restore": True,
-                "delete": True,
-                "usage": True,
-                "waiting": False,
-                "attachments": False,
-                "slash_commands": False,
-                "settings": [],
-                "send_modes": [],
-                "statuses": ["running", "waiting", "idle", "unknown"],
-            }
-            sources = {"catalog": "sqlite", "transcript": "jsonl", "control": "none", "live": "file-poll"}
-        return make_manifest(
-            ident="codex",
-            zh="Codex",
-            en="Codex",
-            order=10,
-            color="#1E222A",
-            color_dark="#FFFFFF",
-            icon={"kind": "builtin", "key": "codex"},
-            legacy=True,
-            min_protocol=1,
-            capabilities=caps,
-            params={"refresh_ms": 2500},
-            ui={"card_layout": "codex.v1", "waiting_text": "等你处理"},
-            sources=sources,
-        )
-
-    def manifest(self) -> dict:
-        return self.build_manifest()
-
-    def can(self, capability: str) -> bool:
-        return bool(self.manifest()["capabilities"].get(capability))
+            if not hooks_trusted:
+                hook_reason = (
+                    codex_hooks.TRUST_HINT
+                    if trust == "pending_trust"
+                    else "遥应的 Codex 钩子还没装上，手机暂时不能批准、停止、回答"
+                )
+                notes["stop"] = hook_reason
+                notes["approve"] = hook_reason
+                notes["answer"] = hook_reason
+            return {"capabilities": caps, "notes": notes}
+        caps = {
+            "list": True,
+            "read": True,
+            "search": True,
+            "open": True,
+            "stop": False,
+            "queue": False,
+            "steer": False,
+            "approve": False,
+            "answer": False,
+            "new": True,
+            "new_projectless": True,
+            "new_permission": False,
+            "archive": True,
+            "restore": True,
+            "delete": True,
+            "usage": True,
+            "waiting": False,
+            "attachments": False,
+            "slash_commands": False,
+            "settings": [],
+            "send_modes": [],
+            "statuses": ["running", "waiting", "idle", "unknown"],
+        }
+        reason = codex_apptools.NOT_RUNNING_REASON
+        notes = {
+            "send": reason,
+            "steer": reason,
+            "queue": reason,
+            "stop": reason,
+            "approve": reason,
+            "answer": reason,
+            "attachments": reason,
+        }
+        return {"capabilities": caps, "notes": notes}
 
     def find(self, conv_id: str) -> dict:
         item = chats.codex_thread(conv_id)
@@ -806,6 +823,12 @@ class CodexAgent(Agent):
             if data.get("settings"):
                 settings = svc._picked({"model": data.get("default_model"), "effort": data.get("default_effort"),
                                         "mode": "default", "service_tier": None}, data["settings"])
+            submitted_settings = (data.get("submitted") or {}).get("settings")
+            if (
+                codex_apptools._is_plan_mode_requested(data.get("settings"))
+                or codex_apptools._is_plan_mode_requested(submitted_settings)
+            ):
+                settings = {**settings, "mode": "plan"}
             trace.phase("bind", "准备首条消息与附件")
             svc._bind(rid, data)
             svc._save(rid, "dispatching", data, {"message": "正在提交首条消息…"})
@@ -822,6 +845,8 @@ class CodexAgent(Agent):
             )
             if not (answer.get("accepted") or answer.get("delivered")):
                 raise new_conversations.chats.ChatError(answer.get("text") or answer.get("message") or "首条消息结果尚未确认")
+            if codex_apptools.PLAN_MODE_IGNORED_NOTE in str(answer.get("text") or ""):
+                data["accepted_message"] = str(answer["text"])
             return
         new_conversations.chats.require_send_desktop()
         new_conversations.os.startfile("codex://threads/" + data["id"])
@@ -975,7 +1000,7 @@ class CodexAgent(Agent):
                 data = backend.status(tid, fresh=q.get("fresh") == "1")
             if hasattr(handler.server, "tasks"):
                 handler.server.tasks.observe(tid, data)
-            handler._json(data)
+            handler._json(self.attach_capabilities_now(handler, tid, data))
         self._run_codex_get(handler, run)
 
     def http_receipt(self, handler) -> None:

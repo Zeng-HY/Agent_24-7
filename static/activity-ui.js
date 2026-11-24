@@ -8,11 +8,11 @@
   function onControl(me,data){
     window.interactionUI?.control(me,data);
     const isCodex=Agents.cardLayout(me?.app)==='codex.v1';
-    const isGeneric=Agents.isGenericLayout(me?.app)&&Agents.can(me?.app,'stop');
+    const isGeneric=Agents.isGenericLayout(me?.app);
     if(!cur||cur.app!==me?.app||cur.id!==me?.id||(!isCodex&&!isGeneric))return;
     control=data;
     if(isCodex){
-      if(!Agents.can(me.app,'stop')){stop.hidden=true;return;}
+      if(!Agents.canNow(me.app,'stop',data)){stop.hidden=true;return;}
       const wait=stopping.get(me.id);
       if(wait){const old=(data.recent_turns||[]).find(t=>t.id===wait);if(old&&old.status!=='inProgress'){stopping.delete(me.id);toast(old.status==='interrupted'?'当前轮已停止':'该轮已结束');}}
       stop.hidden=!data.available||!data.running||!data.active_turn_id;stop.disabled=stopping.has(me.id);stop.textContent=stop.disabled?'正在停止…':'停止当前轮';
@@ -24,6 +24,7 @@
       };
       return;
     }
+    if(!Agents.canNow(me.app,'stop',data)){stop.hidden=true;return;}
     const key=chatKey(me);
     stop.hidden=data.available===false||!data.running;
     stop.disabled=stopping.has(key);stop.textContent=stop.disabled?'正在停止…':'停止当前轮';

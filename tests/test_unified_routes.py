@@ -131,7 +131,16 @@ class UnifiedRouteTests(unittest.TestCase):
              patch("new_conversations.threading.Thread"):
             code, body = call_api(self.server, "GET", "/api/agents/codex/state?id=c1&fresh=1")
             self.assertEqual((code, body["turn_id"]), (200, "t1"))
+            self.assertIn("capabilities_now", body)
+            self.assertIn("capability_notes", body)
             self.server.tasks.observe.assert_called_once()
+            # tasks.observe receives original state without capabilities_now
+            self.assertNotIn("capabilities_now", self.server.tasks.observe.call_args.args[1])
+
+            code_p1, body_p1 = call_api(self.server, "GET", "/api/agents/codex/state?id=c1", protocol=1)
+            self.assertEqual(code_p1, 200)
+            self.assertNotIn("capabilities_now", body_p1)
+            self.assertNotIn("capability_notes", body_p1)
 
             code, body = call_api(self.server, "GET", "/api/agents/codex/receipt?id=c1&request_id=r1")
             self.assertEqual((code, body["state"]), (200, "accepted"))
@@ -186,6 +195,8 @@ class UnifiedRouteTests(unittest.TestCase):
              patch("usage_limits.claude_window", return_value={"available": True, "source": "window", "windows": []}):
             code, body = call_api(self.server, "GET", "/api/agents/claude/state?id=cl1")
             self.assertEqual((code, body["stop_token"]), (200, "tok-1"))
+            self.assertNotIn("capabilities_now", body)
+            self.assertNotIn("capability_notes", body)
 
             self.codex.receipt.return_value = {"state": "unknown"}
             code, body = call_api(self.server, "GET", "/api/agents/claude/receipt?id=cl1&request_id=r1")
@@ -229,6 +240,8 @@ class UnifiedRouteTests(unittest.TestCase):
              patch("remote.os.startfile") as startfile:
             code, body = call_api(self.server, "GET", "/api/agents/deepseek/state?id=d1")
             self.assertEqual((code, body["turn_id"]), (200, "dt1"))
+            self.assertNotIn("capabilities_now", body)
+            self.assertNotIn("capability_notes", body)
 
             code, body = call_api(self.server, "GET", "/api/agents/deepseek/receipt?id=d1&request_id=rd1")
             self.assertEqual((code, body["state"]), (200, "accepted"))
@@ -298,6 +311,12 @@ class UnifiedRouteTests(unittest.TestCase):
                 self.assertEqual(code2, 200)
                 self.assertIn("agents", u2)
                 self.assertEqual(set(u2["agents"].keys()), {"codex", "claude", "testing"})
+
+            # Testing agent returns None from capabilities_now -> no capabilities_now/capability_notes on protocol 2
+            code_ts, ts_state = call_api(self.server, "GET", "/api/agents/testing/state?id=test-running", protocol=2)
+            self.assertEqual(code_ts, 200)
+            self.assertNotIn("capabilities_now", ts_state)
+            self.assertNotIn("capability_notes", ts_state)
 
 
 if __name__ == "__main__":

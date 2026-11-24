@@ -149,32 +149,43 @@ class RouteSelectionTests(unittest.TestCase):
             m_legacy = agent.manifest()
             self.assertTrue(m_legacy["capabilities"]["stop"])
             self.assertTrue(m_legacy["capabilities"]["slash_commands"])
+            self.assertEqual(m_legacy["capabilities"]["settings"], ["model", "effort", "mode"])
             self.assertEqual(m_legacy["sources"]["control"], "ipc")
+            now_legacy = agent.capabilities_now(None, TID)
+            self.assertEqual(now_legacy["capabilities"], m_legacy["capabilities"])
+            self.assertEqual(now_legacy["notes"], {})
             self.assertEqual([c["name"] for c in composer_commands.catalog("codex", TID)["items"]], ["compact"])
 
-            # Mid-run switch to apptools on the SAME agent instance
+            # Mid-run switch to apptools on the SAME agent instance: manifest stays fixed, capabilities_now follows route
             pipes[0] = ["codex-app-tools-1111"]
             ca.reset_route_cache()
             m_new = agent.manifest()
-            self.assertFalse(m_new["capabilities"]["stop"])
-            self.assertFalse(m_new["capabilities"]["approve"])
-            self.assertFalse(m_new["capabilities"]["answer"])
-            self.assertFalse(m_new["capabilities"]["slash_commands"])
-            self.assertTrue(m_new["capabilities"]["queue"])
-            self.assertTrue(m_new["capabilities"]["steer"])
-            self.assertTrue(m_new["capabilities"]["attachments"])
-            self.assertEqual(m_new["capabilities"]["send_modes"], ["send", "steer", "queue"])
-            self.assertEqual(m_new["sources"]["control"], "app-tools")
+            self.assertEqual(m_new, m_legacy)
+            now_new = agent.capabilities_now(None, TID)
+            self.assertFalse(now_new["capabilities"]["stop"])
+            self.assertFalse(now_new["capabilities"]["approve"])
+            self.assertFalse(now_new["capabilities"]["answer"])
+            self.assertFalse(now_new["capabilities"]["slash_commands"])
+            self.assertTrue(now_new["capabilities"]["queue"])
+            self.assertTrue(now_new["capabilities"]["steer"])
+            self.assertTrue(now_new["capabilities"]["attachments"])
+            self.assertEqual(now_new["capabilities"]["settings"], ["model", "effort"])
+            self.assertEqual(now_new["capabilities"]["send_modes"], ["send", "steer", "queue"])
+            self.assertIn("slash_commands", now_new["notes"])
+            self.assertIn("mode", now_new["notes"])
             self.assertEqual(composer_commands.catalog("codex", TID)["items"], [])
 
-            # Mid-run switch to none (Codex closed)
+            # Mid-run switch to none (Codex closed): manifest stays fixed, capabilities_now narrows
             pipes[0] = []
             ca.reset_route_cache()
             m_none = agent.manifest()
-            self.assertFalse(m_none["capabilities"]["queue"])
-            self.assertFalse(m_none["capabilities"]["steer"])
-            self.assertEqual(m_none["capabilities"]["send_modes"], [])
-            self.assertEqual(m_none["sources"]["control"], "none")
+            self.assertEqual(m_none, m_legacy)
+            now_none = agent.capabilities_now(None, TID)
+            self.assertFalse(now_none["capabilities"]["queue"])
+            self.assertFalse(now_none["capabilities"]["steer"])
+            self.assertEqual(now_none["capabilities"]["settings"], [])
+            self.assertEqual(now_none["capabilities"]["send_modes"], [])
+            self.assertEqual(now_none["notes"]["send"], ca.NOT_RUNNING_REASON)
 
 
 class ClientProtocolTests(unittest.TestCase):
@@ -646,6 +657,248 @@ class AppToolsBridgeTests(unittest.TestCase):
             self.assertEqual(code, 409)
             self.assertIn("Codex 没在运行", err["error"])
             self.assertTrue(err["not_submitted"])
+
+    def test_protocol_one_and_two_capabilities_now_routes_commands_and_untrusted_actions(self) -> None:
+        import codex_hooks as ch
+
+        server = SimpleNamespace(
+            machine={"name": "测试电脑", "apps": ["codex"], "voice": False},
+            cfg={"token": "secret"},
+            codex=self.legacy,
+            references=None,
+            deepseek=None,
+            log=SimpleNamespace(write=lambda t: None),
+        )
+        self.legacy._apptools_bridge = self.bridge
+        manifest_caps = registry.get("codex").manifest()["capabilities"]
+
+        def assert_never_wider(now_caps: dict) -> None:
+            self.assertEqual(set(now_caps.keys()), set(manifest_caps.keys()))
+            for k, mval in manifest_caps.items():
+                nval = now_caps[k]
+                self.assertIs(type(nval), type(mval), k)
+                if isinstance(mval, bool) and not mval:
+                    self.assertFalse(nval, k)
+                elif isinstance(mval, list):
+                    self.assertTrue(set(nval) <= set(mval), (k, nval, mval))
+
+        # 1) Legacy route: protocol 1 omits capabilities_now; protocol 2 includes full legacy capabilities & empty notes
+        with patch.object(ca, "_list_pipes", return_value=["codex-ipc"]), \
+             patch.object(self.legacy, "status", return_value={"available": True, "running": False, "status": "idle"}):
+            ca.reset_route_cache()
+            code1, st1 = _call_http(server, "GET", f"/api/codex/state?id={TID}", protocol=1)
+            self.assertEqual(code1, 200)
+            self.assertNotIn("capabilities_now", st1)
+            self.assertNotIn("capability_notes", st1)
+            code1u, st1u = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=1)
+            self.assertEqual(code1u, 200)
+            self.assertEqual(st1u, st1)
+
+            code2, st2 = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+            self.assertEqual(code2, 200)
+            self.assertEqual(st2["capabilities_now"], manifest_caps)
+            self.assertEqual(st2["capability_notes"], {})
+            assert_never_wider(st2["capabilities_now"])
+
+            code_cmd, cmd_body = _call_http(server, "GET", f"/api/agents/codex/commands?id={TID}", protocol=2)
+            self.assertEqual(code_cmd, 200)
+            self.assertEqual([c["name"] for c in cmd_body["items"]], ["compact"])
+
+        # 2) Apptools route across not_installed, pending_trust, enabled
+        fake_home = self.root / "fake_codex_home"
+        fake_home.mkdir()
+        ch.set_default_codex_home_override(fake_home)
+        ch.reset_trust_cache()
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-caps"]):
+            ca.reset_route_cache()
+            # 2a) not_installed
+            code, st_ni = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+            self.assertEqual(code, 200)
+            assert_never_wider(st_ni["capabilities_now"])
+            self.assertFalse(st_ni["capabilities_now"]["stop"])
+            self.assertFalse(st_ni["capabilities_now"]["approve"])
+            self.assertFalse(st_ni["capabilities_now"]["answer"])
+            self.assertFalse(st_ni["capabilities_now"]["slash_commands"])
+            self.assertEqual(st_ni["capabilities_now"]["settings"], ["model", "effort"])
+            self.assertIn("还没装上", st_ni["capability_notes"]["stop"])
+            self.assertEqual(st_ni["capability_notes"]["approve"], st_ni["capability_notes"]["stop"])
+            self.assertEqual(st_ni["capability_notes"]["answer"], st_ni["capability_notes"]["stop"])
+            self.assertEqual(st_ni["capability_notes"]["slash_commands"], "新版 Codex 不能从手机压缩对话（/compact）")
+            self.assertEqual(st_ni["capability_notes"]["mode"], "新版 Codex 从手机发的消息跟着电脑上当前的模式走，手机上不能切换")
+
+            # Protocol 1 on apptools still omits both fields
+            code_p1, st_p1 = _call_http(server, "GET", f"/api/codex/state?id={TID}", protocol=1)
+            self.assertEqual(code_p1, 200)
+            self.assertNotIn("capabilities_now", st_p1)
+            self.assertNotIn("capability_notes", st_p1)
+
+            # http_commands returns 400 unsupported on apptools
+            code_cmd, cmd_err = _call_http(server, "GET", f"/api/agents/codex/commands?id={TID}", protocol=2)
+            self.assertEqual(code_cmd, 400)
+            self.assertEqual(cmd_err, {"error": "这个助手还没有斜杠命令", "code": "unsupported"})
+
+            # Untrusted stop & answer over HTTP return 409 with Chinese reason (never 500)
+            for path, payload in (
+                ("/api/codex/stop", {"id": TID, "turn_id": "turn-1"}),
+                ("/api/agents/codex/stop", {"id": TID, "turn_id": "turn-1"}),
+                ("/api/codex/answer", {"id": TID, "question_id": "q1", "answers": {}}),
+                ("/api/agents/codex/answer", {"id": TID, "question_id": "q1", "answers": {}}),
+            ):
+                code_act, err_act = _call_http(server, "POST", path, payload, protocol=2)
+                self.assertEqual(code_act, 409, (path, err_act))
+                self.assertEqual(err_act["code"], "hooks_not_trusted")
+                self.assertTrue(err_act["not_submitted"])
+
+            # 2b) pending_trust
+            ch.install_hooks(self.root / "TeleplyCodexHook.exe", codex_home=fake_home, log=lambda _t: None)
+            code, st_pt = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+            self.assertEqual(code, 200)
+            assert_never_wider(st_pt["capabilities_now"])
+            self.assertFalse(st_pt["capabilities_now"]["stop"])
+            self.assertEqual(st_pt["capability_notes"]["stop"], ch.TRUST_HINT)
+            self.assertEqual(st_pt["capability_notes"]["approve"], ch.TRUST_HINT)
+            self.assertEqual(st_pt["capability_notes"]["answer"], ch.TRUST_HINT)
+
+            # 2c) enabled (trusted)
+            hp = fake_home / "hooks.json"
+            (fake_home / "config.toml").write_text(
+                f"[hooks.state.'{hp}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+                f"[hooks.state.'{hp}:permission_request:0:0']\ntrusted_hash = \"h2\"\n"
+                f"[hooks.state.'{hp}:stop:0:0']\ntrusted_hash = \"h3\"\n",
+                encoding="utf-8",
+            )
+            ch.reset_trust_cache()
+            code, st_en = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+            self.assertEqual(code, 200)
+            assert_never_wider(st_en["capabilities_now"])
+            self.assertTrue(st_en["capabilities_now"]["stop"])
+            self.assertTrue(st_en["capabilities_now"]["approve"])
+            self.assertTrue(st_en["capabilities_now"]["answer"])
+            self.assertFalse(st_en["capabilities_now"]["slash_commands"])
+            self.assertEqual(st_en["capabilities_now"]["settings"], ["model", "effort"])
+            self.assertEqual(
+                set(st_en["capability_notes"].keys()),
+                {"slash_commands", "mode"},
+            )
+
+        # 3) None route (Codex not running)
+        with patch.object(ca, "_list_pipes", return_value=[]):
+            ca.reset_route_cache()
+            code, st_no = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+            self.assertEqual(code, 200)
+            assert_never_wider(st_no["capabilities_now"])
+            self.assertEqual(st_no["capabilities_now"]["send_modes"], [])
+            self.assertEqual(st_no["capabilities_now"]["settings"], [])
+            self.assertFalse(st_no["capabilities_now"]["attachments"])
+            for k in ("send", "steer", "queue", "stop", "approve", "answer", "attachments"):
+                self.assertEqual(st_no["capability_notes"][k], ca.NOT_RUNNING_REASON)
+            code_cmd, _ = _call_http(server, "GET", f"/api/agents/codex/commands?id={TID}", protocol=2)
+            self.assertEqual(code_cmd, 400)
+
+    def test_plan_mode_note_on_apptools_send_and_new_chat_only(self) -> None:
+        from unittest.mock import Mock
+        import new_conversations
+
+        expected_text = "已交给 Codex。新版 Codex 从手机发的消息跟着电脑上当前的模式走，这次选的「计划模式」没有生效。"
+
+        # 1) Normal send on apptools with mode="plan" carries explanation
+        res_plan = self.bridge.send({
+            "id": TID,
+            "request_id": "req-plan-00001",
+            "text": "请先出计划",
+            "settings": {"model": "gpt-test", "effort": "high", "mode": "plan"},
+        })
+        self.assertTrue(res_plan["accepted"])
+        self.assertEqual(res_plan["text"], expected_text)
+
+        # 2) Normal send on apptools with mode="default" does NOT carry explanation
+        res_default = self.bridge.send({
+            "id": TID,
+            "request_id": "req-plan-00002",
+            "text": "普通执行消息",
+            "settings": {"model": "gpt-test", "effort": "high", "mode": "default"},
+        })
+        self.assertTrue(res_default["accepted"])
+        self.assertEqual(res_default["text"], "已交给 Codex")
+
+        # 3) Queued send while running with mode="plan" also notes it
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        res_queued = self.bridge.send({
+            "id": TID,
+            "request_id": "req-plan-00003",
+            "text": "排队计划",
+            "intent": "queue",
+            "settings": {"model": "gpt-test", "effort": "high", "mode": "plan"},
+        })
+        self.assertEqual(res_queued["delivery_state"], "queued")
+        self.assertIn(ca.PLAN_MODE_IGNORED_NOTE, res_queued["text"])
+        self.pipe_status = {"type": "idle"}
+
+        # 4) New conversation first message on apptools: mode="plan" carries explanation, default does not
+        proj = self.root / "new_proj"
+        proj.mkdir()
+        history = SimpleNamespace(catalog=lambda: [{"app": "codex", "id": TID, "cwd": str(proj), "folder": "new_proj", "updated": 1}])
+        refs = composer_references.References(history, home=self.root)
+        self.legacy._apptools_bridge = self.bridge
+        svc = new_conversations.NewConversations(history, refs, self.legacy, Mock(), root=self.root / "new_db")
+
+        def run_new_case(mode: str, rid_tag: str) -> dict:
+            rid = svc.create_draft()["request_id"]
+            body = {
+                "request_id": rid,
+                "app": "codex",
+                "folder": str(proj),
+                "text": f"新建消息 {rid_tag}",
+                "attachments": [],
+                "references": [],
+                "settings": {"model": "gpt-test", "effort": "high", "mode": mode},
+            }
+            with patch("new_conversations.codex_control.catalog", return_value=self.catalog), \
+                 patch("new_conversations.threading.Thread"):
+                svc.submit(body)
+            with patch("new_conversations.chats.require_send_desktop"), \
+                 patch("new_conversations.os.startfile"), \
+                 patch.object(svc, "_empty_codex", side_effect=lambda _r, d: d.update(id=TID, title="新建测试", default_model="gpt-test", default_effort="medium")), \
+                 patch("new_conversations.codex_control.catalog", return_value=self.catalog):
+                svc._run(rid)
+            return svc.status(rid)
+
+        st_new_plan = run_new_case("plan", "plan")
+        self.assertEqual(st_new_plan["state"], "accepted")
+        self.assertEqual(st_new_plan["message"], expected_text)
+
+        st_new_default = run_new_case("default", "default")
+        self.assertEqual(st_new_default["state"], "accepted")
+        self.assertEqual(st_new_default["message"], "首条消息已送达")
+
+        # 5) Legacy route new chat does NOT add the apptools plan-mode explanation
+        with patch.object(ca, "_list_pipes", return_value=["codex-ipc"]):
+            ca.reset_route_cache()
+            rid_legacy = svc.create_draft()["request_id"]
+            with patch("new_conversations.codex_control.catalog", return_value=self.catalog), \
+                 patch("new_conversations.threading.Thread"):
+                svc.submit({
+                    "request_id": rid_legacy,
+                    "app": "codex",
+                    "folder": str(proj),
+                    "text": "老路线新建计划",
+                    "attachments": [],
+                    "references": [],
+                    "settings": {"model": "gpt-test", "effort": "high", "mode": "plan"},
+                })
+            fake_pipe = SimpleNamespace(snapshot=lambda tid, _t, timing=None: ("owner", {"id": tid}))
+            with patch("new_conversations.chats.require_send_desktop"), \
+                 patch("new_conversations.os.startfile"), \
+                 patch.object(svc, "_empty_codex", side_effect=lambda _r, d: d.update(id=TID, title="老路线新建", default_model="gpt-test", default_effort="medium")), \
+                 patch.object(self.legacy, "_pipe", return_value=fake_pipe), \
+                 patch("new_conversations.codex_control.selected_settings", return_value={"model": "gpt-test", "effort": "high", "mode": "default", "service_tier": None}), \
+                 patch("new_conversations.codex_control.catalog", return_value=self.catalog), \
+                 patch.object(self.legacy, "send", return_value={"accepted": True, "text": "已交给 Codex"}):
+                svc._run(rid_legacy)
+            st_legacy = svc.status(rid_legacy)
+            self.assertEqual(st_legacy["state"], "accepted")
+            self.assertEqual(st_legacy["message"], "首条消息已送达")
+            self.assertNotIn(ca.PLAN_MODE_IGNORED_NOTE, st_legacy["message"])
 
 
 class ChatsDisplayStep1Tests(unittest.TestCase):
