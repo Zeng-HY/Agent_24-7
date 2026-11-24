@@ -9,6 +9,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -987,5 +988,372 @@ class ChatsHookRecordDisplayTests(unittest.TestCase):
         self.assertIs(state["running"], True)
 
 
+class HookQueueTests(unittest.TestCase):
+    """Teleply's own queue and steer slot, and the hook answers that hand them to Claude (design 3.5)."""
+    EXE_OK = r"C:\Users\demo\AppData\Roaming\Claude\claude-code\2.1.330\claude.exe"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.mono = [100.0]
+
+    def bridge(self, sessions=None):
+        bridge = claude_hooks.Bridge(
+            log=lambda text: None, sessions=sessions or (lambda: [ITEM]),
+            clock=lambda: self.mono[0], wall_clock=lambda: 1767323000.0 + self.mono[0],
+            server_port=8765, queue_root=self.dir / "queues", images_root=self.dir / "claude-images",
+        )
+        bridge.refresh_sessions()
+        return bridge
+
+    def event(self, bridge, name, client_port=0, **extra):
+        return bridge.handle({"hook_event_name": name, "session_id": "cli-1", **extra}, client_port=client_port)
+
+    def test_queue_is_first_in_first_out_and_stop_hands_one_message_over(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        bridge.enqueue_message("local_test", "第一句")
+        bridge.enqueue_message("local_test", "第二句")
+        first = self.event(bridge, "Stop")
+        self.assertEqual(first, {"decision": "block",
+                                 "reason": claude_hooks.QUEUE_PREFIX + "第一句"})
+        self.assertTrue(bridge.conv_state("local_test")["running"])  # the same turn goes on
+        self.assertTrue(bridge.conv_state("local_test")["continued"])
+        second = self.event(bridge, "Stop", stop_hook_active=True)
+        self.assertEqual(second, {"decision": "block",
+                                  "reason": claude_hooks.QUEUE_PREFIX + "第二句"})
+        self.assertIsNone(self.event(bridge, "Stop", stop_hook_active=True))
+        self.assertEqual(bridge.list_queued("local_test"), [])
+        self.assertEqual(bridge.conv_state("local_test")["blocks_sent"], 2)
+
+    def test_at_most_eight_stop_blocks_per_turn(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        for i in range(10):
+            bridge.enqueue_message("local_test", f"第{i}句")
+        sent = [self.event(bridge, "Stop", stop_hook_active=i > 0) for i in range(10)]
+        self.assertTrue(all(reply and reply["decision"] == "block" for reply in sent[:8]))
+        self.assertIsNone(sent[8])
+        self.assertIsNone(sent[9])
+        self.assertEqual(len(bridge.list_queued("local_test")), 2)
+        self.assertEqual(bridge.conv_state("local_test")["blocks_sent"], 8)
+        # the next user turn starts the count again
+        self.event(bridge, "UserPromptSubmit")
+        self.assertEqual(self.event(bridge, "Stop")["decision"], "block")
+
+    def test_a_phone_stop_keeps_the_queue_and_the_stop_flag_is_one_turn_only(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        bridge.enqueue_message("local_test", "留着")
+        bridge.request_stop("local_test")
+        self.assertIsNone(self.event(bridge, "Stop"))
+        self.assertEqual([v["text"] for v in bridge.list_queued("local_test")], ["留着"])
+        self.assertFalse(bridge.conv_state("local_test")["stop_requested"])
+        # next turn: the queue gets its chance again
+        self.event(bridge, "UserPromptSubmit")
+        self.assertEqual(self.event(bridge, "Stop"),
+                         {"decision": "block", "reason": claude_hooks.QUEUE_PREFIX + "留着"})
+
+    def test_steer_is_handed_over_once_by_post_tool_use_and_by_a_failed_tool(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        bridge.enqueue_steer("local_test", "补充甲")
+        reply = self.event(bridge, "PostToolUse", tool_name="Bash", tool_use_id="t1")
+        self.assertEqual(reply, {"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": claude_hooks.STEER_PREFIX + "补充甲"}})
+        self.assertIsNone(self.event(bridge, "PostToolUse", tool_name="Bash", tool_use_id="t1"))
+        bridge.enqueue_steer("local_test", "补充乙")
+        failed = self.event(bridge, "PostToolUseFailure", tool_name="Bash", tool_use_id="t2")
+        self.assertEqual(failed["hookSpecificOutput"]["hookEventName"], "PostToolUseFailure")
+        self.assertEqual(failed["hookSpecificOutput"]["additionalContext"],
+                         claude_hooks.STEER_PREFIX + "补充乙")
+
+    def test_steer_not_handed_over_before_stop_is_handed_over_by_stop(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        bridge.enqueue_steer("local_test", "来不及")
+        reply = self.event(bridge, "Stop")
+        self.assertEqual(reply, {"decision": "block", "reason": claude_hooks.STEER_PREFIX + "来不及"})
+        self.assertTrue(bridge.conv_state("local_test")["running"])
+        # steer goes before a queued message: the next Stop hands the queue's first one over
+        bridge.enqueue_message("local_test", "下一句")
+        self.assertEqual(self.event(bridge, "Stop"), {"decision": "block",
+                                                     "reason": claude_hooks.QUEUE_PREFIX + "下一句"})
+
+    def test_steer_waits_during_a_phone_stop(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        bridge.enqueue_steer("local_test", "先别交")
+        bridge.request_stop("local_test")
+        self.assertIsNone(self.event(bridge, "Stop"))
+        self.assertEqual([v["text"] for v in bridge.queues._load("local_test")["steer"]], ["先别交"])
+
+    def test_queue_survives_a_restart_and_request_ids_do_not_duplicate(self):
+        bridge = self.bridge()
+        self.event(bridge, "UserPromptSubmit")
+        item, duplicate = bridge.enqueue_message("local_test", "只一次", request_id="req-queue-123456")
+        self.assertFalse(duplicate)
+        again, duplicate = bridge.enqueue_message("local_test", "只一次", request_id="req-queue-123456")
+        self.assertTrue(duplicate)
+        self.assertEqual(again["id"], item["id"])
+        with self.assertRaises(ValueError):
+            bridge.enqueue_message("local_test", "别的话", request_id="req-queue-123456")
+        fresh = self.bridge()  # a restart: the same queue root
+        self.assertEqual([v["text"] for v in fresh.list_queued("local_test")], ["只一次"])
+
+    def test_images_are_compressed_and_the_message_names_the_files(self):
+        from PIL import Image
+        big = self.dir / "big.png"
+        Image.effect_noise((2200, 1400), 90).convert("RGB").save(big)
+        saved = claude_hooks.store_claude_image(self.dir / "claude-images", "local_test",
+                                                {"id": "a" * 32, "path": str(big)})
+        self.assertEqual(saved.suffix, ".jpg")
+        self.assertLessEqual(max(Image.open(saved).size), 1600)
+        self.assertLessEqual(saved.stat().st_size, 400 * 1024)
+        line = claude_hooks.image_line(saved)
+        self.assertTrue(line.startswith("[附图] "))
+        self.assertIn("claude-images", line)
+        self.assertIn("（请先用 Read 工具打开这张图片）", line)
+        self.assertTrue(line.endswith("（请先用 Read 工具打开这张图片）"))
+
+    def test_a_transparent_picture_keeps_png_and_the_image_line_shows_as_a_picture(self):
+        from PIL import Image
+        src = self.dir / "alpha.png"
+        img = Image.new("RGBA", (1800, 1800), (0, 0, 0, 0))
+        img.paste((255, 0, 0, 255), (0, 0, 900, 900))
+        img.save(src)
+        saved = claude_hooks.store_claude_image(self.dir / "claude-images", "local_test",
+                                                {"id": "b" * 32, "path": str(src)})
+        self.assertEqual(saved.suffix, ".png")
+        self.assertLessEqual(max(Image.open(saved).size), 1600)
+        message = "看图\n\n" + claude_hooks.image_line(saved)
+        cleaned, images = chats._extract_codex_images(message)
+        self.assertEqual(cleaned, "看图")
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["url"], "/api/codex/image?id=" + "b" * 32)
+
+
+class HookQueueStateAndSendTests(unittest.TestCase):
+    """The control state's queued list, the 'make this a steer' ticket, and the send routing."""
+    EXE_OK = r"C:\Users\demo\AppData\Roaming\Claude\claude-code\2.1.330\claude.exe"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.bridge = claude_hooks.Bridge(
+            log=lambda text: None, sessions=lambda: [ITEM], wall_clock=lambda: 1767323000.0,
+            server_port=8765, queue_root=self.dir / "queues", images_root=self.dir / "claude-images")
+        self.bridge.refresh_sessions()
+
+    def run_event(self, name, **extra):
+        return self.bridge.handle({"hook_event_name": name, "session_id": "cli-1", **extra})
+
+    def fake_handler(self, desktop_send=None):
+        calls = []
+        base = self.dir
+
+        class Codex:
+            def attachment(self, ident, tid=None):
+                path = base / "phone.png"
+                if not path.exists():
+                    from PIL import Image
+                    Image.new("RGB", (1200, 800), (20, 80, 160)).save(path)
+                return {"id": "c" * 32, "path": str(path), "app": "claude", "original_size": 1000,
+                        "width": 1200, "height": 800}
+
+            def _begin(self, rid, tid, body):
+                calls.append(["begin", rid, tid])
+                return None
+
+            def _write_meta(self, meta):
+                calls.append(["write_meta", meta["id"]])
+
+            def _finish(self, rid, result):
+                calls.append(["finish", rid, result.get("queued")])
+
+        class Desktop:
+            def send(self, *args, **kwargs):
+                calls.append(["desktop.send", args])
+                return desktop_send() if desktop_send else {"ok": True, "pressed": True, "offset": 0,
+                                                            "running": False, "text": "已提交"}
+
+        handler = SimpleNamespace(
+            server=SimpleNamespace(claude=SimpleNamespace(hooks=self.bridge), codex=Codex(), references=None),
+            desktop=Desktop(),
+        )
+        return handler, calls
+
+    def test_control_state_lists_teleply_messages_and_their_ticket_moves_them_to_the_steer_slot(self):
+        self.run_event("UserPromptSubmit")
+        self.bridge.enqueue_message("local_test", "排队的话")
+
+        class Desktop:
+            def run(self, fn, *args, **kwargs):
+                return fn(*args)
+
+            def _claude_unminimize(self):
+                pass
+
+        ctrl = claude_control.Controller(Desktop())
+        ctrl.hooks = self.bridge
+        ctrl._document = lambda item, open_first=False: (_ for _ in ()).throw(chats.ChatError("不在前台"))
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.settings", return_value={}), \
+             patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "running", "turn_started": 1,
+                                                                 "turn_ended": 0, "step": "run"}):
+            state = ctrl.state("local_test", True)
+            self.assertEqual([(q["text"], bool(q["token"])) for q in state["queued"]], [("排队的话", True)])
+            result = ctrl.choose("local_test", state["queued"][0]["token"])
+            self.assertIn("插话", result["text"])
+            self.assertEqual(self.bridge.list_queued("local_test"), [])
+            self.assertEqual([v["text"] for v in self.bridge.queues._load("local_test")["steer"]], ["排队的话"])
+
+    def test_a_message_sent_while_running_goes_to_the_queue_not_the_window(self):
+        from agents.claude import ClaudeAgent
+        self.run_event("UserPromptSubmit")
+        handler, calls = self.fake_handler()
+        with patch("chats.find", return_value=ITEM):
+            result = ClaudeAgent().chat_send_with_references(handler, {"id": "local_test", "text": "跑着时发的"})
+        self.assertTrue(result["queued"])
+        self.assertEqual(result["text"], "已交给遥应，等这一轮结束")
+        self.assertEqual([v["text"] for v in self.bridge.list_queued("local_test")], ["跑着时发的"])
+        self.assertFalse(any(v[0] == "desktop.send" for v in calls))
+
+    def test_slash_idle_or_hooks_inactive_go_the_old_window_way(self):
+        from agents.claude import ClaudeAgent
+        with patch("chats.find", return_value=ITEM):
+            # slash command while running
+            self.run_event("UserPromptSubmit")
+            handler, calls = self.fake_handler()
+            ClaudeAgent().chat_send_with_references(handler, {"id": "local_test", "text": "/compact"})
+            self.assertTrue(any(v[0] == "desktop.send" for v in calls))
+            self.assertEqual(self.bridge.list_queued("local_test"), [])
+            # idle: the same bridge, but Stop ended the turn
+            self.run_event("Stop")
+            handler, calls = self.fake_handler()
+            ClaudeAgent().chat_send_with_references(handler, {"id": "local_test", "text": "空闲时发的"})
+            self.assertTrue(any(v[0] == "desktop.send" for v in calls))
+            # hooks never received an event: old way
+            idle = claude_hooks.Bridge(log=lambda text: None, sessions=lambda: [ITEM],
+                                       queue_root=self.dir / "q2", images_root=self.dir / "i2")
+            idle.refresh_sessions()
+            self.bridge = idle
+            handler, calls = self.fake_handler()
+            ClaudeAgent().chat_send_with_references(handler, {"id": "local_test", "text": "钩子没生效"})
+            self.assertTrue(any(v[0] == "desktop.send" for v in calls))
+
+    def test_queued_message_with_a_picture_is_compressed_and_the_upload_is_finished(self):
+        from agents.claude import ClaudeAgent
+        self.run_event("UserPromptSubmit")
+        handler, calls = self.fake_handler()
+        with patch("chats.find", return_value=ITEM):
+            result = ClaudeAgent().chat_send_with_references(handler, {
+                "id": "local_test", "text": "看图", "attachments": ["c" * 32], "request_id": "req-img-123456"})
+        self.assertTrue(result["queued"])
+        self.assertIn(["begin", "req-img-123456", "local_test"], calls)
+        self.assertIn(["finish", "req-img-123456", True], calls)
+        queued = self.bridge.list_queued("local_test")[0]
+        self.assertIn("[附图] ", queued["text"])
+        self.assertIn("claude-images", queued["text"])
+        self.assertIn("（请先用 Read 工具打开这张图片）", queued["text"])
+        self.assertEqual(queued["display"], "看图")
+        self.assertTrue(any(self.dir.joinpath("claude-images").rglob("*.png")) or
+                        any(self.dir.joinpath("claude-images").rglob("*.jpg")))
+
+    def test_steer_while_running_goes_to_the_slot_and_is_handed_over_by_the_next_tool(self):
+        path = self.dir / "cli-1.jsonl"
+        path.write_text(json.dumps({"type": "user", "uuid": "turn-1", "isSidechain": False,
+                                    "message": {"role": "user", "content": "开始"}}) + "\n", encoding="utf-8")
+        self.run_event("UserPromptSubmit")
+        ctrl = claude_control.Controller(SimpleNamespace(run=lambda fn, *a, **kw: fn(*a)))
+        ctrl.hooks = self.bridge
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.chats.conv_path", return_value=path), \
+             patch("claude_control.chats.summary", return_value={"status": "running", "turn_started": 1,
+                                                                 "turn_ended": 0, "step": "run"}):
+            result = ctrl.send_steer("local_test", "补充", "turn-1", "req-steer-123456")
+            self.assertTrue(result["steer_requested"])
+            self.assertIn("已交给遥应", result["text"])
+            self.assertEqual(self.bridge.queues._load("local_test")["steer"][0]["text"], "补充")
+            reply = self.run_event("PostToolUse", tool_name="Bash", tool_use_id="t1")
+            self.assertEqual(reply["hookSpecificOutput"]["additionalContext"],
+                             claude_hooks.STEER_PREFIX + "补充")
+
+
+class ChatsHookQueueDisplayTests(unittest.TestCase):
+    HOOK_URL = "http://127.0.0.1:8765/api/claude/hook/testkey"
+
+    def lines(self, *records):
+        return [json.dumps(rec, ensure_ascii=False).encode() for rec in records]
+
+    def test_a_queued_message_shows_as_the_users_bubble_not_as_meta_or_summary(self):
+        lines = self.lines(
+            {"type": "user", "uuid": "u1", "timestamp": "2026-11-24T05:00:00Z",
+             "message": {"role": "user", "content": "开始"}},
+            {"type": "assistant", "uuid": "a1", "timestamp": "2026-11-24T05:00:01Z",
+             "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "好了"}]}},
+            {"type": "user", "uuid": "meta1", "isMeta": True, "timestamp": "2026-11-24T05:00:02Z",
+             "message": {"role": "user", "content": "Stop hook feedback:\n用户在手机上发来下一条消息（遥应）：接着做"}},
+            {"type": "attachment", "uuid": "att1", "timestamp": "2026-11-24T05:00:02Z",
+             "attachment": {"type": "hook_blocking_error", "hookName": "Stop", "hookEvent": "Stop",
+                            "blockingError": {"blockingError": "用户在手机上发来下一条消息（遥应）：接着做",
+                                              "command": self.HOOK_URL}}},
+            {"type": "system", "uuid": "sys1", "subtype": "stop_hook_summary", "timestamp": "2026-11-24T05:00:02Z",
+             "hookInfos": [{"command": self.HOOK_URL}], "hookErrors": ["用户在手机上发来下一条消息（遥应）：接着做"]},
+        )
+        msgs, state = chats.parse_claude(lines)
+        self.assertEqual([(m["role"], m["text"]) for m in msgs],
+                         [("user", "开始"), ("assistant", "好了"), ("user", "接着做")])
+        self.assertTrue(state["running"])
+
+    def test_a_steered_message_with_a_picture_shows_once_with_its_image(self):
+        image = "C:\\FakeData\\claude-images\\local_test\\" + "d" * 32 + ".jpg"
+        lines = self.lines(
+            {"type": "user", "uuid": "u1", "timestamp": "2026-11-24T05:01:00Z",
+             "message": {"role": "user", "content": "跑测试"}},
+            {"type": "attachment", "uuid": "ok1", "timestamp": "2026-11-24T05:01:01Z",
+             "attachment": {"type": "hook_success", "hookName": "PostToolUse:Bash", "command": self.HOOK_URL,
+                            "exitCode": 200}},
+            {"type": "attachment", "uuid": "att2", "timestamp": "2026-11-24T05:01:01Z",
+             "attachment": {"type": "hook_additional_context",
+                            "content": ["用户刚在手机上补充（遥应）：看看这张图\n\n[附图] " + image +
+                                        "（请先用 Read 工具打开这张图片）"],
+                            "hookName": "PostToolUse:Bash", "hookEvent": "PostToolUse"}},
+        )
+        msgs, _ = chats.parse_claude(lines)
+        self.assertEqual([(m["role"], m["text"]) for m in msgs], [("user", "跑测试"), ("user", "看看这张图")])
+        self.assertEqual(msgs[-1]["images"][0]["url"], "/api/codex/image?id=" + "d" * 32)
+
+    def test_someone_elses_hook_records_are_not_shown_as_our_messages(self):
+        lines = self.lines(
+            {"type": "attachment", "uuid": "x1", "timestamp": "2026-11-24T05:02:00Z",
+             "attachment": {"type": "hook_blocking_error", "hookName": "Stop", "hookEvent": "Stop",
+                            "blockingError": {"blockingError": "用户说：继续（遥应）",
+                                              "command": "http://127.0.0.1:9999/some-other-hook"}}},
+            {"type": "attachment", "uuid": "x2", "timestamp": "2026-11-24T05:02:01Z",
+             "attachment": {"type": "hook_additional_context", "content": ["别的钩子：补充"],
+                            "hookName": "PostToolUse:Bash", "hookEvent": "PostToolUse"}},
+        )
+        msgs, _ = chats.parse_claude(lines)
+        self.assertEqual(msgs, [])
+
+    def test_delivery_stage_counts_a_queued_hook_message_as_received(self):
+        path = Path(tempfile.mkdtemp()) / "cli-1.jsonl"
+        image = "C:\\FakeData\\claude-images\\local_test\\" + "e" * 32 + ".png"
+        record = {"type": "attachment", "uuid": "att1", "timestamp": "2026-11-24T05:03:00Z",
+                  "attachment": {"type": "hook_blocking_error", "hookName": "Stop", "hookEvent": "Stop",
+                                 "blockingError": {"blockingError": "用户在手机上发来下一条消息（遥应）：看图\n\n"
+                                                                   "[附图] " + image +
+                                                                   "（请先用 Read 工具打开这张图片）",
+                                                   "command": "http://127.0.0.1:8765/api/claude/hook/testkey"}}}
+        path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "看图"), "received")
+        self.assertEqual(chats.claude_delivery_stage(path, 0, "别的话"), "unknown")
+        msgs, _ = chats.parse_claude([json.dumps(record, ensure_ascii=False).encode()])
+        self.assertEqual(msgs[0]["text"], "看图")
+        self.assertEqual(msgs[0]["images"][0]["id"], "e" * 32)
+
+
 if __name__ == "__main__":
     unittest.main()
+

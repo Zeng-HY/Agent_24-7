@@ -704,7 +704,7 @@ def _format_rui_qa(questions: list[dict], raw_answer: str) -> tuple[str, str]:
 
 
 def _extract_codex_images(text: str) -> tuple[str, list[dict]]:
-    """Turn '[附图] <path>（…）' lines pointing into codex-images into image attachment dicts."""
+    """Turn '[附图] <path>（…）' lines pointing into codex-images or claude-images into image attachment dicts."""
     if "[附图]" not in (text or ""):
         return text, []
     kept_lines: list[str] = []
@@ -714,7 +714,7 @@ def _extract_codex_images(text: str) -> tuple[str, list[dict]]:
         if m:
             raw_path = m.group(1).strip().strip('"').strip("'")
             parts = [p.lower() for p in Path(raw_path).parts]
-            if "codex-images" in parts:
+            if "codex-images" in parts or "claude-images" in parts:
                 p = Path(raw_path)
                 stem = p.stem
                 if re.fullmatch(r"[a-f0-9]{32}", stem):
@@ -1101,6 +1101,58 @@ def _is_teleply_hook_noise(rec: dict) -> bool:
     return False
 
 
+_TELEPLY_QUEUE_PREFIX = "用户在手机上发来下一条消息（遥应）："
+_TELEPLY_STEER_PREFIX = "用户刚在手机上补充（遥应）："
+
+
+def _teleply_hook_text(rec: dict) -> str | None:
+    """The words of a message Teleply handed to Claude through a hook, without Teleply's prefix.
+
+    Queue: an attachment hook_blocking_error whose command is Teleply's own address. Steer: an attachment
+    hook_additional_context whose content carries Teleply's mark. Someone else's hooks of these kinds are left alone."""
+    if rec.get("type") != "attachment" or rec.get("isSidechain"):
+        return None
+    att = rec.get("attachment")
+    if not isinstance(att, dict):
+        return None
+    kind = att.get("type")
+    if kind == "hook_blocking_error":
+        inner = att.get("blockingError")
+        command = att.get("command")
+        if not _is_teleply_hook_url(command) and not (isinstance(inner, dict)
+                                                      and _is_teleply_hook_url(inner.get("command"))):
+            return None
+        raw = (str((inner or {}).get("blockingError") or "") if isinstance(inner, dict)
+               else str(inner or ""))
+        prefix = _TELEPLY_QUEUE_PREFIX
+    elif kind == "hook_additional_context":
+        content = att.get("content")
+        raw = "\n".join(str(v) for v in content if isinstance(v, str)) if isinstance(content, list) else str(content or "")
+        prefix = _TELEPLY_STEER_PREFIX
+    else:
+        return None
+    if "（遥应）" not in raw:
+        return None
+    if raw.startswith(prefix):
+        return raw[len(prefix):].strip()
+    marker = "（遥应）："
+    return raw.split(marker, 1)[1].strip() if marker in raw else raw.strip()
+
+
+def _teleply_hook_message(rec: dict) -> dict | None:
+    """A queued or steered phone message as the user's own bubble (with pictures), from the hook record."""
+    text = _teleply_hook_text(rec)
+    if not text:
+        return None
+    cleaned, images = _extract_codex_images(text)
+    out = {"role": "user", "text": cleaned, "time": rec.get("timestamp") or ""}
+    if images:
+        out["images"] = images
+    if rec.get("uuid"):
+        out["source_id"] = rec["uuid"]
+    return out
+
+
 def _claude_steer_message(rec):
     data=rec.get('attachment') or {}
     prompt=data.get('prompt')
@@ -1285,6 +1337,15 @@ def parse_claude(lines: list[bytes], context: dict | None = None,
                 state["latest_event_time"] = ts
             continue
         if _is_teleply_hook_noise(rec):
+            continue
+        teleply = _teleply_hook_message(rec)
+        if teleply:
+            ts = teleply["time"]
+            msgs.append(teleply)
+            last_kind, last_stop = "user", None
+            state["turn_ended"] = ""
+            if ts:
+                state["latest_event_time"] = ts
             continue
         if t not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
             continue
@@ -1697,6 +1758,10 @@ def claude_delivery_stage(path,offset,text):
     for raw in read_from(path,offset):
         try:rec=json.loads(raw)
         except ValueError:continue
+        delivered=_teleply_hook_text(rec)
+        if delivered:
+            cleaned,_=_extract_codex_images(delivered)
+            if want and norm(cleaned)==want:return 'received'
         steered=_claude_steer_message(rec)
         if steered and want and norm(re.sub(r'^(\[图片\]\s*)+','',steered['text']))==want:return 'received'  # the mark is ours, not sent
         if rec.get('type')=='user':
