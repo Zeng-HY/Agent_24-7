@@ -1047,6 +1047,60 @@ def _claude_task(block: dict) -> dict | None:
             "text": title + ("\n\n" + brief if brief else "")}
 
 
+_TELEPLY_HOOK_PATH = "/api/claude/hook/"
+
+
+def _is_teleply_hook_url(url) -> bool:
+    if not isinstance(url, str) or _TELEPLY_HOOK_PATH not in url:
+        return False
+    try:
+        return urlsplit(url).hostname in ("127.0.0.1", "localhost")
+    except ValueError:
+        return False
+
+
+def _teleply_hook_stop(rec: dict) -> dict | None:
+    """Teleply's own PreToolUse stop continuation attachment -> event message, treated as interrupted turn."""
+    if rec.get("type") != "attachment" or rec.get("isSidechain"):
+        return None
+    att = rec.get("attachment")
+    if not isinstance(att, dict) or att.get("type") != "hook_stopped_continuation":
+        return None
+    msg_text = str(att.get("message") or "")
+    if "（遥应）" not in msg_text:
+        return None
+    ts = rec.get("timestamp") or ""
+    out = {"role": "event", "text": "已在手机上停止", "time": ts}
+    if rec.get("uuid"):
+        out["source_id"] = rec["uuid"]
+    return out
+
+
+def _is_teleply_hook_noise(rec: dict) -> bool:
+    """Teleply's hook_non_blocking_error / hook_success / stop_hook_summary records are hidden from display."""
+    kind = rec.get("type")
+    if kind == "attachment":
+        att = rec.get("attachment")
+        if not isinstance(att, dict):
+            return False
+        atype = att.get("type")
+        if atype == "hook_success":
+            return _is_teleply_hook_url(att.get("command"))
+        if atype == "hook_non_blocking_error":
+            if _is_teleply_hook_url(att.get("command")):
+                return True
+            stderr = str(att.get("stderr") or "")
+            return "ECONNREFUSED" in stderr and ("127.0.0.1:" in stderr or "localhost:" in stderr)
+    elif kind == "system" and rec.get("subtype") == "stop_hook_summary":
+        infos = rec.get("hookInfos") or []
+        if any(isinstance(i, dict) and _is_teleply_hook_url(i.get("command")) for i in infos):
+            return True
+        errs = rec.get("hookErrors") or []
+        if any(isinstance(e, str) and "ECONNREFUSED" in e and ("127.0.0.1:" in e or "localhost:" in e) for e in errs):
+            return True
+    return False
+
+
 def _claude_steer_message(rec):
     data=rec.get('attachment') or {}
     prompt=data.get('prompt')
@@ -1220,6 +1274,18 @@ def parse_claude(lines: list[bytes], context: dict | None = None,
         steered=_claude_steer_message(rec)
         if steered:
             msgs.append(steered);last_kind='user';state['latest_event_time']=steered['time'];continue
+        hook_stop = _teleply_hook_stop(rec)
+        if hook_stop:
+            ts = hook_stop["time"]
+            msgs.append(hook_stop)
+            last_kind, last_stop = "interrupted", None
+            state["turn_ended"] = ts
+            state["step"] = ""
+            if ts:
+                state["latest_event_time"] = ts
+            continue
+        if _is_teleply_hook_noise(rec):
+            continue
         if t not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
             continue
         ts = rec.get("timestamp") or ""

@@ -621,5 +621,225 @@ class KillSessionCommandTests(unittest.TestCase):
         self.assertEqual(killed, [5001])
 
 
+class HookControlStateAndStopTests(unittest.TestCase):
+    CLAUDE_EXE = r"C:\Users\tester\AppData\Roaming\Claude\claude-code\2.1.330\claude.exe"
+
+    def _make_desktop(self, *, on_screen=False, stop_btn=None):
+        unminimized = []
+        opened = []
+
+        class FakeDesktop:
+            def run(self, fn, *args, **kwargs):
+                return fn(*args)
+
+            def _claude_unminimize(self):
+                unminimized.append(1)
+
+            def _claude_open(self, *args, **kwargs):
+                opened.append(args)
+
+            def _claude_where(self, ctrl):
+                return (False, None)
+
+            def _claude_ask(self, root, doc=None):
+                return None
+
+            def _find(self, scope, kind, name=None):
+                if kind == "ButtonControl":
+                    btns = [type("Btn", (), {"Name": "Model: Opus 5.5 High", "IsOffscreen": False, "IsEnabled": True})()]
+                    if stop_btn is not None:
+                        btns.append(stop_btn)
+                    return btns
+                return []
+
+        return FakeDesktop(), unminimized, opened
+
+    def test_hook_active_state_does_not_unminimize_and_exposes_available_step_and_stop_offscreen(self):
+        wall = [1767323500.0]
+        killed = []
+        procs = [
+            {"pid": 6000, "ppid": 1, "name": "claude.exe", "executable_path": self.CLAUDE_EXE, "created_at": wall[0] - 50, "owner": "tester"},
+            {"pid": 6001, "ppid": 6000, "name": "bash.exe", "executable_path": r"C:\git\bash.exe", "created_at": wall[0] + 0.1, "owner": "tester"},
+        ]
+        bridge = claude_hooks.Bridge(
+            log=lambda text: None,
+            sessions=lambda: [ITEM],
+            wall_clock=lambda: wall[0],
+            tcp_owner=lambda cp, sp: 6000,
+            process_exe=lambda pid: self.CLAUDE_EXE,
+            list_processes=lambda: procs,
+            kill_process=lambda pid: killed.append(pid) or True,
+            current_user="tester",
+            server_port=8765,
+        )
+        bridge.refresh_sessions()
+        bridge.handle({"hook_event_name": "UserPromptSubmit", "session_id": "cli-1"}, client_port=61000)
+        bridge.handle({"hook_event_name": "PreToolUse", "session_id": "cli-1", "tool_name": "Bash", "tool_use_id": "t1"}, client_port=61000)
+
+        desktop, unminimized, opened = self._make_desktop(on_screen=False)
+        ctrl = claude_control.Controller(desktop)
+        ctrl.hooks = bridge
+        ctrl._document = lambda item, open_first=False: (_ for _ in ()).throw(chats.ChatError("电脑上显示的不是此 Claude 会话"))
+
+        recorded = {"model": "claude-opus-5-5", "effort": "high", "mode": "auto", "recorded_at": 1}
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.settings", return_value=recorded), \
+             patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "unknown", "turn_started": 0, "turn_ended": 0, "step": ""}), \
+             patch("claude_control.winctl.input_desktop_ready", return_value=False):  # even while PC is locked!
+            state = ctrl.state("local_test", True)
+            self.assertEqual(unminimized, [])  # must NOT unminimize when hooks are active
+            self.assertTrue(state["available"])
+            self.assertFalse(state["on_screen"])
+            self.assertTrue(state["running"])
+            self.assertEqual(state["step"], "run")
+            self.assertEqual(state["settings"], recorded)
+            self.assertTrue(state.get("stop_token"))
+
+            # Pressing Stop while PC is locked & off-screen: sets stop flag, kills command, never switches window
+            stop_res = ctrl.choose("local_test", state["stop_token"])
+            self.assertTrue(stop_res["ok"])
+            self.assertTrue(stop_res["killed"])
+            self.assertEqual(killed, [6001])
+            self.assertEqual(opened, [])
+            self.assertTrue(bridge.conv_state("local_test")["stop_requested"])
+
+        # After Stop hook -> running False, no stop_token
+        bridge.handle({"hook_event_name": "Stop", "session_id": "cli-1"})
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.settings", return_value=recorded), \
+             patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "idle", "turn_started": 1767323500, "turn_ended": 1767323510, "step": ""}):
+            idle_state = ctrl.state("local_test", True)
+            self.assertTrue(idle_state["available"])
+            self.assertFalse(idle_state["running"])
+            self.assertEqual(idle_state["step"], "")
+            self.assertNotIn("stop_token", idle_state)
+
+    def test_hook_active_stop_also_clicks_visible_window_stop_when_unlocked_without_switching(self):
+        wall = [1767323600.0]
+        bridge = claude_hooks.Bridge(log=lambda text: None, sessions=lambda: [ITEM], wall_clock=lambda: wall[0])
+        bridge.refresh_sessions()
+        bridge.handle({"hook_event_name": "UserPromptSubmit", "session_id": "cli-1"})
+
+        invoked = []
+        stop_btn = type("StopBtn", (), {
+            "Name": "Stop", "IsOffscreen": False, "IsEnabled": True,
+            "GetInvokePattern": lambda self: type("P", (), {"Invoke": lambda s: invoked.append(1) or True})(),
+        })()
+        desktop, unminimized, opened = self._make_desktop(on_screen=True, stop_btn=stop_btn)
+        ctrl = claude_control.Controller(desktop)
+        ctrl.hooks = bridge
+        ctrl._document = lambda item, open_first=False: (1, "root", "doc")
+
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.settings", return_value={"model": "claude-opus-5-5", "effort": "high", "mode": "auto"}), \
+             patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "running", "turn_started": 1767323600, "turn_ended": 0, "step": ""}), \
+             patch("claude_control.winctl.input_desktop_ready", return_value=True):
+            state = ctrl.state("local_test", True)
+            res = ctrl.choose("local_test", state["stop_token"])
+            self.assertTrue(res["ok"])
+            self.assertEqual(invoked, [1])  # visible window Stop clicked too
+            self.assertEqual(opened, [])    # never switched conversations
+            self.assertEqual(unminimized, [])
+
+    def test_hook_inactive_preserves_legacy_unminimize_and_offscreen_unavailable(self):
+        bridge = claude_hooks.Bridge(log=lambda text: None, sessions=lambda: [ITEM])
+        desktop, unminimized, _ = self._make_desktop(on_screen=False)
+        ctrl = claude_control.Controller(desktop)
+        ctrl.hooks = bridge
+        ctrl._document = lambda item, open_first=False: (_ for _ in ()).throw(chats.ChatError("电脑上显示的不是此 Claude 会话"))
+
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.settings", return_value={"model": "claude-opus-5-5"}), \
+             patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "idle", "turn_started": 0, "turn_ended": 0, "step": ""}):
+            state = ctrl.state("local_test", True)
+            self.assertEqual(len(unminimized), 1)  # legacy behavior preserved when hooks inactive
+            self.assertFalse(state["available"])
+            self.assertFalse(state["on_screen"])
+
+    def test_hook_running_cross_checks_record_for_pc_manual_stop(self):
+        wall = [1767323700.0]
+        bridge = claude_hooks.Bridge(log=lambda text: None, sessions=lambda: [ITEM], wall_clock=lambda: wall[0])
+        bridge.refresh_sessions()
+        bridge.handle({"hook_event_name": "UserPromptSubmit", "session_id": "cli-1"})
+        # PC user clicked Stop -> Claude Code emits no Stop hook, but transcript shows idle ended at >= turn_started
+        desktop, _, _ = self._make_desktop(on_screen=False)
+        ctrl = claude_control.Controller(desktop)
+        ctrl.hooks = bridge
+        ctrl._document = lambda item, open_first=False: (_ for _ in ()).throw(chats.ChatError("不在前台"))
+        with patch("claude_control.chats.find", return_value=ITEM), \
+             patch("claude_control.settings", return_value={}), \
+             patch("claude_control.chats.conv_path", return_value=None), \
+             patch("claude_control.chats.summary", return_value={"status": "idle", "turn_started": 1767323700, "turn_ended": 1767323705, "step": ""}):
+            state = ctrl.state("local_test", True)
+            self.assertFalse(state["running"])
+            self.assertNotIn("stop_token", state)
+
+
+class ChatsHookRecordDisplayTests(unittest.TestCase):
+    HOOK_URL = "http://127.0.0.1:8765/api/claude/hook/testkey"
+
+    def test_teleply_stop_attachment_shows_stopped_and_ends_turn(self):
+        lines = [
+            json.dumps({"type": "user", "uuid": "u1", "timestamp": "2026-11-24T04:00:00Z",
+                        "message": {"role": "user", "content": "跑个测试"}}, ensure_ascii=False).encode(),
+            json.dumps({"type": "assistant", "uuid": "a1", "timestamp": "2026-11-24T04:00:01Z",
+                        "message": {"role": "assistant", "stop_reason": "tool_use", "content": [
+                            {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "echo one"}}]}},
+                       ensure_ascii=False).encode(),
+            json.dumps({"type": "user", "uuid": "u2", "timestamp": "2026-11-24T04:00:02Z",
+                        "message": {"role": "user", "content": [
+                            {"type": "tool_result", "tool_use_id": "toolu_1",
+                             "content": "PreToolUse:Bash hook error: 用户在手机上按了停止（遥应）。不要再调用任何工具。",
+                             "is_error": True}]}}, ensure_ascii=False).encode(),
+            json.dumps({"type": "attachment", "uuid": "att1", "timestamp": "2026-11-24T04:00:02Z",
+                        "attachment": {"type": "hook_stopped_continuation",
+                                       "message": "用户在手机上停止了这一轮（遥应）",
+                                       "hookName": "PreToolUse:Bash", "toolUseID": "toolu_1",
+                                       "hookEvent": "PreToolUse"}}, ensure_ascii=False).encode(),
+        ]
+        msgs, state = chats.parse_claude(lines)
+        self.assertEqual([(m["role"], m["text"]) for m in msgs if m["role"] != "tool"], [
+            ("user", "跑个测试"),
+            ("event", "已在手机上停止"),
+        ])
+        self.assertIs(state["running"], False)
+        self.assertEqual(state["turn_ended"], "2026-11-24T04:00:02Z")
+        self.assertEqual(state["step"], "")
+
+        # Also verify notify_turn_end recognizes Teleply hook stop
+        from agents.claude import ClaudeAgent
+        end = ClaudeAgent().notify_turn_end(lines)
+        self.assertEqual(end["state"], "stopped")
+
+    def test_teleply_hook_noise_hidden_and_third_party_stop_not_claimed(self):
+        lines = [
+            json.dumps({"type": "user", "uuid": "u1", "timestamp": "2026-11-24T04:01:00Z",
+                        "message": {"role": "user", "content": "你好"}}, ensure_ascii=False).encode(),
+            json.dumps({"type": "attachment", "uuid": "n1", "timestamp": "2026-11-24T04:01:01Z",
+                        "attachment": {"type": "hook_non_blocking_error", "hookName": "UserPromptSubmit",
+                                       "stderr": "connect ECONNREFUSED 127.0.0.1:8765", "stdout": "", "exitCode": 0}},
+                       ensure_ascii=False).encode(),
+            json.dumps({"type": "attachment", "uuid": "s1", "timestamp": "2026-11-24T04:01:02Z",
+                        "attachment": {"type": "hook_success", "hookName": "PostToolUse:Bash",
+                                       "command": self.HOOK_URL, "exitCode": 200}}, ensure_ascii=False).encode(),
+            json.dumps({"type": "system", "uuid": "sys1", "subtype": "stop_hook_summary",
+                        "timestamp": "2026-11-24T04:01:03Z",
+                        "hookInfos": [{"command": self.HOOK_URL}],
+                        "hookErrors": ["connect ECONNREFUSED 127.0.0.1:8765"]}, ensure_ascii=False).encode(),
+            # Another tool's hook_stopped_continuation (no '（遥应）'): must NOT be labeled as Teleply phone stop
+            json.dumps({"type": "attachment", "uuid": "other1", "timestamp": "2026-11-24T04:01:04Z",
+                        "attachment": {"type": "hook_stopped_continuation", "message": "stopped by user script",
+                                       "hookName": "PreToolUse:Bash", "hookEvent": "PreToolUse"}},
+                       ensure_ascii=False).encode(),
+        ]
+        msgs, state = chats.parse_claude(lines)
+        self.assertEqual([(m["role"], m["text"]) for m in msgs], [("user", "你好")])
+        self.assertIs(state["running"], True)
+
+
 if __name__ == "__main__":
     unittest.main()

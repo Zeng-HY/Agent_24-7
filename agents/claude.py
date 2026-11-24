@@ -208,6 +208,10 @@ class ClaudeAgent(Agent):
             text = str(record["message"]["content"]).strip()
         current = context.get("activity_turn")
         clocks = context.setdefault("activity_turns", {})
+        if chats._teleply_hook_stop(record):
+            if current in clocks:
+                clocks[current].update(status="stopped", ended_at=activity_records.milliseconds(ts))
+            return context.get("activity_turn")
         if kind == "user" and not record.get("isSidechain") and not record.get("isMeta"):
             tool_results = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_result"]
             asks = context.setdefault("activity_asks", set())
@@ -362,6 +366,10 @@ class ClaudeAgent(Agent):
                     continue
                 seen.add(uuid)
             kind = rec.get("type")
+            if chats._teleply_hook_stop(rec):
+                ts = rec.get("timestamp") or ""
+                end = {"state": "stopped", "key": rec.get("uuid") or ts, "time": ts, "text": ""}
+                continue
             if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
                 continue
             ts = rec.get("timestamp") or ""
@@ -405,6 +413,12 @@ class ClaudeAgent(Agent):
                 return
             seen.add(uuid)
         kind = rec.get("type")
+        if chats._teleply_hook_stop(rec):
+            ts = rec.get("timestamp") or ""
+            if ts:
+                scan["latest"] = ts
+            scan.update(state="stopped", ended=ts, action="")
+            return
         if kind not in ("user", "assistant") or rec.get("isSidechain") or rec.get("isMeta"):
             return
         ts = rec.get("timestamp") or ""
