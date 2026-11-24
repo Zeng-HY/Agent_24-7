@@ -60,7 +60,14 @@
 
 ## 结果（DeepSeek 填）
 
-- 提交：
-- 权限按钮的实际名字（出处）：
+- 提交：本次提交（分支 `claude-card-fallback`，只含 `claude_control.py`、`claude_hooks.py`、`tests/test_claude_fake_prompt.py`、本文档）；没推送、没合并、没打包、没装、没升版本号。
+- 权限按钮的实际名字（出处）：英文取**这台电脑装着的 Claude 桌面版 6.28899.6.0** 的只读查证 —— `C:\Program Files\WindowsApps\Claude_6.28899.6.0_x64__pzs8sxrjxfjjc\app\resources\ion-dist.asar` 里权限/批准卡组件的字串（扫描脚本和摘录在本次工作区 `permission-strings.md`）：允许 `Allow once`（`8HA3JafrtA`）/ `Allow for this task`（`X2n9R87ZBD`）/ `Always allow`（`lr3QX/nctD`）/ `Allow for all tasks`（`0xIGAXr2i7`，同一下拉里的另一种写法）；拒绝 `Deny`（`htvX+Z11l+`）/ `Decline`（`pvtgR26QWY`）。`Reject` 在这一版不是这张卡的按钮（是行内编辑工具栏的），代码里只当兜底。中文（允许一次、总是允许、拒绝……）是按上表直译的，**没有核实**：这一版 bundle 里没有中文字串，也没有中文权限卡的录制。`research/` 里没有权限提示的窗口录制（只有空闲 dock、新建页、钩子事件），所以真机上那一排按钮到底怎么画，仍然没录到。
 - 测试数字（基线 / 改后 / 完整 pytest）：
+  - 基线（改前，`test_claude_fake_prompt`、`test_claude_new_folder_layout`、`test_claude_hooks`、`test_action_golden`、`test_read_golden`）：73 passed。
+  - 改后同样五个文件：79 passed；其中 `test_claude_fake_prompt` 14 → 20 条，新增 6 条 = 设计要的 4 条（权限按钮+没结果的工具调用出卡片且每个选项带点击票据、工具都有结果不出卡片、假卡片录制+没结果的工具调用仍不出卡片、钩子接住时照旧用钩子的卡片）+ 权限按钮判断的边界 + `has_open_tool_call` 的边界。
+  - 完整 pytest：30 failed, 1223 passed, 6 skipped（8 分 15 秒）。30 条**全是浏览器测试**：29 条 `playwright … BrowserType.launch: Executable doesn't exist at …\ms-playwright\webkit-2359\Playwright.exe`（这台机器的 Playwright 没装 webkit；装它要下载安装，没做），1 条 `Locator.tap` 超时（`test_mobile_polish` 的 chromium，就是设计里已知的那条）。设计里已知的 3 条（`test_mobile_polish` 两引擎、`test_relay_mobile_layout`）都在里面；`test_relay_push` 这次通过。Claude、钩子、`test_notify`、两份标准答案的测试一条没失败。
 - 风险和没做的：
+  - 没在真机上触发一次真权限提示（会碰真的 Claude 会话和窗口），所以「钩子为什么没接住」仍没坐实。`claude_hooks._handle_permission` 现在给每种直接放过各打一行日志（工具输入不是对象 / 没有工具名 / 计划确认 ExitPlanMode / AskUserQuestion 问题格式不对 / 10 秒内没找到对应对话），只写原因和工具名，不写对话内容和命令全文；下次没卡片时先看这几行。
+  - 查证时发现：权限卡和提问卡共用 `epitaxy-approval-card` class（bundle 里 `.epitaxy-approval-card.epitaxy-question-card` 才是提问卡），所以权限提示若真按那张卡画，dev.51 那道门本来就不拦它；被整排滤掉的是同一排按钮画在 dock 里的那种。现在两种画法都出卡片，但只有 dock 那种是这次改出来的。
+  - 放宽的边界：要「允许类 + 拒绝类」两个按钮同时在场，且记录里最新一次工具调用还没有结果；假卡片录制（nested session / Stop）不会因此冒出卡片（有测试）。
+  - 没动 `state()` 那一段，没动 `remote.py`、`agents/*`、`chats.py`、`codex_*.py`、`relay_*.py`、`static/`、`apps/`、`tests/fixtures/*`、`tests/conftest.py`、版本号和更新说明；没用 `git add -A`，没 stash，没切分支，没碰别的工作树。

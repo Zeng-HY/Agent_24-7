@@ -998,14 +998,25 @@ class Bridge:
         return reply
 
     def _handle_permission(self, payload: dict, gone=lambda: False, *, client_port: int = 0, server_port: int = 0) -> dict | None:
-        if not isinstance(payload.get("tool_input"), dict):
-            return None
+        # Every way a request is let go says which it was, with its tool's name only: no conversation, command or input
+        # goes in, and the phone relies on the desktop's own button for such a request (11-24).
         tool = str(payload.get("tool_name") or "")
-        if not tool or tool in NOT_HELD or (tool == "AskUserQuestion" and not questions_ok(payload["tool_input"])):
+        if not isinstance(payload.get("tool_input"), dict):
+            self.log(f"Claude 权限请求：{tool or '（没有工具名）'} 没接，工具输入不是对象；留给桌面")
+            return None
+        if not tool:
+            self.log("Claude 权限请求：没接，请求里没有工具名；留给桌面")
+            return None
+        if tool in NOT_HELD:
+            self.log(f"Claude 权限请求：{tool} 没接，计划确认不在钩子里答；留给桌面")
+            return None
+        if tool == "AskUserQuestion" and not questions_ok(payload["tool_input"]):
+            self.log(f"Claude 权限请求：{tool} 没接，问题格式不对；留给桌面")
             return None
         session_id = str(payload.get("session_id") or "")
         item = self.find(session_id)
         if item is None:  # Claude Code in a terminal or an editor, or a conversation this service does not list
+            self.log(f"Claude 权限请求：{tool} 没接，{self.link_wait} 秒内没找到这个会话对应的对话；留给桌面")
             return None
         self._note_connection_pid(session_id, str(item["id"]), client_port, server_port)
         ask = Ask(item, payload)
