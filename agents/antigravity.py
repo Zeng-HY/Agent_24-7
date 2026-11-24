@@ -12,8 +12,10 @@ changed time or one bad row is read as an empty value instead of an error: the l
 
 from __future__ import annotations
 
+import base64
 import ctypes
 import hashlib
+import io
 import json
 import os
 import re
@@ -23,11 +25,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
-from .base import Agent, NotFound, make_manifest
+from .base import Agent, AgentError, NotFound, make_manifest
 
 # The island asks only for these four kinds of work; the tools that are not one of them say nothing.
 STEP_NAMES = {
@@ -59,12 +62,27 @@ HUB_SECONDS = 2.0         # capabilities_now asks again at most this often
 WAITING_SECONDS = 3.0     # one conversation's waiting steps read at most this often
 LIST_WAITING_SECONDS = 15.0  # the list only uses a result this recent, never reads for itself
 WAITING_TIMEOUT = 5.0     # reading the waiting steps
-SEND_TIMEOUT = 60.0       # agentapi send-message
-ANSWER_TIMEOUT = 10.0     # HandleCascadeUserInteraction
+SEND_TIMEOUT = 60.0       # SendUserCascadeMessage / agentapi / CancelCascadeInvocation
+ANSWER_TIMEOUT = 10.0     # HandleCascadeUserInteraction / UpdateConversationAnnotations
 SEND_LIMIT = 20000        # agentapi takes the text as one command-line argument
 DETAIL_LIMIT = 4000       # a card's detail is cut here
 NOT_OPEN = "电脑上的 Antigravity 没开"
-BUSY_SEND = "Antigravity 正在跑，这一轮结束后才能发"
+QUEUED_SEND = "Antigravity 正在跑，这条会等这一轮做完再交给它"
+NOT_RUNNING = "这个对话没在跑"
+
+# New conversations (the same defaults ag.py uses).
+MODEL = "gemini-4-neon-high"
+TURBO = "AGENT_PERMISSION_PRESET_TURBO"
+TURBO_MARK = "permission_preset:" + TURBO
+WARM_UP = "只回复两个字：好的。不要做别的，不要运行任何命令。"
+NEW_WAIT_SECONDS = 120.0
+NEW_POLL_SECONDS = 3.0
+
+# Pictures: checked before anything is sent; a bad one breaks that Antigravity conversation for good.
+MAX_PICTURES = 5
+MAX_PICTURE_BYTES = 20 << 20
+MAX_PICTURE_SIDE = 8000
+BAD_PICTURE = "这张图片打不开，没有发给 Antigravity"
 
 # The three answers a phone may give to one approval step.
 APPROVAL_CHOICES = {
@@ -92,8 +110,8 @@ APPROVAL_QUESTIONS = {
 }
 
 
-class ControlError(Exception):
-    """One action Antigravity could not carry out; the HTTP layer reads .status."""
+class ControlError(AgentError):
+    """One action Antigravity could not carry out; the HTTP layer turns it into JSON with .status."""
 
     def __init__(self, message: str, status: int = 502) -> None:
         super().__init__(message)
@@ -109,6 +127,7 @@ _FULL_CACHE: dict[str, tuple] = {}
 _HUB_CACHE: dict = {"at": 0.0, "data": None}
 _WAITING_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _SENT: dict[str, dict] = {}
+_CREATED: dict[str, dict] = {}
 _LOGGED: set[tuple[str, str]] = set()
 _LOG_WRITER = [None]
 
@@ -148,6 +167,7 @@ def reset() -> None:
         _HUB_CACHE.update(at=0.0, data=None)
         _WAITING_CACHE.clear()
         _SENT.clear()
+        _CREATED.clear()
         _LOGGED.clear()
 
 
@@ -185,6 +205,46 @@ def _millis(value) -> int:
 
 def _text(value) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+_USER_OPEN = "<USER_REQUEST>"
+_USER_CLOSE = "</USER_REQUEST>"
+_META_OPEN = "<ADDITIONAL_METADATA>"
+_SYSTEM_MARK = "[Message]"
+_SYSTEM_END = "</SYSTEM_MESSAGE>"
+
+
+def _user_request_text(content) -> str:
+    """A real USER_INPUT: the words between <USER_REQUEST> and </USER_REQUEST>, or the whole text."""
+    text = _text(content)
+    start = text.find(_USER_OPEN)
+    if start < 0:
+        return text
+    start += len(_USER_OPEN)
+    end = text.find(_USER_CLOSE, start)
+    if end < 0:
+        end = text.find(_META_OPEN, start)
+    if end < 0:
+        end = len(text)
+    return text[start:end].strip()
+
+
+def _system_user_text(content) -> str:
+    """A sender=system [Message] line's content= words, or '' for any other SYSTEM_MESSAGE."""
+    text = _text(content)
+    marker = text.find(_SYSTEM_MARK)
+    if marker < 0:
+        return ""
+    content_at = text.find("content=", marker)
+    if content_at < 0:
+        return ""
+    if "sender=system" not in text[marker:content_at]:
+        return ""
+    value = text[content_at + len("content="):]
+    end = value.find(_SYSTEM_END)
+    if end >= 0:
+        value = value[:end]
+    return value.strip()
 
 
 def _row_value(row, name: str):
@@ -240,16 +300,16 @@ def _status_of(value) -> str:
 
 
 def _title_of(row) -> str:
-    title = _one_line(_text(_row_value(row, "title")), 120)
+    title = _one_line(_user_request_text(_row_value(row, "title")), 120)
     if title:
         return title
-    preview = _one_line(_text(_row_value(row, "preview")), 40)
+    preview = _one_line(_user_request_text(_row_value(row, "preview")), 40)
     return preview or TITLE_FALLBACK
 
 
 def _item_of(row) -> dict:
     conv_id = str(_row_value(row, "conversation_id") or "").strip()
-    preview = _one_line(_text(_row_value(row, "preview")), PREVIEW_LIMIT)
+    preview = _one_line(_user_request_text(_row_value(row, "preview")), PREVIEW_LIMIT)
     folder = _folder_of(_row_value(row, "workspace_uris"))
     status = _status_of(_row_value(row, "status"))
     modified = _millis(_row_value(row, "last_modified_time"))
@@ -490,6 +550,7 @@ def _records(path: Path) -> list[dict]:
                     messages.extend(_records_one(record))
     except OSError:
         return []
+    _hide_warm_up(messages)
     _number_messages(messages)
     with _LOCK:
         if len(_MESSAGE_CACHE) >= CACHE_LIMIT:
@@ -510,12 +571,26 @@ def _records_one(record: dict) -> list[dict]:
     picture_text = ("\n[图片]" if content else "[图片]") if picture else ""
 
     if kind == "USER_INPUT":
-        text = content + picture_text
+        shown = _user_request_text(content)
+        text = shown + picture_text
         if not text:
             return []
         message = {"role": "user", "text": text, "time": time_text}
         if picture:
             message["_picture"] = True
+        if "content" in cut_fields:
+            message["_truncated"] = True
+            message["_step"] = record.get("step_index")
+        return [message]
+
+    if kind == "SYSTEM_MESSAGE":
+        # The old agentapi send-message path wrote the user's words as sender=system: show those words as
+        # the user's message. Every other SYSTEM_MESSAGE (background notices) stays out of the conversation.
+        shown = _system_user_text(content)
+        if not shown:
+            return []
+        message = {"role": "user", "text": shown + picture_text, "time": time_text,
+                   "_system_user": True}
         if "content" in cut_fields:
             message["_truncated"] = True
             message["_step"] = record.get("step_index")
@@ -578,13 +653,25 @@ def _records_one(record: dict) -> list[dict]:
         text = "出错：" + (reason[:2000] if reason else "Antigravity 出错了")
         return [{"role": "event", "text": text, "time": time_text}]
 
-    if kind in ("SYSTEM_MESSAGE", "CHECKPOINT"):
+    if kind == "CHECKPOINT":
         return []
 
     # An unknown type is shown as ordinary words when it has any; nothing else about it is guessed.
     if content:
         return [{"role": "assistant", "text": content, "time": time_text}]
     return []
+
+
+def _hide_warm_up(messages: list[dict]) -> None:
+    """A new conversation starts with our fixed warm-up and its one answer: hide just that pair."""
+    if not messages:
+        return
+    first = messages[0]
+    if first.get("role") != "user" or _text(first.get("text")) != WARM_UP:
+        return
+    del messages[0]
+    if messages and messages[0].get("role") in ("assistant", "tool"):
+        del messages[0]
 
 
 def _number_messages(messages: list[dict]) -> list[dict]:
@@ -652,7 +739,12 @@ def _fill_cut(messages: list[dict], conv_id: str) -> None:
         if message.get("_truncated"):
             content = record.get("content")
             if content is not None:
-                message["text"] = content + ("\n[图片]" if message.get("_picture") else "")
+                if message.get("role") == "user":
+                    shown = (_system_user_text(content) if message.get("_system_user")
+                             else _user_request_text(content))
+                else:
+                    shown = content
+                message["text"] = shown + ("\n[图片]" if message.get("_picture") else "")
         if message.get("_finish_cut"):
             result = _finish_result(record.get("tool_calls") or [])
             if result:
@@ -772,11 +864,13 @@ def _run_language_server(exe, args: list[str], env: dict, timeout: float):
                           encoding="utf-8", errors="replace", timeout=timeout)
 
 
-def _agentapi(args: list[str], data: dict, timeout: float = SEND_TIMEOUT) -> dict:
+def _agentapi(args: list[str], data: dict, timeout: float = SEND_TIMEOUT, project: str = "") -> dict:
     """One agentapi command; its output is JSON and an error field or a non-zero exit is a failure."""
     env = dict(os.environ)
     env["ANTIGRAVITY_LS_ADDRESS"] = f"localhost:{data['httpPort']}"
     env["ANTIGRAVITY_CSRF_TOKEN"] = str(data["csrfToken"])
+    if project:
+        env["ANTIGRAVITY_PROJECT_ID"] = str(project)
     try:
         done = _run_language_server(_language_server(), list(args), env, timeout)
     except subprocess.TimeoutExpired:
@@ -790,7 +884,7 @@ def _agentapi(args: list[str], data: dict, timeout: float = SEND_TIMEOUT) -> dic
         raise ControlError(_safe("Antigravity 的回答看不懂：" + text[:200], data["csrfToken"]), 502) from None
     if getattr(done, "returncode", 1) != 0 or (isinstance(parsed, dict) and parsed.get("error")):
         reason = parsed.get("error") if isinstance(parsed, dict) else ""
-        raise ControlError(_safe("Antigravity 没发出去：" + str(reason or text[:200]), data["csrfToken"]), 502) from None
+        raise ControlError(_safe("Antigravity 没做成：" + str(reason or text[:200]), data["csrfToken"]), 502) from None
     return parsed if isinstance(parsed, dict) else {}
 
 
@@ -906,6 +1000,174 @@ def _listed(row: dict) -> dict:
     return item
 
 
+def _send_user_message(conv_id: str, text: str, media: list[dict] | None = None, busy: bool = False) -> dict:
+    """The app's own send path: recorded as the user's real message, queued when a turn is running."""
+    body: dict = {"cascadeId": str(conv_id), "items": [{"text": str(text)}]}
+    if media:
+        body["media"] = list(media)
+    if busy:
+        body["deliveryStrategy"] = "MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE"
+    return _rpc("SendUserCascadeMessage", body, timeout=SEND_TIMEOUT)
+
+
+def _annotations_path(conv_id: str) -> Path:
+    return _root() / "annotations" / f"{conv_id}.pbtxt"
+
+
+def _turbo_stored(conv_id: str) -> bool:
+    """Whether this conversation's own annotation already names the turbo preset (ag.py's turbo_stored)."""
+    try:
+        return TURBO_MARK in _annotations_path(conv_id).read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def _set_turbo(conv_id: str) -> None:
+    """Turn this conversation's full-auto on; it applies from the next message."""
+    _rpc("UpdateConversationAnnotations", {
+        "cascadeId": str(conv_id),
+        "annotations": {"permissionPreset": TURBO},
+        "mergeAnnotations": True,
+    }, timeout=ANSWER_TIMEOUT)
+
+
+def _file_uri_path(uri) -> str:
+    return _folder_of(json.dumps([str(uri)]))
+
+
+def _projects() -> list[dict]:
+    """Antigravity's projects: id, name and folders, read only from config\\projects\\*.json."""
+    import machines
+    folder = machines.HOME / ".gemini" / "config" / "projects"
+    rows: list[dict] = []
+    if not folder.is_dir():
+        return rows
+    for path in sorted(folder.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        ident = str(data.get("id") or "").strip()
+        name = str(data.get("name") or "").strip() or ident
+        resources = ((data.get("projectResources") or {}).get("resources") or [])
+        folders = [_file_uri_path(item.get("folderUri")) for item in resources if isinstance(item, dict)]
+        if ident:
+            rows.append({"id": ident, "name": name, "folders": [value for value in folders if value]})
+    rows.sort(key=lambda row: (row["name"].casefold() != "personal", row["name"].casefold()))
+    return rows
+
+
+def _project_for_folder(folder: str = "") -> dict | None:
+    """The project that owns [folder]; with no folder, the default one (Personal, else the first)."""
+    projects = _projects()
+    if not projects:
+        return None
+    if not folder:
+        return projects[0]
+    wanted = os.path.normcase(os.path.normpath(str(folder)))
+    for project in projects:
+        for path in project["folders"]:
+            if os.path.normcase(os.path.normpath(path)) == wanted:
+                return project
+    return None
+
+
+def _jpeg_size(raw: bytes) -> tuple[int, int] | None:
+    """Width and height from a JPEG's SOF segment (the format's own few bytes, no new package)."""
+    index = 2
+    while index + 9 < len(raw):
+        if raw[index] != 0xFF:
+            index += 1
+            continue
+        marker = raw[index + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            index += 2
+            continue
+        if index + 4 > len(raw):
+            return None
+        length = int.from_bytes(raw[index + 2:index + 4], "big")
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            if index + 9 > len(raw):
+                return None
+            return int.from_bytes(raw[index + 7:index + 9], "big"), int.from_bytes(raw[index + 5:index + 7], "big")
+        index += 2 + length
+    return None
+
+
+def _webp_size(raw: bytes) -> tuple[int, int] | None:
+    chunk = raw[12:16]
+    if chunk == b"VP8X" and len(raw) >= 30:
+        return (1 + int.from_bytes(raw[24:27], "little"), 1 + int.from_bytes(raw[27:30], "little"))
+    if chunk == b"VP8 " and len(raw) >= 30:
+        return (int.from_bytes(raw[26:28], "little") & 0x3FFF,
+                int.from_bytes(raw[28:30], "little") & 0x3FFF)
+    if chunk == b"VP8L" and len(raw) >= 25:
+        bits = int.from_bytes(raw[21:25], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    return None
+
+
+def picture_info(raw: bytes) -> tuple[str, int, int]:
+    """(mime, width, height) for a picture this app can take; ControlError 400 for anything else."""
+    if not raw:
+        raise ControlError(BAD_PICTURE, 400)
+    if len(raw) > MAX_PICTURE_BYTES:
+        raise ControlError("这张图片超过 20 MB，没有发给 Antigravity", 400)
+    size = None
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime = "image/png"
+        if len(raw) >= 24 and raw[12:16] == b"IHDR":
+            size = (int.from_bytes(raw[16:20], "big"), int.from_bytes(raw[20:24], "big"))
+    elif raw.startswith(b"\xff\xd8\xff"):
+        mime = "image/jpeg"
+        size = _jpeg_size(raw)
+    elif raw.startswith(b"GIF8"):
+        mime = "image/gif"
+        if len(raw) >= 10:
+            size = (int.from_bytes(raw[6:8], "little"), int.from_bytes(raw[8:10], "little"))
+    elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        mime = "image/webp"
+        size = _webp_size(raw)
+    else:
+        raise ControlError(BAD_PICTURE, 400)
+    if not size or not (1 <= size[0] <= MAX_PICTURE_SIDE and 1 <= size[1] <= MAX_PICTURE_SIDE):
+        raise ControlError(BAD_PICTURE, 400)
+    return mime, size[0], size[1]
+
+
+def _save_picture(codex, tid: str, name: str, raw: bytes, info: tuple[str, int, int]) -> dict:
+    """Store a checked picture in the shared attachment folder, normalized to PNG like codex.upload does."""
+    from PIL import Image, ImageOps
+
+    ident = uuid.uuid4().hex
+    folder = codex.data_root / ident
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        with Image.open(io.BytesIO(raw)) as source:
+            image = ImageOps.exif_transpose(source)
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA" if "transparency" in source.info else "RGB")
+            image.info.clear()
+        image.save(folder / "image.png", format="PNG")
+        thumb = image.copy()
+        thumb.thumbnail((320, 320))
+        thumb.save(folder / "thumb.png")
+        meta = {"id": ident, "thread": str(tid), "app": "antigravity",
+                "name": Path(str(name).replace("\\", "/")).name[:120] or "图片",
+                "file": "image.png", "original_size": len(raw), "width": image.width, "height": image.height,
+                "created": time.time(), "used": False, "source_format": info[0].split("/")[-1].upper(),
+                "source_images": 1}
+        codex._write_meta(meta)
+    except Exception:
+        for name_ in ("image.png", "thumb.png", "meta.json"):
+            (folder / name_).unlink(missing_ok=True)
+        folder.rmdir()
+        raise
+    return codex.public_attachment(meta)
+
+
 # ---------------------------------------------------------------- the agent
 
 
@@ -916,6 +1178,9 @@ class AntigravityAgent(Agent):
     sidebar_without_chats = False
     # The list's search box looks in the preview too (Antigravity's list has the user's first words there).
     search_in_preview = True
+    # A new conversation is created here, not by the shared NewConversations state machine.
+    new_managed = False
+    new_requires_desktop = False
 
     def build_manifest(self) -> dict:
         return make_manifest(
@@ -933,31 +1198,36 @@ class AntigravityAgent(Agent):
                 "read": True,
                 "search": True,
                 "send_modes": ["send"],
+                "stop": True,
+                "new": True,
+                "attachments": True,
                 "settings": [],
                 "skills": False,
                 "waiting": True,
                 "approve": True,
                 "statuses": ["running", "waiting", "idle", "unknown"],
             },
+            params={"send_timeout_s": 60, "new_timeout_s": 140,
+                    "max_images": MAX_PICTURES, "max_image_bytes": MAX_PICTURE_BYTES},
             ui={"card_layout": "generic.v1", "waiting_text": "等待你处理"},
             sources={"catalog": "sqlite", "transcript": "jsonl", "control": "local-api", "live": "file-poll"},
         )
 
     def capabilities_now(self, server, conv_id: str) -> dict | None:
-        """What this conversation can do right now: sending needs Antigravity open and the conversation idle.
+        """What this conversation can do right now.
 
-        Both checks are cached by their readers (the hub 2 s, the list 2 s), so an open conversation may ask
-        every second. A conversation that is not in the records is left at the manifest's capabilities.
+        Sending only needs Antigravity open (a running turn takes a queued message). Stopping needs an open
+        app and a turn that is running or waiting. The hub check is kept two seconds by _hub().
         """
         if _hub() is None:
-            return {"capabilities": {"send_modes": [], "approve": False},
-                    "notes": {"send": NOT_OPEN, "approve": NOT_OPEN}}
+            return {"capabilities": {"send_modes": [], "approve": False, "stop": False},
+                    "notes": {"send": NOT_OPEN, "approve": NOT_OPEN, "stop": NOT_OPEN}}
         try:
             item = self._find(conv_id)
         except NotFound:
             return None
-        if item.get("status") in ("running", "waiting"):
-            return {"capabilities": {"send_modes": []}, "notes": {"send": BUSY_SEND}}
+        if item.get("status") not in ("running", "waiting"):
+            return {"capabilities": {"stop": False}, "notes": {"stop": NOT_RUNNING}}
         return None
 
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
@@ -1051,6 +1321,7 @@ class AntigravityAgent(Agent):
             message.pop("_finish_cut", None)
             message.pop("_step", None)
             message.pop("_picture", None)
+            message.pop("_system_user", None)
         try:
             stat = path.stat()
             size, mtime = stat.st_size, stat.st_mtime_ns
@@ -1105,6 +1376,7 @@ class AntigravityAgent(Agent):
             message.pop("_finish_cut", None)
             message.pop("_step", None)
             message.pop("_picture", None)
+            message.pop("_system_user", None)
             if len(message.get("text") or "") > MESSAGE_TEXT_LIMIT:
                 message["text"] = message["text"][:MESSAGE_TEXT_LIMIT] + "\n…（太长，后面略）"
         out["messages"] = page
@@ -1136,27 +1408,55 @@ class AntigravityAgent(Agent):
     # -- acting
 
     def send(self, payload: dict) -> dict:
-        """Hand one message to an idle conversation through agentapi (Antigravity's own send path)."""
+        """Send the user's words through the app's own SendUserCascadeMessage (not agentapi send-message).
+
+        Full auto is turned on for the conversation first, so the commands of this message do not stop for
+        approval. A running turn takes the message with WHEN_IDLE instead of refusing it.
+        """
         conv_id = str(payload.get("id") or "").strip()
         text = str(payload.get("text") or "")
-        if not text.strip():
+        media = payload.get("media") if isinstance(payload.get("media"), list) else []
+        if not text.strip() and not media:
             raise ControlError("消息不能为空", 400)
         if len(text) > SEND_LIMIT:
             raise ControlError(f"消息太长（最多 {SEND_LIMIT:,} 字）", 400)
+        if not text.strip():
+            text = "请查看这些图片。"
         data = _hub(0)
         if data is None:
             raise ControlError(f"{NOT_OPEN}，开了再发", 409)
         # The newest database, not the 2-second list cache: a turn that just ended must be able to take a message.
         item = self._find(conv_id, fresh=True)
-        if item.get("status") != "idle":
-            raise ControlError(BUSY_SEND, 409)
+        if not _turbo_stored(str(item["id"])):
+            _set_turbo(str(item["id"]))
+        busy = item.get("status") != "idle"
         before = _records(_transcript_path(item["id"]))
-        _agentapi(["send-message", str(item["id"]), text], data, timeout=SEND_TIMEOUT)
+        _send_user_message(str(item["id"]), text, media=media, busy=busy)
         with _LOCK:
             _SENT[str(item["id"])] = {"at": time.time(), "count": len(before), "text": text}
         return {"ok": True, "accepted": True, "pressed": False, "offset": 0,
-                "request_id": str(payload.get("request_id") or ""), "text": "已交给 Antigravity",
-                "delivery_state": "accepted", "accepted_at": int(time.time() * 1000)}
+                "request_id": str(payload.get("request_id") or ""),
+                "text": QUEUED_SEND if busy else "已交给 Antigravity",
+                "delivery_state": "queued" if busy else "accepted",
+                "accepted_at": int(time.time() * 1000)}
+
+    def stop(self, payload: dict) -> dict:
+        """Stop the turn that is running in this conversation."""
+        conv_id = str(payload.get("id") or "").strip()
+        if _hub(0) is None:
+            raise ControlError(NOT_OPEN, 409)
+        item = self._find(conv_id, fresh=True)
+        if item.get("status") not in ("running", "waiting"):
+            raise ControlError(NOT_RUNNING, 409)
+        try:
+            _rpc("CancelCascadeInvocation", {"cascadeId": str(item["id"]), "killBackgroundTasks": True},
+                 timeout=SEND_TIMEOUT)
+        except ControlError as exc:
+            if exc.status == 409:
+                raise
+            raise ControlError(f"Antigravity 没有停下来：{exc}", 502) from None
+        _forget_waiting(str(item["id"]))
+        return {"ok": True, "text": "已让 Antigravity 停下"}
 
     def check(self, conv_id: str, offset: int = 0, text: str = "") -> dict:
         """Whether the transcript now has a new user message that begins with the text we sent."""
@@ -1212,6 +1512,159 @@ class AntigravityAgent(Agent):
             raise ControlError(f"Antigravity 没接受这次批准：{exc}", 502) from None
         _forget_waiting(conv_id)
         return {"ok": True, "accepted": True, "text": done_text}
+
+    # -- new conversations
+
+    def new_own_folders(self, svc) -> list[tuple[str, str, str]]:
+        """Antigravity's project folders, so the new panel lists project names and their folders."""
+        rows = []
+        for project in _projects():
+            for path in project["folders"]:
+                rows.append((path, "Antigravity 项目", project["name"]))
+        return rows
+
+    def new_options(self, svc) -> dict:
+        """Projects for the picker; the model is fixed, so there is nothing to choose."""
+        projects = _projects()
+        return {"models": [], "note": f"新建对话固定用 {MODEL}，手机上不用选模型",
+                "projects": projects,
+                "default_project": projects[0]["id"] if projects else ""}
+
+    def create(self, payload: dict) -> dict:
+        """Create a conversation with the fixed warm-up, wait until idle, turn full auto on, then send."""
+        request_id = str(payload.get("request_id") or "")
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            raise ControlError("消息不能为空", 400)
+        if len(text) > SEND_LIMIT:
+            raise ControlError(f"消息太长（最多 {SEND_LIMIT:,} 字）", 400)
+        if payload.get("attachments"):
+            raise ControlError("新建对话暂不支持带图片，请建好后再发", 400)
+        if payload.get("references"):
+            raise ControlError("新建对话暂不支持引用，请先建好对话再发", 400)
+        data = _hub(0)
+        if data is None:
+            raise ControlError(NOT_OPEN, 409)
+        if not _projects():
+            raise ControlError("电脑上没有 Antigravity 项目，不能新建对话", 400)
+        folder = str(payload.get("folder") or "").strip()
+        project = _project_for_folder(folder)
+        if project is None:
+            raise ControlError("这个文件夹不属于任何 Antigravity 项目，请重新选择", 400)
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), text)
+        title = _one_line(first_line, 40) or TITLE_FALLBACK
+        answer = _agentapi(["new-conversation", f"--model={MODEL}", f"--title={title}", WARM_UP],
+                           data, timeout=SEND_TIMEOUT, project=project["id"])
+        response = answer.get("response") if isinstance(answer.get("response"), dict) else {}
+        created = response.get("newConversation") if isinstance(response.get("newConversation"), dict) else {}
+        conv_id = str(created.get("conversationId") or "").strip()
+        if not conv_id:
+            raise ControlError("Antigravity 没给出新对话的编号，请到电脑上看看", 502)
+        self._wait_idle(conv_id)
+        _set_turbo(conv_id)
+        _send_user_message(conv_id, text, busy=False)
+        shown_folder = folder or (project["folders"][0] if project["folders"] else "")
+        result = {"request_id": request_id, "state": "accepted", "app": self.id, "id": conv_id,
+                  "title": title, "folder": Path(shown_folder).name if shown_folder else "",
+                  "message": "Antigravity 已建好对话"}
+        if request_id:
+            with _LOCK:
+                _CREATED[request_id] = dict(result)
+        return result
+
+    def create_status(self, request_id: str) -> dict:
+        with _LOCK:
+            found = _CREATED.get(str(request_id or ""))
+        if found is not None:
+            return dict(found)
+        return {"request_id": str(request_id or ""), "state": "unconfirmed",
+                "message": "没有这次新建的记录，请到电脑上看对话列表"}
+
+    def _wait_idle(self, conv_id: str) -> None:
+        """Wait up to two minutes for the warm-up turn to finish."""
+        deadline = _now() + NEW_WAIT_SECONDS
+        while True:
+            try:
+                status = self._find(conv_id, fresh=True).get("status")
+            except NotFound:
+                status = ""
+            if status == "idle":
+                return
+            if _now() >= deadline:
+                raise ControlError(
+                    f"新建的 Antigravity 对话在 {int(NEW_WAIT_SECONDS)} 秒内没有空闲，请到电脑上看看", 502)
+            time.sleep(NEW_POLL_SECONDS)
+
+    # -- pictures
+
+    def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
+        """Check the picture first, then store it where the shared attachment reader finds it."""
+        try:
+            info = picture_info(raw)
+            return _save_picture(handler.server.codex, tid, name, raw, info)
+        except ControlError:
+            raise
+        except Exception:
+            raise ControlError(BAD_PICTURE, 400) from None
+
+    def http_upload(self, handler) -> None:
+        """An upload bigger than 20 MB is a 400 here (the shared uploader would say 413)."""
+        try:
+            size = int(handler.headers.get("Content-Length") or 0)
+            if not 0 < size <= MAX_PICTURE_BYTES:
+                handler.close_connection = True
+                raise ControlError("单张图片不能超过 20 MB，没有发给 Antigravity", 400)
+            q = handler._query()
+            raw = handler.rfile.read(size)
+            if len(raw) != size:
+                raise ControlError("图片上传不完整，没有发给 Antigravity", 400)
+            if q.get("draft"):
+                raise ControlError("新建对话暂不支持带图片", 400)
+            handler._json(self._upload_for_chat(handler, q.get("id", ""), q.get("name", "图片"), raw))
+        except ControlError as exc:
+            handler._json({"error": str(exc)}, exc.status)
+        except Exception as exc:
+            handler._json({"error": str(exc) or "图片没有收到"}, getattr(exc, "status", 400))
+
+    def http_send(self, handler, body: dict) -> None:
+        """A message with pictures: every picture is checked before any of them is sent."""
+        images = []
+        try:
+            ids = body.get("attachments")
+            media = []
+            if ids:
+                if (not isinstance(ids, list) or len(ids) > MAX_PICTURES
+                        or any(not isinstance(value, str) or not value for value in ids)
+                        or len(set(ids)) != len(ids)):
+                    raise ControlError(f"一次最多发 {MAX_PICTURES} 张图片，这条没有发出去", 400)
+                images = [handler.server.codex.attachment(value, str(body.get("id") or "")) for value in ids]
+                for image in images:
+                    try:
+                        raw = Path(image["path"]).read_bytes()
+                        mime, _, _ = picture_info(raw)
+                    except ControlError as exc:
+                        raise ControlError(f"「{image.get('name') or '图片'}」{exc}", exc.status) from None
+                    except (OSError, KeyError, TypeError):
+                        raise ControlError(f"「{image.get('name') or '图片'}」{BAD_PICTURE}", 400) from None
+                    media.append({"mimeType": mime, "inlineData": base64.b64encode(raw).decode("ascii")})
+            payload = dict(body)
+            if media:
+                payload["media"] = media
+                if not str(payload.get("text") or "").strip():
+                    payload["text"] = "请查看这些图片。"
+            result = self.send(payload)
+            for image in images:
+                image["used"] = True
+                try:
+                    handler.server.codex._write_meta(image)
+                except Exception:
+                    pass
+            handler._json(result)
+        except ControlError as exc:
+            handler._json({"error": str(exc), "not_submitted": True}, exc.status)
+        except Exception as exc:
+            handler._json({"error": str(exc) or "图片没有发出去", "not_submitted": True},
+                          getattr(exc, "status", 400))
 
     # -- notify
     def notify_conversations(self, limit: int) -> tuple[list[dict], list[dict]]:

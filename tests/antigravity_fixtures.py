@@ -6,6 +6,7 @@ the words, folders and conversation ids are invented. Nothing here touches a rea
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sqlite3
@@ -158,6 +159,14 @@ def real_transcript() -> list[dict]:
 TOKEN = "test-csrf-token-8f3a"
 
 
+def picture(fmt: str = "PNG", width: int = 2, height: int = 2) -> bytes:
+    """A real, tiny picture of the named format (made in memory, never read from a user folder)."""
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (200, 30, 30)).save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
 def waiting_step(trajectory: str = "traj-1", index: int = 3, action: str = "run_command",
                  target: str = "npm test") -> dict:
     """One GetCascadeTrajectorySteps entry that is waiting for an approval."""
@@ -209,6 +218,17 @@ class FakeHub:
                 if method == "HandleCascadeUserInteraction":
                     owner.steps = []  # answered: the app no longer asks
                     return self._send(200, {"ok": True})
+                if method == "SendUserCascadeMessage":
+                    return self._send(200, {})
+                if method == "UpdateConversationAnnotations":
+                    cascade = str((body or {}).get("cascadeId") or "")
+                    folder = data_root(owner.home) / "annotations"
+                    folder.mkdir(parents=True, exist_ok=True)
+                    (folder / f"{cascade}.pbtxt").write_text(
+                        "permission_preset:AGENT_PERMISSION_PRESET_TURBO", encoding="utf-8")
+                    return self._send(200, {})
+                if method == "CancelCascadeInvocation":
+                    return self._send(200, {})
                 return self._send(404, {"error": "no such method"})
 
             def _send(self, code: int, obj: dict) -> None:
@@ -258,4 +278,31 @@ class FakeAgentapi:
         if self.exc is not None:
             raise self.exc
         return SimpleNamespace(returncode=self.returncode, stdout=self.stdout, stderr="")
+
+
+class FakeAttachments:
+    """The shared attachment folder, made small: stores the meta codex.public_attachment would read."""
+
+    def __init__(self, root: Path) -> None:
+        self.data_root = Path(root)
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        self.metas: dict[str, dict] = {}
+
+    def _write_meta(self, meta: dict) -> None:
+        self.metas[meta["id"]] = dict(meta)
+
+    @staticmethod
+    def public_attachment(meta: dict) -> dict:
+        return {key: meta[key] for key in ("id", "name", "original_size", "width", "height")} | {
+            "url": "/api/codex/image?id=" + meta["id"],
+            "thumbnail": "/api/codex/image?thumb=1&id=" + meta["id"]}
+
+    def attachment(self, ident: str, tid: str | None = None) -> dict:
+        meta = dict(self.metas[ident])
+        meta["path"] = str(self.data_root / ident / "image.png")
+        return meta
+
+    def cleanup_drafts(self) -> None:
+        pass
+
 

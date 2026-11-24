@@ -179,7 +179,7 @@ class WebAntigravityTests(unittest.TestCase):
             page, errors = self.page_for(browser)
             page.locator('#convList .conv[data-key="antigravity:a"]').click()
             page.wait_for_function("document.getElementById('cvMsgs').textContent.includes('看完了，没有问题。')")
-            self.assertTrue(page.evaluate("document.getElementById('genericComposerTools').hidden"))
+            self.assertFalse(page.evaluate("document.getElementById('genericComposerTools').hidden"))
             self.assertTrue(page.evaluate("document.querySelector('.cv-top button[aria-label=\"停止当前轮\"]').hidden"))
 
             page.locator("#cvText").fill("手机发来的消息")
@@ -187,11 +187,12 @@ class WebAntigravityTests(unittest.TestCase):
             page.wait_for_function("document.getElementById('cvMsgs').textContent.includes('手机发来的消息')")
             self.assertEqual(self.sent[-1]["id"], "a")
             self.assertEqual(self.sent[-1]["text"], "手机发来的消息")
-            self.assertEqual(self.runner.calls[0]["args"], ["send-message", "a", "手机发来的消息"])
-            self.assertEqual(self.runner.calls[0]["env"]["ANTIGRAVITY_CSRF_TOKEN"], fake.TOKEN)
+            self.assertEqual(self.runner.calls, [])
+            body = self.hub.calls("SendUserCascadeMessage")[-1]["body"]
+            self.assertEqual(body["items"], [{"text": "手机发来的消息"}])
             self.assertEqual(errors, [])
 
-    def test_a_running_conversation_is_blocked_with_the_reason(self):
+    def test_a_running_conversation_takes_a_queued_message(self):
         for _engine, browser in self.engines():
             self.build_scene(status="CASCADE_RUN_STATUS_RUNNING")
             page, errors = self.page_for(browser)
@@ -201,12 +202,11 @@ class WebAntigravityTests(unittest.TestCase):
 
             page.locator("#cvText").fill("现在能发吗")
             page.locator("#cvBtn").click()
-            page.wait_for_function(
-                "document.getElementById('toast').textContent.includes('Antigravity 正在跑，这一轮结束后才能发')")
-            self.assertEqual(self.sent, [])
+            page.wait_for_function("document.getElementById('cvMsgs').textContent.includes('现在能发吗')")
+            self.assertEqual(self.sent[-1]["text"], "现在能发吗")
             self.assertEqual(self.runner.calls, [])
-            self.assertTrue(page.evaluate(
-                "Agents.modesNow('antigravity', genericAgentUI.lastControl(cur)).length === 0"))
+            body = self.hub.calls("SendUserCascadeMessage")[-1]["body"]
+            self.assertEqual(body["deliveryStrategy"], "MESSAGE_DELIVERY_STRATEGY_WHEN_IDLE")
             self.assertEqual(errors, [])
 
     def test_an_approval_card_is_answered_with_the_fake_service(self):
