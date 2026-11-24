@@ -10,8 +10,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from playwright.sync_api import sync_playwright
 
@@ -19,9 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import codex_control  # noqa: E402
 import machines  # noqa: E402
 import remote  # noqa: E402
 from agents import antigravity, legacy as agent_legacy, registry as agent_registry  # noqa: E402
+from composer_references import References  # noqa: E402
+from new_conversations import NewConversations  # noqa: E402
 import antigravity_fixtures as fake  # noqa: E402
 
 ORIGIN = "https://teleply.local"
@@ -55,6 +59,24 @@ class WebAntigravityTests(unittest.TestCase):
         start = patch.object(machines, "HOME", self.home)
         start.start()
         self.addCleanup(start.stop)
+
+        self.personal = self.home / "Personal"
+        self.personal.mkdir()
+        self.public = self.home / "公共"
+        self.public.mkdir()
+        projects = self.home / ".gemini" / "config" / "projects"
+        projects.mkdir(parents=True)
+        (projects / "personal.json").write_text(json.dumps({
+            "id": "proj-personal", "name": "Personal",
+            "projectResources": {"resources": [{"folderUri": self.personal.as_uri()}]}}), encoding="utf-8")
+        self.bridge = codex_control.Bridge()
+        self.bridge.data_root = self.home / "attachments"
+        self.bridge.data_root.mkdir()
+        self.addCleanup(self.bridge.close)
+        history = SimpleNamespace(catalog=lambda: [])
+        self.new_chats = NewConversations(history, References(history, self.home), self.bridge, Mock(),
+                                          self.home / "new-service")
+        self.last_create: dict = {}
 
         self.hub = fake.FakeHub(self.home, steps=[])
         self.hub.__enter__()
@@ -117,9 +139,29 @@ class WebAntigravityTests(unittest.TestCase):
             cid = q.get("id", [""])[0]
             return js(antigravity.AGENT().read(cid, limit=100))
         if path == "/api/chat/folders":
-            self.folder_queries.append(q.get("app", [""])[0])
-            return js({"items": [{"path": str(self.home / "Personal"), "name": "Personal",
-                                  "sources": ["Antigravity 项目"]}]})
+            app = q.get("app", [""])[0]
+            self.folder_queries.append(app)
+            if app == "antigravity":
+                items = [{"path": str(self.personal), "name": "Personal", "sources": ["Antigravity 项目"]}]
+            else:
+                items = [{"path": str(self.public), "name": "公共", "sources": ["Codex 项目"]}]
+            return js({"items": items})
+        if path == "/api/chat/new/draft":
+            return js(self.new_chats.create_draft())
+        if path == "/api/agents/antigravity/create":
+            body = json.loads(request.post_data or "{}")
+            self.last_create = body
+            fake.write(self.home, [fake.row("a", title="测试对话 A"), fake.row("new-1", title="新对话")],
+                       transcripts={"a": TRANSCRIPT, "new-1": [
+                           fake.record(1, "USER_INPUT", "USER_EXPLICIT", antigravity.WARM_UP),
+                           fake.record(2, "PLANNER_RESPONSE", "MODEL", "好的。")]})
+            antigravity.reset()
+            with patch("new_conversations.threading.Thread"):
+                self.new_chats.submit(body)
+            self.new_chats._run(body["request_id"])
+            return js(self.new_chats.status(body["request_id"]))
+        if path == "/api/agents/antigravity/create/state":
+            return js(self.new_chats.status(q.get("request_id", [""])[0]))
         if path == "/api/agents/antigravity/state":
             return js(self.state_payload(q.get("id", [""])[0]))
         if path == "/api/agents/antigravity/send":
@@ -204,6 +246,30 @@ class WebAntigravityTests(unittest.TestCase):
             page.wait_for_selector("#newSheet", state="visible")
             page.wait_for_function("document.getElementById('newFolderName').textContent === 'Personal'")
             self.assertEqual(self.folder_queries[-1], "antigravity")
+            self.assertEqual(errors, [])
+
+    def test_switching_to_antigravity_reloads_projects_and_creates(self):
+        for _engine, browser in self.engines():
+            self.build_scene()
+            self.runner.stdout = json.dumps(
+                {"response": {"newConversation": {"conversationId": "new-1"}}})
+            page, errors = self.page_for(browser)
+            page.evaluate("openNewSheet({app:'codex'})")
+            page.wait_for_selector("#newSheet", state="visible")
+            page.wait_for_function("document.getElementById('newFolderName').textContent === '公共'")
+            page.locator('#newSheet [data-app="antigravity"]').click()
+            page.wait_for_function("document.getElementById('newFolderName').textContent === 'Personal'")
+            self.assertEqual(self.folder_queries[-1], "antigravity")
+            page.fill("#newText", "新对话第一句")
+            page.locator("#newBtn").click()
+            for _ in range(50):
+                if self.last_create:
+                    break
+                page.wait_for_timeout(100)
+            self.assertEqual(self.last_create["folder"], str(self.personal))
+            status = self.new_chats.status(self.last_create["request_id"])
+            self.assertEqual((status["state"], status["id"]), ("accepted", "new-1"))
+            self.assertEqual(self.runner.calls[0]["args"][-1], antigravity.WARM_UP)
             self.assertEqual(errors, [])
 
     def test_a_running_conversation_takes_a_queued_message(self):
