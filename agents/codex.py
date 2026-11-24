@@ -26,6 +26,11 @@ CODEX_STEPS = {
 # that however many tasks run they never push those out of the newest LIMIT.
 AUTOMATION_WHERE = "coalesce(thread_source, '') = 'automation'"
 AUTOMATION_LIMIT = 10
+# 11-24: the 定时任务 setting and the words it uses; the shared notifier only carries the value around.
+AUTOMATION_MODES = {"codex": "跟 Codex 一样", "failed": "只推失败的", "off": "不推"}
+AUTOMATION_DEFAULT = "codex"
+AUTOMATION_OFF = "off"
+AUTOMATION_LABEL = "Codex 定时任务"
 _AUTOMATION_ID = re.compile(r"^[ \t]*Automation ID:[ \t]*([A-Za-z0-9_-]{1,80})[ \t]*$", re.M)
 _AUTOMATION_NAME = re.compile(r"^[ \t]*Automation:[ \t]*(.+?)[ \t]*$", re.M)
 
@@ -44,6 +49,11 @@ class CodexAgent(Agent):
     desktop_process = chats.CODEX_PROCESS
     desktop_send_text = "已按回车，等对话记录确认"
     delivery_markers = (b"UserMessage", b"user_message", b"codex_delegation", b"hook_prompt", b"HookPrompt")
+    automations = True  # 11-24: some of this assistant's conversations are automation runs
+    automation_modes = AUTOMATION_MODES
+    automation_default = AUTOMATION_DEFAULT
+    automation_off = AUTOMATION_OFF
+    automation_label = AUTOMATION_LABEL
 
     def build_manifest(self) -> dict:
         caps = {
@@ -745,6 +755,18 @@ class CodexAgent(Agent):
             scan["automation_id"] = ids[-1]
         if names:
             scan["automation_name"] = chats.one_line(names[-1], 80)
+
+    def notify_decision(self, raw: str, automation: bool, mode: str, aborted: str, automation_id: str) -> dict:
+        """Codex's own rule for a phone notice (11-24): the gesture marks in the answer, plus failed_runs_only from
+        the task's automation.toml when the setting is 跟 Codex 一样. Only automation runs have a task file."""
+        import notify
+        failed_only = False
+        if automation:
+            if mode == "failed":
+                failed_only = True
+            elif mode == "codex":
+                failed_only = notify.automation_failed_runs_only(automation_id, chats.CODEX_HOME)
+        return notify.notice_decision(raw, automation, failed_only, aborted)
 
     def notify_conversations(self, limit: int, automations: str = "codex") -> tuple[list[dict], list[dict]]:
         """The conversations the phone hears about. 11-24: automations too, unless off; they are looked up

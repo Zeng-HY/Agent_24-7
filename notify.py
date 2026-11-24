@@ -36,6 +36,7 @@ import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import chats
@@ -56,8 +57,8 @@ DEFAULT_SERVER = "https://api.day.app"
 # new-conversation button (no thread_source) or by another conversation. Not: codex exec runs (the translation
 # workflows start thousands), sub-agents, reviews, automations.
 CODEX_WHERE = "source in ('vscode', 'cli') and coalesce(thread_source, '') in ('', 'user', 'agent_created_thread')"
-# 定时任务: Codex starts one thread per run with thread_source 'automation' and the task's name as its title (11-24).
-AUTOMATIONS = {"codex": "跟 Codex 一样", "failed": "只推失败的", "off": "不推"}
+# 定时任务 (11-24): the assistant that has such runs declares the setting's modes and its own rules; this module only
+# carries the value around. The marker rules and the words below are the shared part.
 POLICY_SECONDS = 60  # a task's automation.toml is read at most this often per id
 _HEARTBEAT = re.compile(r"<heartbeat>([\s\S]*?)</heartbeat>", re.I)
 _DECISION = re.compile(r"<decision>\s*(DONT_NOTIFY|NOTIFY)\s*</decision>", re.I)
@@ -225,13 +226,12 @@ def _without_markers(text: str) -> str:
     return re.sub(r"(?m)^[ \t]*::inbox-item\{[^{}]*\}[ \t]*$", "", text)
 
 
-def notice_decision(raw: str, automation: bool = False, mode: str = "codex", aborted: str = "",
-                    runs_only: bool = False) -> dict:
-    """Whether a turn's end goes to the phone, why not, and the words Codex wrote for it.
+def notice_decision(raw: str, automation: bool = False, failed_only: bool = False, aborted: str = "") -> dict:
+    """Whether a turn's end goes to the phone, why not, and the words written for it.
 
-    Codex 26.1117's own rules, in order: a heartbeat block's decision, a bare DONT_NOTIFY, the skip marks; then, for
-    an automation's thread, only failed runs when that task or the setting asks for it, and no notice for an empty
-    successful run. Returns {"send", "why", "text"}."""
+    The rules, in order: a heartbeat block's decision, a bare DONT_NOTIFY, the skip marks; then, for an automation's
+    thread, no notice when only failed runs are wanted and this one succeeded, or when a successful run left nothing.
+    [failed_only] is the setting the automation's own assistant resolved. Returns {"send", "why", "text"}."""
     text = raw or ""
     blocks = list(_HEARTBEAT.finditer(text))
     found = blocks[-1] if blocks else None  # the last block decides
@@ -259,16 +259,16 @@ def notice_decision(raw: str, automation: bool = False, mode: str = "codex", abo
             return {"send": False, "why": "Codex 说这次不用提醒", "text": ""}
     failed = bool(aborted) and aborted != "interrupted"
     if automation:
-        if (mode == "failed" or (mode == "codex" and runs_only)) and not failed:
+        if failed_only and not failed:
             return {"send": False, "why": "这个定时任务只在失败时提醒", "text": ""}
         if not failed and not text.strip():
             return {"send": False, "why": "定时任务这次没有回答", "text": ""}
     return {"send": True, "why": "", "text": ""}
 
 
-def automation_failed_runs_only(automation_id: str, clock=time.time) -> bool:
-    """Whether the task's automation.toml says failed_runs_only; an id that could walk the path is never read, and
-    the answer is kept POLICY_SECONDS (11-24)."""
+def automation_failed_runs_only(automation_id: str, home, clock=time.time) -> bool:
+    """Whether the task's automation.toml under [home] says failed_runs_only; an id that could walk the path is never
+    read, and the answer is kept POLICY_SECONDS (11-24)."""
     ident = (automation_id or "").strip()
     if not _AUTOMATION_ID.fullmatch(ident):
         return False
@@ -278,10 +278,10 @@ def automation_failed_runs_only(automation_id: str, clock=time.time) -> bool:
         return cached[1]
     result = False
     try:
-        with (chats.CODEX_HOME / "automations" / ident / "automation.toml").open("rb") as f:
+        with (Path(home) / "automations" / ident / "automation.toml").open("rb") as f:
             result = tomllib.load(f).get("notification_policy") == "failed_runs_only"
     except (OSError, ValueError):
-        result = False  # unreadable or not TOML: Codex's rule is not known, so its markers decide
+        result = False  # unreadable or not TOML: the rule is not known, so the assistant's markers decide
     _AUTOMATION_POLICY[ident] = (now, result)
     return result
 
@@ -389,6 +389,7 @@ class Notifier:
         self.open: collections.Counter = collections.Counter()  # (app, id) -> live streams the phone has on it
         self.recent: collections.deque = collections.deque(maxlen=8)  # the last outcomes, for the page
         self.url = ""                                # this computer's https address on Tailscale
+        self._automation = False                     # the assistant with 定时任务 runs, found once (11-24)
         self.stopped = threading.Event()
 
     # -- what the page asks
@@ -414,20 +415,32 @@ class Notifier:
                 "relay": {"listening": self.relay.listening > 0}, "automations": self.automations(),
                 "recent": list(self.recent)[::-1]}
 
+    def _automation_agent(self):
+        """The assistant whose conversations may be automation runs (it declares automation_modes), or None."""
+        if self._automation is False:
+            from agents import registry
+            self._automation = next((a for a in registry.load() if getattr(a, "automation_modes", None)), None)
+        return self._automation
+
+    def automation_modes(self) -> dict:
+        return dict(getattr(self._automation_agent(), "automation_modes", {}) or {})
+
     def automations(self) -> str:
-        """The 定时任务 setting: 'codex' (its own rule), 'failed' or 'off'; anything else reads as 'codex'."""
+        """The 定时任务 setting the assistant declared: its modes; anything else reads as its default."""
+        modes = self.automation_modes()
         mode = self.cfg.get("automations")
-        return mode if mode in AUTOMATIONS else "codex"
+        return mode if mode in modes else str(getattr(self._automation_agent(), "automation_default", "") or "")
 
     def set_automations(self, mode: str) -> dict:
+        modes = self.automation_modes()
         mode = str(mode or "").strip()
-        if mode not in AUTOMATIONS:
+        if mode not in modes:
             raise NotifyError("定时任务的通知只有三个选项：跟 Codex 一样、只推失败的、不推")
         with self.lock:
             self.cfg["automations"] = mode
             self.save()
-        self.log(f"通知：定时任务的通知已改成「{AUTOMATIONS[mode]}」")
-        return {"ok": True, "automations": mode, "text": f"已改成：{AUTOMATIONS[mode]}"}
+        self.log(f"通知：定时任务的通知已改成「{modes[mode]}」")
+        return {"ok": True, "automations": mode, "text": f"已改成：{modes[mode]}"}
 
     def set_address(self, text: str) -> dict:
         """Keep the pasted address once a first notification went through; an empty one turns them off."""
@@ -805,8 +818,8 @@ class Notifier:
         rows: list[dict] = []
         full_by_app: dict[str, list[dict]] = {}
         for agent in registry.load():
-            # 定时任务 belongs to Codex alone: only it is told the setting, so the other agents' interface is untouched.
-            recent, full = (agent.notify_conversations(LIMIT, self.automations()) if getattr(agent, "id", "") == "codex"
+            # Only the assistant that declares automations is told the setting; the others' interface stays as it was.
+            recent, full = (agent.notify_conversations(LIMIT, self.automations()) if getattr(agent, "automations", False)
                             else agent.notify_conversations(LIMIT))
             rows += recent
             if full:
@@ -818,7 +831,8 @@ class Notifier:
         from agents import registry
         shown = {(row["app"], row["id"]) for row in rows}
         active = {*self.running, *self.waiting}
-        if self.automations() == "off":
+        off = str(getattr(self._automation_agent(), "automation_off", "") or "")
+        if off and self.automations() == off:
             # 11-24: with 定时任务 off an automation is not even followed, and nothing of it reaches the relay.
             for conv in list(active):
                 if ((self.running.get(conv) or self.waiting.get(conv) or {}).get("item") or {}).get("automation"):
@@ -861,12 +875,15 @@ class Notifier:
 
     def _tell(self, found: dict | None, item: dict, end: dict) -> None:
         from agents import registry
+        agent = None
         try:
-            app = registry.get(item["app"]).manifest()["name"]["zh"]
+            agent = registry.get(item["app"])
+            app = agent.manifest()["name"]["zh"]
         except Exception:
             app = item["app"]
-        automation = bool(item.get("automation")) and item["app"] == "codex"
-        label = "Codex 定时任务" if automation else app
+        automation = bool(item.get("automation"))
+        label = str(getattr(self._automation_agent(), "automation_label", "") or "") if automation else app
+        label = label or app
         done = "出错停了" if end["state"] == "failed" else "在等你选" if end.get("asks") else "好了"
         title = chats.one_line(item.get("title") or "（无标题）", 40)
         what = f"{label}「{title}」{done}"
@@ -874,11 +891,10 @@ class Notifier:
         preview = _preview(end.get("text") or "")
         subtitle, outcomes = f"{self.name} · {label} {done}", []
         decision = {"send": True, "why": "", "text": ""}
-        if item["app"] == "codex":  # 11-24: Codex's own rules for what is worth a phone notice
-            mode = self.automations()
-            runs_only = automation and mode == "codex" and automation_failed_runs_only(end.get("automation_id") or "")
-            decision = notice_decision(end.get("raw_text") or end.get("text") or "", automation, mode,
-                                       end.get("abort_reason") or "", runs_only)
+        hook = getattr(agent, "notify_decision", None)  # 11-24: the assistant's own rule for a phone notice
+        if hook is not None:
+            decision = hook(end.get("raw_text") or end.get("text") or "", automation, self.automations(),
+                            end.get("abort_reason") or "", end.get("automation_id") or "")
             if not decision["send"] and not why:
                 why = decision["why"]
         conv = (item["app"], item["id"])

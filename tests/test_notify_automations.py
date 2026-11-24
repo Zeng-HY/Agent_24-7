@@ -170,37 +170,40 @@ class PolicyFile(unittest.TestCase):
         (folder / "automation.toml").write_text(text, encoding="utf-8")
 
     def test_failed_runs_only_is_read_and_cached(self):
+        home = Path(self.home.name)
         self.write("daily", 'notification_policy = "failed_runs_only"\n')
-        self.assertTrue(notify.automation_failed_runs_only("daily"))
+        self.assertTrue(notify.automation_failed_runs_only("daily", home))
         self.write("daily", 'notification_policy = "always"\n')  # still the cached answer for a minute
-        self.assertTrue(notify.automation_failed_runs_only("daily"))
+        self.assertTrue(notify.automation_failed_runs_only("daily", home))
         notify._AUTOMATION_POLICY.clear()
-        self.assertFalse(notify.automation_failed_runs_only("daily"))
+        self.assertFalse(notify.automation_failed_runs_only("daily", home))
 
     def test_missing_or_odd_files_read_as_not_failed_only(self):
+        home = Path(self.home.name)
         self.write("broken", "this is not toml\n")
-        self.assertFalse(notify.automation_failed_runs_only("broken"))
-        self.assertFalse(notify.automation_failed_runs_only("none"))
+        self.assertFalse(notify.automation_failed_runs_only("broken", home))
+        self.assertFalse(notify.automation_failed_runs_only("none", home))
 
     def test_an_id_that_could_walk_the_path_is_never_read(self):
+        home = Path(self.home.name)
         with mock.patch.object(notify.tomllib, "load", side_effect=AssertionError("read")):
             for ident in ("../x", "a/b", "a\\b", "", "a" * 81, "dot.name"):
-                self.assertFalse(notify.automation_failed_runs_only(ident))
+                self.assertFalse(notify.automation_failed_runs_only(ident, home))
 
     def test_failed_mode_pushes_only_failures(self):
-        good = notify.notice_decision("好了", automation=True, mode="failed")
+        good = notify.notice_decision("好了", automation=True, failed_only=True)
         self.assertFalse(good["send"])
         self.assertIn("只在失败时提醒", good["why"])
-        failed = notify.notice_decision("", automation=True, mode="failed", aborted="error")
+        failed = notify.notice_decision("", automation=True, failed_only=True, aborted="error")
         self.assertTrue(failed["send"])
 
     def test_failed_runs_only_in_codex_mode(self):
-        self.assertFalse(notify.notice_decision("好了", automation=True, runs_only=True)["send"])
-        self.assertTrue(notify.notice_decision("", automation=True, aborted="error", runs_only=True)["send"])
+        self.assertFalse(notify.notice_decision("好了", automation=True, failed_only=True)["send"])
+        self.assertTrue(notify.notice_decision("", automation=True, aborted="error", failed_only=True)["send"])
 
     def test_a_user_stopped_run_is_not_a_failure(self):
         for reason in ("interrupted", ""):
-            self.assertFalse(notify.notice_decision("", automation=True, mode="failed", aborted=reason)["send"])
+            self.assertFalse(notify.notice_decision("", automation=True, failed_only=True, aborted=reason)["send"])
 
     def test_an_empty_automation_answer_is_not_sent(self):
         got = notify.notice_decision("   ", automation=True)
