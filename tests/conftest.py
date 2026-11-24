@@ -19,3 +19,15 @@ def _isolate_codex_pipes(monkeypatch, tmp_path):
     codex_hooks.reset_trust_cache()
     codex_apptools.set_default_data_dir_override(None)
     codex_hooks.set_default_codex_home_override(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_antigravity_home(monkeypatch, tmp_path):
+    """Antigravity is really installed on this PC: tests read an empty folder, never its conversations."""
+    import machines
+    from agents import antigravity
+
+    monkeypatch.setattr(machines, "HOME", tmp_path / "isolated-antigravity-home")
+    antigravity.reset()
+    yield
+    antigravity.reset()

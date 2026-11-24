@@ -1,0 +1,148 @@
+"""Antigravity's own files, made up for tests: a summaries database and transcript files.
+
+The shapes follow docs/adding-an-agent.md's Antigravity section and the real format seen on 2026-11-24;
+the words, folders and conversation ids are invented. Nothing here touches a real user folder.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+# The columns Antigravity writes into conversation_summaries (2026-11-24).
+COLUMNS = (
+    "conversation_id", "title", "preview", "step_count", "last_modified_time", "workspace_uris",
+    "status", "source", "project_id", "agent_name", "parent_conversation_id", "nesting_depth",
+    "battle_id", "winning_conversation_id", "not_fully_idle", "killed", "last_user_input_time",
+    "last_user_input_step_index", "app_data_dir", "raw_summary", "group_id",
+)
+
+DEFAULTS = {
+    "title": "测试对话",
+    "preview": "测试内容",
+    "step_count": 2,
+    "last_modified_time": "2026-11-20 10:00:00.1234567+08:00",
+    "workspace_uris": '["file:///c%3A/%E6%B5%8B%E8%AF%95/%E9%A1%B9%E7%9B%AE"]',
+    "status": "CASCADE_RUN_STATUS_IDLE",
+    "source": "",
+    "project_id": None,
+    "agent_name": None,
+    "parent_conversation_id": None,
+    "nesting_depth": 0,
+    "battle_id": None,
+    "winning_conversation_id": None,
+    "not_fully_idle": 0,
+    "killed": 0,
+    "last_user_input_time": "2026-11-20 09:59:00.0000001+08:00",
+    "last_user_input_step_index": 0,
+    "app_data_dir": "测试目录",
+    "raw_summary": "{}",
+    "group_id": None,
+}
+
+
+def data_root(home: Path) -> Path:
+    """The Antigravity folder under a fake machines.HOME."""
+    return Path(home) / ".gemini" / "antigravity"
+
+
+def row(conv_id: str, **changes) -> dict:
+    values = dict(DEFAULTS)
+    values["conversation_id"] = conv_id
+    values.update(changes)
+    return values
+
+
+def record(step: int, kind: str, source: str, content=None, status: str = "DONE",
+           created_at: str | None = None, **extra) -> dict:
+    """One transcript line, with only the fields the reader uses and the extra ones a test names."""
+    item = {
+        "step_index": step,
+        "source": source,
+        "type": kind,
+        "status": status,
+        "created_at": created_at or f"2026-11-20 10:00:0{min(step, 9)}.1234567+08:00",
+        "content": content,
+    }
+    item.update(extra)
+    return item
+
+
+def write(
+    home: Path,
+    rows: list[dict] | None = None,
+    transcripts: dict[str, list[dict]] | None = None,
+    full: dict[str, list[dict]] | None = None,
+    columns: tuple[str, ...] = COLUMNS,
+) -> Path:
+    """Build the data folder [home]/.gemini/antigravity and return it."""
+    root = data_root(home)
+    root.mkdir(parents=True, exist_ok=True)
+    database = root / "conversation_summaries.db"
+    if database.exists():
+        database.unlink()
+    con = sqlite3.connect(database)
+    try:
+        con.execute("CREATE TABLE conversation_summaries (" + ", ".join(f'"{name}" TEXT' for name in columns) + ")")
+        for values in rows or []:
+            kept = {name: values.get(name, DEFAULTS.get(name)) for name in columns}
+            con.execute(
+                "INSERT INTO conversation_summaries (" + ", ".join(f'"{name}"' for name in columns) + ")"
+                " VALUES (" + ", ".join("?" for _ in columns) + ")",
+                [kept[name] for name in columns],
+            )
+        con.commit()
+    finally:
+        con.close()
+    for conv_id, records in (transcripts or {}).items():
+        folder = root / "brain" / str(conv_id) / ".system_generated" / "logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "transcript.jsonl").write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in records), encoding="utf-8")
+    for conv_id, records in (full or {}).items():
+        folder = root / "brain" / str(conv_id) / ".system_generated" / "logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "transcript_full.jsonl").write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in records), encoding="utf-8")
+    return root
+
+
+TOOL_OUTPUT = "工具输出：登录页 6 个测试都通过"
+STRUCTURED_CUT = '{"batch":"示例","items":[{"verdict":"pass"'
+STRUCTURED_FULL = {"batch": "示例", "items": [{"verdict": "pass", "reason": "编的"}]}
+PLAIN_CUT = "这是被截短的普通总结"
+PLAIN_FULL = "这是写给人看的完整总结。"
+
+
+def real_transcript() -> list[dict]:
+    """One conversation in the shape the real records use: calls on PLANNER_RESPONSE, outputs on GENERIC."""
+    return [
+        record(1, "USER_INPUT", "USER_EXPLICIT", "帮我看看这个文件"),
+        record(2, "SYSTEM_MESSAGE", "SYSTEM", "内部提示"),
+        record(3, "PLANNER_RESPONSE", "MODEL", "看过了，没有问题。"),
+        record(4, "PLANNER_RESPONSE", "MODEL", None, tool_calls=[
+            {"name": "read_file", "args": {"Path": "C:\\测试\\a.txt", "StartLine": 1}},
+            {"name": "run_command", "args": {"CommandLine": "pytest -q", "toolSummary": "跑登录页的测试"}},
+            {"name": "edit_file", "args": {"Path": "C:\\测试\\b.py", "Replacement": "改好了"}},
+        ]),
+        record(5, "GENERIC", "MODEL", "工具输出：文件内容第一行，这一行不该显示"),
+        record(6, "GENERIC", "MODEL", TOOL_OUTPUT),
+        record(7, "GENERIC", "MODEL", "工具输出：b.py 已修改"),
+        record(8, "PLANNER_RESPONSE", "MODEL", "补充一句", tool_calls=[
+            {"name": "edit_file", "args": {"Path": "C:\\测试\\c.py", "Replacement": "也改好了"}},
+        ]),
+        record(9, "GENERIC", "MODEL", "工具输出：c.py 已修改"),
+        record(10, "ERROR_MESSAGE", "SYSTEM", None, error="被限流了"),
+        record(11, "CHECKPOINT", "SYSTEM", "检查点"),
+        record(12, "USER_INPUT", "USER_EXPLICIT", None, media=[{"kind": "image"}]),
+        record(13, "USER_INPUT", "USER_EXPLICIT", "显示的截断内容", truncated_fields=["content"]),
+        record(14, "PLANNER_RESPONSE", "MODEL", None, truncated_fields=["tool_calls"], tool_calls=[
+            {"name": "finish", "args": {"result": STRUCTURED_CUT}},
+        ]),
+        record(15, "GENERIC", "MODEL", "工具输出：结构化结果已交回"),
+        record(16, "PLANNER_RESPONSE", "MODEL", None, truncated_fields=["tool_calls"], tool_calls=[
+            {"name": "finish", "args": {"result": PLAIN_CUT}},
+        ]),
+        record(17, "GENERIC", "MODEL", "工具输出：普通总结已交回"),
+    ]

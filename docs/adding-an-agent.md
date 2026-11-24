@@ -13,6 +13,8 @@
 3. 在 `agents/registry.py` 的 `AGENT_MODULES` 元组里加一行 `"agents.<id>"`。
 4. 补齐单元测试并跑过 `tests/test_agents.py`、`tests/test_no_hardcoded_agents.py` 等检查。
 
+只读助手的真实例子是 `agents/antigravity.py`：它只列对话、读内容、报一轮跑完，不发送、不停止、不批准。
+
 Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodules('agents', filter=lambda name: name != 'agents.testing')` 自动收集 `agents/` 下的模块，因此不用改 `.spec`。打包后的自检（`AgentRemote.exe --self-test`，见 `relay_desktop.py`）会自动验证 `AGENT_MODULES` 中的每个模块都能加载、`agent.id` 与文件名一致，且 `testing` 不在正式包里。如果新助手带额外小程序，或需要在卸载时清理本机文件，目前还要改 `deploy/windows/version.py`、`setup.iss`、`relay_desktop.py`（以后会改成按名单统一处理）。
 
 ---
@@ -46,7 +48,7 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
 | `schema` | `int` | 固定为 `1`（由 `make_manifest` 自动填入）。 |
 | `id` | `str` | 助手唯一标识，与模块文件名一致。 |
 | `name` | `{"zh": str, "en": str}` | 中英文显示名；网页端优先显示 `zh`，缺省退回 `en`，再缺退回 `id`。 |
-| `order` | `int` | 展示顺序，正式名单里不能重复。当前已占：`codex=10`、`claude=20`、`deepseek=30`（假测试助手 `testing=99`）。新助手建议从 `40` 起。 |
+| `order` | `int` | 展示顺序，正式名单里不能重复。当前已占：`codex=10`、`claude=20`、`deepseek=30`、`antigravity=40`（假测试助手 `testing=99`）。新助手建议从 `40` 起。 |
 | `color` / `color_dark` | `str` | 浅色 / 深色模式下的十六进制品牌色（如 `#4285F4`）；未传 `color_dark` 时自动复用 `color`。 |
 | `icon` | `dict` | 图标描述，支持两种形式：`{"kind": "builtin", "key": "..."}` 或 `{"kind": "url", "path": "/...", "etag": "..."}`。 |
 | `legacy` | `bool` | **新助手一律填 `False`**。只有历史三家为 `True`。 |
@@ -244,8 +246,10 @@ Windows 打包配置 `deploy/windows/AgentRemote.spec` 使用 `collect_submodule
    - 电脑端 `notify.py` 通过 `/api/notify/push` 向中转发送 `running`、`step`、`waiting`、`done`、`failed`、`snapshot` 事件。
    - 中转侧需要完成第 3 步升级部署（取消 `relay_push.py` 里的三家白名单，新增 `push_phone_protocol` 和 `push_agent_meta` 表，按每部手机登记的 `protocol` 过滤 `min_protocol > 1` 的助手），让老手机收不到新助手的通知和灵动岛，新手机按推送携带的名称/颜色/图标展示。
 3. **发布顺序要求**：
-   - 在中转完成上述一次性部署之前，电脑端 `notify.py` 保持原有推送字段不变（不发 `app_name` / `min_protocol`）。
-   - 以后接入第一个正式新助手（`legacy=False`）前，先确认中转已部署第 3 步；之后每再加一家新助手，**只需发布 Windows 电脑端新版，中转和已支持协议 2 的手机端都不用再改代码或重新发版**。
+   - 三家老助手的推送字段不变：`notify.py` 发给中转的 `running`、`step`、`waiting`、`done`、`failed` 事件和 `snapshot` 项，一个字节都不加。
+   - 新助手（说明书 `legacy=False`）的事件带 `app_name`、`app_color`、`app_icon`、`min_protocol` 四个字段，`snapshot` 里这家助手的那几项也带；新手机按推送携带的名称、颜色、图标展示。新中转没收到 `app_name` 时，名字会退回成助手 ID。
+   - 还没升级的中转会安静地丢掉新助手的事件和快照项，不影响三家老助手；所以老中转还在时发新助手的通知也不会出错，但这条通知到不了手机，不是显示成助手 ID。
+   - 以后每再加一家新助手，**只需发布 Windows 电脑端新版，中转和已支持协议 2 的手机端都不用再改代码或重新发版**。
 
 ---
 

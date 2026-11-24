@@ -22,8 +22,8 @@ from agents.base import UnknownAgent
 
 
 class ManifestTests(unittest.TestCase):
-    def test_the_three_production_agents_in_manifest_order(self):
-        self.assertEqual([a.id for a in registry.load()], ["codex", "claude", "deepseek"])
+    def test_the_four_production_agents_in_manifest_order(self):
+        self.assertEqual([a.id for a in registry.load()], ["codex", "claude", "deepseek", "antigravity"])
 
     def test_every_manifest_has_the_same_shape(self):
         for agent in registry.load():
@@ -45,8 +45,11 @@ class ManifestTests(unittest.TestCase):
         orders = [a.manifest()["order"] for a in registry.load()]
         self.assertEqual(len(orders), len(set(orders)))
 
-    def test_three_are_legacy_and_the_test_assistant_is_not(self):
-        self.assertTrue(all(a.manifest()["legacy"] for a in registry.load()))
+    def test_the_three_legacy_agents_and_the_read_only_antigravity(self):
+        manifests = {a.id: a.manifest() for a in registry.load()}
+        self.assertTrue(all(manifests[app]["legacy"] for app in ("codex", "claude", "deepseek")))
+        self.assertFalse(manifests["antigravity"]["legacy"])
+        self.assertEqual(manifests["antigravity"]["min_protocol"], 2)
         self.assertFalse(registry.load(include_testing=True)[-1].manifest()["legacy"])
 
     def test_unknown_id_is_refused(self):
@@ -63,7 +66,7 @@ class ManifestTests(unittest.TestCase):
         with patch.object(codex_apptools, "detect_route", side_effect=_boom), \
              patch.object(codex_hooks, "read_trust_status", side_effect=_boom):
             loaded = registry.load()
-            self.assertEqual([a.id for a in loaded], ["codex", "claude", "deepseek"])
+            self.assertEqual([a.id for a in loaded], ["codex", "claude", "deepseek", "antigravity"])
             manifest = registry.get("codex").manifest()
             self.assertIn("mode", manifest["capabilities"]["settings"])
 
@@ -147,7 +150,7 @@ class TestingAgentTests(unittest.TestCase):
         with patch.object(registry.sys, "frozen", True, create=True), \
              patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
             self.assertNotIn("testing", registry.ids())
-            self.assertEqual(registry.ids(), ["codex", "claude", "deepseek"])
+            self.assertEqual(registry.ids(), ["codex", "claude", "deepseek", "antigravity"])
 
     def test_catalog_reads_and_count(self):
         agent = self.agent()
@@ -481,16 +484,18 @@ class TestingAgentEndToEndTests(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertTrue(body["available"])
 
-    def test_testing_agent_full_chain_to_relay_push_without_extra_fields(self):
+    def test_testing_agent_full_chain_to_relay_push_carries_only_a_new_assistants_name(self):
         """Step 7 full chain: /api/agents -> /api/chats -> actions -> relay push events.
 
         Verifies:
         - Production registry excludes testing and never emits testing push events.
         - Protocol 1 hides testing everywhere.
         - Protocol 2 flows through /api/agents, /api/chats, send/stop and notify.Notifier -> relay.
-        - Relay push events carry zero new fields (no app_name, min_protocol, app_color, app_icon).
+        - A legacy=False assistant's events carry app_name / app_color / app_icon / min_protocol.
+        - The three legacy assistants' events carry none of them, byte for byte as before.
         """
-        forbidden_fields = {"app_name", "min_protocol", "app_color", "app_icon"}
+        new_fields = {"app_name", "app_color", "app_icon", "min_protocol"}
+        expected_new = {"app_name": "测试助手", "app_color": "#7C3AED", "app_icon": "generic", "min_protocol": 2}
         now_box = [time.time()]
 
         def make_notifier():
@@ -574,14 +579,19 @@ class TestingAgentEndToEndTests(unittest.TestCase):
             self.assertTrue(any(ev.get("kind") == "done" and ev.get("app") == "testing"
                                 and ev.get("chat") == "test-running" for ev in all_events))
 
-            # Verify zero new fields (app_name / min_protocol / app_color / app_icon) added to any push event
+            # A legacy=False assistant's events carry its name, colour, icon and protocol; so does a snapshot item.
             for ev in all_events:
-                self.assertEqual(forbidden_fields & set(ev.keys()), set(), f"unexpected fields in push event: {ev}")
-                for snap_item in ev.get("items", []):
-                    self.assertEqual(
-                        forbidden_fields & set(snap_item.keys()), set(),
-                        f"unexpected fields in snapshot item: {snap_item}",
-                    )
+                if ev.get("kind") == "snapshot":
+                    for snap_item in ev.get("items", []):
+                        self.assertEqual({key: snap_item.get(key) for key in new_fields}, expected_new)
+                    continue
+                self.assertEqual({key: ev.get(key) for key in new_fields}, expected_new, ev)
+            # The three legacy assistants never get any of these fields: a relay that predates them is unchanged.
+            for app in ("codex", "claude", "deepseek"):
+                self.assertEqual(notify.agent_push_fields(app), {})
+            self.assertEqual(notify.agent_push_fields("antigravity"),
+                             {"app_name": "Antigravity", "app_color": "#4285F4",
+                              "app_icon": "generic", "min_protocol": 2})
 
 
 if __name__ == "__main__":
