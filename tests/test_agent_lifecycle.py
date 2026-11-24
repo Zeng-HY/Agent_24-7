@@ -4,10 +4,15 @@ Everything here is fake: no real named pipes, no real settings files, no desktop
 """
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -192,6 +197,52 @@ class CodexServiceTests(unittest.TestCase):
         self.assertTrue(manager.kw["enabled"])
         self.assertEqual(manager.kw["verified_version"], "1.2.3")
         self.assertIs(manager.kw["log"], log.write)
+
+
+class HookAddressTests(unittest.TestCase):
+    def setUp(self):
+        self.server = remote.Server(("127.0.0.1", 0), remote.Handler)
+        self.server.cfg = {"claude_hook_key": "k3y", "token": "tok", "bind": "127.0.0.1"}
+        self.server.claude_hooks = None
+        self.server.verbose = False
+        self.server.log = remote.Log()
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self._stop)
+
+    def _stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def post(self, path, body, headers=None):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.server.server_address[1]}{path}", json.dumps(body).encode(),
+            {"Content-Type": "application/json", **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    def test_claude_hook_keeps_the_same_status_and_bytes(self):
+        reply = {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
+        with patch.object(claude_hooks, "dispatch", return_value=reply):
+            self.assertEqual(
+                self.post(claude_hooks.PATH + "k3y", {"tool_name": "Bash"}),
+                (200, json.dumps(reply, ensure_ascii=False).encode()))
+
+    def test_claude_hook_refuses_a_bad_key_or_tailscale_header(self):
+        self.assertEqual(self.post(claude_hooks.PATH + "wrong", {})[0], 403)
+        self.assertEqual(self.post(claude_hooks.PATH + "k3y", {}, {"Tailscale-User-Login": "a@b.c"})[0], 403)
+
+    def test_a_fake_agent_receives_a_request_on_its_own_hook_path(self):
+        with patch.dict(os.environ, {"TELEPLY_TEST_AGENTS": "1"}):
+            code, body = self.post("/api/testing/hook/abc", {"hello": "world"})
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body),
+                         {"ok": True, "path": "/api/testing/hook/abc", "body": {"hello": "world"}})
+
+    def test_other_paths_still_go_through_the_token(self):
+        self.assertEqual(self.post("/api/nothing", {})[0], 403)
 
 
 if __name__ == "__main__":

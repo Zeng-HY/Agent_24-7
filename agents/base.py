@@ -106,6 +106,10 @@ class Agent:
     """The questions one assistant answers. Unimplemented ones raise Unsupported."""
 
     id = ""
+    # Prefix of the HTTP address this assistant's own hooks arrive on; "" means it has none.
+    # remote._post() checks this before the phone token, so the hook's own key must be checked in
+    # handle_hook().
+    hook_path: str = ""
     # Reading hooks the shared transcript reader asks about.
     home_list = False            # appears in chats.list_conversations (the old home list)
     requires_running_state = True  # a transcript without a running flag cannot be called idle
@@ -521,6 +525,13 @@ class Agent:
 
     def on_server_close(self, server) -> None:
         pass
+
+    def handle_hook(self, handler, path: str) -> None:
+        """A request under this assistant's hook_path, before the phone token is checked.
+
+        The default answer is 404; an assistant with a hook address checks its own key in its
+        handler and then calls this."""
+        handler._json({"error": "没有这个地址"}, 404)
 
     def resolve_aliases(self, server, tid: str, ids: list[str]) -> dict:
         return {}

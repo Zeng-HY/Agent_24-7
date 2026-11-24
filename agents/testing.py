@@ -127,6 +127,7 @@ def reset() -> None:
 
 class TestingAgent(Agent):
     id = "testing"
+    hook_path = "/api/testing/hook/"
     notify_uses_file = False
     new_requires_desktop = False
     new_managed = False
@@ -201,6 +202,10 @@ class TestingAgent(Agent):
 
     def detect(self) -> bool:
         return True
+
+    def handle_hook(self, handler, path: str) -> None:
+        """Prove the registry routes a hook address to the assistant that declared it."""
+        handler._json({"ok": True, "path": path, "body": handler._body()})
 
     def catalog_entries(self, limit: int) -> list[dict]:
         return self.catalog(limit=limit)["items"]

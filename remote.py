@@ -65,7 +65,6 @@ import chat_history
 import chat_projects  # the sidebar: conversations by app and project, as the desktop apps group them
 import live_events
 import claude_control
-import claude_hooks  # Claude Code asks this service first before a question card or a permission prompt (10-27)
 import composer_references
 import composer_commands  # what the box offers after / and how a typed command runs (0.6.6)
 import pc_files  # files on this computer attached by their path, and files sent up from the phone (10-20)
@@ -234,6 +233,15 @@ class Log:
 
 
 # ---------------------------------------------------------------- http
+
+
+def hook_agent(path: str):
+    """The assistant whose hook address this path belongs to, or None (decided by the registry, not by name)."""
+    for agent in agent_registry.load():
+        prefix = getattr(agent, "hook_path", "")
+        if prefix and path.startswith(prefix):
+            return agent
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -423,26 +431,6 @@ class Handler(BaseHTTPRequestHandler):
             return bool(ready) and not self.connection.recv(1, socket.MSG_PEEK)
         except OSError:
             return True
-
-    def _claude_hook(self, path: str) -> None:
-        """A hook request from Claude Code on this computer (claude_hooks.py). Let in by the hook key in the address
-        (remote_config.json "claude_hook_key"), never through Tailscale; held open until the phone answers. Anything
-        else than a decision is an empty 200, which Claude Code reads as no decision."""
-        key = str(self.cfg.get("claude_hook_key") or "")
-        if not key or not secrets.compare_digest(path[len(claude_hooks.PATH):], key) or self.headers.get("Tailscale-User-Login"):
-            self.close_connection = True
-            self._json({"error": "口令不对"}, 403)
-            return
-        body = self._body()
-        reply = None
-        if not body.get("_bad"):
-            try:
-                peer = self.client_address[1] if isinstance(getattr(self, "client_address", None), tuple) and len(self.client_address) >= 2 else 0
-                port = self.server.server_address[1] if isinstance(getattr(self.server, "server_address", None), tuple) and len(self.server.server_address) >= 2 else 0
-                reply = claude_hooks.dispatch(self.server.claude_hooks, body, self._hung_up, peer, port)  # type: ignore[attr-defined]
-            except Exception:
-                self.log.write(traceback.format_exc())
-        self._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
 
     # -- GET
 
@@ -715,8 +703,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self) -> None:
         path = urlsplit(self.path).path
-        if path.startswith(claude_hooks.PATH):  # Claude Code itself, with the hook key instead of the token
-            self._claude_hook(path)
+        hook = hook_agent(path)  # an assistant's own hook address, with its key instead of the phone token
+        if hook is not None:
+            if self.headers.get("Tailscale-User-Login"):
+                self.close_connection = True
+                self._json({"error": "口令不对"}, 403)
+                return
+            hook.handle_hook(self, path)
             return
         if not self._authorized():
             self.close_connection = True
