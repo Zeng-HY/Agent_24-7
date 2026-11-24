@@ -140,4 +140,43 @@ class ChatControllerTest {
         assertEquals(0,api.sends)
         val recovered=ChatController(backgroundScope,store);recovered.bind(key,api,true,false) {};runCurrent();assertEquals("中文草稿",recovered.state.value.draft)
     }
+    /**
+     * 第二批 A2：有 capabilities_now 时计划模式看此刻 settings 里有没有 mode；老电脑（没有这个字段）保持 Codex 布局的旧规则。
+     */
+    @Test fun planModeFollowsCapabilitiesNow()=runTest {
+        // 这一版电脑的说明书里有 mode（第一批把 mode 写进了 Codex 的 settings）。
+        val codex=parseAgentInfo(JSONObject("""{"id":"codex","name":{"zh":"Codex","en":"Codex"},"legacy":true,"capabilities":{"list":true,"read":true,"stop":true,"approve":true,"answer":true,"settings":["model","effort","mode"],"send_modes":["send","steer","queue"]},"ui":{"card_layout":"codex.v1"}}"""))!!
+        val catalog=AgentCatalogSnapshot.fromServer(listOf(codex))
+        for((state,expected) in listOf(
+            """{"available":true,"running":false,"settings":{"model":"x"},"capabilities_now":{"settings":["model","effort"]}}""" to 0,
+            """{"available":true,"running":false,"settings":{"model":"x"},"capabilities_now":{"settings":["model","mode"]}}""" to 1,
+            """{"available":true,"running":false,"settings":{"model":"x"}}""" to 1,
+        )) {
+            var sends=0
+            val api=object:TestApi() {
+                override suspend fun control(device:String,chat:String,fresh:Boolean)=parseControl(JSONObject(state))
+                override fun events(device:String,chat:String)=flow<LiveFrame> { awaitCancellation() }
+                override suspend fun command(device:String,route:String,body:JSONObject):JSONObject { sends++;return JSONObject().put("request_id",body.string("request_id")) }
+            }
+            val c=ChatController(backgroundScope,DraftStore());c.catalog={ catalog }
+            c.bind(key,api,true,false) {};runCurrent()
+            c.executePlan("plan-1");runCurrent()
+            assertEquals(state,expected,sends)
+        }
+    }
+    /** 第二批 A1：此刻能力说不能发时（send_modes 为空），发送不发出去，草稿留着。 */
+    @Test fun sendingStopsWhenCapabilitiesNowTakesEverySendModeAway()=runTest {
+        var sends=0
+        val api=object:TestApi() {
+            override suspend fun control(device:String,chat:String,fresh:Boolean)=parseControl(JSONObject(
+                """{"available":true,"running":false,"capabilities_now":{"send_modes":[]},"capability_notes":{"send":"这台电脑的 Codex 没在运行"}}"""))
+            override fun events(device:String,chat:String)=flow<LiveFrame> { awaitCancellation() }
+            override suspend fun command(device:String,route:String,body:JSONObject):JSONObject { sends++;return JSONObject() }
+        }
+        val c=ChatController(backgroundScope,DraftStore());c.catalog={ AgentCatalogSnapshot.Builtin }
+        c.bind(key,api,true,false) {};runCurrent()
+        c.edit("发不出去");runCurrent();c.send();runCurrent()
+        assertEquals(0,sends);assertEquals("发不出去",c.state.value.draft)
+        assertEquals("这台电脑的 Codex 没在运行",capsNote(JSONObject(c.state.value.control.raw),"send"))
+    }
 }

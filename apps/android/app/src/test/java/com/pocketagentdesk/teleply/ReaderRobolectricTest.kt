@@ -146,5 +146,60 @@ class ReaderRobolectricTest:ReaderUiScenarios() {
         compose.onNodeWithText("服务地址").assertDoesNotExist()
         capture("08-native-login-jvm")
     }
+    /** 第二批 A3：通用布局的助手在时间线里画批准卡和提问卡，点按钮后按统一地址答复，请求体正确。 */
+    @Test fun genericCardsAnswerThroughTheUnifiedRoute() {
+        launch();fixtureList();openChat("测试对话 B","test-waiting")
+        compose.waitUntil(10000) { vm.composer.state.value.control.raw.contains("approval-7") }
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        // 横条用卡片的 title（A3），卡片里也有同一句。
+        compose.onNodeWithContentDescription("测试助手想运行命令，去处理").assertExists()
+        compose.onAllNodesWithText("测试助手想运行命令").onFirst().assertExists()
+        compose.onNodeWithText("npm test",substring=true).assertExists()
+        compose.onNodeWithText("允许一次").performScrollTo().performClick()
+        compose.waitUntil(10000) { vm.fixtureWorld!!.testingAnswers.size==1 }
+        val approval=vm.fixtureWorld!!.testingAnswers.first()
+        org.junit.Assert.assertEquals("approval-7",approval.string("question_id"))
+        org.junit.Assert.assertEquals("[\"允许一次\"]",approval.getJSONObject("answers").getJSONArray("decision").toString())
+        org.junit.Assert.assertFalse(approval.has("answer_revision"))   // 空的原样不带
+        compose.waitUntil(10000) { !vm.composer.state.value.control.raw.contains("approval-7") }
+        // 提问卡：两题，第一题单选带手写、第二题多选；选完点「提交」。
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.onNodeWithText("选方案").assertExists()
+        compose.onNodeWithContentDescription("选择方案 A").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("选择a.py").performScrollTo().performClick()
+        compose.onNodeWithText("提交").performScrollTo().performClick()
+        compose.waitUntil(10000) { vm.fixtureWorld!!.testingAnswers.size==2 }
+        val question=vm.fixtureWorld!!.testingAnswers[1]
+        org.junit.Assert.assertEquals("question-8",question.string("question_id"))
+        org.junit.Assert.assertEquals("rev-1",question.string("answer_revision"))
+        org.junit.Assert.assertEquals("[\"方案 A\"]",question.getJSONObject("answers").getJSONArray("plan").toString())
+        org.junit.Assert.assertEquals("[\"a.py\"]",question.getJSONObject("answers").getJSONArray("files").toString())
+    }
+    /** 第二批 A3：此刻不能批准时按钮灰掉，原因写在卡片里。 */
+    @Test fun aGenericApprovalThatCannotHappenNowIsGreyedWithTheReason() {
+        launch();fixtureList()
+        vm.fixtureWorld!!.testingApproveBlocked="这台电脑的测试助手暂时不能批准"
+        openChat("测试对话 B","test-waiting")
+        compose.waitUntil(10000) { vm.composer.state.value.control.raw.contains("approval-7") }
+        compose.onNodeWithTag("messages").performScrollToKey("interactions")
+        compose.onNodeWithText("允许一次").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText("这台电脑的测试助手暂时不能批准").assertExists()
+    }
+    /** 第二批 A2：控制态里有 capabilities_now 时，Codex 输入区的模式按钮只看此刻 settings。 */
+    @Test fun codexModeChipFollowsCapabilitiesNow() {
+        launch();fixtureList()
+        vm.fixtureWorld!!.codexCapsNow=org.json.JSONObject("""{"settings":["model","effort"],"send_modes":["send","steer","queue"]}""")
+        openChat("原生阅读示例","demo")
+        compose.waitUntil(10000) { vm.composer.state.value.control.available }
+        compose.onNodeWithContentDescription("模式：普通执行").assertDoesNotExist()
+        compose.onNodeWithContentDescription("模型：测试模型 · 中").assertExists()
+        // 没有 capabilities_now 的老电脑：模式按钮照旧（Codex 布局）。
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitUntil(10000) { vm.state.value.screen==Screen.Chats && !vm.state.value.busy }
+        vm.fixtureWorld!!.codexCapsNow=null
+        openChat("原生阅读示例","demo")
+        compose.waitUntil(10000) { vm.composer.state.value.control.available }
+        compose.onNodeWithContentDescription("模式：普通执行").assertExists()
+    }
 
 }

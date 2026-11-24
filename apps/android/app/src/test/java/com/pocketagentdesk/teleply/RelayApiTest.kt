@@ -3,6 +3,7 @@ package com.pocketagentdesk.teleply
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.first
+import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -200,6 +201,27 @@ class RelayApiTest {
         assertEquals("中文 & ?",request.requestUrl!!.queryParameter("query"))
         assertEquals("__Host-ar_account=synthetic",request.getHeader("Cookie"))
         assertTrue(page.hasMore);assertEquals("p2",page.cursor)
+    }
+    /**
+     * 第二批 A3：通用卡片的答复走 /api/agents/&lt;id&gt;/answer，请求体原样（卡片 id、答案、revision），
+     * 结果里的中文文字带回来。
+     */
+    @Test fun genericCardAnswersGoToTheUnifiedAnswerRouteUnchanged()=runTest {
+        val testing=api.forSource("testing")
+        response("""{"ok":true,"accepted":true,"text":"已允许本次操作"}""")
+        val body=JSONObject().put("id","test-waiting").put("request_id","r1").put("question_id","approval-7")
+            .put("answers",JSONObject().put("decision",JSONArray(listOf("允许一次")))).put("answer_revision","rev-1")
+        val result=testing.command(device,"answer",body)
+        val request=server.takeRequest()
+        assertEquals("POST",request.method)
+        assertEquals("/d/$device/api/agents/testing/answer",request.requestUrl!!.encodedPath)
+        val sent=JSONObject(request.body.readUtf8())
+        assertEquals("test-waiting",sent.string("id"))
+        assertEquals("r1",sent.string("request_id"))
+        assertEquals("approval-7",sent.string("question_id"))
+        assertEquals("rev-1",sent.string("answer_revision"))
+        assertEquals("[\"允许一次\"]",sent.getJSONObject("answers").getJSONArray("decision").toString())
+        assertEquals("已允许本次操作",result.string("text"))
     }
     @Test fun historyRetainsIdentityAndOpaqueCursor()=runTest {
         response("""{"id":"x/y","app":"codex","messages":[{"id":"m1","role":"assistant","text":"原文\n","truncated":true,"length":7545}],"next_cursor":"m1","has_more":true,"has_newer":true}""")
