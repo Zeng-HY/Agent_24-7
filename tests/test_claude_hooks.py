@@ -544,6 +544,152 @@ class FastEventsAndProcessTests(unittest.TestCase):
             server.server_close()
 
 
+class FastEventCacheTests(unittest.TestCase):
+    """The fast path must not scan the TCP table, the process list or every Claude session on every step."""
+    EXE_OK = r"C:\Users\demo\AppData\Roaming\Claude\claude-code\2.1.330\claude.exe"
+    EXE_GONE = ""
+
+    def _bridge(self, *, tcp_owner=None, process_exe=None, list_processes=None):
+        mono = [100.0]
+        calls = {"tcp": [], "exe": []}
+
+        def tcp(cp, sp):
+            calls["tcp"].append((cp, sp))
+            return tcp_owner(cp, sp) if tcp_owner else 4200
+
+        def exe(pid):
+            calls["exe"].append(pid)
+            return process_exe(pid) if process_exe else self.EXE_OK
+
+        bridge = claude_hooks.Bridge(
+            log=lambda text: None,
+            sessions=lambda: [ITEM],
+            clock=lambda: mono[0],
+            wall_clock=lambda: 1767323000.0 + mono[0],
+            tcp_owner=tcp,
+            process_exe=exe,
+            list_processes=list_processes or (lambda: []),
+            kill_process=lambda pid: True,
+            current_user="tester",
+            server_port=8765,
+        )
+        bridge.refresh_sessions()
+        return bridge, calls, mono
+
+    def _event(self, name, *, port=50101, tool=None):
+        payload = {"hook_event_name": name, "session_id": "cli-1"}
+        if tool:
+            payload.update(tool_name=tool, tool_use_id="t1")
+        return self._bridge_handle(payload, port)
+
+    def _bridge_handle(self, payload, port):
+        # set by each test to the current bridge
+        return self.bridge.handle(payload, client_port=port)
+
+    def test_pid_looked_up_once_then_rechecked_every_60_seconds(self):
+        self.bridge, calls, mono = self._bridge()
+        self._event("UserPromptSubmit")
+        self.assertEqual((len(calls["tcp"]), len(calls["exe"])), (1, 1))
+        # every later step within the minute: two dict lookups, no TCP scan and no process query
+        self._event("PreToolUse", tool="Bash")
+        self._event("PostToolUse", tool="Bash")
+        self._event("PreToolUse", tool="Edit")
+        self.assertEqual((len(calls["tcp"]), len(calls["exe"])), (1, 1))
+        mono[0] += 59.9
+        self._event("PostToolUse", port=50102)  # a new connection and still inside the minute: no query
+        self.assertEqual((len(calls["tcp"]), len(calls["exe"])), (1, 1))
+        mono[0] += 1.0  # past the minute: the PID's path is checked again, but not the TCP table
+        self._event("PreToolUse", tool="Read")
+        self.assertEqual((len(calls["tcp"]), len(calls["exe"])), (1, 2))
+        self.assertEqual(self.bridge.session_pid("cli-1"), 4200)
+
+    def test_a_pid_that_is_gone_is_dropped_and_looked_up_from_the_connection_again(self):
+        self.bridge, calls, mono = self._bridge()
+        self._event("UserPromptSubmit")
+        self.assertEqual((len(calls["tcp"]), len(calls["exe"])), (1, 1))
+        mono[0] += 61
+        self.bridge._process_exe = lambda pid: (calls["exe"].append(pid), self.EXE_GONE)[1]
+        self._event("PreToolUse", tool="Read", port=50109)
+        # recheck fails; the connection's port is read from the table, then its path is checked and fails too
+        self.assertEqual(len(calls["tcp"]), 2)
+        self.assertEqual(calls["tcp"][-1], (50109, 8765))
+        self.assertEqual(calls["exe"], [4200, 4200, 4200])
+        self.assertEqual(self.bridge.session_pid("cli-1"), 0)
+
+    def test_request_stop_checks_the_process_again_before_ending_a_command(self):
+        self.bridge, calls, mono = self._bridge()
+        self._event("UserPromptSubmit")
+        self._event("PreToolUse", tool="Bash")
+        self.assertEqual(len(calls["exe"]), 1)  # the first event recognised the process
+        mono[0] += 1  # well within the minute: only request_stop must check again
+        self.bridge.request_stop("local_test")
+        self.assertEqual(len(calls["exe"]), 2)
+        self.assertEqual(len(calls["tcp"]), 1)
+        self.assertTrue(self.bridge.conv_state("local_test")["stop_requested"])
+
+    def test_unknown_session_backs_off_per_session_from_2_to_60_seconds(self):
+        mono = [0.0]
+        started = []
+
+        class FakeThread:
+            def __init__(self, target=None, **kwargs):
+                self.target = target
+
+            def start(self):
+                started.append(self.target)
+
+        bridge = claude_hooks.Bridge(
+            log=lambda text: None, sessions=lambda: [], clock=lambda: mono[0],
+            wall_clock=lambda: 1767323000.0 + mono[0], server_port=8765,
+        )
+
+        def miss(at, session="terminal"):
+            bridge._refreshing = False  # pretend the last background scan finished
+            mono[0] = at
+            self.assertIsNone(bridge.handle({"hook_event_name": "PreToolUse", "session_id": session, "tool_name": "Read"}))
+            return len(started)
+
+        with patch.object(claude_hooks.threading, "Thread", FakeThread):
+            self.assertEqual(miss(0.0), 1)      # first miss: look at once
+            self.assertEqual(miss(1.9), 1)      # then wait 2 s
+            self.assertEqual(miss(2.0), 2)      # 2 s: look again, then wait 4 s
+            self.assertEqual(miss(5.9), 2)
+            self.assertEqual(miss(6.0), 3)      # 4 s later: 8 s
+            self.assertEqual(miss(13.9), 3)
+            self.assertEqual(miss(14.0), 4)     # 8 s later: 16 s
+            self.assertEqual(miss(29.9), 4)
+            self.assertEqual(miss(30.0), 5)     # 16 s later: 32 s
+            self.assertEqual(miss(61.9), 5)
+            self.assertEqual(miss(62.0), 6)     # 32 s later: 60 s (the cap)
+            self.assertEqual(miss(121.9), 6)
+            self.assertEqual(miss(122.0), 7)    # still 60 s, not more
+            self.assertEqual(bridge._unknown_delay["terminal"], 60)
+            # a second terminal session has its own backoff: it is not delayed by the first one's minute
+            self.assertEqual(miss(122.1, "another-terminal"), 8)
+
+    def test_a_known_session_clears_its_backoff(self):
+        mono = [0.0]
+        started = []
+
+        class FakeThread:
+            def __init__(self, target=None, **kwargs):
+                self.target = target
+
+            def start(self):
+                started.append(self.target)
+
+        bridge = claude_hooks.Bridge(log=lambda text: None, sessions=lambda: [ITEM], clock=lambda: mono[0],
+                                     wall_clock=lambda: 1767323000.0, server_port=8765)
+        bridge._refreshing = False
+        with patch.object(claude_hooks.threading, "Thread", FakeThread):
+            self.assertIsNone(bridge._lookup_fast_session("cli-1"))
+            self.assertIn("cli-1", bridge._unknown_retry_at)
+        bridge.register_session(ITEM)
+        self.assertNotIn("cli-1", bridge._unknown_retry_at)
+        self.assertNotIn("cli-1", bridge._unknown_delay)
+        self.assertEqual(bridge._lookup_fast_session("cli-1")["id"], "local_test")
+
+
 class KillSessionCommandTests(unittest.TestCase):
     CLAUDE_EXE = r"C:\Users\tester\AppData\Roaming\Claude\claude-code\2.1.330\claude.exe"
 

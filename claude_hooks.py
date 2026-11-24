@@ -59,7 +59,9 @@ STOP_DENY_REASON = "用户在手机上按了停止（遥应）。不要再调用
 
 COMMAND_TOOLS = frozenset({"Bash", "PowerShell"})
 COMMAND_SHELLS = frozenset({"bash.exe", "sh.exe", "pwsh.exe", "powershell.exe", "cmd.exe"})
-SESSION_CACHE_RETRY_SECONDS = 2.0
+SESSION_BACKOFF_START = 2.0   # seconds before an unknown session is looked for again: 2, 4, 8 … 60
+SESSION_BACKOFF_MAX = 60.0
+PID_RECHECK_SECONDS = 60.0    # how long a verified conversation claude.exe is trusted before its path is checked again
 
 
 def settings_file() -> Path:
@@ -450,9 +452,13 @@ class Bridge:
 
         # Fast-path caches and live state
         self._session_map: dict[str, dict] = {}   # cliSessionId -> desktop item
-        self._last_refresh = -SESSION_CACHE_RETRY_SECONDS
+        self._last_refresh = 0.0
         self._refreshing = False
+        self._unknown_retry_at: dict[str, float] = {}   # session_id -> when to look for it again
+        self._unknown_delay: dict[str, float] = {}
         self._session_pids: dict[str, int] = {}   # cliSessionId -> verified claude.exe PID
+        self._pid_checked_at: dict[str, float] = {}  # cliSessionId -> when that PID was last verified
+        self._session_ports: dict[str, int] = {}     # cliSessionId -> its hook connection's client port
         self._states: dict[str, _ConvState] = {}  # desktop conv id -> _ConvState
 
     # -- session cache
@@ -468,6 +474,9 @@ class Bridge:
         with self.lock:
             if mapping is not None:
                 self._session_map.update(mapping)
+                for session_id in mapping:  # found: its backoff is over
+                    self._unknown_retry_at.pop(session_id, None)
+                    self._unknown_delay.pop(session_id, None)
             self._last_refresh = now
             self._refreshing = False
 
@@ -476,9 +485,15 @@ class Bridge:
         if isinstance(item, dict) and item.get("cli") and item.get("id"):
             with self.lock:
                 self._session_map[str(item["cli"])] = item
+                self._unknown_retry_at.pop(str(item["cli"]), None)
+                self._unknown_delay.pop(str(item["cli"]), None)
 
     def _lookup_fast_session(self, session_id: str) -> dict | None:
-        """O(1) lookup of desktop conversation by session_id. On miss, schedules a background refresh and returns None."""
+        """O(1) lookup of desktop conversation by session_id.
+
+        A miss schedules one background refresh, then backs off for this session alone: 2, 4, 8 … 60 seconds. A
+        conversation opened while hooks were already running becomes known a few seconds after its first message;
+        a terminal session that this desktop never lists is not rescanned on every one of its steps."""
         if not session_id:
             return None
         start_refresh = False
@@ -486,35 +501,82 @@ class Bridge:
         with self.lock:
             item = self._session_map.get(session_id)
             if item is not None:
+                self._unknown_retry_at.pop(session_id, None)
+                self._unknown_delay.pop(session_id, None)
                 return item
-            if not self._refreshing and (now - self._last_refresh) >= SESSION_CACHE_RETRY_SECONDS:
+            due = self._unknown_retry_at.get(session_id)
+            if due is not None and now < due:
+                return None
+            delay = self._unknown_delay.get(session_id)
+            delay = SESSION_BACKOFF_START if delay is None else min(delay * 2, SESSION_BACKOFF_MAX)
+            self._unknown_delay[session_id] = delay
+            self._unknown_retry_at[session_id] = now + delay
+            if len(self._unknown_retry_at) > 512:  # old sessions that never answer: forget the stale ones
+                for stale in [s for s, at in self._unknown_retry_at.items() if at < now - 3600]:
+                    self._unknown_retry_at.pop(stale, None)
+                    self._unknown_delay.pop(stale, None)
+            if not self._refreshing:
                 self._refreshing = True
                 start_refresh = True
         if start_refresh:
             threading.Thread(target=self.refresh_sessions, name="claude-hook-sessions", daemon=True).start()
         return None
 
-    def _note_connection_pid(self, session_id: str, tid: str, client_port: int, server_port: int) -> int:
-        port = server_port or self.server_port
-        if not session_id or client_port <= 0 or port <= 0:
-            return 0
-        try:
-            pid = int(self._tcp_owner(client_port, port) or 0)
-        except Exception:
-            pid = 0
+    def _process_is_claude(self, pid: int) -> bool:
+        """Whether [pid] is still a Claude Code claude.exe (its path is checked, never its command line)."""
         if pid <= 0:
-            return 0
+            return False
         try:
             exe = str(self._process_exe(pid) or "")
         except Exception:
             exe = ""
-        if not is_claude_code_exe(exe):
-            return 0
+        return is_claude_code_exe(exe)
+
+    def _sync_state_pid(self, session_id: str, tid: str, pid: int) -> None:
+        if not tid:
+            return
         with self.lock:
-            self._session_pids[session_id] = pid
             st = self._states.get(tid)
-            if st is not None:
-                st.pid = pid
+            if st is not None and (pid > 0 or st.session_id == session_id):
+                st.pid = max(int(pid or 0), 0)
+
+    def _note_connection_pid(self, session_id: str, tid: str, client_port: int, server_port: int,
+                             force: bool = False) -> int:
+        """The claude.exe PID for this conversation, from the hook connection's client port.
+
+        Once known it is trusted for PID_RECHECK_SECONDS: every event then costs two dict lookups, not a TCP table
+        scan plus a process-path query. After that the PID's path is checked again (and the TCP table only if it is
+        gone). force: request_stop checks again right before it ends a command."""
+        if not session_id:
+            return 0
+        port = int(server_port or self.server_port or 0)
+        now = self.clock()
+        with self.lock:
+            known = int(self._session_pids.get(session_id, 0) or 0)
+            checked = self._pid_checked_at.get(session_id, 0.0)
+            if client_port > 0:
+                self._session_ports[session_id] = int(client_port)
+            else:
+                client_port = int(self._session_ports.get(session_id, 0) or 0)
+        if known > 0 and not force and now - checked < PID_RECHECK_SECONDS:
+            self._sync_state_pid(session_id, tid, known)
+            return known
+        pid = known if known > 0 and self._process_is_claude(known) else 0
+        if not pid and client_port > 0 and port > 0:
+            try:
+                candidate = int(self._tcp_owner(client_port, port) or 0)
+            except Exception:
+                candidate = 0
+            if candidate > 0 and self._process_is_claude(candidate):
+                pid = candidate
+        with self.lock:
+            if pid > 0:
+                self._session_pids[session_id] = pid
+                self._pid_checked_at[session_id] = now
+            else:
+                self._session_pids.pop(session_id, None)
+                self._pid_checked_at.pop(session_id, None)
+        self._sync_state_pid(session_id, tid, pid)
         return pid
 
     def session_pid(self, session_id: str) -> int:
@@ -723,7 +785,8 @@ class Bridge:
     # -- the phone's side
 
     def request_stop(self, tid: str) -> dict[str, Any]:
-        """Mark [tid] to stop on the next PreToolUse and immediately kill any running Bash/PowerShell child tree."""
+        """Mark [tid] to stop on the next PreToolUse and immediately kill any running Bash/PowerShell child tree.
+        The conversation's claude.exe is verified once more right before a command tree is ended (design 3.4)."""
         with self.lock:
             st = self._states.get(tid)
             if st is None:
@@ -732,8 +795,16 @@ class Bridge:
             st.stop_requested = True
             tool_name = st.tool_name
             step_started_at = st.step_started_at
-            pid = st.pid or self._session_pids.get(st.session_id, 0)
+            session_id = st.session_id
+            pid = st.pid or self._session_pids.get(session_id, 0)
+            client_port = self._session_ports.get(session_id, 0)
         killed: list[int] = []
+        if tool_name in COMMAND_TOOLS and step_started_at > 0 and pid > 0:
+            # check again that it is still this conversation's claude.exe, and that its path is still Claude Code's
+            if session_id:
+                pid = self._note_connection_pid(session_id, tid, client_port, self.server_port, force=True)
+            elif not self._process_is_claude(pid):
+                pid = 0
         if tool_name in COMMAND_TOOLS and pid > 0 and step_started_at > 0:
             killed = kill_session_command(
                 pid,
