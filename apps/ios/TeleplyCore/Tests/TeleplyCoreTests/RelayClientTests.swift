@@ -11,7 +11,10 @@ struct RelayClientTests {
         #expect(sent.count == 1)
         #expect(sent.first?.method == .get)
         #expect(sent.first?.url.absoluteString == "https://app.pocketagentdesk.com/account/config")
-        #expect(sent.first?.headers == ["Accept": "application/json"])
+        // 第一段 (handoff 3.1): every request to the service carries the protocol handshake, this one included.
+        #expect(sent.first?.headers == ["Accept": "application/json",
+                                        "X-Teleply-Protocol": "2",
+                                        "X-Teleply-Client": TeleplyClient.tag])
         #expect(sent.first?.body == nil)
         #expect(sent.first?.deadline == 40)
     }

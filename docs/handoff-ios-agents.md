@@ -92,7 +92,7 @@
 
 ### 3.5 通知和锁屏卡片（第三段）
 
-- `Push.swift:14/24`：catalog 里有就接受。推送 `teleply` 里的可选 `n`、`k`、`m` 读出来，存进 `IslandAttributes` 等处新加的**可选**字段（如 `sourceName`、`tint`、`markKey`），老字段不动。
+- `Push.swift:14/24`：只要 `isValidAgentId(app)` 就接受，不要求在 catalog 里。冷启动点通知时说明书还没取到；而中转只会推电脑发过的助手。推送 `teleply` 里的可选 `n`、`k`、`m` 读出来，存进 `IslandAttributes` 等处新加的**可选**字段（如 `sourceName`、`tint`、`markKey`），老字段不动。
 - `IslandWords.appName`、`IslandPalette`、`IslandMark` 先用这些可选字段，没有就用 catalog，再没有就通用。三家的岛一点不变。
 - 点新助手的通知，能打开它的对话。
 
@@ -145,15 +145,15 @@
 
 ### 第一段
 
-**结论**：3.1、3.2、3.3 做完了。请求带协议 2；iOS 从 `/api/agents` 取说明书并按电脑缓存；名单、颜色、图标、筛选、侧栏、归档页、新建面板都由 catalog 来；不认识的助手不再整页报错，用通用样式显示、只能读。三家（Codex / Claude / DeepSeek）的请求、路由、控制态、卡片、按钮、颜色、图标、顺序一行没动。演示里加了假助手 `testing`（只在演示和测试里）。本机没有 Swift，**没编译、没跑测试**，全部等 Codemagic。
+**结论**：3.1、3.2、3.3 做完了。请求带协议 2；iOS 从 `/api/agents` 取说明书并按电脑缓存；名单、颜色、图标、筛选、侧栏、归档页、新建面板都由 catalog 来；不认识的助手不再整页报错，用通用样式显示、只能读。三家（Codex / Claude / DeepSeek）的请求、路由、控制态、卡片、按钮、颜色、图标、顺序一行没动。演示里加了假助手 `testing`，默认关着，要用 `-TeleplyDemoAgents` 打开（审后改的，见下）。本机没有 Swift，**没编译、没跑测试**，全部等 Codemagic。
 
-**改了的文件**（都在 `apps/ios/` 下；29 改 3 新）
+**改了的文件**（都在 `apps/ios/` 下；第一段合计 31 改 3 新——审后这轮又改了 9 个文件，其中 `AppModelTests`、`DemoServiceTests` 已被改回原样，净变化里看不到）
 
 - 新 `TeleplyCore/Sources/TeleplyModel/AgentCatalog.swift`：说明书解析（`AgentInfo` / `AgentName` / `AgentIcon` / `AgentCapabilities` / `AgentParams` / `AgentUi`，一项坏了只丢那一项）、`isValidAgentId`、`#RRGGBB`/`#AARRGGBB` 校验、`AgentCatalogSnapshot`（内置三家 + `fromServer` 把三家的名字/颜色/图标/`legacy`/`min_protocol` 换回 App 自己的，只用电脑给的 `order` 和能力位；电脑漏了三家也补上）、`AgentCatalog`（按设备 id 缓存，`Mutex` 保证 Sendable，404 存三家，版本号变了才算要重取）。
-- `TeleplyModel/Relay.swift`：`TeleplyClient`（`protocolVersion = 2`、`ios/<版本>` tag）；`signed()` 给每个请求加 `X-Teleply-Protocol` / `X-Teleply-Client`（上传、下载、图片、实时流都走它，因此全都带上）；`agents(device:)`（404 返回 nil）；`chatList` 的来源校验改成 `isValidAgentId`（不认识的合法 id 不再报错）；`treeApps(_:catalog:)` 保留树里所有合法 id、按 catalog 排序、不认识的排最后；实时流另带 `protocol=2&client=…` 查询参数（和安卓一样两样都带）。
+- `TeleplyModel/Relay.swift`：`TeleplyClient`（`protocolVersion = 2`、`ios/<版本>` tag，另有纯函数 `tag(_:)` 给测试拼法）；`signed()` 给每个请求加 `X-Teleply-Protocol` / `X-Teleply-Client`（上传、下载、图片、实时流都走它，因此全都带上）；`agents(device:)`（404 返回 nil）；`chatList` 的来源校验改成 `isValidAgentId`（不认识的合法 id 不再报错）；`treeApps(_:catalog:)` 保留树里所有合法 id、按 catalog 排序、不认识的排最后；实时流另带 `protocol=2&client=…` 查询参数（和安卓一样两样都带）。
 - `TeleplyModel/Models.swift`：删掉 `sourceOrder`（11 处引用全部换掉，编译器会盯住漏掉的）。
 - `TeleplyModel/Labels.swift`：`sourceName(_:catalog:)` 从 catalog 取名字（默认 `.current`），不认识的用 id。
-- `TeleplyModel/Push.swift`：推送登记 body 加 `"protocol": "2"`；`PushTarget` 改成「当前 catalog 里有就接受」（否则新助手的通知点了打不开；冷启动点通知仍可能丢，见第三段）。
+- `TeleplyModel/Push.swift`：推送登记 body 加 `"protocol": "2"`；`PushTarget` 只要 `isValidAgentId(app)` 就接受（审后改：不要求在 catalog 里，冷启动点通知时说明书还没取到）。
 - `TeleplyModel/NewJob.swift`：`newJobDock(_:catalog:)`。
 - `TeleplyState/AppModel.swift`：新增 `catalog`（观察得到）和 `agentCatalog` 缓存、`agentsTask`；`live()` 里同步当前电脑的 catalog；`settle()` 等它；`clearAll` 清掉；`logout` 忘掉缓存；`checkStatus` 的版本号变了就重取。
 - `TeleplyState/AppModel+List.swift`：新增 `syncCatalog` / `refreshAgents` / `serverVersion` / `applyCatalog`（先读 `/api/status` 的 `ui_version`，同版本不重取，取到之后才记版本，失败下次再问）；`retrySources` 一起强取；`loadTree` 用 `treeApps(tree, catalog:)`；`cachedSources` 只要求合法 id；`listDisplay` 接受任何合法来源。
@@ -162,44 +162,58 @@
 - `TeleplyState/ChatModel.swift`：**第一段的临时处理**——`legacy=false` 的新助手不读老地址的控制态、不轮询，只读记录和实时流（否则 404 会在能读的页面上挂一条「连接中断」）。第二段接统一地址时删掉。
 - `Teleply/Design/Palette.swift`、`Marks.swift`、`List/ChatRows.swift`、`List/ChatListView.swift`、`Drawer/DrawerView.swift`、`Settings/ArchivedView.swift`、`Chat/ChatSheets.swift`、`Chat/ConversationView.swift`、`NewChat/NewChatSheet.swift`、`NewChat/NewJobViews.swift`：三家颜色/图标/名字原样；其他助手用说明书的颜色（深色值也取，格式不对用中性灰 `#6B7280`/`#9CA3AF`）和通用图标；名字、筛选、徽标、侧栏、归档分组、新建面板都从自己的 `model.catalog` 取（这样 catalog 到了会立刻重画，不会先显示 id 很久）。
 - `Teleply/App/TeleplyApp.swift`：启动时把 `AppVersion.short` 交给 `TeleplyClient`。
+- `Teleply/App/LaunchOptions.swift`：加 `-TeleplyDemoAgents`（只在调试版生效，照 `-TeleplyDemoSite` 的写法），打开时才给演示的测试电脑 A 加假助手。
 - `TeleplyIsland/IslandWords.swift`、`TeleplyIslandWidget/IslandViews.swift`：`else` 不再默认当 Codex（名字用 id、颜色用 `muted`、图标用通用符号），三家的岛不变。Island 是单独 target，读不到 catalog，名字和颜色等第三段随推送带（`n/k/m`）。
-- 演示（`TeleplyDemo/DemoWorld.swift`、`DemoTransport.swift`）：`/api/agents` 路由；`demoData` 里四份说明书（`testing` 照 `agents/testing.py`，颜色 `#7C3AED`/`#A78BFA`）；测试电脑 A 多 `testing` 的两行（`test-running`、`test-waiting`）和它的会话内容、侧栏分组；B 仍然没有 Claude，网站演示仍然只有 DeepSeek。
-- 测试：新 `AgentCatalogTests.swift`（解析、坏项、三家不变、三家永远在、未知 id 通用样式、颜色格式、名字回退、id 规则、按电脑缓存与版本、treeApps 排序）、新 `AgentHandshakeTests.swift`（每个请求带协议头与 tag、实时流的查询参数、推送登记带 `protocol`、未知助手行不整页报错、catalog 到达模型、老电脑 404、取不到、新助手会话能打开能读）。
+- 演示（`TeleplyDemo/DemoWorld.swift`、`DemoTransport.swift`）：`/api/agents` 路由；`demoData` 里四份说明书（`testing` 照 `agents/testing.py`，颜色 `#7C3AED`/`#A78BFA`）；`DemoWorld(testingAgent: true)`（或 `-TeleplyDemoAgents`）才把 `testing` 的两行（`test-running`、`test-waiting`）、会话内容、侧栏分组给它——**关着时列表行、树、`/api/agents` 和 0.8.0 完全一样**；B 仍然没有 Claude，网站演示仍然只有 DeepSeek。
+- 测试：新 `AgentCatalogTests.swift`（解析、坏项、三家不变、三家永远在、未知 id 通用样式、颜色格式、名字回退、id 规则、按电脑缓存与版本、treeApps 排序）、新 `AgentHandshakeTests.swift`（tag 拼法、每个请求带协议头与 tag、实时流的查询参数、推送登记带 `protocol`、未知助手行不整页报错、演示默认三家/打开后四家、catalog 到达模型、老电脑 404、取不到、新助手会话能打开能读）。
 
 **自己怎么核对的**（本机没有 Swift，没有编译）
 
 1. 逐个文件读过改动（可选值、`switch` 穷尽、`public` 够不够、`@MainActor`/`Sendable`）：`AgentCatalogSnapshot.current` 用 `nonisolated(unsafe)`（和 `Labels.language` 同一手法），`AgentCatalog` 是 `final class … Sendable` + `Mutex`，AppModel 侧全在 MainActor 上；TeleplyDemo/TeleplyIsland 没有反向依赖 TeleplyModel 的新类型。
-2. 写了一个括号/引号配对检查脚本（`F:\Android-Dev\work\20261101-island-duplicates\20261125-ios-agents\balance_check.py`），对 32 个改动文件跑过，0 处不平衡；它不认 Swift 语法，只能抓漏括号。
+2. 写了一个括号/引号配对检查脚本（`F:\Android-Dev\work\20261101-island-duplicates\20261125-ios-agents\balance_check.py`），对改动的 Swift 文件逐个跑过（第一轮 32 个、审后 10 个），0 处不平衡；它不认 Swift 语法，只能抓漏括号。
 3. 用 `ConvertFrom-Json` 把这次新写的所有 JSON 字面量（4 份演示说明书、测试里的假说明书、坏项）都验过是合法 JSON。
 4. 对着安卓 1.0.10 的 `AgentInfo.kt` / `AgentCatalog.kt` / `RelayApi.kt` 逐条比：能力位默认值（list/read 缺省 true）、`params` 下限、三家兜底、`fromServer` 归一化、`treeApps` 排序规则、404 语义。
 5. 对着中转 0b3f8d7 核了协议登记：只有 `POST /account/push/register` 存 `protocol`（按通知令牌），灵动岛的 `/account/push/activity`、`/start-token` 不存，也不按手机协议过滤；所以 3.1 只改推送登记，岛的两个登记地址**故意没加** `protocol`。
+6. 审后按用户要求把测试里可能被握手改影响的「整体相等」比较全查了一遍：正则查 `headers ==`、`absoluteString ==`、`.url ==`、`queryItems ==`、`queryValue(`，逐个看。结果：只有 `RelayClientTests:15` 的整份请求头会变（已改）；`RelayClientTests:13` 和 `ServiceOriginTests:37/39` 是 `/account/config` 和 `ServiceOrigin.url()` 的网址，没有新增查询参数；`IslandTests:180/182` 是 `IslandURL` 的网址；`queryValue(` 的三处（`AppModelTests:333`、`AttachmentTests:229`、`RelayReadTests:174`）都是按名字取值；其余是 `url.path` 列表或 `contains`。**没有别的会因为握手而变。**
 
-**现有测试改了 4 处**（按设计 3.7 允许的那一类，逐条原因）
+**现有测试的改动**（逐条原因；第 1、2 处审后已撤销）
 
-1. `AppModelTests.signingInListsTheComputersAndEnteringOneShowsItsList`：`knownApps` 从三家变成四家——演示里给测试电脑 A 加了假助手 `testing`（3.7 要求）。
-2. `DemoServiceTests.computerBHasNoClaudeAnywhere`：A 的 `treeApps` 多了 `testing`（同上）。
+1. ~~`AppModelTests.signingInListsTheComputersAndEnteringOneShowsItsList`：`knownApps` 从三家变成四家~~——审后已改回三家（演示的假助手改成要打开才有，见「审后修改」2）。
+2. ~~`DemoServiceTests.computerBHasNoClaudeAnywhere`：A 的 `treeApps` 多了 `testing`~~——同上，已改回三家。
 3. `RelayReadTests.mixedListKeepsEachRowsSourceAndAcceptsAnyLegalOne`（原 `…RefusesUnknownOnes`）：`app:"other"` 的行不再报错（3.2 明说「碰到 catalog 里没有的行不整页报错」），改成断言它被接受、而 `app:"Mail!"` 这种非法 id 仍然拒绝。
 4. `RelayReadTests.accountListsComputersAndTreeNamesItsApps`：`treeApps` 现在保留树里的合法 id（3.2 明说「保留树里所有合法 id」），期望值从 `["codex","deepseek"]` 变成 `["codex","deepseek","other"]`。
+5. （审后第 5 处）`RelayClientTests.getAsksForJSONWithoutOriginOrBody`：整份请求头从 `["Accept": "application/json"]` 改成再加上 `X-Teleply-Protocol: "2"` 和 `X-Teleply-Client: TeleplyClient.tag`。原因：`signed()` 给每个请求都带握手（安卓 `RelayApi.request()` 也一样），这条断言写的正是整份请求头，所以确实要跟着变。
+6. （审后）`PushTests.aNotificationNamesAComputerAnAppAndAConversationOnly`：`a: "mail"` 从「拒绝」改成「接受」，另加 `a: "9mail"` 仍然拒绝。原因：3.5 改成只要合法 id 就收。
+7. （审后）`IslandFlowTests.tappingTheIslandOpensOnlyItsOwnAddress`：同上，`a=mail` 现在接受，另加 `a=9mail` 拒绝。
 
 **最可能编不过的地方**（Codemagic 报错时按这里对）
 
 - `TeleplyCore/Sources/TeleplyModel/AgentCatalog.swift:306`（`nonisolated(unsafe) public static var current`）、`434`（`Mutex<[String: Entry]>`；`import Synchronization` 的 `withLock` 返回值/`inout` 闭包）、`68`（`AgentCapabilities` 的属性名 `open`/`new`/`delete` 当变量名）。
+- `TeleplyCore/Sources/TeleplyModel/Relay.swift:18`（`public static var tag` 和 `public static func tag(_ version:)` 同名重载；审后加的）。
 - `TeleplyState/AppModel+List.swift:240-262`（`Task { [weak self] … }` 在 TeleplyState 默认 MainActor 隔离下捕获 `client`、`await self.serverVersion`；`known` 在闭包外读）。
 - `TeleplyState/AppModel.swift:362`（`settle()` 里 `while let running = agentsTask` 和 `agentsTask == running` 的 `Task` 相等比较）、`732`（`live()` 开头调 `syncCatalog`）。
 - `TeleplyState/ChatModel.swift:221`（`AgentCatalogSnapshot.current.isLegacy(key.app)` 在非 UI 的 ChatModel 里读全局）。
 - `Teleply/Design/Palette.swift:79`（`UIColor(dynamicProvider:)` + `Color(uiColor:)`，这个文件新加了 `import UIKit`）。
 - `Teleply/Design/Marks.swift:19`、`TeleplyIslandWidget/IslandViews.swift:61`（`Image(systemName: "sparkles").resizable()` 放在 `Group` + `.frame` 里）。
-- `TeleplyCore/Sources/TeleplyModel/Push.swift:118`（body 里混用 `.string(...)` 和字符串字面量的 `[String: JSONValue]`）。
-- 测试：`AgentHandshakeTests.swift:8`（`struct LegacyAgentsTransport: RelayTransport` 只转发 `send`，AppModel 里的会话仍会去要实时流）、`35`（`AppServices` 参数顺序）、`56`（`client.agents(device:)` 在 `WatchedTransport` 上）、`59-61`（`upload`/`download` 走 `WatchedTransport`）。`AgentCatalogTests.swift:15`（`DemoData.parse` 在别 target，靠 `@testable import TeleplyDemo`）。
+- `TeleplyCore/Sources/TeleplyModel/Push.swift:118`（body 里混用 `.string(...)` 和字符串字面量的 `[String: JSONValue]`）；`16`（`PushTarget` 的 guard 换成 `isValidAgentId`，审后改）。
+- 演示：`TeleplyDemo/DemoWorld.swift:95`（`init(site:testingAgent:)` 两个默认参数）、`112`（`apps(of:)` 里 `var apps = …` 再 append）；`Teleply/App/LaunchOptions.swift:29/68`（`agentsDemo` 是 `nonisolated`，`DemoHolder` 也是 nonisolated）。
+- 测试：`AgentHandshakeTests.swift:8`（`struct LegacyAgentsTransport: RelayTransport` 只转发 `send`，AppModel 里的会话仍会去要实时流）、`43`（`AppServices` 参数顺序）、`67`（`client.agents(device:)` 在 `WatchedTransport` 上）、`74-76`（`upload`/`download` 走 `WatchedTransport`）。`AgentCatalogTests.swift:15`（`DemoData.parse` 在别 target，靠 `@testable import TeleplyDemo`）。`RelayClientTests.swift:17`（整份请求头的期望值比的是 `TeleplyClient.tag`）。
 
 **没做的 / 要用户看的**
 
 - 第二、三段：统一地址的控制态/发送/停止/批准/回答/新建/上传、`capabilities_now`、推送 `n/k/m`、`UsageView` 按能力分组、`README` 的 0.9.0 草稿一节——都还没做。
 - 第一段的临时现状（第二段接上就好）：新助手页面上输入区是灰的、没有说明为什么不能发；新建面板能选到新助手，但创建会走老地址报 404；灵动岛/锁屏卡片里新助手的名字先显示 id、颜色用中性灰。
-- 点新助手的通知：App 已经开着、进过这台电脑时能打开；冷启动点通知时 catalog 还没取到，可能被丢掉（第三段处理）。
-- 演示里 `testing` 用的是全能力（照 `agents/testing.py`），所以演示中它可以被归档；真电脑的能力位以说明书为准。
+- 点新助手的通知：只要 id 合法就接受（审后改），冷启动点通知也能打开；卡片上的名字和颜色仍要等第三段的推送字段。
+- 演示里 `testing` 默认不出现；要看它，用调试版启动参数 `-TeleplyDemoAgents`（或 `DemoWorld(testingAgent: true)`）。打开后 `testing` 用的是全能力（照 `agents/testing.py`），所以演示中它可以被归档；真电脑的能力位以说明书为准。
 - 没推送、没跑 Codemagic、没碰 TestFlight/苹果后台/中转/密钥；版本号没动（`project.yml` 仍是 0.8.0）。
 - 要用户在 Codemagic 上先看 compile：`swift test` 里新增的两套测试 + 老测试；再看 App 编译（`Palette`/`Marks`/新增 catalog 依赖只在 App 里编到）。
+
+### 审后修改（第一段，2026-11-25，按用户审阅意见）
+
+1. **一个现有测试会挂（第 5 处改动）**：`RelayClientTests.getAsksForJSONWithoutOriginOrBody` 原来要求 `/account/config` 的请求头正好是 `["Accept": "application/json"]`，而 `signed()` 现在给每个请求都加两个头。改法：保留「所有请求都带握手」（安卓 `RelayApi.request()` 也一样），把这条断言改成完整请求头 `["Accept": "application/json", "X-Teleply-Protocol": "2", "X-Teleply-Client": TeleplyClient.tag]`。
+2. **测试不再改全局版本号**：`TeleplyClient` 新增纯函数 `tag(_ version:)`，测试里单独断言 `tag("0.9.0") == "ios/0.9.0"`、`tag("") == "ios/?"`；`everyRequestCarriesProtocolTwoAndTheAppTag` 不再设置 `TeleplyClient.version`，只断言请求头等于当时的 `TeleplyClient.tag`（Swift Testing 默认并行跑，改全局会让别的测试读到）。
+3. **演示数据恢复原样**：`DemoWorld.apps(of:)` 回到原来的写法（测试电脑 B 两家、A 和离线那台三家），假助手 `testing` 改成要打开才有——`DemoWorld(testingAgent: true)`，外加只在调试版生效的启动参数 `-TeleplyDemoAgents`（照 `-TeleplyDemoSite` 的写法，`DemoHolder.fresh()` 里传）。关着时列表行、树、`/api/agents`（只回三家说明书）和 0.8.0 逐张一样；打开后 A 才有 `testing` 的两行、会话、侧栏分组和第四份说明书。`AppModelTests`、`DemoServiceTests` 里第一版改过的两处期望已改回原样；新测试改用 `DemoWorld(testingAgent: true)`，并加了「演示默认只回三家、打开后回四家」的测试。
+4. **`PushTarget.init?` 改成只要 `isValidAgentId(app)` 就接受**：不要求在 `AgentCatalogSnapshot.current` 里，冷启动点通知时说明书还没取到；中转只会推电脑发过的助手。这样也少了一处在主线程外读全局。设计 3.5 第一条已按这个意思改。`PushTests`、`IslandFlowTests` 里原来断言 `a: "mail"` 被拒绝的两处，改成接受 `mail`、拒绝 `9mail`（第 6、7 处改动）。
 
 ### 第二段
 

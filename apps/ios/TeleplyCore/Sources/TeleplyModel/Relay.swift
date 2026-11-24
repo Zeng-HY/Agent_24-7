@@ -10,9 +10,12 @@ public enum HTTPMethod: String, Sendable {
 /// protocol 1, as before: the three old assistants answer exactly as they did.
 public enum TeleplyClient {
     public static let protocolVersion = 2
-    /// "0.9.0": set once at launch from the app's own bundle (LaunchOptions sets it); tests keep it empty.
+    /// "0.9.0": set once at launch from the app's own bundle (TeleplyApp sets it); tests leave it empty.
     nonisolated(unsafe) public static var version = ""
-    public static var tag: String { "ios/" + (version.isEmpty ? "?" : version) }
+    /// The tag every request carries now, e.g. "ios/0.9.0" ("ios/?" when no version was set, as in tests).
+    public static var tag: String { TeleplyClient.tag(version) }
+    /// The same for any version, so the spelling can be tested without touching the value the app runs with.
+    public static func tag(_ version: String) -> String { "ios/" + (version.isEmpty ? "?" : version) }
 }
 
 /// One call to the relay, built here and carried out by a RelayTransport (URLSession on the phone, a fake in

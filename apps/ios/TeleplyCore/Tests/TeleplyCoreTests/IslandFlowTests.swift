@@ -97,7 +97,9 @@ struct IslandFlowTests {
         #expect(PushTarget(url: URL(string: "https://example.com/open?d=\(device)&a=claude&c=x")!) == nil)
         #expect(PushTarget(url: URL(string: "teleply://list?d=\(device)")!) == nil)
         #expect(PushTarget(url: URL(string: "teleply://open?d=bad&a=claude&c=x")!) == nil)
-        #expect(PushTarget(url: URL(string: "teleply://open?d=\(device)&a=mail&c=x")!) == nil)
+        // 第一段 (handoff 3.5): a legal assistant id is enough to open the conversation; only an illegal one is refused.
+        #expect(PushTarget(url: URL(string: "teleply://open?d=\(device)&a=mail&c=x")!) != nil)
+        #expect(PushTarget(url: URL(string: "teleply://open?d=\(device)&a=9mail&c=x")!) == nil)
     }
 
     @Test func theDemoStartsAnIslandOnThisPhoneOnly() async {

@@ -9,11 +9,11 @@ public struct PushTarget: Sendable, Equatable {
     public let app: String
     public let chat: String
 
-    /// Nil unless the computer is a 32-hex id, the app one this catalog knows (the three always are) and the
-    /// conversation a short id.
+    /// Nil unless the computer is a 32-hex id, the app a legal assistant id and the conversation a short id. Any
+    /// legal id is taken, not only ones this catalog already knows: a tap can open the app before `/api/agents` was
+    /// read, and the relay only sends ids a computer has reported (handoff 3.5).
     public init?(device: String, app: String, chat: String) {
-        guard (try? RelayClient.devicePath(device, "")) != nil, AgentCatalogSnapshot.current.contains(app),
-              !chat.isEmpty, chat.count <= 200 else {
+        guard (try? RelayClient.devicePath(device, "")) != nil, isValidAgentId(app), !chat.isEmpty, chat.count <= 200 else {
             return nil
         }
         self.device = device

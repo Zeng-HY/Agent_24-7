@@ -140,8 +140,7 @@ struct AppModelTests {
         await model.settle()
         #expect(model.screen == .chats && model.device?.id == a)
         #expect(model.chats.first?.title == "原生阅读示例" && model.listCursor == "page2")
-        // 3.7: the demo computer A carries the fake testing helper too (in the demo and the tests only).
-        #expect(model.knownApps == ["codex", "claude", "deepseek", "testing"])
+        #expect(model.knownApps == ["codex", "claude", "deepseek"])
     }
 
     @Test func aComputerWithoutClaudeDropsAClaudeFilter() async {

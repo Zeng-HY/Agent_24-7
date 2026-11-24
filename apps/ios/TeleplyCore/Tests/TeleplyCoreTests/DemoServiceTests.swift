@@ -28,8 +28,7 @@ struct DemoServiceTests {
         let rows = try await demo.chatList(device: b, app: "all")
         #expect(!rows.items.contains { $0.app == "claude" })
         #expect(treeApps(try await demo.projects(device: b)) == ["codex", "deepseek"])
-        // 3.7: 测试电脑 A also has the fake testing helper, so the demo can show a new assistant.
-        #expect(treeApps(try await demo.projects(device: a)) == ["codex", "claude", "deepseek", "testing"])
+        #expect(treeApps(try await demo.projects(device: a)) == ["codex", "claude", "deepseek"])
     }
 
     /// The website's pictures come from this demo, and the site names no other AI product (user 11-04).

@@ -68,7 +68,10 @@ struct PushRequestTests {
         #expect(PushTarget(userInfo: info) == PushTarget(device: device, app: "codex", chat: "x1"))
         #expect(PushTarget(userInfo: ["aps": ["alert": ["title": "遥应", "body": "试推一条：通知是好的"]]]) == nil)
         #expect(PushTarget(userInfo: ["teleply": ["d": "not-a-computer", "a": "codex", "c": "x1"]]) == nil)
-        #expect(PushTarget(userInfo: ["teleply": ["d": device, "a": "mail", "c": "x1"]]) == nil)
+        // 第一段 (handoff 3.5): any legal assistant id is taken, even one this catalog has not read yet — a tap can
+        // open the app before /api/agents answered, and the relay only sends ids a computer reported.
+        #expect(PushTarget(userInfo: ["teleply": ["d": device, "a": "mail", "c": "x1"]]) != nil)
+        #expect(PushTarget(userInfo: ["teleply": ["d": device, "a": "9mail", "c": "x1"]]) == nil)
         #expect(PushTarget(device: device, app: "claude", chat: "") == nil)
     }
 

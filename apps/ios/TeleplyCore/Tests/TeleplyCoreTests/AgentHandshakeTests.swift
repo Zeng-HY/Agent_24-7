@@ -6,7 +6,11 @@ import TeleplyModel
 
 /// The demo computer as an older one: no `/api/agents` at all (404), everything else as the demo answers.
 struct LegacyAgentsTransport: RelayTransport {
-    let demo = DemoTransport()
+    let demo: DemoTransport
+
+    init(world: DemoWorld = DemoWorld()) {
+        demo = DemoTransport(world: world)
+    }
 
     func send(_ request: RelayRequest) async throws -> RelayResponse {
         if request.url.path.hasSuffix("/api/agents") { return .json(#"{"error":"没有这个地址"}"#, status: 404) }
@@ -17,7 +21,11 @@ struct LegacyAgentsTransport: RelayTransport {
 /// The demo computer with its manifest list out of reach: the call fails, so nothing new is kept.
 struct NoAgentsTransport: RelayTransport {
     struct Unreachable: Error {}
-    let demo = DemoTransport()
+    let demo: DemoTransport
+
+    init(world: DemoWorld = DemoWorld()) {
+        demo = DemoTransport(world: world)
+    }
 
     func send(_ request: RelayRequest) async throws -> RelayResponse {
         if request.url.path.hasSuffix("/api/agents") { throw Unreachable() }
@@ -46,9 +54,16 @@ struct AgentHandshakeTests {
         await model.settle()
     }
 
+    @Test func theClientTagNamesTheAppVersion() {
+        // A pure spelling test: the value the app runs with is never changed here (Swift Testing runs tests in
+        // parallel, so another test would see it).
+        #expect(TeleplyClient.tag("0.9.0") == "ios/0.9.0")
+        #expect(TeleplyClient.tag("") == "ios/?")
+        #expect(TeleplyClient.protocolVersion == 2)
+        #expect(TeleplyClient.tag == TeleplyClient.tag(TeleplyClient.version))
+    }
+
     @Test func everyRequestCarriesProtocolTwoAndTheAppTag() async throws {
-        TeleplyClient.version = "0.9.0"
-        defer { TeleplyClient.version = "" }
         let watched = WatchedTransport(world: DemoWorld())
         let client = RelayClient(origin: .default, transport: watched, vault: MemoryCookieVault())
         try await client.login(name: "x", password: "y")
@@ -64,7 +79,7 @@ struct AgentHandshakeTests {
         #expect(sent.count >= 6)
         for request in sent {
             #expect(request.headers["X-Teleply-Protocol"] == "2")
-            #expect(request.headers["X-Teleply-Client"] == "ios/0.9.0")
+            #expect(request.headers["X-Teleply-Client"] == TeleplyClient.tag)
         }
         // The push registration tells the relay which assistants this phone can show (docs §九).
         let register = try #require(sent.last { $0.url.path == "/account/push/register" })
@@ -97,8 +112,20 @@ struct AgentHandshakeTests {
         await #expect(throws: ReadFailure("来源应用不匹配")) { try await broken.chatList(device: device, app: "all") }
     }
 
+    @Test func theDemosManifestListIsTheThreeUnlessTheTestingHelperIsOn() async throws {
+        let plain = RelayClient(origin: .default, transport: DemoTransport(world: DemoWorld()))
+        #expect(try await plain.agents(device: device)?.map(\.id) == ["codex", "claude", "deepseek"])
+        // The fake helper is opt-in, so the demo's rows and tree stay exactly as 0.8.0 had them (the screenshots).
+        let rows = try await plain.chatList(device: device, app: "all")
+        #expect(!rows.items.contains { $0.app == "testing" })
+        let withHelper = RelayClient(origin: .default, transport: DemoTransport(world: DemoWorld(testingAgent: true)))
+        #expect(try await withHelper.agents(device: device)?.map(\.id) == ["codex", "claude", "deepseek", "testing"])
+        let withRows = try await withHelper.chatList(device: device, app: "all")
+        #expect(withRows.items.contains { $0.app == "testing" })
+    }
+
     @Test func theCatalogComesFromTheComputerWithTheFakeTestingHelper() async {
-        let model = makeModel(DemoTransport(world: DemoWorld()))
+        let model = makeModel(DemoTransport(world: DemoWorld(testingAgent: true)))
         await enterA(model)
         #expect(model.catalog.order == ["codex", "claude", "deepseek", "testing"])
         #expect(model.catalog.fromServer)
@@ -108,12 +135,20 @@ struct AgentHandshakeTests {
         #expect(Labels.sourceName("testing", catalog: model.catalog) == "测试助手")
     }
 
+    @Test func thePlainDemoCatalogIsTheThreeFromTheComputer() async {
+        let model = makeModel(DemoTransport(world: DemoWorld()))
+        await enterA(model)
+        #expect(model.catalog.order == ["codex", "claude", "deepseek"])
+        #expect(model.catalog.fromServer)
+        #expect(model.knownApps == ["codex", "claude", "deepseek"])
+    }
+
     @Test func anOlderComputerKeepsTheThreeBuiltinsAndTheListStillLoads() async {
-        let model = makeModel(LegacyAgentsTransport())
+        // Its tree still names the fake helper, but the computer has no manifest list at all.
+        let model = makeModel(LegacyAgentsTransport(world: DemoWorld(testingAgent: true)))
         await enterA(model)
         #expect(model.catalog.order == ["codex", "claude", "deepseek"])
         #expect(!model.catalog.fromServer)
-        // The chips come from the computer's tree, which still names the fake testing helper; only its manifest is gone.
         #expect(model.knownApps?.contains("testing") == true)
         #expect(model.chats.first?.title == "原生阅读示例")
         #expect(model.error == nil && model.treeError == nil)
@@ -128,7 +163,7 @@ struct AgentHandshakeTests {
     }
 
     @Test func aNewAssistantsConversationOpensAndReads() async throws {
-        let model = makeModel(DemoTransport(world: DemoWorld()))
+        let model = makeModel(DemoTransport(world: DemoWorld(testingAgent: true)))
         await enterA(model)
         let row = try #require(model.chats.first { $0.app == "testing" && $0.id == "test-waiting" })
         model.open(row)

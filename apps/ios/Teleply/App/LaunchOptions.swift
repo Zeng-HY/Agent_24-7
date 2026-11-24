@@ -24,6 +24,10 @@ enum LaunchOptions {
     /// -TeleplyDemoSite: the local demo as the website's pictures show it, DeepSeek alone (DemoSite).
     nonisolated static var siteShots: Bool { flag("-TeleplyDemoSite") }
 
+    /// -TeleplyDemoAgents: the local demo also offers the fake `testing` helper (handoff 3.7), so the new assistant can
+    /// be looked at without a real computer. Off by default: the screenshots' rows and tree stay as 0.8.0 had them.
+    nonisolated static var agentsDemo: Bool { flag("-TeleplyDemoAgents") }
+
     /// -TeleplyForceNarrow: the iPad screenshot tour's narrow window, drawn as a phone-wide column on an iPad.
     static var forceNarrow: Bool { flag("-TeleplyForceNarrow") }
 
@@ -59,7 +63,9 @@ nonisolated final class DemoHolder: Sendable {
     private let chosen = Mutex(DemoNetwork.instant)
 
     func fresh() -> any RelayTransport {
-        let next = LaunchOptions.siteShots ? DemoWorld(site: DemoSite(english: LaunchOptions.english)) : DemoWorld()
+        let next = LaunchOptions.siteShots
+            ? DemoWorld(site: DemoSite(english: LaunchOptions.english))
+            : DemoWorld(testingAgent: LaunchOptions.agentsDemo)
         next.network = chosen.withLock { $0 }
         world.withLock { $0 = next }
         return DemoTransport(world: next)

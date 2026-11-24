@@ -88,9 +88,13 @@ public final class DemoWorld: Sendable {
 
     /// Set for the website's pictures: this computer has DeepSeek alone, in the phone's language (DemoSite).
     public let site: DemoSite?
+    /// The fake `testing` helper is offered too (handoff 3.7): off by default, so the demo answers exactly as it did
+    /// before the 0.9.0 work (the screenshot tour's rows and tree must match 0.8.0). `-TeleplyDemoAgents` turns it on.
+    public let testingAgent: Bool
 
-    public init(site: DemoSite? = nil) {
+    public init(site: DemoSite? = nil, testingAgent: Bool = false) {
         self.site = site
+        self.testingAgent = testingAgent
         if let site { state.withLock { $0.devices = site.computers } }
     }
 
@@ -103,12 +107,13 @@ public final class DemoWorld: Sendable {
         state.withLock { $0.stateReads }
     }
 
-    /// The desktop apps each demo computer has; 测试电脑 B has no Claude, like a tester's (Android 0.9.1), and the
-    /// fake testing helper lives on 测试电脑 A only (handoff 3.7): it exists in the demo and the tests, never in the
-    /// real app's own list.
+    /// The desktop apps each demo computer has; 测试电脑 B has no Claude, like a tester's (Android 0.9.1). 测试电脑 A
+    /// also has the fake testing helper when this demo was opened with it (handoff 3.7); otherwise exactly as before.
     func apps(of device: String) -> [String] {
         if site != nil { return ["deepseek"] }
-        return device == DemoData.computerA ? DemoData.allApps : ["codex", "deepseek"]
+        var apps = device == DemoData.computerB ? ["codex", "deepseek"] : DemoData.builtinApps
+        if testingAgent, device == DemoData.computerA { apps.append("testing") }
+        return apps
     }
 
     /// Times the demo computer opened Claude's menus on its desktop (only 刷新 or a first read should).
@@ -657,8 +662,8 @@ enum DemoData {
     static let computerA = String(repeating: "a", count: 32)
     static let computerB = String(repeating: "b", count: 32)
     static let offline = String(repeating: "c", count: 32)
-    /// Every assistant 测试电脑 A has, the fake testing helper included (handoff 3.7).
-    static let allApps = ["codex", "claude", "deepseek", "testing"]
+    /// The three assistants the demo computers have always had (A and the offline one); B has no Claude.
+    static let builtinApps = ["codex", "claude", "deepseek"]
     static let ungrouped = "ungrouped"
     static let taskTitle = "整理发布清单"
 
@@ -687,7 +692,8 @@ enum DemoData {
         row("claude-demo", "Claude 选项示例", "测试项目", "请选择发布说明的格式", "waiting", "claude", now - 600_000),
         row("deepseek-demo", "DeepSeek 批准示例", "固定测试项目", "批准这一步吗？", "waiting", "deepseek", now - 1_800_000,
             ["children": .array(Array(deepseekChildren.prefix(2))), "child_count": 3, "child_running": 1]),
-        // 3.7: the fake testing helper's two rows, as agents/testing.py has them (0.9.0: while it runs, and waiting).
+        // 3.7: the fake testing helper's two rows, as agents/testing.py has them (while it runs, and waiting). They are
+        // listed only when the demo was opened with the helper (DemoWorld(testingAgent:), -TeleplyDemoAgents).
         row("test-running", "测试对话 A", "测试项目", "正在跑测试", "running", "testing", now - 2_400_000,
             ["turn_started": .number(Double(startedSeconds)), "step": "run"]),
         row("test-waiting", "测试对话 B", "", "等你选择", "waiting", "testing", now - 3_000_000),
