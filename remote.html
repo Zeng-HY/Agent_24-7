@@ -988,6 +988,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Generic panel for assistants whose card_layout is not codex.v1 / claude.v1 / deepseek.v1 (plan.md §5.5 & §5.7).
 window.genericAgentUI = (() => {
   let timer = 0;
+  const lastStates = new Map();  // 每个对话最近一次拿到的控制态（发消息时按「此刻能力」判断能不能发）
   function stopTimer() { clearTimeout(timer); timer = 0; }
   async function refresh(me = cur, force = false) {
     stopTimer();
@@ -1001,11 +1002,14 @@ window.genericAgentUI = (() => {
     try {
       const data = await api('/api/agents/' + encodeURIComponent(me.app) + '/state?id=' + encodeURIComponent(me.id) + (force ? '&fresh=1' : ''), null, timeoutMs);
       if (!cur || cur.app !== me.app || cur.id !== me.id) return;
+      lastStates.set(me.app + ':' + me.id, data);
       if (data.status) {
         me.status = data.status;
         $('cvMeta').textContent = Agents.name(me.app) + (me.folder ? ' · ' + me.folder : '') + ' · ' + (STATUS[me.status] || me.status);
       }
       window.activityUI?.onControl(me, data);
+      // 通用的批准 / 回答卡片：由控制态里的 questions 画（generic-ui.js）。
+      window.genericCards?.paint(me, data);
     } catch (e) {}
     if (cur && cur.app === me.app && cur.id === me.id) {
       timer = setTimeout(() => refresh(me, false), Math.max(1000, Agents.params(me.app).refresh_ms || 2500));
@@ -1023,15 +1027,20 @@ window.genericAgentUI = (() => {
       stopTimer();
       const box = $('genericComposerTools');
       if (box) box.hidden = true;
+      window.genericCards?.clear();
     },
     refresh,
+    lastControl(me) { return (me && lastStates.get(me.app + ':' + me.id)) || null; },
   };
 })();
 
 async function sendGenericConv(deliveryMode = null) {
   if (!cur || sending || window.workspaceUI?.composing) return;
   const me = cur;
-  if (!Agents.canSend(me.app)) { toast('这个助手暂不支持从手机发送', true); return; }
+  // 能不能发按最近一次控制态判断（第一批的 capabilities_now）；没有控制态时退回说明书。
+  const recent = window.genericAgentUI?.lastControl(me) || null;
+  const canSendNow = recent ? Agents.modesNow(me.app, recent).length > 0 : Agents.canSend(me.app);
+  if (!canSendNow) { toast(Agents.noteNow(me.app, 'send', recent) || '这个助手暂不支持从手机发送', true); return; }
   const images = Agents.can(me.app, 'attachments') ? (window.codexUI?.imageSnapshot(me) || []) : [];
   const text = $('cvText').value.trim();
   if (!text && !images.length && !window.referencesUI?.fileCount(me)) return;
@@ -1432,5 +1441,6 @@ setMode('chat'); replaceUIState();
 <script src="/deepseek-ui.js"></script>
 <script src="/archive-ui.js"></script>
 <script src="/interaction-ui.js"></script>
+<script src="/generic-ui.js"></script>
 </body>
 </html>

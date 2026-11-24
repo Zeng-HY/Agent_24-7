@@ -502,5 +502,186 @@ class WebAgentsTests(unittest.TestCase):
                         browser.close()
 
 
+    def test_generic_cards_answer_and_respect_capabilities_in_both_engines(self):
+        """通用布局的助手：批准卡点一下、提问卡填完提交，请求体照设计第三节；此刻不能批准时灰掉并写原因。"""
+        apps = ["codex", "testing"]
+        manifests = agent_registry.manifests_for(apps, include_testing=True)
+        machine = {
+            "name": "测试电脑", "apps": apps, "voice": False, "version": "0.27.0-test",
+            "agents": manifests, **agent_legacy.page_capabilities(apps),
+        }
+        testing_caps = next(m for m in manifests if m["id"] == "testing")["capabilities"]
+        approval_card = {
+            "id": "approval-7", "status": "pending", "kind": "approval", "turn_id": "turn-3",
+            "title": "测试助手想运行命令", "detail": "npm test\n在 C:\\测试\\项目",
+            "questions": [{
+                "id": "decision", "header": "", "question": "允许运行这条命令吗？",
+                "options": [{"label": "允许一次", "description": ""}, {"label": "拒绝", "description": ""}],
+                "isOther": False, "isSecret": False, "isMultiple": False,
+            }],
+            "answer_revision": "", "expires_at": 0,
+        }
+        question_card = {
+            "id": "question-8", "status": "pending", "kind": "question", "turn_id": "turn-3",
+            "questions": [
+                {"id": "plan", "header": "选方案", "question": "用哪个方案？",
+                 "options": [{"label": "方案 A", "description": "先改接口"}, {"label": "方案 B", "description": "先改界面"}],
+                 "isOther": True, "isSecret": False, "isMultiple": False},
+                {"id": "files", "header": "改哪些文件", "question": "这次要改哪些文件？",
+                 "options": [{"label": "a.py", "description": ""}, {"label": "b.py", "description": ""}],
+                 "isOther": False, "isSecret": False, "isMultiple": True},
+            ],
+            "answer_revision": "rev-1", "expires_at": 0,
+        }
+
+        for engine in ("webkit", "chromium"):
+            with self.subTest(engine=engine):
+                browser = (
+                    self.browser
+                    if engine == "webkit"
+                    else self.pw.chromium.launch(channel="chrome", headless=True)
+                )
+                try:
+                    for case in ("can_answer", "cannot_approve"):
+                        cards = [approval_card, question_card]
+                        answers = []
+                        state_extra = (
+                            {"capabilities_now": testing_caps, "capability_notes": {}}
+                            if case == "can_answer"
+                            else {"capabilities_now": {**testing_caps, "approve": False},
+                                  "capability_notes": {"approve": "这台电脑的测试助手暂时不能批准"}}
+                        )
+
+                        def router(route, request, box=cards, seen=answers, extra=state_extra):
+                            u = urlsplit(request.url)
+                            path, q = u.path, parse_qs(u.query)
+                            js = lambda obj, status=200: route.fulfill(
+                                status=status, content_type="application/json; charset=utf-8",
+                                body=json.dumps(obj, ensure_ascii=False),
+                            )
+                            if path == "/":
+                                return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=render_page(machine))
+                            if path == "/api/status":
+                                return js({"ok": True, "ui_version": "0.27.0-test", "protocol": 2})
+                            if path == "/api/chats":
+                                return js({"items": [
+                                    {"app": "testing", "id": "test-waiting", "title": "测试对话 B", "folder": "",
+                                     "cwd": "", "updated": NOW - 3000, "created": NOW - 9000, "status": "waiting", "preview": "等你选择"},
+                                    {"app": "codex", "id": "c-1", "title": "Codex 对话", "folder": "proj", "cwd": "C:\\proj",
+                                     "updated": NOW - 1000, "created": NOW - 10000, "status": "idle", "preview": "ok"},
+                                ], "total": 2, "has_more": False, "next_cursor": ""})
+                            if path == "/api/chat":
+                                app, cid = q.get("app", [""])[0], q.get("id", [""])[0]
+                                if app == "testing":
+                                    return js({
+                                        "app": "testing", "id": cid, "title": "测试对话 B", "folder": "", "cwd": "",
+                                        "status": "waiting", "size": 2, "note": "", "has_more": False, "next_cursor": "",
+                                        "runtime": {}, "messages": [
+                                            {"id": "m3", "role": "user", "time": NOW - 6000, "text": "选一个方案"},
+                                            {"id": "m4", "role": "assistant", "time": NOW - 5000, "text": "请选择 A 或 B", "kind": "question"},
+                                        ],
+                                    })
+                                return js({
+                                    "app": app, "id": cid, "title": "Codex 对话", "folder": "proj", "cwd": "C:\\proj",
+                                    "status": "idle", "size": 1, "note": "", "has_more": False, "next_cursor": "",
+                                    "runtime": {}, "messages": [{"id": "cm1", "role": "assistant", "time": NOW, "text": "Codex 回复"}],
+                                })
+                            if path == "/api/agents/testing/state":
+                                return js({
+                                    "available": True, "running": False, "status": "waiting" if list(box) else "idle",
+                                    "turn_id": "turn-3", "settings": {}, "queued": [], "queue_available": True,
+                                    "questions": [dict(card) for card in box], **extra,
+                                })
+                            if path == "/api/agents/testing/answer":
+                                body = json.loads(request.post_data or "{}")
+                                seen.append(body)
+                                box[:] = [card for card in box if card["id"] != body.get("question_id")]
+                                return js({"ok": True, "accepted": True,
+                                           "text": "已允许本次操作" if body.get("question_id") == "approval-7" else "答案已提交"})
+                            if path == "/api/codex/state":
+                                return js({"available": True, "running": False, "status": "idle",
+                                           "settings": {"model": "gpt-5", "effort": "high", "mode": "default"},
+                                           "catalog": {"models": []}, "questions": [], "queued": [], "images": []})
+                            if path == "/api/events":
+                                return route.fulfill(status=404, body="{}")
+                            if path.startswith("/api/"):
+                                return js({})
+                            if serve_static(route, path):
+                                return
+                            route.fulfill(status=404, body="")
+
+                        ctx = browser.new_context(viewport={"width": 390, "height": 844}, reduced_motion="reduce")
+                        try:
+                            page = ctx.new_page()
+                            errors = []
+                            page.on("pageerror", lambda e: errors.append(str(e)))
+                            page.route(ORIGIN + "/**", router)
+                            page.goto(ORIGIN, wait_until="load")
+                            page.wait_for_function("document.querySelectorAll('#convList .conv').length === 2")
+                            page.locator('#convList .conv[data-key="testing:test-waiting"]').click()
+                            page.wait_for_function("document.querySelectorAll('#cvOpts .gc-wrap .codex-card').length === 2")
+
+                            # 批准卡：标题、两行 detail、每个选项一个按钮
+                            first = page.locator("#cvOpts .gc-wrap .codex-card").first
+                            self.assertEqual(first.locator(".card-title").evaluate("n => n.firstChild.textContent"), "测试助手想运行命令")
+                            self.assertEqual(first.locator(".gc-detail").text_content(), "npm test\n在 C:\\测试\\项目")
+                            self.assertEqual(first.locator(".card-actions button").count(), 2)
+                            self.assertEqual([b.strip() for b in first.locator(".card-actions button").all_text_contents()],
+                                             ["允许一次", "拒绝"])
+
+                            if case == "cannot_approve":
+                                # 此刻不能批准：按钮灰掉，原因写在卡片下面
+                                self.assertTrue(first.locator(".card-actions button").first.is_disabled())
+                                first.get_by_text("这台电脑的测试助手暂时不能批准").wait_for(state="visible")
+                                self.assertEqual(answers, [])
+                                # 三家的页面不出现通用卡片
+                                page.evaluate("closeConv(true)")
+                                page.locator('#convList .conv[data-key="codex:c-1"]').click()
+                                page.wait_for_function("!document.getElementById('codexComposerTools').hidden")
+                                self.assertEqual(page.locator("#cvOpts .gc-wrap").count(), 0)
+                                self.assertEqual(errors, [])
+                                continue
+
+                            first.get_by_role("button", name="允许一次", exact=True).click()
+                            page.wait_for_function("document.querySelectorAll('#cvOpts .gc-wrap .codex-card').length === 1")
+                            self.assertEqual(len(answers), 1)
+                            approval_body = answers[0]
+                            self.assertEqual(approval_body["id"], "test-waiting")
+                            self.assertEqual(approval_body["question_id"], "approval-7")
+                            self.assertEqual(approval_body["answers"], {"decision": ["允许一次"]})
+                            self.assertRegex(approval_body["request_id"], r"^[0-9a-f]{32}$")
+                            self.assertNotIn("answer_revision", approval_body)  # 空的原样不带
+
+                            # 提问卡：题目都列出来，手写一题、多选一题，填完点「提交」
+                            second = page.locator("#cvOpts .gc-wrap .codex-card").first
+                            self.assertEqual(second.locator(".card-title").evaluate("n => n.firstChild.textContent"), "选方案")
+                            self.assertEqual(second.locator(".gc-q").count(), 2)
+                            submit = second.locator(".gc-submit")
+                            self.assertTrue(submit.is_disabled())
+                            second.locator(".gc-other").fill("自己写的答案")
+                            second.locator(".gc-choice", has_text="a.py").click()
+                            self.assertFalse(submit.is_disabled())
+                            submit.click()
+                            page.wait_for_function("document.querySelectorAll('#cvOpts .gc-wrap').length === 0")
+                            self.assertEqual(len(answers), 2)
+                            question_body = answers[1]
+                            self.assertEqual(question_body["question_id"], "question-8")
+                            self.assertEqual(question_body["answers"], {"plan": ["自己写的答案"], "files": ["a.py"]})
+                            self.assertEqual(question_body["answer_revision"], "rev-1")
+                            self.assertRegex(question_body["request_id"], r"^[0-9a-f]{32}$")
+
+                            # 三家的页面不出现通用卡片
+                            page.evaluate("closeConv(true)")
+                            page.locator('#convList .conv[data-key="codex:c-1"]').click()
+                            page.wait_for_function("!document.getElementById('codexComposerTools').hidden")
+                            self.assertEqual(page.locator("#cvOpts .gc-wrap").count(), 0)
+                            self.assertEqual(errors, [])
+                        finally:
+                            ctx.close()
+                finally:
+                    if engine != "webkit":
+                        browser.close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -132,6 +132,7 @@ STATIC_FILES = {
     "/new-chat-ui.js": ("new-chat-ui.js", "application/javascript; charset=utf-8"),
     "/workspace-ui.js": ("workspace-ui.js", "application/javascript; charset=utf-8"),
     "/activity-ui.js": ("activity-ui.js", "application/javascript; charset=utf-8"),
+    "/generic-ui.js": ("generic-ui.js", "application/javascript; charset=utf-8"),
     "/sidebar-ui.js": ("sidebar-ui.js", "application/javascript; charset=utf-8"),
     "/reading-ui.js": ("reading-ui.js", "application/javascript; charset=utf-8"),
     "/voice-ui.js": ("voice-ui.js", "application/javascript; charset=utf-8"),
