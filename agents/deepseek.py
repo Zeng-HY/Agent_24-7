@@ -402,11 +402,31 @@ class DeepSeekAgent(Agent):
 
     # -- lifecycle & HTTP action handlers (shared by /api/agents/deepseek/* and /api/deepseek/*)
 
+    def on_server_init(self, server) -> None:
+        import deepseek_control
+        bridge = getattr(server, "deepseek", None)
+        if bridge is None or not deepseek_control.HOME.is_dir():
+            return
+        bridge.events.start()
+        self.set_service(server, bridge.events)
+
+    def on_server_close(self, server) -> None:
+        events = self.service(server)
+        bridge = getattr(server, "deepseek", None)
+        if events is None and bridge is not None:
+            events = getattr(bridge, "events", None)
+        if events is not None:
+            try:
+                events.close()
+            except Exception:
+                pass
+
     def on_apps_rechecked(self, server, apps: list[str]) -> None:
         import deepseek_control
         deepseek = getattr(server, "deepseek", None)
         if deepseek is not None and self.id in apps and deepseek_control.HOME.is_dir():
             deepseek.events.start()
+            self.set_service(server, deepseek.events)
 
     def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
         return handler.server.codex.upload(tid, name, raw, self.id)

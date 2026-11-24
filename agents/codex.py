@@ -450,6 +450,10 @@ class CodexAgent(Agent):
         bridge = getattr(server, "codex", None)
         if bridge is None:
             return
+        import codex_question_dismiss
+        bridge.dismiss_manager = codex_question_dismiss.DismissManager(
+            bridge, enabled=cfg.get("codex_auto_dismiss_answered_questions", False),
+            verified_version=cfg.get("codex_dismiss_verified_version", ""), log=log)
         apptools = self._apptools_for(bridge)
 
         def on_waiting(tid: str, card: dict) -> None:

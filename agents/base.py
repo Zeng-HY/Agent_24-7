@@ -491,6 +491,25 @@ class Agent:
         return ""
 
     # -- server lifecycle & request-resolution hooks used by remote.py
+    #
+    # server.agent_services is a dict keyed by agent id, created by remote.main() before any
+    # on_server_start/on_server_init runs. An assistant keeps everything it leaves running for the
+    # whole service lifetime there (event listeners, bridges, background workers), and closes it in
+    # on_server_close. The legacy three keep their old objects (server.codex, server.claude,
+    # server.deepseek) for old routes; new assistants use server.agent_services only.
+    def service(self, server):
+        """This assistant's long-lived service object from server.agent_services, or None."""
+        return (getattr(server, "agent_services", None) or {}).get(self.id)
+
+    def set_service(self, server, obj):
+        """Store this assistant's long-lived service object in server.agent_services[self.id]."""
+        services = getattr(server, "agent_services", None)
+        if not isinstance(services, dict):
+            services = {}
+            server.agent_services = services
+        services[self.id] = obj
+        return obj
+
     def on_apps_rechecked(self, server, apps: list[str]) -> None:
         pass
 
