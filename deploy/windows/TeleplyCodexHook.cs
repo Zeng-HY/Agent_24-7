@@ -23,6 +23,11 @@ namespace TeleplyCodexHook {
         const uint WAIT_OBJECT_0 = 0;
         const int CONNECT_TIMEOUT_MS = 300;
         const int DEFAULT_READ_TIMEOUT_MS = 155000;
+        // PermissionRequest is held on the phone while nobody is at the PC (codex_hooks.py), so its reply
+        // may take nearly the hook's whole 86400 s. Stay a few seconds under that; the phone releases
+        // 60 s before the hook timeout anyway, and a missing pipe still answers at once.
+        const int PERMISSION_READ_TIMEOUT_MS = 86390000;
+        const int MAX_READ_TIMEOUT_MS = 86400000;
         const int MAX_BYTES = 4 * 1024 * 1024;
         static readonly IntPtr INVALID_HANDLE = new IntPtr(-1);
 
@@ -96,6 +101,10 @@ namespace TeleplyCodexHook {
             return string.Equals(eventName, "Stop", StringComparison.OrdinalIgnoreCase);
         }
 
+        static bool IsPermissionRequest(string eventName) {
+            return string.Equals(eventName, "PermissionRequest", StringComparison.OrdinalIgnoreCase);
+        }
+
         static void EmitStdout(string text) {
             if (string.IsNullOrEmpty(text)) return;
             byte[] bytes = Encoding.UTF8.GetBytes(text);
@@ -144,13 +153,19 @@ namespace TeleplyCodexHook {
             return @"\\.\pipe\teleply-codex-hooks-" + SanitizeUser(user);
         }
 
-        static int ResolveReadTimeoutMs() {
+        static int ResolveReadTimeoutMs(string eventName) {
             string raw = Environment.GetEnvironmentVariable("TELEPLY_CODEX_HOOK_READ_TIMEOUT_MS");
             int parsed;
-            if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out parsed) && parsed >= 50 && parsed <= 600000) {
+            if (!string.IsNullOrEmpty(raw) && int.TryParse(raw, out parsed) && parsed >= 50 && parsed <= MAX_READ_TIMEOUT_MS) {
                 return parsed;
             }
-            return DEFAULT_READ_TIMEOUT_MS;
+            return IsPermissionRequest(eventName) ? PERMISSION_READ_TIMEOUT_MS : DEFAULT_READ_TIMEOUT_MS;
+        }
+
+        // TickCount wraps every ~49.7 days. Reading the remaining wait as an unsigned difference keeps a
+        // whole-day wait correct across that wrap (and past int overflow of deadline = TickCount + ms).
+        static int RemainingMs(int deadline) {
+            return unchecked((int)((uint)deadline - (uint)Environment.TickCount));
         }
 
         static string ReadStdinText() {
@@ -188,7 +203,7 @@ namespace TeleplyCodexHook {
                 int err = Marshal.GetLastWin32Error();
                 if (err == ERROR_FILE_NOT_FOUND) return INVALID_HANDLE;
                 if (err != ERROR_PIPE_BUSY) return INVALID_HANDLE;
-                int remaining = deadline - Environment.TickCount;
+                int remaining = RemainingMs(deadline);
                 if (remaining <= 0) return INVALID_HANDLE;
                 if (!WaitNamedPipeW(pipePath, remaining)) return INVALID_HANDLE;
             }
@@ -205,7 +220,7 @@ namespace TeleplyCodexHook {
                 if (!ok) {
                     int err = Marshal.GetLastWin32Error();
                     if (err != ERROR_IO_PENDING) return false;
-                    int rem = deadline - Environment.TickCount;
+                    int rem = RemainingMs(deadline);
                     if (rem <= 0 || WaitForSingleObject(ev, (uint)rem) != WAIT_OBJECT_0) {
                         CancelIoEx(handle, IntPtr.Zero);
                         return false;
@@ -230,7 +245,7 @@ namespace TeleplyCodexHook {
                 if (!ok) {
                     int err = Marshal.GetLastWin32Error();
                     if (err != ERROR_IO_PENDING) return null;
-                    int rem = deadline - Environment.TickCount;
+                    int rem = RemainingMs(deadline);
                     if (rem <= 0 || WaitForSingleObject(ev, (uint)rem) != WAIT_OBJECT_0) {
                         CancelIoEx(handle, IntPtr.Zero);
                         return null;
@@ -279,7 +294,7 @@ namespace TeleplyCodexHook {
                     return;
                 }
 
-                int readDeadline = Environment.TickCount + ResolveReadTimeoutMs();
+                int readDeadline = Environment.TickCount + ResolveReadTimeoutMs(eventName);
                 byte[] respHeader = ReadExactOverlapped(handle, ev, 4, readDeadline);
                 if (respHeader == null) {
                     EmitFallback(eventName);

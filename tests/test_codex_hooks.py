@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import struct
 import subprocess
@@ -38,9 +39,19 @@ CSC = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET/Framework64
 HOOK_CS = ROOT / "deploy/windows/TeleplyCodexHook.cs"
 
 
+def _recent_input() -> tuple[int, int]:
+    """Someone just used the keyboard/mouse: the PC is never 'away'."""
+    return (200_000, 200_000)
+
+
+def _away_input() -> tuple[int, int]:
+    """Nobody touched the keyboard/mouse for 3 minutes."""
+    return (200_000, 200_000 - 180_000)
+
+
 class HookServerCoreTests(unittest.TestCase):
     def test_fast_path_and_disabled_server_return_empty_immediately(self) -> None:
-        server = ch.CodexHookServer(pipe_name=r"\\.\pipe\teleply-unused")
+        server = ch.CodexHookServer(pipe_name=r"\\.\pipe\teleply-unused", input_ticks=_recent_input)
         t0 = time.perf_counter()
         self.assertEqual(server.handle_event("PreToolUse", {"session_id": TID, "tool_name": "Bash"}), "")
         self.assertEqual(server.handle_event("PermissionRequest", {"session_id": TID, "tool_name": "Bash"}), "")
@@ -61,6 +72,7 @@ class HookServerCoreTests(unittest.TestCase):
             pipe_name=r"\\.\pipe\teleply-unused",
             clock=lambda: now[0],
             approval_timeout=0.35,
+            input_ticks=_recent_input,
             on_waiting=lambda tid, card: waiting_calls.append((tid, card)),
         )
 
@@ -328,6 +340,275 @@ class HookServerCoreTests(unittest.TestCase):
         self.assertEqual(server.latest_progress(TID)["event"], "Stop")
 
 
+def _wait_for_card(server, tid: str = TID, timeout: float = 2.0) -> dict | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        cards = server.pending_cards(tid)
+        if cards:
+            return cards[0]
+        time.sleep(0.01)
+    return None
+
+
+class AwayApprovalTests(unittest.TestCase):
+    """11-24 night: an approval on a PC nobody is at is held for the phone — until the phone answers,
+    the person touches the keyboard/mouse, the turn is stopped, or Codex's hook timeout comes near."""
+
+    payload = {
+        "session_id": TID, "turn_id": "t-away", "tool_name": "Bash", "cwd": r"C:\demo",
+        "tool_input": {"command": "python -m pytest -q"},
+    }
+
+    def _server(self, **kwargs) -> ch.CodexHookServer:
+        kwargs.setdefault("pipe_name", r"\\.\pipe\teleply-unused")
+        kwargs.setdefault("input_ticks", _away_input)
+        kwargs.setdefault("approval_timeout", 5.0)
+        kwargs.setdefault("hold_poll", 0.02)
+        return ch.CodexHookServer(**kwargs)
+
+    def test_idle_seconds_is_wrap_safe(self) -> None:
+        self.assertEqual(ch.idle_seconds((200_000, 70_000)), 130.0)
+        self.assertEqual(ch.idle_seconds((1_000, 1_000)), 0.0)
+        self.assertIsNone(ch.idle_seconds(None))
+        # GetTickCount wraps every ~49.7 days: last input just before the wrap, now just after it.
+        self.assertAlmostEqual(ch.idle_seconds((5_000, 0xFFFF0000)), 70.536, places=3)
+        # Windows cannot say -> never treat the PC as empty.
+        self.assertFalse(self._server(input_ticks=lambda: None).is_desktop_away())
+
+    def test_away_without_watching_holds_an_answerable_card_for_allow_and_deny(self) -> None:
+        waiting: list[tuple[str, dict]] = []
+        server = self._server(on_waiting=lambda tid, card: waiting.append((tid, card)))
+
+        out: list[str] = []
+        thread = threading.Thread(
+            target=lambda: out.append(server.handle_event("PermissionRequest", dict(self.payload))), daemon=True)
+        thread.start()
+        card = _wait_for_card(server)
+        self.assertIsNotNone(card, "an empty desk must keep the approval for the phone")
+        self.assertEqual(card["kind"], "approval")
+        self.assertTrue(card["answerable"])
+        self.assertIn("pytest", card["question"])
+        # The phone's existing "在等你" notice already rides on on_waiting: nobody had to add a channel.
+        self.assertEqual(len(waiting), 1)
+        self.assertEqual(waiting[0][0], TID)
+        self.assertEqual(waiting[0][1]["id"], card["id"])
+
+        server.submit_answer(TID, {
+            "id": TID, "request_id": "req-away-1", "question_id": card["id"],
+            "answer_revision": card["answer_revision"], "answers": {"decision": ["允许一次"]},
+        })
+        thread.join(timeout=3.0)
+        self.assertEqual(len(out), 1)
+        parsed = json.loads(out[0])
+        self.assertEqual(parsed["hookSpecificOutput"]["hookEventName"], "PermissionRequest")
+        self.assertEqual(parsed["hookSpecificOutput"]["decision"], {"behavior": "allow"})
+        self.assertEqual(server.pending_cards(TID), [])
+
+        # Deny travels back exactly as before too.
+        out.clear()
+        thread = threading.Thread(
+            target=lambda: out.append(server.handle_event("PermissionRequest", dict(self.payload))), daemon=True)
+        thread.start()
+        card = _wait_for_card(server)
+        self.assertIsNotNone(card)
+        server.submit_answer(TID, {
+            "id": TID, "request_id": "req-away-2", "question_id": card["id"],
+            "answer_revision": card["answer_revision"], "answers": {"decision": ["拒绝"]},
+        })
+        thread.join(timeout=3.0)
+        decision = json.loads(out[0])["hookSpecificOutput"]["decision"]
+        self.assertEqual(decision["behavior"], "deny")
+        self.assertIn("拒绝", decision["message"])
+
+    def test_someone_at_the_pc_gets_the_desktop_dialog_at_once(self) -> None:
+        server = self._server(input_ticks=_recent_input)
+        started = time.perf_counter()
+        self.assertEqual(server.handle_event("PermissionRequest", dict(self.payload)), "")
+        self.assertLess((time.perf_counter() - started) * 1000.0, 200.0)
+        self.assertEqual(server.pending_cards(TID), [])
+
+    def test_other_events_stay_instant_while_away(self) -> None:
+        server = self._server()
+        question = {"session_id": TID, "turn_id": "t-away", "tool_name": "request_user_input",
+                    "tool_input": {"questions": [{"id": "color", "question": "哪种颜色？",
+                                                  "options": [{"label": "红色"}]}]}}
+        started = time.perf_counter()
+        self.assertEqual(server.handle_event("PreToolUse", question), "")
+        self.assertLess((time.perf_counter() - started) * 1000.0, 200.0)
+        self.assertEqual(server.pending_cards(TID), [])
+
+    def test_keyboard_input_during_the_hold_hands_the_approval_back_to_the_desktop(self) -> None:
+        ticks = [(200_000, 200_000 - 180_000)]
+        server = self._server(input_ticks=lambda: ticks[0], approval_timeout=10.0)
+        out: list[str] = []
+        thread = threading.Thread(
+            target=lambda: out.append(server.handle_event("PermissionRequest", dict(self.payload))), daemon=True)
+        thread.start()
+        self.assertIsNotNone(_wait_for_card(server))
+
+        ticks[0] = (200_500, 200_500)  # the person types: last input is now after the hold began
+        thread.join(timeout=3.0)
+        self.assertEqual(out, [""])
+        self.assertEqual(server.pending_cards(TID), [])
+
+    def test_watching_also_hands_back_when_the_desktop_gets_input(self) -> None:
+        ticks = [(200_000, 200_000)]
+        server = self._server(input_ticks=lambda: ticks[0], approval_timeout=10.0)
+        server.note_phone_viewing(TID)
+        out: list[str] = []
+        thread = threading.Thread(
+            target=lambda: out.append(server.handle_event("PermissionRequest", dict(self.payload))), daemon=True)
+        thread.start()
+        self.assertIsNotNone(_wait_for_card(server))
+        ticks[0] = (201_000, 201_000)
+        thread.join(timeout=3.0)
+        self.assertEqual(out, [""])
+
+    def test_stop_during_the_hold_releases_without_approving(self) -> None:
+        server = self._server(approval_timeout=10.0)
+        out: list[str] = []
+        thread = threading.Thread(
+            target=lambda: out.append(server.handle_event("PermissionRequest", dict(self.payload))), daemon=True)
+        thread.start()
+        self.assertIsNotNone(_wait_for_card(server))
+        server.request_stop(TID)
+        thread.join(timeout=3.0)
+        self.assertEqual(out, [""])
+        self.assertEqual(server.pending_cards(TID), [])
+
+    def test_hold_ends_sixty_seconds_before_the_hook_timeout_and_never_approves(self) -> None:
+        # Full-size numbers first: 24 h allowed by Codex, our hold stops at 24 h minus 60 s.
+        self.assertEqual(ch.PERMISSION_HOOK_TIMEOUT_SECONDS, 86400.0)
+        self.assertEqual(ch.APPROVAL_HOLD_SECONDS, 86400.0 - 60.0)
+        self.assertEqual(ch.CodexHookServer(pipe_name=r"\\.\pipe\teleply-unused",
+                                          input_ticks=_recent_input)._approval_hold_limit(), 86340.0)
+
+        # The same rule, scaled down so the test runs in a second: stop 0.6 s before a 1.6 s hook timeout.
+        server = self._server(hook_timeout=1.6, approval_margin=0.6, approval_timeout=60.0)
+        started = time.monotonic()
+        out = server.handle_event("PermissionRequest", dict(self.payload))
+        elapsed = time.monotonic() - started
+        self.assertEqual(out, "")  # empty, never an approval
+        self.assertGreaterEqual(elapsed, 0.9)
+        self.assertLess(elapsed, 1.55)
+        self.assertEqual(server.pending_cards(TID), [])
+
+
+def _trust_toml(home: Path, data: dict) -> str:
+    """config.toml entries Codex itself would write after the user trusts these hooks.json contents."""
+    lines: list[str] = []
+    hooks_file = home / "hooks.json"
+    for event, groups in data.get("hooks", {}).items():
+        label = ch.HOOK_STATE_EVENT_NAMES.get(event, (event,))[0]
+        for group_idx, group in enumerate(groups):
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            for handler_idx, handler in enumerate(handlers or []):
+                if not ch.is_teleply_handler(handler):
+                    continue
+                digest = ch.command_hook_trusted_hash(event, handler, group.get("matcher"))
+                if digest is None:
+                    continue
+                lines.append(
+                    f"[hooks.state.'{hooks_file}:{label}:{group_idx}:{handler_idx}']\ntrusted_hash = \"{digest}\"\n")
+    return "".join(lines)
+
+
+class TrustHashTests(unittest.TestCase):
+    def test_hash_matches_the_published_codex_digests(self) -> None:
+        # Ground truth from two independent reproductions of codex-rs command_hook_hash.
+        self.assertEqual(
+            ch.command_hook_trusted_hash("session_start", {"type": "command", "command": "/abs/path/forwarder", "timeout": 600}),
+            "sha256:7052f4cf46032e30d7b56d23cd91adf72fcbdcba1d143b76d900f53e3cf84fc1",
+        )
+        self.assertEqual(
+            ch.command_hook_trusted_hash("permission_request", {"type": "command", "command": "/abs/path/forwarder", "timeout": 600}),
+            "sha256:354fce909e5e514e42327261e05b9b423f9fff69cde54db155fabada5db9cfda",
+        )
+        self.assertEqual(
+            ch.command_hook_trusted_hash("session_start", {"type": "command", "command": "/private/tmp/rev-hook.sh"}),
+            "sha256:932ff9c435e0eb610421fc8bcb41e0de2d9a213ca6dc6fef60eaf00bd4bcdd6e",
+        )
+
+    def test_changed_content_is_detected_in_every_accepted_shape(self) -> None:
+        handler = {"type": "command", "command": '"C:\\x\\TeleplyCodexHook.exe" PermissionRequest',
+                   "timeout": 86400}
+        hashes = ch.command_hook_trusted_hashes("PermissionRequest", handler, "*")
+        self.assertIn(ch.command_hook_trusted_hash("PermissionRequest", handler, "*"), hashes)
+        self.assertEqual(len(hashes), 2)  # with and without the matcher in the identity
+        with_async = dict(handler, **{"async": True})
+        self.assertGreaterEqual(len(ch.command_hook_trusted_hashes("PermissionRequest", with_async, "*")), 3)
+        self.assertFalse(hashes & ch.command_hook_trusted_hashes("PermissionRequest",
+                                                                dict(handler, timeout=90), "*"))
+        self.assertFalse(hashes & ch.command_hook_trusted_hashes("PermissionRequest",
+                                                                dict(handler, command='"C:\\y\\TeleplyCodexHook.exe" PermissionRequest'), "*"))
+        self.assertNotEqual(ch.command_hook_trusted_hash("PermissionRequest", handler, "*"),
+                            ch.command_hook_trusted_hash("PermissionRequest", handler, "Bash"))
+
+    def test_stale_hash_after_a_content_change_reads_as_pending_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "codex_home"
+            home.mkdir()
+            exe = Path(td) / "TeleplyCodexHook.exe"
+            self.assertTrue(ch.install_hooks(exe, codex_home=home, log=lambda _t: None))
+            current = json.loads((home / "hooks.json").read_text(encoding="utf-8"))
+            (home / "config.toml").write_text(_trust_toml(home, current), encoding="utf-8")
+            ch.reset_trust_cache()
+            self.assertEqual(ch.read_trust_status(codex_home=home), "enabled")
+
+            # What the previous release left in every PC's config.toml: PermissionRequest timeout 90.
+            stale = json.loads(json.dumps(current))
+            for group in stale["hooks"]["PermissionRequest"]:
+                for handler in group["hooks"]:
+                    handler["timeout"] = 90
+            (home / "config.toml").write_text(_trust_toml(home, stale), encoding="utf-8")
+            ch.reset_trust_cache()
+            self.assertEqual(ch.read_trust_status(codex_home=home), "pending_trust")
+
+    def test_plain_legacy_trusted_hash_keeps_the_presence_only_check(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "codex_home"
+            home.mkdir()
+            exe = Path(td) / "TeleplyCodexHook.exe"
+            ch.install_hooks(exe, codex_home=home, log=lambda _t: None)
+            hooks_file = home / "hooks.json"
+            (home / "config.toml").write_text(
+                f"[hooks.state.'{hooks_file}:pre_tool_use:0:0']\ntrusted_hash = \"abc123\"\n"
+                f"[hooks.state.'{hooks_file}:permission_request:0:0']\ntrusted_hash = \"def456\"\n"
+                f"[hooks.state.'{hooks_file}:stop:0:0']\ntrusted_hash = \"ghi789\"\n",
+                encoding="utf-8",
+            )
+            ch.reset_trust_cache()
+            # No sha256: prefix -> an older/unknown recipe: report trusted as before, never worse.
+            self.assertEqual(ch.read_trust_status(codex_home=home), "enabled")
+
+
+class PermissionHookTimeoutConfigTests(unittest.TestCase):
+    def test_existing_ninety_second_permission_hook_is_upgraded_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "codex_home"
+            home.mkdir()
+            hooks_file = home / "hooks.json"
+            hooks_file.write_text(json.dumps({"hooks": {"PermissionRequest": [{"matcher": "*", "hooks": [
+                {"type": "command", "command": r'"C:\old\TeleplyCodexHook.exe" PermissionRequest',
+                 "timeout": 90}]}]}}), encoding="utf-8")
+            self.assertTrue(ch.install_hooks(Path(td) / "TeleplyCodexHook.exe", codex_home=home,
+                                             log=lambda _t: None))
+            merged = json.loads(hooks_file.read_text(encoding="utf-8"))
+            handlers = merged["hooks"]["PermissionRequest"]
+            self.assertEqual(len(handlers), 1)  # the old entry is replaced, not duplicated
+            self.assertEqual(handlers[0]["hooks"][0]["timeout"], 86400)
+
+    def test_csharp_hook_program_waits_a_full_day_for_permission_replies(self) -> None:
+        source = HOOK_CS.read_text(encoding="utf-8")
+        permission_ms = int(re.search(r"PERMISSION_READ_TIMEOUT_MS\s*=\s*(\d+)", source).group(1))
+        self.assertGreaterEqual(permission_ms, 86_400_000 - 20_000)
+        self.assertLessEqual(permission_ms, 86_400_000)
+        # Fast events (PreToolUse, Stop) keep their fast read wait.
+        self.assertIn("DEFAULT_READ_TIMEOUT_MS = 155000", source)
+        self.assertIn("ResolveReadTimeoutMs(eventName)", source)
+        self.assertIn("RemainingMs(deadline)", source)
+
+
 class HookInstallerAndTrustTests(unittest.TestCase):
     def test_install_preserves_user_hooks_is_idempotent_never_writes_config_toml_and_reads_trust(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -361,7 +642,7 @@ class HookInstallerAndTrustTests(unittest.TestCase):
             self.assertEqual(merged["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "my-audit.exe")
             self.assertIn("TeleplyCodexHook.exe", merged["hooks"]["PreToolUse"][1]["hooks"][0]["command"])
             self.assertEqual(merged["hooks"]["PreToolUse"][1]["hooks"][0]["timeout"], 150)
-            self.assertEqual(merged["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"], 90)
+            self.assertEqual(merged["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"], 86400)
             self.assertEqual(merged["hooks"]["Stop"][0]["hooks"][0]["timeout"], 10)
             self.assertEqual(merged["hooks"]["PostToolUse"], user_initial["hooks"]["PostToolUse"])
 
