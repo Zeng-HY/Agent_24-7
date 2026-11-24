@@ -573,8 +573,10 @@ class ClaudeAgent(Agent):
     @staticmethod
     def _hook_bridge(handler):
         """The hook bridge when Teleply's Claude hooks are enabled for this server (not when the user turned them off)."""
+        import claude_hooks
         controller = getattr(handler.server, "claude", None)
-        return getattr(controller, "hooks", None) if controller is not None else None
+        hooks = getattr(controller, "hooks", None) if controller is not None else None
+        return hooks if isinstance(hooks, claude_hooks.Bridge) else None
 
     def _hook_running(self, handler, item: dict | None) -> bool:
         """Hooks are active on this conversation and the turn is still running. The controller also looks at the
