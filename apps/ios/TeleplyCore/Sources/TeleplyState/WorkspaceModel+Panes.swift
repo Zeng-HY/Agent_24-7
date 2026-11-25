@@ -410,7 +410,7 @@ extension WorkspaceModel {
                 if !version.isEmpty { fields["v"] = .string(version) }
                 if modified > 0 { fields["modified"] = .number(Double(modified)) }
                 if !textLang.isEmpty, fields["lang"]?.string().isEmpty ?? true { fields["lang"] = .string(textLang) }
-                if textLine > 0, fields["line"].int() <= 0 { fields["line"] = .number(Double(textLine)) }
+                if textLine > 0, (fields["line"]?.int() ?? 0) <= 0 { fields["line"] = .number(Double(textLine)) }
                 self.data = .object(fields)
                 self.fileText = text
                 self.fileTextTruncated = textTruncated
@@ -585,7 +585,7 @@ extension WorkspaceModel {
                 let relative = resourcePath(path, pagePath: file["path"].string())
                 return try await client.resourceData(device: key.device, app: key.app, chat: key.chat, file: id, path: relative)
             } catch is CancellationError {
-                throw CancellationError()
+                return nil
             } catch let failure as ServiceFailure where failure.status != 404 {
                 return nil
             } catch {
