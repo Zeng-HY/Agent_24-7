@@ -1,8 +1,9 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.9.0 构建 34 已传 TestFlight；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.9.1 构建 35 已传 TestFlight；0.9.0 构建 34 已传 TestFlight；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
-## 0.9.1：答案里的文件预览，新助手的用量（11-25，构建号与 Codemagic 编号待填）
+## 0.9.1：答案里的文件预览，新助手的用量（11-25，构建 35 已传 TestFlight）
 
-- **这一版是什么**：0.9.0（34）之后两条线合在一起——答案里的文件预览（设计 `docs/handoff-file-preview.md`，iOS 分三段做完），和新助手的用量显示。版本号由发布前改；这里先留构建号和 Codemagic 编号。
+- 构建 35（Codemagic `6b06d3cfc763b9eeebadc4d1`，排队约 15 分钟、构建约 6 分钟，`UPLOAD SUCCEEDED`），从 `fp-ios` 分支（`969c4c6`）打；版本 0.9.1，Delivery UUID `c291bab4-b1db-4ba4-86e7-bc53b6b7d0d4`。打包前 `TeleplyCore` 381 项测试（47 个套件）全过，包检查通过；包里有 `Viewer/` 文件夹（11 个文件，`code.html`、`code.js` 和安卓 1.0.11 逐字节相同）、灵动岛扩展和隐私清单，iPhone 和 iPad 都支持。只进内部测试，没有提交审核。
+- **这一版是什么**：0.9.0（34）之后两条线合在一起——答案里的文件预览（设计 `docs/handoff-file-preview.md`，iOS 分三段做完），和新助手的用量显示。
 - **消息里的文件**：回答带 `files` 时，消息里的图直接画出来；文件条按 `id` 去重、最多 8 个、多了「还有 N 个」；链接对不上时跟灰色短说明，点开是完整原因；`code`/`path` 文件的字也能点开。老电脑（没有 `files`）照 0.9.0。
 - **看图页**：点消息里的图或文件条的图片卡进入，全屏、左右滑看同一条回答的图、顶上「2/5」；双指 1–8×、双击 1×/2.5×，放大时左右拖只移图。先 1280 缩略图（大图/GIF 2048），≤30 MB 换原图；GIF 会动；SVG 放大超过 2 倍换 4096；PDF 从适合宽度到 3 倍、右下角页码；⋯ 可保存、分享、用其他应用打开、在文件页打开。
 - **代码页**：`code`/`text` 文件用和安卓逐字节相同的 highlight.js 11.12.0 页面（行号、查找、复制、跳行、深浅色、200 KB 不搞高亮、截断说明）；只读 App 内文件和这一份文字，不联网、无桥。
@@ -11,8 +12,8 @@
 - **附属资源**：HTML 和 Markdown 里同目录的图片/样式走 `/api/file/resource`，老电脑或 404 退回原来的文件列表；Markdown 有阅读视图/源码切换。
 - **缓存**：缩略图 200 MB、原文件 500 MB，都按全部电脑合计、最久没用先删；退出登录和移除电脑时清掉。
 - **用量**：协议 2 `/api/usage` 的 `agents.<id>` 读出来了；`legacy=false` 且说明书开 `usage` 的助手，在设置「用量」页和它的对话 ⋯ 菜单里都能看。Antigravity 会显示 Gemini（5 小时/每周）和 Claude 与 GPT（5 小时/每周）两组额度。Codex、Claude 和 DeepSeek 照旧。
-- **测试**：新增/补了文件预览与用量的纯规则测试、缓存测试、资源路线测试；当前测试数与 Codemagic 结果待填。
-- **没验到的**：这台电脑没有 Swift，代码未在本机编译；真机上的看图手势、GIF、PDF 页码、代码页、播放器和 Cookie 需要按下面的清单验。
+- **测试**：新增/补了文件预览与用量的纯规则测试、缓存测试、资源路线测试。Codemagic `ios-native-check` compile 最后一次 `6b06a01f568221cbad76e71e`（`969c4c6` 之前的 `9b6c13b`）：381 项（47 个套件）全过，`Build Succeeded`；TestFlight 构建里同样 381 项全过。
+- **没验到的**：这台电脑没有 Swift，只在 Codemagic 上编译和跑了测试，没跑截图巡览；真机上的看图手势、GIF、PDF 页码、代码页、播放器和 Cookie 需要按下面的清单验。
 
 ### 留给你在真机上验（0.9.1）
 
