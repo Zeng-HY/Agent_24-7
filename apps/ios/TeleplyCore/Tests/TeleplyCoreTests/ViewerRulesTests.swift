@@ -53,6 +53,17 @@ struct ViewerRulesTests {
         #expect(!isGIF("图.png"))
     }
 
+    @Test func aFileThePageCannotShowSaysWhy() {
+        #expect(unshownReason(kind: "image", size: RelayClient.picturePreviewLimit + 1,
+                             limit: RelayClient.picturePreviewLimit, looks: true) == "这张图超过 30MB，不直接显示")
+        #expect(unshownReason(kind: "pdf", size: RelayClient.pdfPreviewLimit + 1,
+                             limit: RelayClient.pdfPreviewLimit, looks: true) == "这个 PDF 超过 100MB，不直接显示")
+        #expect(unshownReason(kind: "download", size: RelayClient.officePreviewLimit + 1,
+                             limit: RelayClient.officePreviewLimit, looks: true) == "超过 30MB，不直接显示")
+        #expect(unshownReason(kind: "download", size: 10, limit: RelayClient.officePreviewLimit, looks: true) == "这里不直接显示")
+        #expect(unshownReason(kind: "download", size: 10, limit: RelayClient.officePreviewLimit, looks: false) == "手机上看不了这类文件")
+    }
+
     @Test func aDecodedPictureHalvesUntilItFitsTheEdge() {
         #expect(pictureSampleSize(width: 6000, height: 4000) == 2)
         #expect(pictureSampleSize(width: 4096, height: 100) == 1)

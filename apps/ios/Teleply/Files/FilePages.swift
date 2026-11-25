@@ -285,12 +285,7 @@ struct FilePage: View {
         let looks = Self.quickLooks(name.lowercased())
         let kind = model.workspace.data["kind"].string()
         let limit = WorkspaceModel.pagePreviewLimit(kind: kind, name: name)
-        let why: String
-        if size > limit {
-            why = kind == "image" ? "这张图超过 30MB，不直接显示" : kind == "pdf" ? "这个 PDF 超过 100MB，不直接显示" : "超过 30MB，不直接显示"
-        } else {
-            why = looks ? "这里不直接显示" : "手机上看不了这类文件"
-        }
+        let why = unshownReason(kind: kind, size: size, limit: limit, looks: looks)
         VStack(spacing: 12) {
             Image(systemName: "doc")
                 .font(.system(size: 44))

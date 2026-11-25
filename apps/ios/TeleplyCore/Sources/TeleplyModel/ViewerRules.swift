@@ -61,3 +61,17 @@ public func viewerThumbWidth(_ file: FileRef, scale: Float) -> Int {
 public func viewerLoadsOriginal(_ file: FileRef) -> Bool {
     file.view != "svg" && opensOriginal(file.size)
 }
+
+/// Why a file's page does not draw the file itself (§5.8): too large for its type, or a kind this phone cannot show.
+/// A pure function so the page's `@ViewBuilder` only declares the answer, never assigns it inside an `if`.
+public func unshownReason(kind: String, size: Int64, limit: Int64, looks: Bool) -> String {
+    if size <= limit { return looks ? "这里不直接显示" : "手机上看不了这类文件" }
+    switch kind {
+    case "image":
+        return "这张图超过 \(RelayClient.picturePreviewLimit / 1_048_576)MB，不直接显示"
+    case "pdf":
+        return "这个 PDF 超过 \(RelayClient.pdfPreviewLimit / 1_048_576)MB，不直接显示"
+    default:
+        return "超过 \(RelayClient.officePreviewLimit / 1_048_576)MB，不直接显示"
+    }
+}
