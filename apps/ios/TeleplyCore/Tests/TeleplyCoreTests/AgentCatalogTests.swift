@@ -9,7 +9,7 @@ import TeleplyModel
 struct AgentCatalogTests {
     let device = String(repeating: "a", count: 32)
 
-    static let antigravity = #"{"id":"antigravity","name":{"zh":"Antigravity","en":"Antigravity"},"order":40,"color":"#4285F4","color_dark":"#8AB4F8","icon":{"kind":"builtin","key":"generic"},"legacy":false,"min_protocol":2,"schema":1,"capabilities":{"list":true,"read":true,"search":true,"open":false,"stop":true,"queue":false,"steer":false,"approve":true,"answer":false,"new":true,"new_projectless":false,"new_permission":false,"archive":false,"restore":false,"delete":false,"usage":false,"waiting":true,"attachments":true,"slash_commands":false,"settings":[],"send_modes":["send"],"statuses":["running","waiting","idle","unknown"]},"params":{"state_timeout_s":40,"send_timeout_s":60,"open_timeout_s":45,"new_timeout_s":140,"refresh_ms":2500,"max_images":5,"max_image_bytes":20971520,"max_text":20000},"ui":{"card_layout":"generic.v1","waiting_text":"等待你处理"}}"#
+    static let antigravity = ##"{"id":"antigravity","name":{"zh":"Antigravity","en":"Antigravity"},"order":40,"color":"#4285F4","color_dark":"#8AB4F8","icon":{"kind":"builtin","key":"generic"},"legacy":false,"min_protocol":2,"schema":1,"capabilities":{"list":true,"read":true,"search":true,"open":false,"stop":true,"queue":false,"steer":false,"approve":true,"answer":false,"new":true,"new_projectless":false,"new_permission":false,"archive":false,"restore":false,"delete":false,"usage":false,"waiting":true,"attachments":true,"slash_commands":false,"settings":[],"send_modes":["send"],"statuses":["running","waiting","idle","unknown"]},"params":{"state_timeout_s":40,"send_timeout_s":60,"open_timeout_s":45,"new_timeout_s":140,"refresh_ms":2500,"max_images":5,"max_image_bytes":20971520,"max_text":20000},"ui":{"card_layout":"generic.v1","waiting_text":"等待你处理"}}"##
 
     static func agents(_ entries: String...) -> [AgentInfo] {
         parseAgentsResponse(DemoData.parse(#"{"schema":1,"protocol":2,"agents":[\#(entries.joined(separator: ","))]}"#))
@@ -53,7 +53,7 @@ struct AgentCatalogTests {
         // The computer may say anything about the three: name, colours, mark and the old-route flags are always the
         // app's own (handoff 3.2: 三家外观永远用 App 自己的，只用它的顺序和能力位).
         let parsed = Self.agents(
-            #"{"id":"codex","name":{"zh":"别家的名字","en":"Someone else"},"order":10,"color":"#000000","color_dark":"#111111","icon":{"kind":"builtin","key":"generic"},"legacy":false,"min_protocol":9,"capabilities":{"archive":true}}"#)
+            ##"{"id":"codex","name":{"zh":"别家的名字","en":"Someone else"},"order":10,"color":"#000000","color_dark":"#111111","icon":{"kind":"builtin","key":"generic"},"legacy":false,"min_protocol":9,"capabilities":{"archive":true}}"##)
         let catalog = AgentCatalogSnapshot.fromServer(parsed)
         let codex = try #require(catalog.agents.first { $0.id == "codex" })
         #expect(codex.name.zh == "Codex" && codex.name.en == "Codex")
@@ -87,7 +87,7 @@ struct AgentCatalogTests {
 
     @Test func aColourThatIsNotOneFallsBackToNeutralGrey() {
         let catalog = AgentCatalogSnapshot.fromServer(Self.agents(
-            #"{"id":"broken-color","name":"颜色坏了","color":"blue","color_dark":"#12"}"#))
+            ##"{"id":"broken-color","name":"颜色坏了","color":"blue","color_dark":"#12"}"##))
         #expect(catalog.color("broken-color") == "#6B7280")
         #expect(catalog.color("broken-color", dark: true) == "#9CA3AF")
         #expect(agentColorValue("#4285F4") == 0x4285F4)

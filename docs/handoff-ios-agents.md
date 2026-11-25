@@ -175,6 +175,7 @@
 4. 对着安卓 1.0.10 的 `AgentInfo.kt` / `AgentCatalog.kt` / `RelayApi.kt` 逐条比：能力位默认值（list/read 缺省 true）、`params` 下限、三家兜底、`fromServer` 归一化、`treeApps` 排序规则、404 语义。
 5. 对着中转 0b3f8d7 核了协议登记：只有 `POST /account/push/register` 存 `protocol`（按通知令牌），灵动岛的 `/account/push/activity`、`/start-token` 不存，也不按手机协议过滤；所以 3.1 只改推送登记，岛的两个登记地址**故意没加** `protocol`。
 6. 审后按用户要求把测试里可能被握手改影响的「整体相等」比较全查了一遍：正则查 `headers ==`、`absoluteString ==`、`.url ==`、`queryItems ==`、`queryValue(`，逐个看。结果：只有 `RelayClientTests:15` 的整份请求头会变（已改）；`RelayClientTests:13` 和 `ServiceOriginTests:37/39` 是 `/account/config` 和 `ServiceOrigin.url()` 的网址，没有新增查询参数；`IslandTests:180/182` 是 `IslandURL` 的网址；`queryValue(` 的三处（`AppModelTests:333`、`AttachmentTests:229`、`RelayReadTests:174`）都是按名字取值；其余是 `url.path` 列表或 `contains`。**没有别的会因为握手而变。**
+7. Codemagic 报回原始字符串的问题后，写了一个扫描脚本（`F:\Android-Dev\work\20261101-island-duplicates\20261125-ios-agents\raw_string_check.py`），按 Swift 的规则走每个文件：以 N 个 `#` 开头的原始字符串在第一个 `"` + N 个 `#` 处结束，脚本检查结束符后面那个字符能不能接下去（`1`、`E` 这种就不能）。对这两轮改过的 34 个 Swift 文件跑过，改前正好报出那 7 处，改后 0 处；另外用 `json.loads` 把改过的 7 个字符串再解析了一遍，内容和改前一致。
 
 **现有测试的改动**（逐条原因；第 1、2 处审后已撤销）
 
@@ -197,6 +198,7 @@
 - `Teleply/Design/Marks.swift:19`、`TeleplyIslandWidget/IslandViews.swift:61`（`Image(systemName: "sparkles").resizable()` 放在 `Group` + `.frame` 里）。
 - `TeleplyCore/Sources/TeleplyModel/Push.swift:118`（body 里混用 `.string(...)` 和字符串字面量的 `[String: JSONValue]`）；`16`（`PushTarget` 的 guard 换成 `isValidAgentId`，审后改）。
 - 演示：`TeleplyDemo/DemoWorld.swift:95`（`init(site:testingAgent:)` 两个默认参数）、`112`（`apps(of:)` 里 `var apps = …` 再 append）；`Teleply/App/LaunchOptions.swift:29/68`（`agentsDemo` 是 `nonisolated`，`DemoHolder` 也是 nonisolated）。
+- 演示/测试里的原始字符串：`TeleplyDemo/DemoWorld.swift:834-837`、`TeleplyCoreTests/AgentCatalogTests.swift:12/56/90` 现在是 `##"…"##`（里面的 `"#1E222A"` 这类颜色值不再是结束符）。这里若再报 `not a valid digit in floating point exponent` / `expected ',' separator`，就是字符串里又出现了 `"##`，要再升一层 `###"…"###`（用同一个扫描脚本先查）。
 - 测试：`AgentHandshakeTests.swift:8`（`struct LegacyAgentsTransport: RelayTransport` 只转发 `send`，AppModel 里的会话仍会去要实时流）、`43`（`AppServices` 参数顺序）、`67`（`client.agents(device:)` 在 `WatchedTransport` 上）、`74-76`（`upload`/`download` 走 `WatchedTransport`）。`AgentCatalogTests.swift:15`（`DemoData.parse` 在别 target，靠 `@testable import TeleplyDemo`）。`RelayClientTests.swift:17`（整份请求头的期望值比的是 `TeleplyClient.tag`）。
 
 **没做的 / 要用户看的**
@@ -214,6 +216,7 @@
 2. **测试不再改全局版本号**：`TeleplyClient` 新增纯函数 `tag(_ version:)`，测试里单独断言 `tag("0.9.0") == "ios/0.9.0"`、`tag("") == "ios/?"`；`everyRequestCarriesProtocolTwoAndTheAppTag` 不再设置 `TeleplyClient.version`，只断言请求头等于当时的 `TeleplyClient.tag`（Swift Testing 默认并行跑，改全局会让别的测试读到）。
 3. **演示数据恢复原样**：`DemoWorld.apps(of:)` 回到原来的写法（测试电脑 B 两家、A 和离线那台三家），假助手 `testing` 改成要打开才有——`DemoWorld(testingAgent: true)`，外加只在调试版生效的启动参数 `-TeleplyDemoAgents`（照 `-TeleplyDemoSite` 的写法，`DemoHolder.fresh()` 里传）。关着时列表行、树、`/api/agents`（只回三家说明书）和 0.8.0 逐张一样；打开后 A 才有 `testing` 的两行、会话、侧栏分组和第四份说明书。`AppModelTests`、`DemoServiceTests` 里第一版改过的两处期望已改回原样；新测试改用 `DemoWorld(testingAgent: true)`，并加了「演示默认只回三家、打开后回四家」的测试。
 4. **`PushTarget.init?` 改成只要 `isValidAgentId(app)` 就接受**：不要求在 `AgentCatalogSnapshot.current` 里，冷启动点通知时说明书还没取到；中转只会推电脑发过的助手。这样也少了一处在主线程外读全局。设计 3.5 第一条已按这个意思改。`PushTests`、`IslandFlowTests` 里原来断言 `a: "mail"` 被拒绝的两处，改成接受 `mail`、拒绝 `9mail`（第 6、7 处改动）。
+5. **Codemagic `6b062a17631e119ed9f664eb` 的编译错误：原始字符串提前结束**。`#"…"#` 在第一个 `"#` 处就结束，而说明书 JSON 里的颜色值 `"#1E222A"`、`"#4285F4"` 正好带着 `"#`；`TeleplyModel`、`TeleplyIsland` 编过了，`TeleplyDemo` 在 `DemoWorld.swift` 834–837 报 `'A' is not a valid digit in floating point exponent` / `expected ',' separator`。改法：这 7 处（`DemoWorld.swift:834-837` 四份说明书；`AgentCatalogTests.swift:12`、`56`、`90`）改成 `##"…"##`，里面的 `"#` 就不再是结束符。又把这两轮写的所有原始字符串用脚本重查了一遍（见「自己怎么核对的」7）：34 个改过的 Swift 文件，改前正好只有这 7 处、改后 0 处；7 个字符串再解析成 JSON，内容和改前一样。改写时 PowerShell 把这两个文件的行尾临时写成了 CRLF，已改回 LF（`git ls-files --eol` 现在是 `i/lf w/lf`，提交里只有那 7 行变化）。
 
 ### 第二段
 
