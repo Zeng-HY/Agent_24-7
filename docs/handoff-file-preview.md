@@ -482,6 +482,10 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - 测试：第三段后 345 条全过（新增 9 条：高亮大小线、跳行、截断说明、CSV 走哪条路、播放器请求头、zip 解析与上限、附属资源走哪条路、老电脑退回、语言判定）；`assembleDebug` 通过。未加 Gradle 依赖，版本号未动。
 - 本段没在真机走查（不连手机、不装 APK）：代码页、播放器、zip 页面只过了编译和纯逻辑测试。
 
+**第三段发布前修正（代码页空白）**：`code.html` 原来把滚动区做成 `position:absolute; top:0; bottom:0`，App 的网页视图第一次量到 0 高时它按 0 高算，代码被裁掉，只剩行号。改成普通文档流：工具栏 `position:sticky; top:0`，代码区排在它下面；每一行一个 flex 行（行号 + 这一行的代码），自动换行时也对齐。highlight.js 的结果里跨行的 span 在行尾关掉、下一行开头重新打开；超过 200 KB 也按同样的逐行结构画。覆盖了 `code.hljs` 的 `padding`/`overflow`/`display`/背景，行号不再和代码错开。跳行、页内查找都改成找到那一行元素后 `scrollIntoView`，不再估行高；网页视图先 0 高、之后才拿到高度时，页面不依赖初始高度，正常显示后再跳一次。页面只依赖 DOM/CSS，网页线可直接复用。
+
+核对：在工作区写了 Playwright（Chrome `channel='chrome'`）脚本，按 `CodeViewer.kt` 的同一份 `/code.html`、`/text`、js/css 起本地服务：正常视口、自动换行开/关、视口先 1 像素再变正常、跳到第 3 行，截图在 `shots/`；脚本检查了代码可见、第一行在工具栏下面、行号与代码顶线一致（换行开/关都是 0 条错位）、第 3 行在视野内并标出，全部通过。单元测试 345 条全过，`assembleDebug` 通过；未加 Gradle 依赖，版本号未动。
+
 
 ### 线四、iOS 0.9.1
 
