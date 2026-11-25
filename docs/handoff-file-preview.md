@@ -572,8 +572,8 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **代码页。** 文件页原来的「文本」视图换成代码页：文字从 `/api/file/text` 来，行号、自动换行开关、按 `line` 跳到那一行并标出、页内查找（查找框 + 上一个/下一个 + 命中计数）、复制全部、跟随浅色/深色。`lang` 有就用，没有按后缀猜；超过 200 KB 不高亮，只给行号；`truncated` 时顶上说明。Markdown、HTML 的阅读视图没有改。
 - **高亮组件。** 从安卓线 `fp-android` 原样拷了 highlight.js 11.12.0 的 5 个 js（common + R、PowerShell、LaTeX、Dockerfile）、`code-light.css`、`code-dark.css` 到 `static/highlight/`；许可证放 `static/highlight.js.LICENSE`。`static/vendor-lock.json` 按现有写法逐文件登记了 npm 包名、版本、来源和 SHA-256（含许可证，共 8 条）；测试逐条核对文件摘要。高亮脚本按需加载，失败时退回纯文本代码页。
 - **工具行的文件。** `interaction-ui.js` 画活动项时，如果工具项带 `files`，就在工具详情下面画一排文件卡；`remote.html` 的旧工具行分支也接了一次。这样还没有回答时 SendUserFile 挂在工具行上的文件也能看到、能点。
-- **测试。** 新增 `tests/test_answer_files_preview.py`：临时目录里的编造文件，缩略图由真的 `file_renders.thumbnail` 生成（测试里断言返回的是 WebP、宽度 320/640/1280，不是固定假图），文字由真的 `file_text.read` 解出来。覆盖看图页打开/顺序/计数/放大不翻页/双击还原/Esc 关闭/blob 撤销/文件页/下载；消息里和文件条的缩略图；SVG 只进 `<img>`、没有新标签页或 blob 链接；表格的引号、引号里的逗号与换行、GB18030、5000 行上限、查看原文；代码页高亮、跳行、换行、查找、复制、深色主题、超过 200 KB 不高亮、截断说明；工具行文件条；vendor-lock 摘要。第一段测试也改成点图打开新看图页。
-- 本段测试：新测试 2 个通过；第一段测试 1 个通过。完整 pytest（工作区 `full-pytest-b-final.log`）：**1558 passed，7 skipped，3 failed**；3 条都是已知的环境失败（`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时），没有本段代码的失败。
+- **测试。** 新增 `tests/test_answer_files_preview.py`：临时目录里的编造文件，缩略图由真的 `file_renders.thumbnail` 生成（测试里断言返回的是 WebP、宽度 320/640/1280，不是固定假图），文字由真的 `file_text.read` 解出来；另有一个用例直接走 `Handler._reading_get` 的 `/api/file/thumb` 和 `/api/file/text`，验证 409、宽度错误、GB18030/R 的行号和编码。覆盖看图页打开/顺序/计数/放大不翻页/双击还原/Esc 关闭/blob 撤销/文件页/下载；消息里和文件条的缩略图；SVG 只进 `<img>`、没有新标签页或 blob 链接；表格的引号、引号里的逗号与换行、GB18030、5000 行上限、查看原文；代码页高亮、跳行、换行、查找、复制、深色主题、超过 200 KB 不高亮、截断说明；工具行文件条；vendor-lock 摘要。第一段测试也改成点图打开新看图页。
+- 本段测试：新测试 3 个通过；第一段测试 1 个通过。完整 pytest（工作区 `full-pytest-b-final.log`）：**1559 passed，7 skipped，3 failed**；3 条都是已知的环境失败（`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时），没有本段代码的失败。
 
 要审：
 

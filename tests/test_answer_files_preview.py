@@ -13,6 +13,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from PIL import Image, ImageDraw
@@ -63,7 +64,9 @@ def make_files(root: Path):
 
 
 def history_for(root: Path, paths):
-    links = " ".join(f"[{p.name}](<{p.as_posix()}>)`{p.as_posix()}`" for p in paths)
+    links = " ".join(
+        f"[{p.name}](<{p.as_posix()}{':12' if p.name == 'script.R' else ''}>)" + "`" + p.as_posix() + "`"
+        for p in paths)
     message = {"id": "m1", "role": "assistant", "text": links, "time": "2026-11-25T03:00:00Z",
                "activity_turn": "turn-1"}
     entry = SimpleNamespace(messages=[message], by_id={"m1": message}, state={"running": False},
@@ -99,7 +102,6 @@ class AnswerFilesPreview(unittest.TestCase):
         self.rows = self.history.list_files("codex", "c")["items"]
         self.by_id = {row["id"]: row for row in self.rows}
         self.by_name = {Path(row["path"]).name: row for row in self.rows}
-        self.by_name["script.R"]["line"] = 12
         self.assertEqual(len(self.rows), len(self.paths))
         self.assertTrue(file_renders.available())
         self.thumb_calls: list[tuple[str, int, bytes]] = []
@@ -394,6 +396,45 @@ class AnswerFilesPreview(unittest.TestCase):
         self.assertGreaterEqual(page.locator(".activity-item .answer-files .answer-file").count(), 1)
 
         self.assertEqual(errors, [])
+
+    def test_real_file_routes_for_thumb_and_text(self):
+        class Fake:
+            def __init__(self, query):
+                self.query = query
+                self.sent = []
+                self.history = self_history
+            def _query(self):
+                return self.query
+            def _app_visible(self, app):
+                return True
+            def _json(self, body, status=200):
+                self.sent.append(("json", status, body))
+            def _send(self, code, body, ctype, extra=None):
+                self.sent.append(("send", code, body, ctype))
+
+        self_history = self.history
+        chart = self.by_name["chart.png"]
+        with patch.object(file_renders, "_cache_root", lambda cache_dir=None: self.thumbs):
+            fake = Fake({"app": "codex", "id": "c", "file": chart["id"], "w": "640", "v": chart["v"]})
+            remote.Handler._reading_get(fake, "/api/file/thumb")
+            kind, status, body, ctype = fake.sent[-1]
+            self.assertEqual((kind, status, ctype), ("send", 200, "image/webp"))
+            self.assertEqual(body[:4], b"RIFF")
+            self.assertEqual(body[8:12], b"WEBP")
+            fake = Fake({"app": "codex", "id": "c", "file": chart["id"], "w": "640", "v": "stale"})
+            remote.Handler._reading_get(fake, "/api/file/thumb")
+            self.assertEqual(fake.sent[-1][1], 409)
+            fake = Fake({"app": "codex", "id": "c", "file": chart["id"], "w": "999"})
+            remote.Handler._reading_get(fake, "/api/file/thumb")
+            self.assertEqual(fake.sent[-1][1], 400)
+        script = self.by_name["script.R"]
+        fake = Fake({"app": "codex", "id": "c", "file": script["id"]})
+        remote.Handler._reading_get(fake, "/api/file/text")
+        kind, status, body = fake.sent[-1]
+        self.assertEqual((kind, status), ("json", 200))
+        self.assertEqual(body["text"], SCRIPT)
+        self.assertEqual(body["encoding"], "utf-8")
+        self.assertEqual((body["lang"], body["line"]), ("r", 12))
 
     def test_vendor_lock_matches_the_files(self):
         entries = json.loads((ROOT / "static/vendor-lock.json").read_text(encoding="utf-8"))
