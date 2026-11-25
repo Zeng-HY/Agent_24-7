@@ -211,6 +211,35 @@ def test_a_second_refresh_weighs_messages_that_already_have_a_scan_cache(tmp_pat
     assert len(entry.messages) == 2
 
 
+def test_updated_stays_updated_until_the_process_forgets_it(tmp_path, monkeypatch):
+    image = make(tmp_path, "out/chart.png")
+    agent = StubAgent()
+    history, item, entry = make_env(tmp_path, [f"[图]({image.as_posix()})"], agent=agent)
+    monkeypatch.setattr(registry, "get", lambda app: agent)
+    assert history.list_files("codex", "chat-1")["items"][0]["state"] == "current"
+    image.write_text("a much longer file", encoding="utf-8")
+    assert history.list_files("codex", "chat-1")["items"][0]["state"] == "updated"
+    assert history.list_files("codex", "chat-1")["items"][0]["state"] == "updated"
+
+
+def test_identical_texts_share_one_scan(tmp_path, monkeypatch):
+    image = make(tmp_path, "out/chart.png")
+    text = f"[图]({image.as_posix()})"
+    calls = []
+    real = chat_history.answer_files.scan
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(chat_history.answer_files, "scan", counting)
+    agent = StubAgent()
+    history, item, entry = make_env(tmp_path, [text, text], agent=agent)
+    monkeypatch.setattr(registry, "get", lambda app: agent)
+    history.list_files("codex", "chat-1")
+    assert len(calls) == 1
+
+
 def test_claude_send_user_file_moves_to_the_next_answer(tmp_path):
     record, image = claude_record(tmp_path, with_answer=True)
     entry = chat_history.Transcript(record, "claude", str(tmp_path)).refresh()

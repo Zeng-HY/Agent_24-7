@@ -110,6 +110,50 @@ def test_a_long_local_path_is_still_local(places):
     assert file_policy.check("\\\\?\\" + str(path), **options) is None
 
 
+def test_antigravity_brain_is_allowed_but_the_rest_of_gemini_is_not(places):
+    root, home, _, options = places
+    for name in (".gemini/antigravity/brain/chat-1/chart.png",
+                 ".gemini/antigravity-cli/brain/chat-2/notes.md"):
+        path = make(root, "home/" + name)
+        assert file_policy.check(path, **options) is None, name
+    for name in (".gemini/oauth_creds.json", ".gemini/antigravity/settings.json",
+                 ".gemini/antigravity/brain-copy/a.png"):
+        assert file_policy.check(root / "home" / name, **options) == "denied", name
+
+
+def test_drive_list_is_cached_for_thirty_seconds(monkeypatch, places):
+    root, _, _, options = places
+    path = make(root, "cached.txt")
+    file_policy.clear_cache()
+    calls = []
+    monkeypatch.setattr("pc_files.local_drives", lambda: calls.append(1) or [root.anchor])
+    clock = [100.0]
+    for _ in range(2):
+        assert file_policy.check(path, home=options["home"], data=options["data"],
+                                 clock=lambda: clock[0]) is None
+    assert calls == [1]
+    clock[0] += 31
+    assert file_policy.check(path, home=options["home"], data=options["data"],
+                             clock=lambda: clock[0]) is None
+    assert calls == [1, 1]
+
+
+def test_a_file_check_is_cached_for_five_seconds_and_fresh_bypasses_it(places):
+    root, _, _, options = places
+    path = make(root, "size.txt")
+    file_policy.clear_cache()
+    clock = [100.0]
+    first = file_policy.inspect(path, clock=lambda: clock[0], **options)[1].st_size
+    path.write_text("a much longer file", encoding="utf-8")
+    cached = file_policy.inspect(path, clock=lambda: clock[0], **options)[1].st_size
+    assert cached == first
+    fresh = file_policy.inspect(path, clock=lambda: clock[0], fresh=True, **options)[1].st_size
+    assert fresh != first
+    clock[0] += 6
+    later = file_policy.inspect(path, clock=lambda: clock[0], **options)[1].st_size
+    assert later == fresh
+
+
 def test_a_link_is_not_followed(places):
     root, _, _, options = places
     real = make(root, "real.txt")

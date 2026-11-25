@@ -474,11 +474,13 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - `/api/chat/files` 用同一套结果；老字段都在，新字段照 §5.1；`message=` 时同一个文件的每个 `index` 各一行（各自的 `id`），整个对话按路径去重。`History.file()` 仍每次重新走 `list_files()` 的策略复查。
 - `message_files.references`、`absolute_links` 改成 `answer_files` 的薄包装。
 
-测试：`tests/test_file_policy.py` 49 个通过、1 个符号链接用例跳过（Windows 不许建链接）；`tests/test_answer_files_history.py` 11 个通过（三个出口、空 `files`、`file_notes`、SendUserFile 两种位置、DeepSeek 成果、缓存、刷新后仍能称重）；`tests/test_answer_files.py` 80 个、第一段两个旧文件测试也通过。
+审后修（11-25）：`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余照旧不给；盘符列表缓存 30 秒，`file_policy.inspect` 的路径结果缓存 5 秒（时钟可注入，`History.file()` 用 `fresh=True` 绕过读缓存、仍每次重新检查）；`updated` 恢复成一旦发现就一直保持；同样文字的消息共用一次 `answer_files.scan`（`History` 里最多 256 条），所以一万条编造对话第一次列文件从 **4.8 秒降到约 0.10 秒**。
 
-完整 pytest（工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**。失败的 3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。浏览器测试运行时设了 `PLAYWRIGHT_BROWSERS_PATH=D:/Personal/agent_remote_lanes/ms-playwright`，所以这次没有出现 webkit 启动失败那批。
+测试：`tests/test_file_policy.py` 52 个通过、1 个符号链接用例跳过（Windows 不许建链接）；`tests/test_answer_files_history.py` 13 个通过（三个出口、空 `files`、`file_notes`、SendUserFile 两种位置、DeepSeek 成果、缓存、同文共用、刷新后仍能称重、updated 保持）；`tests/test_answer_files.py` 80 个、第一段两个旧文件测试也通过。
 
-速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接的对话，只有两个不同文件）：第一次出一页（60 条）**0.08–0.11 秒**；第一次列整个对话的文件 **4.8 秒**（5,000 条消息要认，第二次走缓存 0.12 秒）；缓存后再出一页 0.05 秒。脚本在 DeepSeek 工作区，没有提交。
+完整 pytest（第二段当时，工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**。
+
+速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接的对话，只有两个不同文件）：修前第一次出一页 **0.085 秒**、第一次列整个对话文件 **4.78 秒**；修后 **0.026 秒**和 **0.105 秒**，缓存后再列 0.09 秒、再出页 0.018 秒。脚本在 DeepSeek 工作区，没有提交。
 
 旧测试的有意改动：
 
@@ -491,9 +493,9 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 要审：
 
 - `files` 只加在回答（和还没有回答的 SendUserFile 工具行）上；用户消息没有 `files`。
-- `file_policy` 把 `~/.gemini`、`~/.aws`、`~/.ssh` 整个目录都算不给；浏览器文件只在路径带 Chrome/Edge/Firefox/User Data 等标记时按文件名拒绝。
+- `file_policy` 把 `~/.aws`、`~/.ssh` 等整个目录都算不给；`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余不给。浏览器文件只在路径带 Chrome/Edge/Firefox/User Data 等标记时按文件名拒绝。
 - HTML 的 `<img src>` / `<a href>` 仍按网址做 %-解码；审后修里「不做 %-解码」只指 presented、Codex 引用、行内代码、正文路径。
-- 整个对话第一次列文件在 10,000 条时约 4.8 秒；如果嫌慢，下一步可以在 `list_files` 里按「没有 `](`、`]:`、`:\`、`:/`、`file:`、`<img`、`<a `、`~/`、反引号」先粗筛整条消息（`answer_files` 内部已有，但每条仍进入一次函数）。
+- 整个对话第一次列文件在 10,000 条时约 0.10 秒（同文共用一次 scan；不同文字的长对话仍是逐条认）。
 
 ### 线二、网页
 

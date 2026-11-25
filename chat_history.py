@@ -19,6 +19,8 @@ CHILDREN_SHOWN=30      # children sent with a row; the rest on request (/api/cha
 # 11-16: parsed transcripts kept in memory. A ninth conversation used to throw the oldest away, so opening it again
 # parsed a 114 MB file from its first line.
 MAX_TRANSCRIPTS=24
+# One scan result can serve several messages with the same words (a repeated template, the same answer copied).
+MAX_SCAN_CACHE=256
 # 11-24: bounded by the memory the parsed messages take (Transcript.weight), no longer by the size of their files. A
 # parsed Claude record keeps 6-23% of its file (tracemalloc: 420 MB -> 48 MB, 319 MB -> 19 MB, 114 MB -> 14 MB), so the
 # 600 MB of files allowed before let two or three big conversations push out all the others, and each switch back
@@ -251,6 +253,7 @@ class Transcript:
 class History:
     def __init__(self,roots=None,secret='',warm=None):
         self.entries=OrderedDict();self.lock=threading.RLock();self.roots=roots or [];self.secret=secret.encode();self.files={};self.catalog_cache=(0,[],[])
+        self.scan_cache=OrderedDict();self.scan_cache_lock=threading.Lock()
         self.catalog_load_lock=threading.Lock();self.catalog_generation=0
         # 11-24: the read-ahead (warm_once) runs on its own thread in the installed app only; tests call warm_once().
         self.log=None  # a callable given the read-ahead's errors, when the service hands one over
@@ -462,7 +465,17 @@ class History:
         key=(hashlib.sha256(text.encode('utf-8')).hexdigest(),bases,tuple(presented))
         cached=m.get('_answer_scan')
         if isinstance(cached,_ScanCache) and cached.key==key:return cached.scan
-        result=answer_files.scan(text,bases,presented=presented)
+        with self.scan_cache_lock:
+            result=self.scan_cache.get(key)
+            if result is not None:
+                self.scan_cache.move_to_end(key)
+        if result is None:
+            result=answer_files.scan(text,bases,presented=presented)
+            with self.scan_cache_lock:
+                self.scan_cache[key]=result
+                self.scan_cache.move_to_end(key)
+                while len(self.scan_cache)>MAX_SCAN_CACHE:
+                    self.scan_cache.popitem(last=False)
         m['_answer_scan']=_ScanCache(key,result)
         return result
 
@@ -475,6 +488,7 @@ class History:
         old=self.files.get((app,tid,fid))
         updated=bool(old and old.get('mtime') is not None and st
                      and (old['mtime']!=st.st_mtime_ns or old['size']!=size))
+        updated=updated or bool(old and old.get('updated'))
         state='missing' if st is None else 'updated' if updated else 'current'
         row={'id':fid,'index':index,'name':path.name,'path':str(path),'kind':kind,'view':view,
              'ext':ext,'mime':_file_mime(suffix,view),'size':size,
@@ -491,7 +505,8 @@ class History:
             'message_id':m.get('id'),'index':index,'updated':updated}
         return row
 
-    def _message_rows(self,m,item,app,tid,entry=None,agent=None,per_index=False,cache_on=None,seen=None):
+    def _message_rows(self,m,item,app,tid,entry=None,agent=None,per_index=False,cache_on=None,seen=None,
+                      fresh=False):
         """(rewritten text, file rows, file notes) for one message; scans only now, never while reading the record."""
         if not (m.get('role')=='assistant' or (m.get('role')=='tool' and m.get('_presented_files'))):
             return (m.get('text') or ''),[],[]
@@ -500,7 +515,7 @@ class History:
         for f in scan.files:
             identity=os.path.normcase(f['path'])
             if seen is not None and identity in seen:continue
-            reason,st=file_policy.inspect(f['path'])
+            reason,st=file_policy.inspect(f['path'],fresh=fresh)
             if reason in ('denied','not_local','folder'):
                 href=(f.get('hrefs') or [f['path']])[0]
                 notes.append({'href':href,'reason':reason,'text':_ANSWER_REASONS[reason]})
@@ -518,10 +533,10 @@ class History:
             note_seen.add(key);unique.append(note)
         return scan.text,rows,unique
 
-    def _tool_row(self,m,app,tid):
+    def _tool_row(self,m,app,tid,fresh=False):
         raw=m.get('current_file')
         if not isinstance(raw,str) or not raw.strip():return None
-        reason,st=file_policy.inspect(raw)
+        reason,st=file_policy.inspect(raw,fresh=fresh)
         if reason not in (None,'missing'):return None
         path=str(Path(raw))
         f={'path':path,'line':None,'indexes':[1000],'via':['tool']}
@@ -670,7 +685,7 @@ class History:
                 hits.append({'id':m['id'],'role':m['role'],'origin':m.get('origin'),'time':m.get('time'),'snippet':m['text'][max(0,at-60):at+len(query)+100]})
             more=offset+limit<len(hits)
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
-    def list_files(self,app,tid,message_id=None):
+    def list_files(self,app,tid,message_id=None,fresh=True):
         from agents import registry
         item,entry=self.transcript(app,tid)
         agent=getattr(entry,'agent',None) or registry.get(app)
@@ -686,10 +701,11 @@ class History:
                 if m.get('role')=='assistant' or (m.get('role')=='tool' and m.get('_presented_files')):
                     _,rows,found_notes=self._message_rows(m,item,app,tid,entry,agent,
                                                           per_index=bool(message_id),
-                                                          seen=None if message_id else seen_paths)
+                                                          seen=None if message_id else seen_paths,
+                                                          fresh=fresh)
                     notes+=found_notes
                 else:
-                    row=self._tool_row(m,app,tid);rows=[row] if row else []
+                    row=self._tool_row(m,app,tid,fresh);rows=[row] if row else []
                 for row in rows:
                     identity_path=os.path.normcase(row['path'])
                     if not message_id and identity_path in seen_paths:continue
@@ -706,7 +722,7 @@ class History:
     def file(self,app,tid,fid):
         meta=self.files.get((app,tid,fid))
         # Revalidate source authorization on every access, including old references.
-        listed=self.list_files(app,tid,meta['message_id'] if meta else None)
+        listed=self.list_files(app,tid,meta['message_id'] if meta else None,fresh=True)
         if not any(f['id']==fid for f in listed['items']):raise HistoryError('文件引用无效或不属于当前对话',403)
         meta=self.files[(app,tid,fid)]
         try:
@@ -715,4 +731,5 @@ class History:
             if not p.is_file():raise HistoryError('文件已移动或删除',404)
             st=p.stat()
         except OSError:raise HistoryError('文件已移动或删除',404) from None
-        return {**meta,'path':p,'size':st.st_size,'mime':meta['mime']}
+        return {**meta,'path':p,'size':st.st_size,'mime':meta['mime'],'v':_file_version(st),
+                'mtime':st.st_mtime_ns,'modified':int(st.st_mtime*1000)}
