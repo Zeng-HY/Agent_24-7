@@ -99,14 +99,19 @@ public struct FileCache: Sendable {
     /// The file name of one version: a digest, so no file id or version is written out as the phone's name, then the
     /// extension Quick Look and the share sheet need.
     public static func name(file: String, version: String, ext: String) -> String {
-        ThumbCache.digest("\(file)\n\(version)") + "." + safeExt(ext)
+        ThumbCache.digest("\(file)\n\(version)") + "." + cleanExt(ext)
     }
 
-    /// The extension for a kept file: letters and digits only, at most 8, else `bin`.
+    /// The extension for a kept file, from a whole file name: letters and digits only, at most 8, else `bin`.
     public static func safeExt(_ name: String) -> String {
         guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return "bin" }
-        let ext = name[name.index(after: dot)...].lowercased()
-        let clean = ext.filter { character in
+        return cleanExt(String(name[name.index(after: dot)...]))
+    }
+
+    /// An extension already on its own (no dot), cleaned the same way: `png` stays `png`, `a very long one` becomes
+    /// `bin`, so `name` may be given either a file name's extension or just `png`.
+    private static func cleanExt(_ ext: String) -> String {
+        let clean = ext.lowercased().filter { character in
             (character.isLetter || character.isNumber) && character.unicodeScalars.allSatisfy { $0.isASCII }
         }
         return clean.count >= 1 && clean.count <= 8 ? clean : "bin"

@@ -58,7 +58,7 @@ public struct DemoTransport: RelayFileTransport {
         let file = path.hasSuffix("/api/codex/image") ? "fixture-png" : Self.query(request.url)["file"] ?? ""
         let bytes: Data = switch file {
         case "fixture-png": Data(base64Encoded: DemoData.png) ?? Data()
-        case "fixture-docx", "fixture-report": DemoData.docx
+        case "fixture-docx", "fixture-report", "fixture-office-mid": DemoData.docx
         case "fixture-download": Data(DemoData.computerFile.utf8)
         // 文件预览示例's own files: pictures are the fixed PNG, the PDF a one-page one, the spreadsheet the fixed
         // workbook, and the R script and the note read here.
@@ -289,9 +289,12 @@ public struct DemoTransport: RelayFileTransport {
             if query["file"] == "fixture-download" {
                 return Self.json(["kind": "download", "name": "遥应下载测试.txt", "state": "current", "size": .number(Double(Data(DemoData.computerFile.utf8).count))])
             }
-            // A PowerPoint file over the 20 MB a page shows by itself, not listed.
+            // An Office file over the 30 MB a page shows by itself, not listed; a smaller one is fetched and drawn.
             if query["file"] == "fixture-office-big" {
-                return Self.json(["kind": "download", "name": "季度汇报.pptx", "state": "current", "size": 31_457_280, "preview": "pdf"])
+                return Self.json(["kind": "download", "name": "季度汇报.pptx", "state": "current", "size": 33_554_432, "preview": "pdf"])
+            }
+            if query["file"] == "fixture-office-mid" {
+                return Self.json(["kind": "download", "name": "季度汇报.pptx", "state": "current", "size": 26_214_400, "preview": "pdf"])
             }
             let file = (world.site?.files ?? (DemoData.files + [DemoData.deliverable])).first { $0["id"].string() == query["file"] }
             var meta: [String: JSONValue] = ["kind": file?["kind"] ?? "text", "name": file?["name"] ?? "安全预览.html", "state": "current", "size": file?["size"] ?? 60]

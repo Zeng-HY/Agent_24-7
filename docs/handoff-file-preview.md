@@ -476,3 +476,4 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **演示**：文件预览示例加了 6000×4000 的 PNG（`size` 写成 41 MB，用来看 2048 退回）、四帧 GIF 和三页 PDF；名字、路径全编造，仍只在 `-TeleplyDemoFiles` 下出现。
 - **测试**：`ViewerRulesTests`（缩放上下限、双击目标、放大时不翻页、选原图还是 2048、SVG 换 4096、解码边长）；`FileCacheTests`（命名有 `v`、无 `v` 用大小和修改时间、两样都没有不缓存、500 MB 最久没用清理、清一台电脑只动它、两个缓存上限是全电脑合计）；`AnswerFilesTests` 补了 `modified`、缩略图 2048/4096 宽度和看图页图片顺序。
 - **没验到的**：本机没有 Swift，第二段的 App/测试都还没编译过；看图页手势、PDF 页码和 GIF 只在演示数据上准备，等 Codemagic 编译后再看截图/真机。
+- **测试修正（11-25，构建 `6b069324f367b6e980234968`）**：`FileCache.name` 的 `ext` 参数本来就不带点，之前又交给按文件名取的 `safeExt`，缓存名因此没有 `.png`；拆出 `cleanExt`，两种写法都能得到正确后缀。`AttachmentTests` 里旧的 20 MB Office 上限测试改成 30 MB（`fixture-office-big` 改成 32 MiB），并加了一条 20–30 MB 之间会直接取来画的测试（`fixture-office-mid`，25 MiB）；图片 30 MB、PDF 100 MB 没有按旧数字写的测试。

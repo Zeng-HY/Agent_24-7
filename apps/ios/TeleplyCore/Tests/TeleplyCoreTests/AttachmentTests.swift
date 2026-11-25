@@ -214,19 +214,34 @@ struct AttachmentTests {
         #expect(workspace.preview == nil && !FileManager.default.fileExists(atPath: shown.path))
     }
 
-    /// Over 20 MB a file is not fetched by opening its page; saving it still downloads it whole.
-    @Test func anOfficeFileOver20MBWaitsToBeAskedFor() async throws {
+    /// Over 30 MB an Office file is not fetched by opening its page (§5.8); saving it still downloads it whole.
+    @Test func anOfficeFileOver30MBWaitsToBeAskedFor() async throws {
         let watched = WatchedTransport()
         let model = await demoConversation("原生阅读示例", on: watched)
         let workspace = model.workspace
         workspace.file(["id": "fixture-office-big", "name": "季度汇报.pptx"])
         await workspace.settle()
         #expect(workspace.paneError == nil && workspace.fileNote.isEmpty && workspace.preview == nil)
-        #expect(workspace.data["meta"]["size"].int64() > RelayClient.previewLimit)
+        #expect(workspace.data["meta"]["size"].int64() > RelayClient.officePreviewLimit)
         #expect(await !watched.log.items.contains { $0.url.path.hasSuffix("/api/file") || $0.url.path.hasSuffix("/api/file/pdf") })
         let copy = try await workspace.fileCopy()
         #expect(copy.lastPathComponent == "季度汇报.pptx")
         #expect(await watched.log.items.filter { $0.url.path.hasSuffix("/api/file") }.compactMap { queryValue($0, "file") } == ["fixture-office-big"])
+    }
+
+    /// Between the old 20 MB and the new 30 MB an Office file is fetched and drawn on the page.
+    @Test func anOfficeFileBetween20And30MBIsFetchedToShow() async throws {
+        let watched = WatchedTransport()
+        let model = await demoConversation("原生阅读示例", on: watched)
+        let workspace = model.workspace
+        workspace.file(["id": "fixture-office-mid", "name": "季度汇报.pptx"])
+        await workspace.settle()
+        #expect(workspace.paneError == nil && workspace.fileNote.isEmpty)
+        let size = workspace.data["meta"]["size"].int64()
+        #expect(size > RelayClient.previewLimit && size <= RelayClient.officePreviewLimit)
+        let shown = try #require(workspace.preview)
+        #expect(shown.lastPathComponent == "季度汇报.pptx")
+        #expect(await watched.log.items.filter { $0.url.path.hasSuffix("/api/file") }.compactMap { queryValue($0, "file") } == ["fixture-office-mid"])
     }
 
     /// Office files, the pictures the computer lists as plain files, sound and video show in the page, whatever the
