@@ -60,6 +60,8 @@ _BODY_PATH = re.compile(
     r"|'([A-Za-z]:[\\/][^'\n]*)'"
     r'|「([A-Za-z]:[\\/][^」\n]*)」'
     r'|([A-Za-z]:[\\/][^\s，。；：、！？」』）】》〈〉…—·"\'<>`]*))')
+_REFERENCE_LABEL = re.compile(r'(!?)\[([^\[\]\n]*)\]\[([^\[\]\n]*)\]')
+_FILE_AUTOLINK = re.compile(r"<(file:[^<>\s]+)>", re.I)
 
 _TRAILING = ".,;:)]}'\""
 _COLON_LINE = re.compile(r":(\d+)(?::\d+)?(?:-\d+)?$")
@@ -86,14 +88,16 @@ def _pct(value: str) -> str:
         return value
 
 
-def _normalize_dest(raw: str) -> str:
+def _normalize_dest(raw: str, decode: bool = True) -> str:
     s = raw.strip()
     if len(s) >= 2 and s[0] == "<" and s[-1] == ">":
         s = s[1:-1]
     # Every backslash is a separator, including the one CommonMark reads as an escape
     # (D:\a\.claude\f.md) and would otherwise drop.
     s = s.replace("\\", "/")
-    return unicodedata.normalize("NFC", _pct(s))
+    if decode:
+        s = _pct(s)
+    return unicodedata.normalize("NFC", s)
 
 
 def _href_text(raw: str) -> str:
@@ -135,15 +139,6 @@ def _line_spans(text: str) -> tuple[list[str], list[int]]:
     return lines, starts
 
 
-def _line_start(text: str, pos: int) -> int:
-    return text.rfind("\n", 0, pos) + 1
-
-
-def _line_end(text: str, pos: int) -> int:
-    end = text.find("\n", pos)
-    return len(text) if end < 0 else end
-
-
 def _merge_ranges(ranges: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
     merged: list[tuple[int, int]] = []
     for start, end in sorted((a, b) for a, b in ranges if a < b):
@@ -163,8 +158,8 @@ def _inside(pos: int, ranges: Sequence[tuple[int, int]]) -> bool:
     return False
 
 
-def _is_image(text: str, close: int) -> bool:
-    """True when the ] at [close] closes an image label (a ![ before its opening [)."""
+def _label_start(text: str, close: int) -> int | None:
+    """The [ that opens the label closed by ] at [close], or None."""
     depth = 1
     i = close - 1
     while i >= 0:
@@ -177,9 +172,15 @@ def _is_image(text: str, close: int) -> bool:
         elif char == "[":
             depth -= 1
             if depth == 0:
-                return i > 0 and text[i - 1] == "!"
+                return i
         i -= 1
-    return False
+    return None
+
+
+def _is_image(text: str, close: int) -> bool:
+    """True when the ] at [close] closes an image label (a ![ before its opening [)."""
+    start = _label_start(text, close)
+    return start is not None and start > 0 and text[start - 1] == "!"
 
 
 def _local_base(value) -> str | None:
@@ -275,7 +276,7 @@ def _recognize_form(s: str, bases: Sequence[str], lookup: Callable, depth: int =
         if s.lower().startswith("unc/"):
             return ("not_local",)
     if s.startswith("//"):
-        return ("not_local",)  # \\server\share, \\wsl$\..., \\wsl.localhost\...
+        return ("ignore",)  # //cdn.example.com is a web address, not a network share
     if re.match(r"(?i)^file:", s):
         rest = _file_rest(s)
         if rest is _NOT_LOCAL:
@@ -293,6 +294,9 @@ def _recognize_form(s: str, bases: Sequence[str], lookup: Callable, depth: int =
     if s.startswith("/"):
         return ("not_local",) if s.lower().startswith(_POSIX_ROOTS) else ("ignore",)
     if _SCHEME.match(s):
+        # https://host:443, vscode://… and every other scheme with // is a URL, never a file.
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", s):
+            return ("ignore",)
         # filename.ext:line is a file with a line number, not a URL scheme (message_files.py:28).
         colon = _COLON_LINE.search(s)
         if colon and _EXTENDING.search(s[:colon.start()].rsplit("/", 1)[-1]):
@@ -301,8 +305,15 @@ def _recognize_form(s: str, bases: Sequence[str], lookup: Callable, depth: int =
     return _relative(s, bases, lookup)
 
 
-def _recognize(raw: str, bases: Sequence[str], lookup: Callable) -> tuple:
-    s = _normalize_dest(raw)
+def _recognize(raw: str, bases: Sequence[str], lookup: Callable, *, decode: bool = True) -> tuple:
+    original = _href_text(raw)
+    if original.startswith("\\\\"):
+        if not (original.startswith("\\\\?\\")
+                and not original[4:].lower().startswith("unc\\")):
+            return ("not_local",)  # \\server\share, \\wsl$\..., \\.\...
+    elif original.startswith("//"):
+        return ("ignore",)  # a protocol-relative web address
+    s = _normalize_dest(raw, decode)
     if not s or s.startswith("#") or s.startswith("?"):
         return ("ignore",)
     return _recognize_form(s, bases, lookup)
@@ -321,7 +332,7 @@ def _code_file(content: str, bases: Sequence[str], lookup: Callable):
     s = content.strip()
     if not s:
         return None
-    info = _recognize(s, bases, lookup)
+    info = _recognize(s, bases, lookup, decode=False)
     if info[0] != "ok":
         return None
     # An absolute path that no longer exists is still a reference; a path with spaces is
@@ -395,9 +406,17 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
     tag_starts = {start for start, _ in tag_ranges}
     comment_ranges = (_merge_ranges(match.span() for match in _COMMENT.finditer(source))
                       if "<!--" in source else [])
-    definition_ranges = (_merge_ranges(
-        (_line_start(source, match.start()), _line_end(source, match.end()))
-        for match in _DEFINITION.finditer(source)) if "]:" in source else [])
+    references = env.get("references") or {}
+    reference_ranges = []
+    for reference in references.values():
+        span_map = reference.get("map") if isinstance(reference, dict) else None
+        if span_map and len(span_map) == 2:
+            start = starts[min(span_map[0], len(lines))]
+            end = starts[min(span_map[1], len(lines))]
+            if start < end:
+                reference_ranges.append((start, end))
+    # Only lines markdown-it really recognized as link reference definitions are definitions.
+    definition_ranges = _merge_ranges(reference_ranges)
 
     occurrences: list[dict] = []
     notes: list[tuple[int, dict]] = []
@@ -424,9 +443,8 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             _note(notes, seen_notes, _href_text(raw), info[0], start)
 
     # Reference-style links: the address lives on the definition line.
-    references = env.get("references") or {}
     for match in (_DEFINITION.finditer(source) if references else ()):
-        if _inside(match.start(), code_ranges):
+        if _inside(match.start(), code_ranges) or not _inside(match.start(), definition_ranges):
             continue
         label = normalizeReference(match.group(1))
         if label not in references:
@@ -462,6 +480,17 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
                 elif info[0] in ("not_found", "not_local"):
                     _note(notes, seen_notes, value, info[0], match.start())
 
+    # <file:///D:/a.png> is a Markdown autolink to a file: recognized, never rewritten
+    # (a <D:/…> autolink is not valid Markdown and would turn into plain text).
+    for match in (_FILE_AUTOLINK.finditer(source) if "file:" in source.lower() else ()):
+        if _inside(match.start(), code_ranges) or _inside(match.start(), comment_ranges):
+            continue
+        info = _recognize(match.group(1), bases, lookup)
+        if info[0] == "ok":
+            occurrences.append(_occurrence(match.start(), ["link"], "autolink", info))
+        elif info[0] in ("not_found", "not_local"):
+            _note(notes, seen_notes, match.group(1), info[0], match.start())
+
     # Codex file citations, already turned into links by chats.codex_answer in the live path.
     for match in (_CITATION.finditer(source) if ":codex-file-citation{" in source else ()):
         if _inside(match.start(), code_ranges):
@@ -469,7 +498,7 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
         path = _CITATION_PATH.search(match.group(1))
         if not path:
             continue
-        info = _recognize(path.group(1), bases, lookup)
+        info = _recognize(path.group(1), bases, lookup, decode=False)
         if info[0] == "ok":
             occurrences.append(_occurrence(match.start(), ["citation"], "citation", info))
 
@@ -482,13 +511,24 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
         if info:
             occurrences.append(_occurrence(match.start(), ["code"], "code", info, content))
 
+    link_labels = []
+    for match in _DESTINATION.finditer(source):
+        if _inside(match.start(), code_ranges):
+            continue
+        opening = _label_start(source, match.start())
+        if opening is not None:
+            link_labels.append((opening, match.start() + 1))
+    link_labels += [match.span(2) for match in _REFERENCE_LABEL.finditer(source)
+                    if not _inside(match.start(), code_ranges)]
     body_ranges = _merge_ranges(
         code_ranges + list(tag_ranges) + list(definition_ranges)
         + [match.span(1) for match in _DESTINATION.finditer(source)]
+        + link_labels
         + [match.span() for match in _CITATION.finditer(source)]
         + list(comment_ranges))
 
-    # Absolute paths in body text: only when the file really exists.
+    # Absolute paths in body text: only when the file really exists.  A real path, not a
+    # URL, so no %-decoding (a file may be named b%20c.png).
     for match in _BODY_PATH.finditer(source):
         if _inside(match.start(), body_ranges):
             continue
@@ -496,13 +536,13 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
         raw = raw.strip().rstrip(_TRAILING)
         if not raw:
             continue
-        info = _recognize(raw, bases, lookup)
+        info = _recognize(raw, bases, lookup, decode=False)
         if info[0] == "ok" and info[3]:
             occurrences.append(_occurrence(match.start(), ["path"], "path", info, raw))
 
     # Files the assistant explicitly presented (Claude SendUserFile, DeepSeek deliverables).
     for index, value in enumerate(presented):
-        info = _recognize(value, bases, lookup)
+        info = _recognize(value, bases, lookup, decode=False)
         if info[0] == "ok":
             occurrences.append(_occurrence(len(source) + 1 + index, ["presented"], "presented", info))
 

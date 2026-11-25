@@ -449,13 +449,15 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 `index`：按改写后的文字、markdown-it 的顺序，给所有本地 Markdown 链接和图片从 0 编号（文件夹、文件不在也占号）；HTML、`code`、`path`、`presented`、`citation` 从 1000。每个文件另有 `indexes`（旧网页的每个号），`index` 是其中最小的一个。同一个文件被链接两次时两个号都在；B 段做 `/api/chat/files` 时按 `indexes` 拆成多行，旧网页第二个链接才找得到。
 
+审后修（11-25）：带端口的网址（`https://host:443`）和一切 `协议://` 地址不再当文件；`//cdn…` 按原文判成网页地址，只有原文以 `\\` 开头的才算网络位置；`presented`、Codex 引用、行内代码、正文路径是真实路径，不做 %-解码（只有 Markdown 链接/图片地址解码）；只有 markdown-it 真认作定义的行才算定义行；链接文字 `[…]` 里的路径不再记成 `path`；`<file:///D:/…>` 自动链接认成 `link` 但不改写，编号从 1000。每处都有测试。
+
 几个自己定的做法，请审：
 
 - 改写后的地址把 `%` 写成 `%25`（`100%.txt` → `100%25.txt`），否则旧网页的 `decodeURIComponent` 遇到 `100%` 会抛错；三端规则解码后仍是原路径。
 - 相对路径找不到只给 `file_notes`（`not_found`），并且只认「像文件」的相对路径（有 `/`、有扩展名或有行号）；`#…`、`mailto:`、`vscode:`、网页、`localhost` 都不记 note。
 - 网络位置和别的系统的绝对路径在查文件之前就判 `not_local`，不会调用 `stat`（测试里用会抛错的 `stat` 验证过）。
 
-测试：`tests/test_answer_files.py` 71 个（表驱动，§3.2 每种写法、三端 `localPath` 契约、幂等、代码不动、重复 index、50 个上限、网络不 stat），加 `tests/test_relative_links.py`、`tests/test_artifact_files.py` 共 81 个通过。速度：本机 10,000 条编造消息（各约 2 KB，5,000 条带链接），总 8.3–8.7 秒，约 0.86 ms/条；带链接的约 1.7 ms/条。量速脚本在 DeepSeek 工作区，没有提交。
+测试：`tests/test_answer_files.py` 80 个（表驱动，§3.2 每种写法、三端 `localPath` 契约、幂等、代码不动、重复 index、50 个上限、网络不 stat，以及上面六处审后修），加 `tests/test_relative_links.py`、`tests/test_artifact_files.py` 共 90 个通过。速度：本机 10,000 条编造消息（各约 2 KB，5,000 条带链接），总 8.3–8.7 秒，约 0.86 ms/条；带链接的约 1.7 ms/条。量速脚本在 DeepSeek 工作区，没有提交。
 
 没做：B 段的 `file_policy.py`、消息里的 `files` / `file_notes`、`/api/chat/files`；没有改版本号、没有推送。
 

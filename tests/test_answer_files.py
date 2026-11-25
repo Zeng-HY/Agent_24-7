@@ -45,7 +45,8 @@ class Env:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     for name in ("chart.png", "b.R", "src/app.ts", "out/report.md",
-                 "sub/.hidden/f.md", "a_b.md", "dir with space/x.txt"):
+                 "sub/.hidden/f.md", "a_b.md", "dir with space/x.txt",
+                 "b%20c.png"):
         make(tmp_path, name)
     make(tmp_path, "报告 图 (1).png")
     make(tmp_path, "100%.txt")
@@ -522,6 +523,118 @@ def test_web_anchors_mail_and_other_schemes_are_not_files(env):
         result = env.scan(text)
         assert result.text == text
         assert result.files == [] and result.notes == [], link
+
+
+def test_url_with_port_is_not_a_file(env):
+    for link in ("https://api.example.com:443", "http://example.com:8080/x/y",
+                 "vscode://file/D:/a/fig.png"):
+        text = f"[api]({link})"
+        result = env.scan(text)
+        assert result.text == text
+        assert result.files == [] and result.notes == [], link
+
+
+def test_protocol_relative_web_address_is_not_network(env):
+    for text in ("[cdn](//cdn.example.com/a.js)",
+                 '<img src="//cdn.example.com/a.js">',
+                 '<a href="//cdn.example.com/a.js">x</a>'):
+        result = env.scan(text)
+        assert result.text == text
+        assert result.files == [] and result.notes == [], text
+
+
+def test_unc_paths_are_still_network(env):
+    calls = []
+
+    def guard(path):
+        calls.append(path)
+        raise AssertionError(path)
+
+    text = (r"[a](\\server\share\a.png) "
+            r'<img src="\\wsl$\Ubuntu\home\a.png">')
+    result = env.scan(text, stat=guard)
+    assert calls == []
+    assert result.files == []
+    assert result.notes == [{"href": r"\\server\share\a.png", "reason": "not_local"},
+                            {"href": r"\\wsl$\Ubuntu\home\a.png", "reason": "not_local"}]
+
+
+def test_real_paths_are_not_percent_decoded(env):
+    name = "b%20c.png"
+    path = env.path(name)
+    presented = env.scan("答案", presented=[path])
+    assert presented.files[0]["path"] == path
+    citation = env.scan(f':codex-file-citation{{path="{path}"}}')
+    assert citation.files[0]["path"] == path
+    code = env.scan(f"`{path}`")
+    assert code.files[0]["path"] == path
+    body = env.scan(f"看 {path}。")
+    assert body.files[0]["path"] == path
+    # Markdown links and images are URLs and still decode once.
+    markdown = env.scan("[x](b%2520c.png)")
+    assert markdown.files[0]["path"] == path
+    assert markdown.text == f"[x](<{env.posix}/b%2520c.png>)"
+
+
+def test_fake_definition_line_keeps_its_link(env):
+    text = f"[注]: see [x]({env.posix}/chart.png)"
+    result = env.scan(text)
+    assert result.text == f"[注]: see [x](<{env.posix}/chart.png>)"
+    assert result.files[0]["via"] == ["link"]
+    assert "texts" not in result.files[0]
+    assert result.notes == []
+
+
+def test_only_real_definition_lines_are_definitions(env):
+    text = (f"[r]\n\n[r]: <{env.posix}/chart.png>\n\n"
+            f"[r]: see [x]({env.posix}/b.R)\n")
+    result = env.scan(text)
+    assert result.text == (f"[r]\n\n[r]: <{env.posix}/chart.png>\n\n"
+                           f"[r]: see [x](<{env.posix}/b.R>)\n")
+    assert [row["path"] for row in result.files] == [env.path("chart.png"), env.path("b.R")]
+
+
+def test_paths_in_link_text_are_not_body_paths(env):
+    target = env.posix_path("chart.png")
+    inline = f"[{env.win}/chart.png 图]({target})"
+    result = env.scan(inline)
+    assert result.files[0]["via"] == ["link"]
+    assert "texts" not in result.files[0]
+    assert result.text == f"[{env.win}/chart.png 图](<{target}>)"
+
+    image = f"![{env.win}/chart.png]({target})"
+    result = env.scan(image)
+    assert result.files[0]["via"] == ["image"]
+    assert "texts" not in result.files[0]
+
+    reference = f"[{env.win}/chart.png][r]\n\n[r]: <{target}>\n"
+    result = env.scan(reference)
+    assert result.files[0]["via"] == ["link"]
+    assert "texts" not in result.files[0]
+
+
+def test_file_autolink_is_recognized_but_not_rewritten(env):
+    text = f"<file:///{env.posix}/chart.png>"
+    result = env.scan(text)
+    assert result.text == text
+    assert result.files[0]["path"] == env.path("chart.png")
+    assert result.files[0]["via"] == ["link"]
+    assert result.files[0]["index"] == 1000
+    assert "texts" not in result.files[0]
+
+    missing = f"<file:///{env.posix}/nope.png>"
+    result = env.scan(missing)
+    assert result.text == missing
+    assert result.files[0]["exists"] is False
+    assert result.files[0]["index"] == 1000
+
+
+def test_file_autolink_gets_1000_even_beside_a_markdown_link(env):
+    text = f"[a]({env.posix}/b.R) <file:///{env.posix}/chart.png>"
+    result = env.scan(text)
+    rows = {row["path"]: row for row in result.files}
+    assert rows[env.path("b.R")]["index"] == 0
+    assert rows[env.path("chart.png")]["index"] == 1000
 
 
 def test_no_markers_returns_the_text_untouched(env):
