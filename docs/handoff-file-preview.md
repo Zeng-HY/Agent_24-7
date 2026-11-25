@@ -422,7 +422,7 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 ## 12. 要用户决定的事
 
-1. **SVG 转图片要加一个新组件 resvg。** 开源，Apache-2.0 或 MIT 双许可。下载它、把它打进安装包，都要用户同意。加之前核对两件事：这台电脑的 Python 版本有没有它的 Windows 安装包（`resvg_py` 新版只见到 Linux 包，可能要用旧版或官方的 `resvg.exe`），以及那个包自己的许可证文件。不同意就不加：网页照样能画 SVG，手机上的 SVG 显示成文件卡。
+1. **SVG 转图片要加一个新组件 resvg。** 开源，Apache-2.0 或 MIT 双许可。**用户 11-25 已同意：这份设计要用的组件（resvg、highlight.js）下载时不用再问，直接用。** 仍然要：固定版本，从官方来源拿（PyPI、npm、GitHub 发布页），核对它自己的许可证文件，把版本和摘要记进 `requirements.txt` 或 `static/vendor-lock.json`。resvg 还要先确认这台电脑的 Python 版本有 Windows 安装包（`resvg_py` 新版只见到 Linux 包，可能要用旧版或官方的 `resvg.exe`）；实在没有，网页照样能画 SVG，手机上的 SVG 显示成文件卡。
 2. **行内代码里的路径也算「回答点名了这个文件」。** 现在的规则是「代码里的路径一律不算」（`message_files.py` 第 1 行的说明）。新规则只放宽到「反引号里只有一个路径」；整段代码块照旧不算，另外还有第 4 节的「不给手机」清单把关。
 3. 建议另做：把第 4 节的「不给手机」清单也用到「电脑上的文件」那张表上。
 4. 建议另做（要改中转）：第 8 节最后一条。
