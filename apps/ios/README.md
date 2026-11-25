@@ -1,6 +1,8 @@
-# 遥应 Teleply iOS 版（原生 SwiftUI；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
+# 遥应 Teleply iOS 版（原生 SwiftUI；0.9.0 构建 34 已传 TestFlight；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
-## 0.9.0：iOS 按说明书显示助手，另带语音停顿修复（11-25）
+## 0.9.0：iOS 按说明书显示助手，另带语音停顿修复（11-25，构建 34 已传 TestFlight）
+
+- 构建 34（Codemagic `6b064dd925fe59234ec05ce9`，6 分钟，`UPLOAD SUCCEEDED`），从 `ipad-adapt` 分支（`d0adcfc`）打；版本 0.9.0，Delivery UUID `aaef3a2b-0db4-4f05-83fa-300e37397886`。打包前 `TeleplyCore` 344 项测试（43 个套件）全过。只进内部测试，没有提交审核。
 
 - **这一版是什么**：`ios-agents`（下面这些）和本机 `ipad-adapt` 上的语音停顿修复（`230cf10`、说明 `0b51d0b`，见下一节）合在一起，从 0.8.0（33）的代码往上走。
 
