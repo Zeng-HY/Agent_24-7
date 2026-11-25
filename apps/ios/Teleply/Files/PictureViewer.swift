@@ -3,6 +3,7 @@ import ImageIO
 import QuickLook
 import SwiftUI
 import TeleplyModel
+import TeleplyState
 import UIKit
 
 /// 看图页 (§6.2): fills the screen, one picture per page, 2/5 at the top. A pinch zooms to 8×, a double tap goes
