@@ -58,6 +58,9 @@ public final class WorkspaceModel {
     /// A file page's text (text files) and its copy on this phone: a picture, a PDF, or another file the page shows
     /// itself (showsInPage), up to 20 MB.
     public internal(set) var fileText = ""
+    /// What `/api/file/text` said about a cut text (§5.4): whether it is the start only, and the whole size.
+    public internal(set) var fileTextTruncated = false
+    public internal(set) var fileTextTotalSize: Int64 = 0
     public internal(set) var preview: URL?
     /// A kept original on this phone (§7): it stays in the cache after the page goes, unlike [preview], which is a
     /// temporary copy deleted with the page.

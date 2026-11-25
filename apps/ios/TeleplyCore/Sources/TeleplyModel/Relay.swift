@@ -148,6 +148,12 @@ public struct RelayClient: Sendable {
         RelayRequest(method: .get, url: origin.url(path, query: query), headers: try signed(["Accept": "application/json"]), deadline: deadline)
     }
 
+    /// The sign-in kept for this service, when the keychain can be read now: for a player that streams a file route
+    /// itself and cannot carry this app's request headers (§6.2).
+    public func sessionCookie(now: Date = Date()) -> SessionCookie? {
+        try? vault?.read(origin.key)
+    }
+
     public func post(_ path: String, json: JSONValue, query: [(String, String?)] = [], deadline: TimeInterval = defaultDeadline) throws -> RelayRequest {
         RelayRequest(method: .post, url: origin.url(path, query: query),
                      headers: try signed(["Accept": "application/json", "Content-Type": "application/json; charset=utf-8", "Origin": origin.header]),
@@ -400,7 +406,7 @@ public struct RelayClient: Sendable {
     public static let detailRoutes: Set<String> = [
         "chat/new/options", "chat/folders", "chat/new/draft", "chat/new", "chat/new/state", "chat/new/retry", "chat/new/references",
         "composer/references", "composer/commands", "files/places", "files/list", "files/image", "files/remove", "codex/remove-attachment", "codex/attachments",
-        "chat/files", "chat/diff", "file/text", "file/meta", "deepseek/models", "deepseek/permissions", "deepseek/model", "deepseek/permission",
+        "chat/files", "chat/diff", "file/text", "file/meta", "file/zip", "deepseek/models", "deepseek/permissions", "deepseek/model", "deepseek/permission",
         "deepseek/answer", "deepseek/approval", "claude/catalog", "claude/setting", "claude/choose", "claude/menu", "claude/close-menu",
         "chat/projects", "chat/open", "chat/resolve", "claude/next", "claude/task", "chat/check", "chat/archive", "chat/unarchive",
         "chat/delete", "chat/archived", "chats/children", "notify", "notify/ntfy", "notify/test", "voice/status", "voice/terms",
@@ -566,6 +572,27 @@ public struct RelayClient: Sendable {
         guard (200..<300).contains(response.status) else { throw ServiceFailure(status: response.status, body: response.body) }
         guard response.body.count <= Self.thumbLimit else { throw ReadFailure("缩略图太大") }
         return response.body
+    }
+
+    /// A same-folder resource a Markdown or HTML file names (GET /api/file/resource, §5.6): the computer checks that
+    /// the path is inside the page's folder, and returns the file's bytes. 404 means an older computer, whose page falls
+    /// back to the conversation's file list.
+    public func resourceData(device: String, app: String, chat: String, file: String, path: String,
+                             limit: Int64 = 8 * 1024 * 1024) async throws -> Data {
+        var request = try get(Self.devicePath(device, "/api/file/resource"),
+                              query: [("app", app), ("id", chat), ("file", file), ("path", path),
+                                      ("protocol", String(TeleplyClient.protocolVersion))], deadline: 60)
+        request.headers["Accept"] = "*/*"
+        let response = try await transport.send(request)
+        if response.status == 401 { try? vault?.write(origin.key, nil) }
+        guard (200..<300).contains(response.status) else { throw ServiceFailure(status: response.status, body: response.body) }
+        guard response.body.count <= limit else { throw ReadFailure("这个文件太大") }
+        return response.body
+    }
+
+    /// A zip's listing (GET /api/file/zip, §5.7): names, sizes and folders, never the archive's bytes.
+    public func zip(device: String, app: String, chat: String, file: String) async throws -> JSONValue {
+        try await detail(device: device, route: "file/zip", query: [("app", app), ("id", chat), ("file", file)])
     }
 
     /// The computer's voice service (web voice-ui.js): raw audio up, recognised text back. A whole recording, or the

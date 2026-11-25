@@ -12,14 +12,15 @@ private enum MarkdownCache {
     private static var kept = 0
     private static var clock = 0
 
-    static func blocks(_ source: String, files: [FileRef]? = nil, notes: [FileNote] = []) -> [MarkdownBlock] {
-        let key = cacheKey(source, files, notes)
+    static func blocks(_ source: String, files: [FileRef]? = nil, notes: [FileNote] = [],
+                       resources: Bool = false) -> [MarkdownBlock] {
+        let key = cacheKey(source, files, notes, resources)
         clock += 1
         if let hit = entries[key] {
             entries[key]?.used = clock
             return hit.blocks
         }
-        let parsed = MarkdownReader.answerBlocks(source, files: files, notes: notes)
+        let parsed = MarkdownReader.answerBlocks(source, files: files, notes: notes, resources: resources)
         let size = key.utf8.count
         guard size <= room / 4 else { return parsed }
         entries[key] = (parsed, clock)
@@ -29,9 +30,9 @@ private enum MarkdownCache {
     }
 
     /// One text with an older computer's answer is the key; with a computer's files, what the drawings and links rest on
-    /// is part of it, so a file that changed its `v` is parsed again.
-    private static func cacheKey(_ source: String, _ files: [FileRef]?, _ notes: [FileNote]) -> String {
-        guard let files else { return source }
+    /// is part of it, so a file that changed its `v` is parsed again. A Markdown file's reading view is another key.
+    private static func cacheKey(_ source: String, _ files: [FileRef]?, _ notes: [FileNote], _ resources: Bool) -> String {
+        guard let files else { return resources ? source + "\u{1F}resources" : source }
         var key = source + "\u{1F}files"
         for file in files {
             key += "\u{1F}\(file.id)|\(file.path)|\(file.version)|\(file.view)|\(file.thumb ? 1 : 0)|\(file.kind)"
@@ -74,13 +75,16 @@ struct MarkdownView: View {
     var thumb: ((FileRef, Int) async -> Data?)? = nil
     /// A tap on a picture opens the answer's pictures at that one (§6.2); nil keeps the file page's own link.
     var openPicture: ((FileRef) -> Bool)? = nil
+    /// A Markdown file's reading view: relative pictures are fetched from the file's own folder (§5.6).
+    var resources = false
+    var resource: ((String) async -> Data?)? = nil
 
     var body: some View {
-        let blocks = MarkdownCache.blocks(source, files: files, notes: notes)
+        let blocks = MarkdownCache.blocks(source, files: files, notes: notes, resources: resources)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 MarkdownBlockView(block: block, first: index == 0, look: look, files: files, notes: notes,
-                                  thumb: thumb, openPicture: openPicture)
+                                  thumb: thumb, openPicture: openPicture, resource: resource)
             }
         }
         .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
@@ -119,6 +123,7 @@ private struct MarkdownBlockView: View {
     let notes: [FileNote]
     let thumb: ((FileRef, Int) async -> Data?)?
     let openPicture: ((FileRef) -> Bool)?
+    let resource: ((String) async -> Data?)?
 
     var body: some View {
         switch block {
@@ -149,6 +154,8 @@ private struct MarkdownBlockView: View {
                         }
                     case .picture(let file):
                         AnswerPicture(file: file, thumb: thumb, openPicture: openPicture)
+                    case .resource(let source):
+                        ResourcePicture(source: source, loader: resource)
                     }
                 }
             }
@@ -160,7 +167,7 @@ private struct MarkdownBlockView: View {
                 Rectangle().fill(Palette.line).frame(width: 3)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(children.enumerated()), id: \.offset) { _, child in
-                        MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb, openPicture: openPicture)
+                        MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb, openPicture: openPicture, resource: resource)
                     }
                 }
             }
@@ -174,7 +181,7 @@ private struct MarkdownBlockView: View {
                             .frame(minWidth: 20, alignment: .leading)
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(item.enumerated()), id: \.offset) { _, child in
-                                MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb, openPicture: openPicture)
+                                MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb, openPicture: openPicture, resource: resource)
                             }
                         }
                     }

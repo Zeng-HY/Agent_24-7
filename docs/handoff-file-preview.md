@@ -478,3 +478,14 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **没验到的**：本机没有 Swift，第二段的 App/测试都还没编译过；看图页手势、PDF 页码和 GIF 只在演示数据上准备，等 Codemagic 编译后再看截图/真机。
 - **测试修正（11-25，构建 `6b069324f367b6e980234968`）**：`FileCache.name` 的 `ext` 参数本来就不带点，之前又交给按文件名取的 `safeExt`，缓存名因此没有 `.png`；拆出 `cleanExt`，两种写法都能得到正确后缀。`AttachmentTests` 里旧的 20 MB Office 上限测试改成 30 MB（`fixture-office-big` 改成 32 MiB），并加了一条 20–30 MB 之间会直接取来画的测试（`fixture-office-mid`，25 MiB）；图片 30 MB、PDF 100 MB 没有按旧数字写的测试。
 - **ViewBuilder 修正（11-25，构建 `6b0694bee531f2f5ec488cc8`）**：文件页 `unshown` 在 `@ViewBuilder` 里用 `if/else` 给 `why` 赋值，赋值语句的类型是 `()`，不能当 View；判断挪到 TeleplyCore 的纯函数 `unshownReason(kind:size:limit:looks:)`，文件页只 `let why = …`，并补了测试。又扫了所有 `@ViewBuilder` 和 `body`：其余赋值都在 `.task`、`.onChange`、按钮等闭包里，不在 builder 顶层。
+
+#### 第三段（C）
+
+- **代码页**：`Viewer/` 原样放进安卓 `c12fa99` 的 viewer 十个文件和 `licenses/highlight.js-LICENSE.txt`，逐个 SHA-256 与 README 一致；`project.yml` 用 `type: folder` 作为文件夹资源，`Teleply` 源路径排除 `Viewer`。`CodeViewer` 用 `WKWebView`（非持久数据、`teleply-viewer` 私有协议、只给清单文件和 `/text`、`..`/嵌套/不在清单的 404、无脚本桥、content rule list 挡 http/https、导航只允许本协议），地址与安卓一致：`dark`、`lang`、`line`、截断的 `truncated/size/total`。`view` 的 `code`/`text` 都走它；超过 200 KB 由 `code.js` 不搞高亮。开源组件页加了 highlight.js 11.12.0（BSD-3-Clause）和许可证全文。
+- **表格**：`view` 为 `table` 时从 `/api/file/text` 取已解码文字，`parseTable` 按 RFC 4180（引号、引号里的逗号/换行、双引号）解析，首行表头固定、横向滚动、最多 5000 行；`truncated` 说明只显示开头多少 MB；「⋯」加「查看原文」，用代码页（`lang=text`）显示。
+- **音视频**：`MediaViewer` 用 `AVPlayerViewController`，地址是 `/api/file?app&id&file&v&protocol=2`，登录 Cookie 用 `HTTPCookie` 放进 `AVURLAssetHTTPCookiesKey`（没用私有 header key），边下边播；失败换文件卡加「用其他应用打开」。本地示例从缓存里的短片播放。
+- **zip**：`view` 为 `archive` 且 `.zip` 时调 `/api/file/zip`，`parseZipListing` 文件夹在前、按路径排，最多 2000 项，显示名字、大小、本地修改时间，顶上「共 N 项，解压后 X MB」，截断说明；7z/rar/接口报错显示文件卡。
+- **附属资源**：HTML 的 `previewResource` 对新电脑（页面条目有 `view`）先走 `/api/file/resource`，404 或老电脑照旧的 `chat/files` 列表；Markdown 文件阅读视图新增相对图片资源（`MarkdownPiece.resource` + `ResourcePicture`），来源同一条资源接口，宽度占满、整张可见。
+- **演示**：文件预览示例加了带 `line` 的 R、300 KB 日志、带引号内换行的 CSV、2.4 KB MP3、2.3 KB MP4、zip 目录、带同目录图片的 Markdown、带 CSS 的 HTML；`DemoTransport` 补了 `file/text`、`file/zip`、`file/resource` 和这些文件的下载，仍只在 `-TeleplyDemoFiles` 下出现。
+- **测试**：新增 `TextViewerRulesTests`（CSV 引号/引号内换行/5000 行、代码页地址、协议处理器的清单与 `..`、zip 排序/上限、播放器地址和 Cookie、老电脑/新电脑资源路线）；`AttachmentTests` 补了资源接口新路线、老页面和 404 退回；`AnswerFilesTests` 更新了演示文件条的期望。
+- **没验到的**：本机没有 Swift，第三段 App/测试都还没编译过；代码页的 WKWebView 私有协议、播放器 Cookie、zip/资源接口只在本地示例上准备，等 Codemagic 编译和真机/截图。

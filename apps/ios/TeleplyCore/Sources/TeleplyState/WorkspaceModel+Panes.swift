@@ -1,6 +1,17 @@
 import Foundation
 import TeleplyModel
 
+/// Where a file's bytes stream from for the system player, and the sign-in cookie that player must send itself (§6.2).
+public struct MediaSource {
+    public let url: URL
+    public let cookies: [HTTPCookie]
+
+    public init(url: URL, cookies: [HTTPCookie] = []) {
+        self.url = url
+        self.cookies = cookies
+    }
+}
+
 /// A file name safe to use on this phone: no folder separators, never empty.
 func safeFileName(_ name: String) -> String {
     let safe = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
@@ -322,6 +333,7 @@ extension WorkspaceModel {
                 let ids: [(String, String?)] = [("app", key.app), ("id", key.chat), ("file", id)]
                 let meta = try await client.detail(device: key.device, route: "file/meta", query: ids)
                 let kind = meta["kind"].string()
+                let view = file["view"].string()
                 let name = file["name"].string().isEmpty ? meta["name"].string() : file["name"].string()
                 let size = meta["size"].int64() > 0 ? meta["size"].int64() : file["size"].int64()
                 let version = file["v"].string().isEmpty ? meta["v"].string() : file["v"].string()
@@ -329,11 +341,48 @@ extension WorkspaceModel {
                 let shown = ["image", "pdf"].contains(kind) || (kind == "download" && Self.showsInPage(name))
                 let limit = Self.pagePreviewLimit(kind: kind, name: name)
                 var text = ""
+                var textTruncated = false
+                var textTotalSize: Int64 = 0
+                var textLang = ""
+                var textLine = 0
                 var kept: URL?
                 var temp: URL?
                 var note = ""
+                // A zip lists what is inside (§5.7); audio and video stream from the file route themselves (§6.2).
+                if view == "archive", zipFile(name) {
+                    let listing = try? await client.zip(device: key.device, app: key.app, chat: key.chat, file: id)
+                    guard let self, g == self.paneGeneration else { return }
+                    var fields = file.object
+                    fields["meta"] = meta
+                    fields["kind"] = .string(kind)
+                    if fields["name"]?.string().isEmpty ?? true { fields["name"] = meta["name"] }
+                    if !version.isEmpty { fields["v"] = .string(version) }
+                    fields["zip"] = listing ?? .null
+                    self.data = .object(fields)
+                    self.fileNote = listing == nil ? "这个压缩包读不了，可以保存后用其他应用打开。" : ""
+                    self.paneBusy = false
+                    return
+                }
+                if view == "audio" || view == "video" {
+                    guard let self, g == self.paneGeneration else { return }
+                    var fields = file.object
+                    fields["meta"] = meta
+                    fields["kind"] = .string(kind)
+                    if fields["name"]?.string().isEmpty ?? true { fields["name"] = meta["name"] }
+                    if !version.isEmpty { fields["v"] = .string(version) }
+                    self.data = .object(fields)
+                    self.paneBusy = false
+                    return
+                }
                 do {
-                    if kind == "text" { text = try await client.detail(device: key.device, route: "file/text", query: ids)["text"].string() }
+                    if kind == "text" || view == "table" {
+                        let reply = try await client.detail(device: key.device, route: "file/text", query: ids)
+                        text = reply["text"].string()
+                        textTruncated = reply["truncated"].bool()
+                        textTotalSize = reply["total_size"].int64()
+                        textLang = reply["lang"].string()
+                        textLine = reply["line"].int()
+                    }
                     // Pictures, PDFs, Word and Excel stay on disk (§7), not whole in memory; a file too big for the page
                     // is only saved or shared.
                     if shown && (size <= 0 || size <= limit) {
@@ -360,8 +409,12 @@ extension WorkspaceModel {
                 if fields["name"]?.string().isEmpty ?? true { fields["name"] = meta["name"] }
                 if !version.isEmpty { fields["v"] = .string(version) }
                 if modified > 0 { fields["modified"] = .number(Double(modified)) }
+                if !textLang.isEmpty, fields["lang"]?.string().isEmpty ?? true { fields["lang"] = .string(textLang) }
+                if textLine > 0, fields["line"].int() <= 0 { fields["line"] = .number(Double(textLine)) }
                 self.data = .object(fields)
                 self.fileText = text
+                self.fileTextTruncated = textTruncated
+                self.fileTextTotalSize = textTotalSize
                 self.preview = temp
                 self.previewFile = kept
                 self.fileNote = note
@@ -499,15 +552,46 @@ extension WorkspaceModel {
     func dropFile() {
         cancelCopy()
         fileText = ""
+        fileTextTruncated = false
+        fileTextTotalSize = 0
         fileNote = ""
         previewFile = nil
         dropPreview()
     }
 
-    /// A file an HTML page names beside itself (web artifact-preview resource): only one this conversation lists,
-    /// matched exactly by its path, at most 4 MB. Nil for anything else, so the page shows it as missing.
+    /// Where the system player streams an audio or video file (§6.2): the file route with the same sign-in as every
+    /// request, or for the local demo a kept copy on this phone. Nil when it cannot be played.
+    public func mediaSource(_ file: FileRef) async -> MediaSource? {
+        guard !file.id.isEmpty else { return nil }
+        // The local demo has no stream of its own: its made-up clip is played from the phone's kept copy.
+        if synthetic {
+            guard let kept = await cachedAnswerFile(file) else { return nil }
+            return MediaSource(url: kept)
+        }
+        guard let key, let client else { return nil }
+        guard let url = try? mediaFileURL(origin: client.origin, device: key.device, app: key.app,
+                                          chat: key.chat, file: file.id, version: file.version) else { return nil }
+        let cookie = mediaCookie(origin: client.origin, cookie: client.sessionCookie())
+        return MediaSource(url: url, cookies: cookie.map { [$0] } ?? [])
+    }
+
+    /// A file an HTML page names beside itself (web artifact-preview resource): a newer computer reads it through
+    /// `/api/file/resource`; an older one, or a 404, still goes through the conversation's file list.
     public func previewResource(for file: JSONValue, path: String) async -> Data? {
         guard let key, let client, !path.isEmpty, !file["path"].string().isEmpty else { return nil }
+        let id = file["id"].string()
+        if usesFileResource(view: file["view"].string(), id: id) {
+            do {
+                let relative = resourcePath(path, pagePath: file["path"].string())
+                return try await client.resourceData(device: key.device, app: key.app, chat: key.chat, file: id, path: relative)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let failure as ServiceFailure where failure.status != 404 {
+                return nil
+            } catch {
+                // A computer too old for the resource route: the file list below is the 0.9.0 way.
+            }
+        }
         let items: [JSONValue]
         if let listing, listing.key == key {
             items = listing.items

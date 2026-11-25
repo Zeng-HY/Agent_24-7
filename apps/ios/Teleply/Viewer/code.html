@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<link id="style" rel="stylesheet" href="/code-light.css">
+<style>
+  /* The page itself scrolls: the toolbar is sticky and the code follows it in normal flow, so a viewport that was 0
+     when the page loaded can never leave the code in a zero-height box. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #ffffff; color: #24292f; }
+  /* The page's root takes the dark colour too: a short file must not leave white below its last line. */
+  html.dark, body.dark { background: #0d1117; color: #c9d1d9; }
+  .bar { position: sticky; top: 0; z-index: 20; display: flex; gap: 6px; align-items: center; padding: 6px 8px;
+         background: #ffffff; border-bottom: 1px solid rgba(127,127,127,.28);
+         font: 12px -apple-system, "Noto Sans CJK SC", sans-serif; }
+  body.dark .bar { background: #0d1117; }
+  .bar button, .bar input { font: inherit; color: inherit; background: transparent; border: 1px solid rgba(127,127,127,.5);
+         border-radius: 6px; padding: 4px 8px; }
+  .bar input { flex: 1; min-width: 70px; }
+  #banner { display: none; padding: 6px 10px; font: 12px -apple-system, "Noto Sans CJK SC", sans-serif;
+         background: rgba(255,193,7,.18); color: inherit; }
+  #banner.show { display: block; }
+
+  /* One row per line: the gutter number and that line's code share the row, so they stay aligned when wrapping.
+     Without wrapping, a long line scrolls sideways inside the code area only: the bar never slides away and the line
+     numbers stay at the left edge (opaque, so the code passes under them). */
+  #code { margin: 0; padding: 8px 0 40px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          overflow-x: auto; }
+  .line { display: flex; align-items: flex-start; min-height: 18px; width: max-content; min-width: 100%; }
+  body.wrap .line { width: auto; }
+  .line .ln { flex: 0 0 44px; padding-right: 8px; text-align: right; color: #8b949e; white-space: pre; user-select: none;
+          position: sticky; left: 0; z-index: 1; background: #ffffff; }
+  body.dark .line .ln { background: #0d1117; }
+  .line .lc { flex: 1 1 auto; min-width: 0; padding-right: 12px; white-space: pre; tab-size: 4; }
+  body.wrap .line .lc { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+  /* The marked line shows across the whole row: the theme's .hljs background must not cover it. */
+  .line .lc, .line .lc.hljs { background: transparent; }
+  .line.target { background: rgba(255,214,10,.28); }
+  .line.target .ln { background: #fff5c2; }
+  body.dark .line.target .ln { background: #514813; }
+
+  /* highlight.js' own block padding/scroll box must not shift the text against the gutter. */
+  #code pre, #code code, #code code.hljs, #code pre code.hljs, .line .lc code {
+    margin: 0; padding: 0; border: 0; background: transparent; display: inline; overflow: visible; white-space: inherit;
+  }
+  #code .lc { display: block; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="wrap" type="button">自动换行</button>
+  <input id="find" placeholder="页内查找" autocomplete="off" aria-label="页内查找">
+  <button id="prev" type="button" aria-label="上一处">↑</button>
+  <button id="next" type="button" aria-label="下一处">↓</button>
+  <button id="copy" type="button">复制全部</button>
+</div>
+<div id="banner"></div>
+<main id="code" aria-label="代码"></main>
+<script src="/highlight.min.js"></script>
+<script src="/highlight.r.min.js"></script>
+<script src="/highlight.powershell.min.js"></script>
+<script src="/highlight.latex.min.js"></script>
+<script src="/highlight.dockerfile.min.js"></script>
+<script src="/code.js"></script>
+</body>
+</html>

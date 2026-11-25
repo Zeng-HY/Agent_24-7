@@ -866,7 +866,7 @@ enum DemoData {
         FileRef(id: "fp-contract", name: "合同.pdf", path: "D:\\fixture\\file-preview\\contract.pdf", kind: "pdf", view: "pdf",
                 size: 36_864, state: "current", version: "v1", via: ["link"]),
         FileRef(id: "fp-analysis", name: "分析.R", path: "D:\\fixture\\file-preview\\analysis.R", kind: "text", view: "code",
-                size: 1_200, state: "current", version: "v1", lang: "r", via: ["link"]),
+                size: 1_200, state: "current", version: "v1", line: 2, lang: "r", via: ["link"]),
         FileRef(id: "fp-budget", name: "预算表.xlsx", path: "D:\\fixture\\file-preview\\budget.xlsx", kind: "download", view: "table",
                 size: 2_293, state: "current", version: "v1", via: ["link"], preview: "pdf"),
         FileRef(id: "fp-pages", name: "多页说明.pdf", path: "D:\\fixture\\file-preview\\pages.pdf", kind: "pdf", view: "pdf",
@@ -883,6 +883,20 @@ enum DemoData {
                 size: 620, state: "current", version: "v1", lang: "r", texts: ["D:\\fixture\\file-preview\\run.R"], via: ["code"]),
         FileRef(id: "fp-report", name: "报告.txt", path: "D:\\fixture\\file-preview\\report.txt", kind: "text", view: "text",
                 size: 480, state: "current", version: "v1", texts: ["D:/fixture/file-preview/report.txt"], via: ["path"]),
+        FileRef(id: "fp-longlog", name: "长日志.log", path: "D:\\fixture\\file-preview\\long.log", kind: "text", view: "text",
+                size: 300_000, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-csv", name: "数据.csv", path: "D:\\fixture\\file-preview\\data.csv", kind: "text", view: "table",
+                size: 4_000, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-audio", name: "提示音.mp3", path: "D:\\fixture\\file-preview\\tone.mp3", kind: "download", view: "audio",
+                size: 2_420, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-video", name: "演示视频.mp4", path: "D:\\fixture\\file-preview\\clip.mp4", kind: "download", view: "video",
+                size: 2_311, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-zip", name: "资料.zip", path: "D:\\fixture\\file-preview\\files.zip", kind: "download", view: "archive",
+                size: 435, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-markdown", name: "说明.md", path: "D:\\fixture\\file-preview\\notes.md", kind: "text", view: "markdown",
+                size: 1_500, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-html", name: "页面.html", path: "D:\\fixture\\file-preview\\page.html", kind: "text", view: "html",
+                size: 1_200, state: "current", version: "v1", via: ["link"]),
     ]
 
     /// The answer, written the way a newer computer marks it up: pictures in place, links that match `files`, an
@@ -901,6 +915,8 @@ enum DemoData {
     [合同.pdf](D:/fixture/file-preview/contract.pdf) 和 [分析.R](D:/fixture/file-preview/analysis.R) 也放好了。
 
     [多页说明.pdf](D:/fixture/file-preview/pages.pdf) 有三页。
+
+    [长日志](D:/fixture/file-preview/long.log)、[数据.csv](D:/fixture/file-preview/data.csv)、[提示音.mp3](D:/fixture/file-preview/tone.mp3)、[演示视频.mp4](D:/fixture/file-preview/clip.mp4)、[资料.zip](D:/fixture/file-preview/files.zip)、[说明.md](D:/fixture/file-preview/notes.md)、[页面.html](D:/fixture/file-preview/page.html)。
 
     生成的脚本是 `D:\fixture\file-preview\run.R`，说明写在 D:/fixture/file-preview/report.txt。
 
@@ -933,6 +949,56 @@ enum DemoData {
     /// The example's own words: an R script, and the note the answer says it wrote.
     static let previewSource = "# 固定示例：按天汇总\ncounts <- table(demo[[\"day\"]])\nprint(counts)\n"
     static let previewReport = "文件预览示例\n\n这是一段固定的说明文字，用来检查文字页。\n所有名字和路径都是编造的。\n"
+
+    /// Over 200 KB of made-up log, for the code page's no-highlighting line.
+    static let previewLongLog: String = {
+        var text = "# 固定示例日志\n"
+        for line in 1...3_600 {
+            text += "2026-11-25 12:00:\(String(format: "%02d", line % 60))  [fixture] step \(line) finished in \(line % 97) ms\n"
+        }
+        return text
+    }()
+
+    /// A GBK file the demo computer already decoded: quotes, a comma and a newline inside quotes, and a doubled quote.
+    static let previewCSV = """
+    name,note,amount
+    "张三","第一行
+    第二行",12.5
+    "李四","带,逗号",3
+    "王五","引号""在里",7
+    """
+
+    /// A Markdown file whose picture is beside it, and an HTML page whose stylesheet is beside it (§5.6).
+    static let previewMarkdown = """
+    # 固定说明
+
+    这是 **Markdown** 文件，图片在同目录。
+
+    ![同目录图片](pic.png)
+
+    段落后面还有字。
+    """
+
+    static let previewHTML = """
+    <link rel="stylesheet" href="style.css">
+    <h1>固定页面</h1>
+    <p>样式表在同一个文件夹里，通过附属资源接口取。</p>
+    """
+
+    static let previewCSS = "h1 { color: #2563eb; } p { font-size: 17px; }"
+
+    /// The zip's listing: a folder first, then files by path.
+    static let previewZip: JSONValue = [
+        "entries": .array([
+            ["name": "docs/", "size": 0, "packed": 0, "modified": 1_764_020_000_000, "dir": true],
+            ["name": "docs/readme.txt", "size": 16, "packed": 16, "modified": 1_764_020_060_000, "dir": false],
+            ["name": "chart.png", "size": 8, "packed": 8, "modified": 1_764_020_120_000, "dir": false],
+            ["name": "run.R", "size": 9, "packed": 9, "modified": 1_764_020_180_000, "dir": false],
+        ]),
+        "total": 4,
+        "truncated": false,
+    ]
+
 
     static func previewFile(_ id: String) -> FileRef? { previewFiles.first { $0.id == id } }
 
@@ -1145,6 +1211,10 @@ enum DemoData {
         case "fixture-html": return htmlFile
         case "fp-run", "fp-analysis": return previewSource
         case "fp-report": return previewReport
+        case "fp-longlog": return previewLongLog
+        case "fp-csv": return previewCSV
+        case "fp-markdown": return previewMarkdown
+        case "fp-html": return previewHTML
         default: return "固定测试内容"
         }
     }

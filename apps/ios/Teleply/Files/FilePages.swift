@@ -130,6 +130,9 @@ struct FilePage: View {
     @State private var saved: URL?
     /// The saved copy being looked at, while the system lets this app read it.
     @State private var reading: URL?
+    /// A table's «查看原文»: the same text through the code page.
+    @State private var tableSource = false
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let workspace = model.workspace
@@ -137,14 +140,31 @@ struct FilePage: View {
         let meta = data["meta"]
         let name = data["name"].string().isEmpty ? "文件" : data["name"].string()
         let kind = meta["kind"].string()
+        let view = data["view"].string()
         let lower = name.lowercased()
         let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
         let text = workspace.fileText
         // A kept original (§7) stays in the cache; a temporary copy for an older computer goes with the page.
         let shownURL = workspace.previewFile ?? workspace.preview
         let picture = kind == "image" ? shownURL.flatMap { decodeThumbnail($0, maxPixel: pictureDecodeEdge) } : nil
+        let codeLang = view == "text" ? "text" : codeLanguage(data["lang"].string(), name: name)
         Group {
-            if let shown = shownURL, kind == "pdf" || kind == "download" {
+            if view == "code" || view == "text" {
+                CodeViewer(text: text, file: data, lang: codeLang, truncated: workspace.fileTextTruncated,
+                           totalSize: workspace.fileTextTotalSize, dark: scheme == .dark)
+            } else if view == "table" {
+                if tableSource {
+                    CodeViewer(text: text, file: data, lang: "text", truncated: workspace.fileTextTruncated,
+                               totalSize: workspace.fileTextTotalSize, dark: scheme == .dark)
+                } else {
+                    TableViewer(text: text, truncated: workspace.fileTextTruncated,
+                                totalSize: workspace.fileTextTotalSize)
+                }
+            } else if view == "audio" || view == "video" {
+                MediaViewer(model: model, file: parseFileRef(data)) { copy { sharing = $0 } }
+            } else if view == "archive" {
+                ZipViewer(data: data)
+            } else if let shown = shownURL, kind == "pdf" || kind == "download" {
                 Group {
                     if kind == "pdf" {
                         PDFPreview(url: shown)
@@ -225,10 +245,15 @@ struct FilePage: View {
     private func actions(_ name: String, meta: JSONValue) -> some View {
         let workspace = model.workspace
         let lower = name.lowercased()
+        let view = workspace.data["view"].string()
         let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
         let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
         let busy = workspace.transferring || workspace.paneBusy
         Section(operationLabel(meta["state"].string()) + (meta.has("size") ? " · " + byteSize(meta["size"].int64()) : "")) {
+            if view == "table" {
+                Button(tableSource ? "查看表格" : "查看原文",
+                       systemImage: tableSource ? "tablecells" : "chevron.left.forwardslash.chevron.right") { tableSource.toggle() }
+            }
             if (html || markdown) && !workspace.fileText.isEmpty {
                 Button(rendered ? "查看源码" : html ? "查看页面" : "阅读视图",
                        systemImage: rendered ? "chevron.left.forwardslash.chevron.right" : "doc.richtext") { rendered.toggle() }
@@ -254,8 +279,11 @@ struct FilePage: View {
         let workspace = model.workspace
         let lower = name.lowercased()
         let markdown = lower.hasSuffix(".md") || lower.hasSuffix(".markdown")
+        let newMarkdown = markdown && workspace.data["view"].string() == "markdown"
         let loaded = !workspace.paneBusy && workspace.paneError == nil
         let text = workspace.fileText
+        let resourceLoader: ((String) async -> Data?)? = newMarkdown
+            ? { await workspace.previewResource(for: workspace.data, path: $0) } : nil
         if workspace.paneBusy { ProgressView().frame(maxWidth: .infinity).padding(.top, 40) }
         if let error = workspace.paneError {
             Text(error)
@@ -264,7 +292,7 @@ struct FilePage: View {
         }
         if !text.isEmpty {
             if markdown && rendered {
-                MarkdownView(source: text)
+                MarkdownView(source: text, resources: newMarkdown, resource: resourceLoader)
             } else {
                 CodePanel(label: name, code: text, copyLabel: "复制文件内容")
             }

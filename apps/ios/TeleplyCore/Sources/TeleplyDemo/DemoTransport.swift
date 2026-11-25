@@ -70,6 +70,13 @@ public struct DemoTransport: RelayFileTransport {
         case "fp-budget": Data(base64Encoded: DemoData.xlsx, options: .ignoreUnknownCharacters) ?? Data()
         case "fp-run", "fp-analysis": Data(DemoData.previewSource.utf8)
         case "fp-report": Data(DemoData.previewReport.utf8)
+        case "fp-longlog": Data(DemoData.previewLongLog.utf8)
+        case "fp-csv": Data(DemoData.previewCSV.utf8)
+        case "fp-markdown": Data(DemoData.previewMarkdown.utf8)
+        case "fp-html": Data(DemoData.previewHTML.utf8)
+        case "fp-audio": Data(base64Encoded: DemoMedia.silentMP3, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-video": Data(base64Encoded: DemoMedia.clipMP4, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-zip": Data(base64Encoded: DemoMedia.demoZIP, options: .ignoreUnknownCharacters) ?? Data()
         default: Data(DemoData.textFile(file).utf8)
         }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-demo-\(UUID().uuidString)")
@@ -300,6 +307,20 @@ public struct DemoTransport: RelayFileTransport {
             var meta: [String: JSONValue] = ["kind": file?["kind"] ?? "text", "name": file?["name"] ?? "安全预览.html", "state": "current", "size": file?["size"] ?? 60]
             if let preview = file?["preview"], !preview.isNull { meta["preview"] = preview }
             return Self.json(.object(meta))
+        case "/api/file/zip":
+            return Self.json(DemoData.previewZip)
+        case "/api/file/resource":
+            // The two resources 文件预览示例's Markdown and HTML pages name beside themselves.
+            switch query["path"] ?? "" {
+            case "pic.png":
+                return RelayResponse(status: 200, headers: ["content-type": "image/png"],
+                                     body: Data(base64Encoded: DemoData.png) ?? Data())
+            case "style.css":
+                return RelayResponse(status: 200, headers: ["content-type": "text/css"],
+                                     body: Data(DemoData.previewCSS.utf8))
+            default:
+                return Self.notFound
+            }
         case "/api/file/text":
             // A text file the computer cannot read as text (its preview fails; the file can still be saved).
             if query["file"] == "fixture-broken" { return Self.json(["error": "无法按 UTF-8 或 UTF-16 预览，请下载原文件"], status: 400) }

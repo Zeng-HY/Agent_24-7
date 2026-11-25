@@ -36,6 +36,8 @@ extension Array where Element == InlineRun {
 public enum MarkdownPiece: Sendable, Equatable {
     case words([InlineRun])
     case picture(FileRef)
+    /// A relative picture in a Markdown file's reading view, fetched through `/api/file/resource` (§5.6).
+    case resource(String)
 }
 
 /// Markdown in the shapes the native renderer draws, the same set as Android's Markdown.kt: headings,
@@ -75,10 +77,12 @@ public enum MarkdownReader {
     /// An answer's blocks with the files the computer listed for it (§5.1): a link opens the very entry, a picture the
     /// computer can thumb is drawn where the answer put it, and a link that cannot be given says why in grey (§6.1).
     /// [files] nil is an older computer, and the blocks are exactly 0.9.0's.
-    public static func answerBlocks(_ source: String, files: [FileRef]?, notes: [FileNote] = []) -> [MarkdownBlock] {
+    public static func answerBlocks(_ source: String, files: [FileRef]?, notes: [FileNote] = [],
+                                    resources: Bool = false) -> [MarkdownBlock] {
         var look = Look()
         look.files = files
         look.notes = notes
+        look.resources = resources
         return blocks(source, look)
     }
 
@@ -169,7 +173,7 @@ public enum MarkdownReader {
         case let paragraph as Paragraph:
             // A paragraph with a picture the computer can thumb is split around it; one without stays exactly as
             // 0.9.0 drew it.
-            if look.files != nil, containsImage(paragraph) {
+            if containsImage(paragraph) && (look.files != nil || look.resources) {
                 return .pictureParagraph(paragraphPieces(paragraph, look))
             }
             return .paragraph(runs(paragraph.children, look))
@@ -201,6 +205,8 @@ public enum MarkdownReader {
         /// The answer's files and the reasons for those it cannot give (§5.1); nil files is an older computer.
         var files: [FileRef]?
         var notes: [FileNote] = []
+        /// A Markdown file's reading view: relative pictures are resources beside the file (§5.6).
+        var resources = false
     }
 
     /// A cell's words without their marks: plainText keeps the backticks round inline code.
@@ -228,7 +234,6 @@ public enum MarkdownReader {
     /// A paragraph split around the pictures drawn where it put them (§6.1). The test is by node, not by its words: an
     /// image's alt text never contains `![`, and a code sample does.
     static func paragraphPieces(_ paragraph: Paragraph, _ look: Look) -> [MarkdownPiece] {
-        guard let files = look.files else { return [.words(runs(paragraph.children, look))] }
         var pieces: [MarkdownPiece] = []
         var words: [any Markup] = []
         func flush() {
@@ -238,9 +243,17 @@ public enum MarkdownReader {
             words.removeAll()
         }
         for child in paragraph.children {
-            if let image = wrappedImage(child), let file = pictureForImage(files, image.source ?? "") {
+            let image = wrappedImage(child)
+            let destination = image?.source ?? ""
+            let file = image.flatMap { _ in look.files.flatMap { fileForLink($0, destination) } }
+            let picture = file.flatMap { $0.picture ? $0 : nil }
+            let resource = image != nil && look.files == nil && look.resources && markdownRelativeResource(destination)
+            if let picture {
                 flush()
-                pieces.append(.picture(file))
+                pieces.append(.picture(picture))
+            } else if resource {
+                flush()
+                pieces.append(.resource(destination))
             } else {
                 words.append(child)
             }

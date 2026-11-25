@@ -273,7 +273,8 @@ struct AnswerFilesTests {
         #expect(answer.files?.filter { $0.picture }.count == 6)
         #expect(drawnPictureIDs(answer) == Set(["fp-chart", "fp-logo", "fp-huge", "fp-gif"]))
         let strip = fileStripFiles(answer, drawn: drawnPictureIDs(answer))
-        #expect(strip.map(\.id) == ["fp-contract", "fp-analysis", "fp-budget", "fp-pages", "fp-shot-1", "fp-shot-2"])
+        #expect(strip.map(\.id) == ["fp-contract", "fp-analysis", "fp-budget", "fp-pages", "fp-shot-1", "fp-shot-2",
+                                   "fp-longlog", "fp-csv"])
         #expect(answer.fileNotes.map(\.reason) == ["not_found", "not_local"])
         // The older computer's answer has no files at all.
         let older = try parseMessage(rows[2])

@@ -328,6 +328,21 @@ struct AttachmentTests {
         #expect(missing == nil)
     }
 
+    /// A newer computer's page asks `/api/file/resource`; an old page, or a 404 from the route, falls back to the
+    /// conversation's listed files (§5.6).
+    @Test func aPageResourceUsesTheFileRouteOrFallsBackToTheList() async {
+        let model = await demoConversation("原生阅读示例")
+        let newPage = DemoData.previewFile("fp-markdown")!.pageJSON
+        let picture = await model.workspace.previewResource(for: newPage, path: "pic.png")
+        #expect(picture?.count == 462)
+        // No `view`: the old computer's page goes through the conversation's files.
+        let oldPage = DemoData.files[0]
+        #expect(await model.workspace.previewResource(for: oldPage, path: "D:/fixture/images/logo.png")?.count == 462)
+        // A new page whose resource route answers 404 falls back to the same list.
+        let missingRoute: JSONValue = ["id": "unknown", "name": "安全预览.html", "path": "D:/fixture/安全预览.html", "view": "html"]
+        #expect(await model.workspace.previewResource(for: missingRoute, path: "D:/fixture/images/logo.png")?.count == 462)
+    }
+
     @Test func pathsCompareAsTheWebDoes() {
         #expect(normalizePath("D:\\Fixture\\images\\..\\logo.PNG") == "d:/fixture/logo.png")
         #expect(normalizePath("./a//b/./c") == "a/b/c")

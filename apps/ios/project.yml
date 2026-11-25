@@ -27,6 +27,13 @@ targets:
     platform: iOS
     sources:
       - path: Teleply
+        excludes:
+          - Viewer
+      # The code page's own files (highlight.js 11.12.0, code.html/code.js, the two themes, its README and license),
+      # byte for byte as Android ships them. A folder reference keeps them a folder in the app bundle, which the page's
+      # scheme handler reads; the Swift under Teleply above must not add them a second time.
+      - path: Teleply/Viewer
+        type: folder
       - path: Shared
     dependencies:
       - package: TeleplyCore

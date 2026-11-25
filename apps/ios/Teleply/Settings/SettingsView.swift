@@ -203,16 +203,57 @@ private struct AppearanceChoice: View {
 private struct LicencesView: View {
     var body: some View {
         ScrollView {
-            Text("Markdown 解析用苹果维护的 swift-markdown 0.9.0（Apache-2.0）和 swift-cmark 0.9.0（BSD-2-Clause）。Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。")
-                .bodyFont()
-                .foregroundStyle(Palette.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Markdown 解析用苹果维护的 swift-markdown 0.9.0（Apache-2.0）和 swift-cmark 0.9.0（BSD-2-Clause）。Claude、DeepSeek 图形来自 Simple Icons（CC0），Codex 图形来自 SVG Logos（CC0）；这些标志归各自公司所有。")
+                    .bodyFont()
+                    .foregroundStyle(Palette.ink)
+                Text("代码页用 highlight.js 11.12.0（BSD-3-Clause），许可证全文如下：")
+                    .bodyFont()
+                    .foregroundStyle(Palette.ink)
+                Text(Self.highlightLicense)
+                    .captionFont()
+                    .foregroundStyle(Palette.muted)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
         .background(Palette.page)
         .navigationTitle("开源组件")
         .navigationBarTitleDisplayMode(.inline)
     }
+
+    private static let highlightLicense = """
+    BSD 3-Clause License
+
+    Copyright (c) 2006, Ivan Sagalaev.
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright notice, this
+      list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above copyright notice,
+      this list of conditions and the following disclaimer in the documentation
+      and/or other materials provided with the distribution.
+
+    * Neither the name of the copyright holder nor the names of its
+      contributors may be used to endorse or promote products derived from
+      this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+    OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+    """
 }
 
 /// 开发者选项 (spec 4.6; Android DeveloperScreen): for building and looking into problems, out of users' way. Where

@@ -129,6 +129,47 @@ struct AnswerPicture: View {
         image = decoded    }
 }
 
+/// A relative picture in a Markdown file's reading view (§5.6): fetched through `/api/file/resource` and drawn where the
+/// file put it, the reading width and whole, at most about 360 points high. Without bytes it keeps its place grey with
+/// the file's name.
+struct ResourcePicture: View {
+    let source: String
+    var loader: ((String) async -> Data?)?
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    private var name: String {
+        source.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? source
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: 360)
+            } else {
+                Text(failed ? "这张图没能加载" : name)
+                    .noteFont()
+                    .foregroundStyle(failed ? Palette.danger : Palette.muted)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+                    .background(Palette.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .task(id: source) {
+            guard let loader else { return }
+            guard let data = await loader(source), let decoded = decodeThumbnail(data, maxPixel: pictureDecodeEdge) else {
+                failed = true
+                return
+            }
+            image = decoded
+        }
+    }
+}
+
 /// The files an answer names, under its words (§6.1): those it did not draw in place, from link, citation, presented
 /// or tool, by `id` deduplicated. Image and SVG cards show a small thumb; the rest a type mark, the name and the size,
 /// with 已更新 / 已删除 when the computer says so. At most 8; 还有 N 个 opens the message's own file list.
