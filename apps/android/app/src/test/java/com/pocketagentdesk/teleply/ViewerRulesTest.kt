@@ -64,6 +64,32 @@ class ViewerRulesTest {
         assertEquals(1, pictureSampleSize(800, 600))
     }
 
+    @Test fun withoutVSizeAndModifiedMakeTheVersion() {
+        assertEquals("v1", fileVersion("v1", 10, 20))
+        assertEquals("s10-m20", fileVersion("", 10, 20))
+        assertNull(fileVersion("", 10, 0))
+        assertNull(fileVersion("", 0, 20))
+        assertNull(fileVersion("", 0, 0))
+        // The cache key changes when the file changes without a `v`, so an old copy is not used.
+        assertNotEquals(FileCache.name("file-1", fileVersion("", 10, 20)!!, "png"), FileCache.name("file-1", fileVersion("", 10, 21)!!, "png"))
+    }
+
+    @Test fun theThumbLimitCountsAllComputersTogether() {
+        val root = Files.createTempDirectory("teleply-thumbs-all").toFile()
+        try {
+            val cache = ThumbCache(root, maxBytes = 100)
+            cache.write("pc-a", "file-1", "v1", 320, ByteArray(60))
+            val old = cache.entry("pc-a", "file-1", "v1", 320)
+            old.setLastModified(1_000)
+            cache.write("pc-b", "file-2", "v1", 320, ByteArray(60))
+            assertTrue(cache.totalBytes() <= 100)
+            assertFalse(old.exists())
+            assertTrue(cache.entry("pc-b", "file-2", "v1", 320).exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun keptOriginalsAreNamedByFileAndVersionAndDroppedLeastRecentlyUsed() {
         val dir = Files.createTempDirectory("teleply-files").toFile()
         try {

@@ -35,6 +35,7 @@ data class FileRef(
     val kind: String = "",
     val view: String = "",
     val size: Long = 0,
+    val modified: Long = 0,
     val state: String = "",
     val version: String = "",
     val width: Int = 0,
@@ -52,6 +53,7 @@ data class FileRef(
     fun toJson(): JSONObject = JSONObject().put("id", id).put("name", name).put("path", path).put("kind", kind)
         .put("view", view).put("size", size).put("state", state).put("v", version)
         .apply {
+            if (modified > 0) put("modified", modified)
             if (width > 0) put("w", width)
             if (height > 0) put("h", height)
             if (thumb) put("thumb", true)
@@ -70,7 +72,7 @@ data class FileNote(val href: String, val reason: String, val text: String = "")
 }
 fun parseFileRef(j: JSONObject): FileRef = FileRef(
     id = j.string("id"), name = j.string("name"), path = j.string("path"), kind = j.string("kind"),
-    view = j.string("view"), size = j.optLong("size"), state = j.string("state"), version = j.string("v"),
+    view = j.string("view"), size = j.optLong("size"), modified = j.optLong("modified"), state = j.string("state"), version = j.string("v"),
     width = j.optInt("w"), height = j.optInt("h"), thumb = j.optBoolean("thumb"), line = j.optInt("line"),
     lang = j.string("lang"), texts = j.textStrings("texts"), via = j.textStrings("via"), preview = j.string("preview"),
 )
@@ -108,6 +110,17 @@ fun fileNoteFull(reason: String, text: String = ""): String = when (reason) {
     "local_web" -> "这是电脑本机的网址，手机打不开"
     else -> text.ifBlank { "这个文件现在给不了" }
 }
+/**
+ * The version a file's cache is kept by (§7): the computer's `v`; without one (an older computer) its size and
+ * modification time; null when even those are unknown, in which case nothing is kept and the file is fetched again.
+ */
+fun fileVersion(version: String, size: Long, modified: Long): String? = when {
+    version.isNotBlank() -> version
+    size > 0 && modified > 0 -> "s${size}-m$modified"
+    else -> null
+}
+fun FileRef.stableVersion(): String? = fileVersion(version, size, modified)
+
 /** [meta] carries page-level fields as JSON, e.g. a conversation's title, folder, status and runtime. */
 data class Page<T>(val items: List<T>, val cursor: String? = null, val hasMore: Boolean = false, val hasNewer: Boolean = false, val reset: Boolean = false, val meta: String = "{}")
 fun JSONObject.string(key: String) = if (isNull(key)) "" else optString(key, "")

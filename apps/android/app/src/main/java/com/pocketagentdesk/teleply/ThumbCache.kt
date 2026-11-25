@@ -15,9 +15,10 @@ const val ThumbCacheLimit = 200L * 1024 * 1024
  * whole, the way [SentPictures]' copies are; reading touches it, and past [maxBytes] the least recently used go.
  * Kept free of Android types so the cache can be read on a plain JVM in tests.
  */
-class ThumbCache(private val folder: File, private val maxBytes: Long = ThumbCacheLimit) {
+class ThumbCache(private val root: File, private val maxBytes: Long = ThumbCacheLimit) {
     /** Where the thumb of one address lives (whether or not it is there yet). */
-    fun entry(computer: String, file: String, version: String, width: Int): File = File(folder, name(computer, file, version, width))
+    fun entry(computer: String, file: String, version: String, width: Int): File =
+        File(File(root, computer), name(computer, file, version, width))
 
     /** The thumb's bytes, touching it as used; null when it is not kept here. */
     fun read(computer: String, file: String, version: String, width: Int): ByteArray? {
@@ -31,9 +32,9 @@ class ThumbCache(private val folder: File, private val maxBytes: Long = ThumbCac
     /** Keeps [bytes] as this address's thumb, written aside first; null when it could not be kept. */
     fun write(computer: String, file: String, version: String, width: Int, bytes: ByteArray): File? {
         if (bytes.isEmpty()) return null
-        folder.mkdirs()
         val kept = entry(computer, file, version, width)
-        val part = File.createTempFile(kept.name, ".part", folder)
+        kept.parentFile?.mkdirs()
+        val part = File.createTempFile(kept.name, ".part", kept.parentFile)
         return try {
             part.outputStream().use { it.write(bytes) }
             require(part.renameTo(kept) || kept.isFile) { "缩略图没能存到手机上" }
@@ -47,9 +48,10 @@ class ThumbCache(private val folder: File, private val maxBytes: Long = ThumbCac
         }
     }
 
-    /** Past [maxBytes], the least recently read or written files go until the folder fits again. */
+    /** Past [maxBytes] over the whole [root] (§7: all computers together), the least recently used go until it fits. */
     @Synchronized fun trim() {
-        val files = folder.listFiles { f -> f.isFile } ?: return
+        if (!root.isDirectory) return
+        val files = root.walkTopDown().filter { it.isFile }.toList()
         var total = files.sumOf { it.length() }
         if (total <= maxBytes) return
         files.sortedBy { it.lastModified() }.forEach { old ->
@@ -57,8 +59,8 @@ class ThumbCache(private val folder: File, private val maxBytes: Long = ThumbCac
         }
     }
 
-    /** What the folder takes, for the tests and 存储. */
-    fun totalBytes(): Long = folder.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0
+    /** What the cache takes, all computers together. */
+    fun totalBytes(): Long = if (!root.isDirectory) 0 else root.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
     companion object {
         const val Suffix = ".thumb"

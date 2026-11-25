@@ -702,11 +702,13 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val k=key ?: return null;val service=api ?: return null
         if(file.id.isBlank()) return null
         val bucket=when { width<=320 -> 320; width<=640 -> 640; width<=1280 -> 1280; width<=2048 -> 2048; else -> 4096 }
-        val cache=ThumbCache(java.io.File(java.io.File(caches,ThumbCacheFolder),k.device))
-        val kept=withContext(Dispatchers.IO) { cache.read(k.device,file.id,file.version,bucket) }
+        val version=file.stableVersion()
+        val cache=ThumbCache(java.io.File(caches,ThumbCacheFolder),ThumbCacheLimit)
+        val kept=if(version!=null) withContext(Dispatchers.IO) { cache.read(k.device,file.id,version,bucket) } else null
         val bytes=kept ?: try {
-            val fetched=service.thumb(k.device,k.chat,file.id,bucket,file.version)
-            withContext(Dispatchers.IO) { cache.write(k.device,file.id,file.version,bucket,fetched) }
+            val fetched=service.thumb(k.device,k.chat,file.id,bucket,version.orEmpty())
+            // No version means no safe cache key: the computer is asked every time (an older computer).
+            if(version!=null) withContext(Dispatchers.IO) { cache.write(k.device,file.id,version,bucket,fetched) }
             fetched
         } catch(e:CancellationException) { throw e }
         catch(_:Exception) { return null }
@@ -719,18 +721,22 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     suspend fun cachedAnswerFile(file:FileRef):java.io.File? {
         val k=key ?: return null;val service=api ?: return null;val dir=mediaDir ?: return null
         if(file.id.isBlank()) return null
+        // No `v` and no size+modified: nothing to tell one version from the next, so nothing is kept.
+        val version=file.stableVersion() ?: return null
         val cache=FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit)
         val ext=FileCache.safeExt(file.name)
-        cache.read(k.device,file.id,file.version,ext)?.let { return it }
+        cache.read(k.device,file.id,version,ext)?.let { return it }
         return withContext(Dispatchers.IO) {
-            cache.writeStream(k.device,file.id,file.version,ext) { output -> service.downloadTo(k.device,k.chat,file.id,output) }
+            cache.writeStream(k.device,file.id,version,ext) { output -> service.downloadTo(k.device,k.chat,file.id,output) }
         }
     }
     /** The kept original of an open file, when there is one already: saving and sharing then copy it, no second fetch. */
     fun cachedFileFor(file:JSONObject):java.io.File? {
         val k=key ?: return null;val dir=mediaDir ?: return null
         val id=file.string("id");if(id.isBlank()) return null
-        return FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).read(k.device,id,file.string("v"),FileCache.safeExt(file.string("name")))
+        val meta=file.optJSONObject("meta") ?: JSONObject()
+        val version=fileVersion(file.string("v"), file.optLong("size").takeIf { it>0 } ?: meta.optLong("size"), file.optLong("modified").takeIf { it>0 } ?: meta.optLong("modified")) ?: return null
+        return FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).read(k.device,id,version,FileCache.safeExt(file.string("name")))
     }
     /** The pictures of one answer, in the order it shows them, in the viewer (§6.2): a full-screen page of its own. */
     fun openPictures(files:List<FileRef>, index:Int) {
@@ -782,7 +788,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             if(pdf && !phone) {
                 // The page and its buttons at once; the PDF when Office on the computer has made it (5-30 s the first time).
                 if(g==generation) update(k) { it.copy(data=data.toString(),busy=false,converting=true) }
-                convert(k,service,FileRef(id=file.getString("id"),name=name,version=version),g)
+                convert(k,service,FileRef(id=file.getString("id"),name=name,version=version,size=size,modified=meta.optLong("modified")),g)
                 return@launchSafe
             }
             var text="";var bytes:ByteArray?=null;var keptFile:String?=null;var note="";var unshown=""
@@ -799,12 +805,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                     val picture=kind=="image" && (size<=0 || size<=pictureLimit)
                     val document=(kind=="pdf" || pdf) && (size<=0 || size<=pdfLimit)
                     if(picture || document || phone) {
-                        val ref=FileRef(id=file.getString("id"),name=name,version=version)
+                        val ref=FileRef(id=file.getString("id"),name=name,version=version,size=size,modified=meta.optLong("modified"))
                         // With the app's cache, the file goes to disk; a plain JVM (tests) keeps the old in-memory way.
                         if(cached) {
                             val kept=cachedAnswerFile(ref)
                             if(kept!=null) { keptFile=kept.path;if(phone) bytes=kept.readBytes() }
-                            else if(phone && size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                            else if((picture || document || phone) && size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
                         } else if(size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
                     }
                 }
@@ -823,7 +829,7 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         if(pdf==null) { if(g==generation) update(k) { it.copy(converting=false,previewNote=note) };return }
         val dir=mediaDir
         val kept=if(dir==null) null else withContext(Dispatchers.IO) {
-            FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).writeStream(k.device,file.id,file.version.ifBlank { "pdf" },"pdf") { it.write(pdf) }
+            FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).writeStream(k.device,file.id,file.stableVersion() ?: "pdf","pdf") { it.write(pdf) }
         }
         if(g==generation) update(k) { it.copy(converting=false,preview=if(kept==null) pdf else null,previewFile=kept?.path) }
     }
