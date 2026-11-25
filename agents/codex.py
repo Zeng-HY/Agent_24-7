@@ -579,9 +579,9 @@ class CodexAgent(Agent):
         import codex_apptools
         return codex_apptools.read_source_request_map(tid)
 
-    def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False):
+    def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False, public=None):
         import live_events
-        return live_events.merge_live_messages(page, entry, state, previous, lite)
+        return live_events.merge_live_messages(page, entry, state, previous, lite, public)
 
     def detect(self) -> bool:
         import machines

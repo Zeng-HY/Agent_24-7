@@ -979,6 +979,28 @@ def _older(ts: str, than: str) -> bool:
         return False
 
 
+def _send_user_files(name: str, args: dict) -> list[str]:
+    """Paths Claude's SendUserFile names (input.files, absolute); other tools give []."""
+    if not re.sub(r"[^a-z]", "", str(name or "").casefold()).endswith("senduserfile"):
+        return []
+    if not isinstance(args, dict):
+        return []
+    rows = args.get("files")
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        if isinstance(row, str):
+            path = row
+        elif isinstance(row, dict):
+            path = row.get("path") or row.get("file_path") or row.get("file")
+        else:
+            path = None
+        if isinstance(path, str) and path.strip():
+            out.append(path.strip())
+    return out
+
+
 def _claude_tool(block: dict) -> str:
     name = block.get("name") or "工具"
     args = block.get("input") or {}
@@ -1441,7 +1463,13 @@ def parse_claude(lines: list[bytes], context: dict | None = None,
                         step = _step_of("claude", str(block.get("name") or ""))
                         if step:
                             state["step"] = step
-                    msgs.append({**card, "time": ts} if card else {"role": "tool", "text": _claude_tool(block), "time": ts})
+                        public = {"role": "tool", "text": _claude_tool(block), "time": ts}
+                        presented = _send_user_files(block.get("name") or "", block.get("input") or {})
+                        if presented:
+                            public["_presented_files"] = presented
+                        msgs.append(public)
+                    else:
+                        msgs.append({**card, "time": ts})
     mark_open_next(msgs)
     if last_kind is not None:
         state["running"] = not (last_kind in ("interrupted", "asked", "command_done") or (last_kind == "assistant" and last_stop not in (None, "tool_use")))

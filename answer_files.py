@@ -350,8 +350,8 @@ def _attr(tag: str, name: str) -> str | None:
 
 
 def _occurrence(pos: int, via: Sequence[str], src: str, info: tuple,
-                text: str | None = None) -> dict:
-    return {"pos": pos, "via": list(via), "src": src, "info": info, "text": text}
+                text: str | None = None, href: str | None = None) -> dict:
+    return {"pos": pos, "via": list(via), "src": src, "info": info, "text": text, "href": href}
 
 
 def _note(notes: list, seen: set, href: str, reason: str, pos: int) -> None:
@@ -437,7 +437,8 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
         info = _recognize(raw, bases, lookup)
         if info[0] == "ok":
             occurrences.append(_occurrence(match.start(), ["image" if _is_image(source, match.start())
-                                                          else "link"], "markdown", info))
+                                                          else "link"], "markdown", info,
+                                           href=_href_text(raw)))
             edits.append((start, end, _dest_text(info[1], info[2])))
         elif info[0] in ("not_found", "not_local"):
             _note(notes, seen_notes, _href_text(raw), info[0], start)
@@ -456,7 +457,7 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
         info = _recognize(raw, bases, lookup)
         if info[0] == "ok":
             occurrences.append(_occurrence(match.start(), href_vias.get(key, ["link"]),
-                                           "markdown", info))
+                                           "markdown", info, href=_href_text(raw)))
             start, end = match.span(2)
             edits.append((start, end, _dest_text(info[1], info[2])))
         elif info[0] in ("not_found", "not_local"):
@@ -476,7 +477,7 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
                     continue
                 info = _recognize(value, bases, lookup)
                 if info[0] == "ok":
-                    occurrences.append(_occurrence(match.start(), [via], "html", info))
+                    occurrences.append(_occurrence(match.start(), [via], "html", info, href=value))
                 elif info[0] in ("not_found", "not_local"):
                     _note(notes, seen_notes, value, info[0], match.start())
 
@@ -487,7 +488,8 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             continue
         info = _recognize(match.group(1), bases, lookup)
         if info[0] == "ok":
-            occurrences.append(_occurrence(match.start(), ["link"], "autolink", info))
+            occurrences.append(_occurrence(match.start(), ["link"], "autolink", info,
+                                           href=match.group(1)))
         elif info[0] in ("not_found", "not_local"):
             _note(notes, seen_notes, match.group(1), info[0], match.start())
 
@@ -500,7 +502,8 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             continue
         info = _recognize(path.group(1), bases, lookup, decode=False)
         if info[0] == "ok":
-            occurrences.append(_occurrence(match.start(), ["citation"], "citation", info))
+            occurrences.append(_occurrence(match.start(), ["citation"], "citation", info,
+                                           href=path.group(1)))
 
     # Inline code that holds exactly one path: recorded in texts, never rewritten.
     for match in (_CODE_SPAN.finditer(source) if "`" in source else ()):
@@ -509,7 +512,8 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
         content = _code_content(match)
         info = _code_file(content, bases, lookup)
         if info:
-            occurrences.append(_occurrence(match.start(), ["code"], "code", info, content))
+            occurrences.append(_occurrence(match.start(), ["code"], "code", info, content,
+                                           href=content))
 
     link_labels = []
     for match in _DESTINATION.finditer(source):
@@ -538,13 +542,14 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             continue
         info = _recognize(raw, bases, lookup, decode=False)
         if info[0] == "ok" and info[3]:
-            occurrences.append(_occurrence(match.start(), ["path"], "path", info, raw))
+            occurrences.append(_occurrence(match.start(), ["path"], "path", info, raw, href=raw))
 
     # Files the assistant explicitly presented (Claude SendUserFile, DeepSeek deliverables).
     for index, value in enumerate(presented):
         info = _recognize(value, bases, lookup, decode=False)
         if info[0] == "ok":
-            occurrences.append(_occurrence(len(source) + 1 + index, ["presented"], "presented", info))
+            occurrences.append(_occurrence(len(source) + 1 + index, ["presented"], "presented", info,
+                                           href=value))
 
     occurrences.sort(key=lambda item: item["pos"])
     files: list[dict] = []
@@ -572,6 +577,10 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             texts = row.setdefault("texts", [])
             if occurrence["text"] not in texts:
                 texts.append(occurrence["text"])
+        if occurrence["href"]:
+            hrefs = row.setdefault("hrefs", [])
+            if occurrence["href"] not in hrefs:
+                hrefs.append(occurrence["href"])
 
     # index: old-web numbering over the rewritten text.  Every local Markdown link/image
     # takes a number (folder and missing files too); HTML/code/path/presented start at 1000.

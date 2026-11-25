@@ -1,14 +1,15 @@
 """Append-aware public transcript index and scoped result-file registry."""
 from __future__ import annotations
 import os,sys
-import base64,copy,hashlib,hmac,json,mimetypes,re,threading,time
+import base64,copy,hashlib,hmac,json,re,threading,time
 from array import array
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote
 import chats
 import activity_records
+import answer_files
+import file_policy
 
 class HistoryError(Exception):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -54,6 +55,101 @@ def encode(value):return base64.urlsafe_b64encode(json.dumps(value,separators=('
 def decode(value):
     try:return json.loads(base64.urlsafe_b64decode(value+'='*(-len(value)%4)))
     except Exception:raise HistoryError('分页位置无效，请刷新') from None
+
+
+# -- answer files (docs/handoff-file-preview.md §5.1): suffix tables until segment C reads the contents
+_IMAGE_KIND={'.png','.jpg','.jpeg','.webp','.bmp','.heic','.heif','.tif','.tiff'}
+_IMAGE_VIEW=_IMAGE_KIND|{'.gif'}
+_TEXT_KIND={'.txt','.md','.csv','.tsv','.json','.py','.js','.html','.htm','.markdown','.css',
+            '.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql'}
+_OFFICE={'.doc','.docx','.rtf','.odt','.xls','.xlsx','.xlsm','.ods','.ppt','.pptx','.odp'}
+_MARKDOWN={'.md','.markdown'}
+_HTML={'.html','.htm','.xhtml'}
+_CODE={'.py','.js','.mjs','.ts','.tsx','.jsx','.json','.yaml','.yml','.xml','.sql','.r','.log',
+       '.css','.scss','.less','.ps1','.sh','.bat','.cmd','.c','.h','.cpp','.hpp','.cs','.java',
+       '.kt','.kts','.swift','.go','.rs','.rb','.php','.lua','.toml','.ini','.cfg','.conf',
+       '.gradle','.tex','.dockerfile','.makefile'}
+_AUDIO={'.mp3','.m4a','.aac','.wav','.flac','.ogg'}
+_VIDEO={'.mp4','.m4v','.mov','.webm','.mkv'}
+_ARCHIVE={'.zip','.rar','.7z','.tar','.gz','.tgz','.bz2','.xz'}
+_IMAGE_MIME={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp',
+             '.gif':'image/gif','.bmp':'image/bmp','.tif':'image/tiff','.tiff':'image/tiff',
+             '.heic':'image/heic','.heif':'image/heic'}
+_AUDIO_MIME={'.mp3':'audio/mpeg','.m4a':'audio/mp4','.aac':'audio/aac','.wav':'audio/wav',
+             '.flac':'audio/flac','.ogg':'audio/ogg'}
+_VIDEO_MIME={'.mp4':'video/mp4','.m4v':'video/x-m4v','.mov':'video/quicktime','.webm':'video/webm',
+             '.mkv':'video/x-matroska'}
+_LANG={'.r':'r','.py':'python','.js':'javascript','.mjs':'javascript','.ts':'typescript',
+       '.tsx':'typescript','.jsx':'javascript','.json':'json','.yaml':'yaml','.yml':'yaml',
+       '.xml':'xml','.sql':'sql','.sh':'bash','.ps1':'powershell','.kt':'kotlin','.kts':'kotlin',
+       '.swift':'swift','.java':'java','.c':'c','.h':'c','.cpp':'cpp','.hpp':'cpp','.cs':'csharp',
+       '.go':'go','.rs':'rust','.css':'css','.scss':'css','.less':'css','.md':'markdown',
+       '.markdown':'markdown','.ini':'ini','.cfg':'ini','.conf':'ini','.toml':'ini',
+       '.diff':'diff','.patch':'diff','.tex':'latex'}
+_ANSWER_REASONS={'missing':'文件已移动或删除','not_found':'电脑上没找到这个文件',
+                 'not_local':'文件在网络位置或别的电脑上，遥应只读这台电脑自己的磁盘',
+                 'denied':'出于安全，遥应不让手机读这个文件（可能含密钥或登录信息）',
+                 'folder':'这是文件夹，可以在「电脑上的文件」里看'}
+
+
+def _file_kind(suffix,size):
+    if suffix in _IMAGE_KIND:return 'image'
+    if suffix=='.pdf':return 'pdf'
+    if suffix in _TEXT_KIND and size<=2<<20:return 'text'
+    return 'download'
+
+
+def _file_view(suffix):
+    if suffix in _IMAGE_VIEW:return 'image'
+    if suffix=='.svg':return 'svg'
+    if suffix=='.pdf':return 'pdf'
+    if suffix in _OFFICE:return 'office'
+    if suffix in ('.csv','.tsv'):return 'table'
+    if suffix in _MARKDOWN:return 'markdown'
+    if suffix in _HTML:return 'html'
+    if suffix in _AUDIO:return 'audio'
+    if suffix in _VIDEO:return 'video'
+    if suffix in _ARCHIVE:return 'archive'
+    if suffix in _CODE:return 'code'
+    if suffix in _TEXT_KIND:return 'text'
+    return 'none'
+
+
+def _file_mime(suffix,view):
+    if suffix in _IMAGE_MIME:return _IMAGE_MIME[suffix]
+    if suffix=='.pdf':return 'application/pdf'
+    if suffix in _AUDIO_MIME:return _AUDIO_MIME[suffix]
+    if suffix in _VIDEO_MIME:return _VIDEO_MIME[suffix]
+    if suffix in ('.html','.htm','.xhtml','.svg','.xml','.js','.mjs'):
+        return 'application/octet-stream'  # never let a browser run it (§5.2)
+    if view in ('code','text','markdown','table') or suffix in _TEXT_KIND:
+        return 'text/plain; charset=utf-8'
+    return 'application/octet-stream'
+
+
+def _file_version(st):
+    return hashlib.sha256(f'{st.st_size}:{st.st_mtime_ns}'.encode()).hexdigest()[:12]
+
+
+def _answer_bases(m,item,entry):
+    values=[]
+    for source in (m,item):
+        if not isinstance(source,dict):continue
+        values+=[source.get('cwd'),source.get('turn_cwd'),source.get('working_folder')]
+    if entry is not None:values.append(getattr(entry,'cwd',''))
+    out=[];seen=set()
+    for value in values:
+        if not isinstance(value,str) or not value.strip():continue
+        key=os.path.normcase(value.strip())
+        if key in seen:continue
+        seen.add(key);out.append(value.strip())
+    return out
+
+
+class _ScanCache:
+    """The answer_files result kept on a message; a plain object so weigh() does not walk its files."""
+    __slots__=('key','scan')
+    def __init__(self,key,scan):self.key=key;self.scan=scan
 
 class Transcript:
     def __init__(self,path,app,cwd='',tid=''):
@@ -126,8 +222,6 @@ class Transcript:
                         m['id']=m.get('source_id') or digest+':'+str(self.duplicates[digest])
                         m['order']=self.offset
                         if self.agent.assign_turn_id and self.state.get('current_turn_id'):m['turn_id']=self.state['current_turn_id']
-                        if self.agent.relative_links and m.get('role')=='assistant':
-                            m['text']=self.agent.absolute_links(m['text'],self.cwd)  # its links relative to the working folder
                         if m['id'] in self.by_id:
                             m['order']=self.by_id[m['id']]['order'];self.by_id[m['id']].update(m)
                         else:self.messages.append(m);self.by_id[m['id']]=m
@@ -138,6 +232,7 @@ class Transcript:
                                 if not any(v is row for v in rows):rows.append(row)
             # Read a line at a time, a box looked open on its own line for good, even after the user had answered (10-16)
             if self.agent.mark_next_open:self.agent.mark_open_next(self.messages)
+            if len(self.messages)>first:self.agent.attach_presented(self.messages)
             # read in slices, a row filled in more than WEIGH_AGAIN rows later was missed: all weighed once at the end
             if self.partial:self.sliced=True
             elif self.sliced:first=0;self.sliced=False
@@ -347,14 +442,126 @@ class History:
             raise HistoryError(str(exc),getattr(exc,'status',400)) from None
         except chats.ChatError as exc:
             raise HistoryError(str(exc),getattr(exc,'status',400)) from None
-    @staticmethod
-    def public_message(m,full=False,lite=False):
+    def _file_id(self,app,tid,mid,index,path):
+        identity=[app,tid,mid,index,str(path)]
+        return hmac.new(self.secret,json.dumps(identity).encode(),hashlib.sha256).hexdigest()[:32]
+
+    def _answer_scan(self,m,item,entry=None,agent=None):
+        """answer_files.scan for one message, cached on the message by its text, folders and presented paths."""
+        if agent is None:agent=getattr(entry,'agent',None)
+        text=m.get('text') or ''
+        bases=tuple(_answer_bases(m,item,entry))
+        presented=[]
+        if agent is not None:
+            try:got=agent.presented_files(m,item if isinstance(item,dict) else {})
+            except Exception:got=None
+            for value in got or ():
+                try:value=os.fspath(value)
+                except TypeError:continue
+                if isinstance(value,str) and value.strip():presented.append(value)
+        key=(hashlib.sha256(text.encode('utf-8')).hexdigest(),bases,tuple(presented))
+        cached=m.get('_answer_scan')
+        if isinstance(cached,_ScanCache) and cached.key==key:return cached.scan
+        result=answer_files.scan(text,bases,presented=presented)
+        m['_answer_scan']=_ScanCache(key,result)
+        return result
+
+    def _file_row(self,m,f,index,st,app,tid):
+        """One public file row (§5.1) and its registry entry, rechecked by the caller."""
+        import office_preview
+        path=Path(f['path']);size=st.st_size if st else 0;suffix=path.suffix.lower()
+        kind=_file_kind(suffix,size);view=_file_view(suffix);ext=suffix[1:]
+        fid=self._file_id(app,tid,m.get('id'),index,path)
+        old=self.files.get((app,tid,fid))
+        updated=bool(old and old.get('mtime') is not None and st
+                     and (old['mtime']!=st.st_mtime_ns or old['size']!=size))
+        state='missing' if st is None else 'updated' if updated else 'current'
+        row={'id':fid,'index':index,'name':path.name,'path':str(path),'kind':kind,'view':view,
+             'ext':ext,'mime':_file_mime(suffix,view),'size':size,
+             'modified':int(st.st_mtime*1000) if st else None,'state':state,
+             'v':_file_version(st) if st else '','line':f.get('line'),
+             'lang':_LANG.get(suffix) if view in ('code','text') else None,
+             'via':list(f.get('via') or []),'thumb':False,'message_id':m.get('id')}
+        if f.get('texts'):row['texts']=list(f['texts'])
+        if kind=='download' and st and office_preview.offers(path):row['preview']='pdf'
+        try:resolved=path.resolve()
+        except (OSError,ValueError):resolved=None
+        self.files[(app,tid,fid)]={**row,'path':path,'resolved':resolved,
+            'size':size,'mtime':st.st_mtime_ns if st else None,'kind':kind,
+            'message_id':m.get('id'),'index':index,'updated':updated}
+        return row
+
+    def _message_rows(self,m,item,app,tid,entry=None,agent=None,per_index=False,cache_on=None,seen=None):
+        """(rewritten text, file rows, file notes) for one message; scans only now, never while reading the record."""
+        if not (m.get('role')=='assistant' or (m.get('role')=='tool' and m.get('_presented_files'))):
+            return (m.get('text') or ''),[],[]
+        scan=self._answer_scan(cache_on or m,item,entry,agent)
+        rows=[];notes=[]
+        for f in scan.files:
+            identity=os.path.normcase(f['path'])
+            if seen is not None and identity in seen:continue
+            reason,st=file_policy.inspect(f['path'])
+            if reason in ('denied','not_local','folder'):
+                href=(f.get('hrefs') or [f['path']])[0]
+                notes.append({'href':href,'reason':reason,'text':_ANSWER_REASONS[reason]})
+                continue
+            indexes=f.get('indexes') or [f.get('index') or 0]
+            for index in (indexes if per_index else [indexes[0]]):
+                rows.append(self._file_row(m,f,index,st,app,tid))
+        for note in scan.notes:
+            notes.append({'href':note['href'],'reason':note['reason'],
+                          'text':_ANSWER_REASONS.get(note['reason'],'')})
+        note_seen=set();unique=[]
+        for note in notes:
+            key=(note['href'],note['reason'])
+            if key in note_seen:continue
+            note_seen.add(key);unique.append(note)
+        return scan.text,rows,unique
+
+    def _tool_row(self,m,app,tid):
+        raw=m.get('current_file')
+        if not isinstance(raw,str) or not raw.strip():return None
+        reason,st=file_policy.inspect(raw)
+        if reason not in (None,'missing'):return None
+        path=str(Path(raw))
+        f={'path':path,'line':None,'indexes':[1000],'via':['tool']}
+        return self._file_row(m,f,1000,st,app,tid)
+
+    def _public_read(self,app,tid,agent,page):
+        """Non-transcript assistants (DeepSeek, Antigravity) return public rows directly: add files here too."""
+        messages=[]
+        for raw in page.get('messages') or []:
+            if not isinstance(raw,dict):messages.append(raw);continue
+            message=activity_records.public_message(raw)  # drop _answer_scan and other private keys
+            if raw.get('role')=='assistant' or (raw.get('role')=='tool' and raw.get('_presented_files')):
+                text,files,notes=self._message_rows(raw,page,app,tid,agent=agent,cache_on=raw)
+                message={**message,'text':text,'length':len(text),
+                         'truncated':len(text)>6000,'files':files}
+                if len(text)>6000:message['text']=text[:6000]
+                if notes:message['file_notes']=notes
+            else:
+                text=message.get('text') or ''
+                message={**message,'length':len(text),'truncated':len(text)>6000}
+                if len(text)>6000:message['text']=text[:6000]
+            messages.append(message)
+        return {**page,'messages':messages}
+
+    def public_message(self,m,item=None,entry=None,full=False,lite=False,app=None,tid=None,
+                       agent=None,cache_on=None):
         result=activity_records.public_message(m)
         # 11-16: a phone stores no tool output; lite pages (lite=1) leave detail and result out before they are sent.
         if lite:result.pop('detail',None);result.pop('result',None)
         result.pop('legacy',None)
-        result['length']=len(m['text']);result['truncated']=not full and len(m['text'])>6000
-        if result['truncated']:result['text']=m['text'][:6000]
+        text=m.get('text') or ''
+        if m.get('role')=='assistant' or (m.get('role')=='tool' and m.get('_presented_files')):
+            if app is None:app=getattr(entry,'app',None) or (item or {}).get('app')
+            if tid is None:tid=getattr(entry,'tid',None) or (item or {}).get('id')
+            text,files,notes=self._message_rows(cache_on or m,item,app,tid,entry,agent,cache_on=cache_on or m)
+            result['files']=files
+            if notes:result['file_notes']=notes
+        result['length']=len(text);result['truncated']=not full and len(text)>6000
+        if result['truncated']:result['text']=text[:6000]
+        else:result['text']=text
         return result
     @staticmethod
     def _with_client_request_id(m,req_map):
@@ -393,7 +600,7 @@ class History:
         try:agent=registry.get(app)
         except AgentError as exc:raise HistoryError(str(exc),400) from None
         if not agent.home_list:
-            try:return agent.read(tid,limit=limit,before=before,around=around,lite=lite)
+            try:return self._public_read(app,tid,agent,agent.read(tid,limit=limit,before=before,around=around,lite=lite))
             except chats.ChatError as exc:raise HistoryError(str(exc),getattr(exc,'status',400)) from None
         item,entry=self.transcript(app,tid);limit=max(5,min(100,limit));reset=False
         req_map=agent.message_request_ids(tid)
@@ -418,7 +625,8 @@ class History:
                 tr=turns.get(m.get('activity_turn')) or {}
                 enriched=self._with_client_request_id(m,req_map)
                 timed={**enriched,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
-                items.append(self.public_message(timed,lite=lite))
+                items.append(self.public_message(timed,item=item,entry=entry,lite=lite,app=app,tid=tid,
+                                                 cache_on=m))
             return chats.public(item)|{'messages':items, 'status':chats._status(entry.state,entry.mtime/1e9),
                 'size':entry.size,'runtime':agent.runtime(entry.path),'modified':entry.mtime//1000000,
                 # 0.6.4: the turn's own times, Unix seconds; each message of that turn carries them too.
@@ -435,13 +643,14 @@ class History:
         row=entry.by_id.get(mid)
         return next((i for i,m in enumerate(entry.messages) if m is row),None) if row is not None else None
     def message(self,app,tid,mid):
-        _,entry=self.transcript(app,tid)
+        item,entry=self.transcript(app,tid)
         entry_agent=getattr(entry,'agent',None)
         req_map=entry_agent.message_request_ids(tid) if entry_agent is not None else {}
         with entry.lock:
             m=entry.by_id.get(mid)
             if not m:raise HistoryError('消息已变化，请刷新',404)
-            return self.public_message(self._with_client_request_id(m,req_map),True)
+            return self.public_message(self._with_client_request_id(m,req_map),item=item,entry=entry,
+                                       full=True,app=app,tid=tid)
     def diff(self,app,tid,ref,offset=0):
         _,entry=self.transcript(app,tid)
         with entry.lock:
@@ -462,43 +671,37 @@ class History:
             more=offset+limit<len(hits)
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
     def list_files(self,app,tid,message_id=None):
-        from message_files import references
         from agents import registry
-        import office_preview  # Word, Excel and PowerPoint files the computer can show as PDF
         item,entry=self.transcript(app,tid)
-        agent=registry.get(app)
-        out=[];seen_paths=set()
+        agent=getattr(entry,'agent',None) or registry.get(app)
+        out=[];seen_paths=set();notes=[]
         with entry.lock:
             if message_id:message_id=(getattr(entry,'by_id',{}).get(message_id) or {}).get('id',message_id)  # a merged copy's id too
-            messages=[m for m in entry.messages if (m['role']=='assistant' or (m.get('current_file') and m.get('tool_status')=='completed')) and (not message_id or m['id']==message_id)]
+            messages=[m for m in entry.messages
+                      if (m.get('role')=='assistant'
+                          or (m.get('current_file') and m.get('tool_status')=='completed')
+                          or (m.get('role')=='tool' and m.get('_presented_files')))
+                      and (not message_id or m.get('id')==message_id)]
             for m in reversed(messages):
-                paths=references(m['text']) if m['role']=='assistant' else [m['current_file']]
-                presented=agent.presented_files(m,item)
-                if presented is not None:
-                    paths=presented
-                for index,raw in enumerate(paths):
-                    p=Path(raw)
-                    # Only an explicit source reference authorizes this exact regular local file.
-                    if not p.is_absolute() or not re.match(r'^[A-Za-z]:[\\/]',raw) or ':' in raw[2:] or '\x00' in raw:continue
-                    identity=[app,tid,m['id'],index,str(p)]
-                    fid=hmac.new(self.secret,json.dumps(identity).encode(),hashlib.sha256).hexdigest()[:32]
-                    old=self.files.get((app,tid,fid))
-                    try:
-                        resolved=p.resolve()
-                        # A specific path grants no authority over a symlink/junction's new target.
-                        if resolved!=p.absolute():continue
-                        st=p.stat() if p.is_file() else None
-                    except (OSError,ValueError):st=None
-                    suffix=p.suffix.lower();size=st.st_size if st else 0
-                    kind='pdf' if suffix=='.pdf' else 'image' if suffix in ('.png','.jpg','.jpeg','.webp') else 'text' if suffix in ('.txt','.md','.csv','.tsv','.json','.py','.js','.html','.htm','.markdown','.css','.ts','.tsx','.jsx','.ps1','.sh','.yaml','.yml','.sql') and size<=1<<20 else 'download'
-                    updated=bool(old and st and old['mtime'] is not None and (old['mtime']!=st.st_mtime_ns or old['size']!=size))
-                    self.files[(app,tid,fid)]={'path':p,'resolved':resolved,'size':size,'mtime':st.st_mtime_ns if st else None,'kind':kind,'message_id':m['id'],'index':index,'updated':updated or bool(old and old.get('updated'))}
-                    identity_path=str(p).casefold()
-                    if identity_path in seen_paths:continue
+                if m.get('role')=='assistant' or (m.get('role')=='tool' and m.get('_presented_files')):
+                    _,rows,found_notes=self._message_rows(m,item,app,tid,entry,agent,
+                                                          per_index=bool(message_id),
+                                                          seen=None if message_id else seen_paths)
+                    notes+=found_notes
+                else:
+                    row=self._tool_row(m,app,tid);rows=[row] if row else []
+                for row in rows:
+                    identity_path=os.path.normcase(row['path'])
+                    if not message_id and identity_path in seen_paths:continue
                     seen_paths.add(identity_path)
-                    out.append({'id':fid,'name':p.name,'path':str(p),'size':size,'modified':st.st_mtime_ns//1000000 if st else None,'kind':kind,'message_id':m['id'],'index':index,'state':'missing' if not st else 'updated' if self.files[(app,tid,fid)]['updated'] else 'current'}
-                               |({'preview':'pdf'} if kind=='download' and st and office_preview.offers(p) else {}))
-        return {'items':out,'scope':'当前会话明确引用的具体文件；打开当前内容，不保存历史副本'}
+                    out.append(row)
+        unique=[];seen=set()
+        for note in notes:
+            key=(note['href'],note['reason'])
+            if key in seen:continue
+            seen.add(key);unique.append(note)
+        return {'items':out,'file_notes':unique,
+                'scope':'当前会话明确引用的具体文件；打开当前内容，不保存历史副本'}
 
     def file(self,app,tid,fid):
         meta=self.files.get((app,tid,fid))
@@ -512,5 +715,4 @@ class History:
             if not p.is_file():raise HistoryError('文件已移动或删除',404)
             st=p.stat()
         except OSError:raise HistoryError('文件已移动或删除',404) from None
-        mime='application/pdf' if meta['kind']=='pdf' else (mimetypes.guess_type(p.name)[0] or 'image/png') if meta['kind']=='image' else 'text/plain; charset=utf-8' if meta['kind']=='text' else 'application/octet-stream'
-        return {**meta,'path':p,'size':st.st_size,'mime':mime}
+        return {**meta,'path':p,'size':st.st_size,'mime':meta['mime']}

@@ -179,9 +179,9 @@ class DeepSeekAgent(Agent):
             paths.append(str(p.absolute()))
         return paths
 
-    def native_stream(self, handler, tid: str) -> bool:
+    def native_stream(self, handler, tid: str, history=None, lite: bool = False) -> bool:
         import live_events
-        live_events.deepseek_stream(handler, tid)
+        live_events.deepseek_stream(handler, tid, history, lite)
         return True
 
     def detect(self) -> bool:

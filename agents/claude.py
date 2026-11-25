@@ -283,6 +283,34 @@ class ClaudeAgent(Agent):
         from message_files import absolute_links
         return absolute_links(text, cwd)
 
+    def presented_files(self, message: dict, item: dict) -> list[str] | None:
+        paths = message.get("_presented_files")
+        return list(paths) if paths else None
+
+    def attach_presented(self, messages: list[dict]) -> None:
+        """SendUserFile belongs under the first answer after it in the same turn (handoff §3.1)."""
+        for index, message in enumerate(messages):
+            paths = message.get("_presented_files") if message.get("role") == "tool" else None
+            if not paths:
+                continue
+            target = None
+            for later in messages[index + 1:]:
+                if later.get("role") == "user":
+                    break
+                if later.get("role") != "assistant":
+                    continue
+                before, after = message.get("activity_turn"), later.get("activity_turn")
+                if before is None or after is None or before == after:
+                    target = later
+                    break
+            if target is None:
+                continue  # no answer yet: it stays on the tool row
+            keep = target.setdefault("_presented_files", [])
+            for path in paths:
+                if path not in keep:
+                    keep.append(path)
+            message.pop("_presented_files", None)
+
     def mark_open_next(self, messages: list[dict]) -> None:
         chats.mark_open_next(messages)
 

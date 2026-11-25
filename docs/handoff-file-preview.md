@@ -461,6 +461,40 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 没做：B 段的 `file_policy.py`、消息里的 `files` / `file_notes`、`/api/chat/files`；没有改版本号、没有推送。
 
+#### 第二段（授权、接进电脑、发给手机）
+
+已做：
+
+- 新增 `file_policy.py`：§4 第 2–6 条和「不给手机」清单，`check()` / `inspect()` 只返回 `missing`、`folder`、`not_local`、`denied` 或 `None`；盘符列表、家目录、数据文件夹、`stat` 都可注入。网络位置、别的盘、别的系统的绝对路径在 stat 之前就拒绝；符号链接/目录联接、备用数据流、保留名、登录/密钥/浏览器资料和 `remote_config.json` 都拒绝。
+- `History` 按需处理：读记录时只存原文，出公开消息、列文件时才调 `answer_files.scan`，结果按（文字摘要、bases、presented）缓存到消息上；`length`、`truncated` 按改写后的文字算。
+- 三个出口都带 `files`（没有文件是 `[]`），有原因时带 `file_notes`：`chat_history.py` 的 `conversation()`（一页）、`message()`（整条）、`live_events.py` 的 `merge_live_messages()`（实时）。DeepSeek、Antigravity 的 `read()` 页也在 `History.conversation()` 里补上，所以四个助手都走同一套。
+- `bases` 依次是消息/这一轮的 `cwd`（有的话）、对话文件夹；`presented` 用助手自己的 `presented_files()`。
+- Claude 的 SendUserFile：`chats.parse_claude` 把 `input.files` 记在工具行上；`ClaudeAgent.attach_presented()` 把它移到同一轮后面的第一条回答，后面还没有回答时留在工具行。DeepSeek 成果清单照旧。
+- `files` 字段按 §5.1：`id`、`index`、`name`、`path`、`kind`（老四种）、`view`、`ext`、`mime`、`size`、`modified`、`state`、`v`、`line`、`lang`、`via`，`code`/`path` 加 `texts`；`thumb` 一律 false，没有 `w`/`h`。Office 带 `preview: "pdf"`。策略拒绝的不进 `files`，进 `file_notes`；`missing` 留在 `files`，`state` 是 `missing`。
+- `/api/chat/files` 用同一套结果；老字段都在，新字段照 §5.1；`message=` 时同一个文件的每个 `index` 各一行（各自的 `id`），整个对话按路径去重。`History.file()` 仍每次重新走 `list_files()` 的策略复查。
+- `message_files.references`、`absolute_links` 改成 `answer_files` 的薄包装。
+
+测试：`tests/test_file_policy.py` 49 个通过、1 个符号链接用例跳过（Windows 不许建链接）；`tests/test_answer_files_history.py` 11 个通过（三个出口、空 `files`、`file_notes`、SendUserFile 两种位置、DeepSeek 成果、缓存、刷新后仍能称重）；`tests/test_answer_files.py` 80 个、第一段两个旧文件测试也通过。
+
+完整 pytest（工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**。失败的 3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。浏览器测试运行时设了 `PLAYWRIGHT_BROWSERS_PATH=D:/Personal/agent_remote_lanes/ms-playwright`，所以这次没有出现 webkit 启动失败那批。
+
+速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接的对话，只有两个不同文件）：第一次出一页（60 条）**0.08–0.11 秒**；第一次列整个对话的文件 **4.8 秒**（5,000 条消息要认，第二次走缓存 0.12 秒）；缓存后再出一页 0.05 秒。脚本在 DeepSeek 工作区，没有提交。
+
+旧测试的有意改动：
+
+- `tests/test_relative_links.py`：Claude 读记录不再改写原文，改写后的文字从公开消息看；`absolute_links` 现在也把绝对链接统一成 `<D:/…>`；`references` 去重。
+- `tests/test_artifact_files.py`：行内代码里只有一个路径现在算引用（§12 的决定），`references('`C:/secret.html`')` 从 `[]` 变为 `['C:/secret.html']`；`plain filename.html` 仍然不算。
+- `tests/test_read_golden.py`、`tests/test_action_golden.py` 没变：它们的固定数据只存记录解析和旧版实时合并的原始字段，没有经过公开消息的 `files`，也没有带链接的例子。
+
+没做：第三段的内容判文本、类型细表；第四段的缩略图、`w`/`h`、附件资源、zip；没有推送、合并、打包、改版本号。
+
+要审：
+
+- `files` 只加在回答（和还没有回答的 SendUserFile 工具行）上；用户消息没有 `files`。
+- `file_policy` 把 `~/.gemini`、`~/.aws`、`~/.ssh` 整个目录都算不给；浏览器文件只在路径带 Chrome/Edge/Firefox/User Data 等标记时按文件名拒绝。
+- HTML 的 `<img src>` / `<a href>` 仍按网址做 %-解码；审后修里「不做 %-解码」只指 presented、Codex 引用、行内代码、正文路径。
+- 整个对话第一次列文件在 10,000 条时约 4.8 秒；如果嫌慢，下一步可以在 `list_files` 里按「没有 `](`、`]:`、`:\`、`:/`、`file:`、`<img`、`<a `、`~/`、反引号」先粗筛整条消息（`answer_files` 内部已有，但每条仍进入一次函数）。
+
 ### 线二、网页
 
 （待填）

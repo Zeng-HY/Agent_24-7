@@ -148,6 +148,7 @@ class Presentation:
         self.sid=sid;self.item=item;self.rows={};self.cursor=-1;self.revision=0
         self.attempt=None;self.blocks=Blocks();self.has_more=False;self.before=None
         self.running=item.get('_running',item.get('status')=='running');self.modified=0
+        self.public=None  # (row)->public row, set by the live stream to add answer files
         # child id -> still running, for the subagent cards in this presentation (10-19)
         self.subagent_status={}
     def set_subagent_status(self,rows):
@@ -229,6 +230,7 @@ class Presentation:
                 elif kind=='tool-call':row.update(tool_status='running')
                 rows.append(row)
         item={k:v for k,v in self.item.items() if not k.startswith('_')}
+        if self.public is not None:rows=[self.public(row) for row in rows]
         return {**item,'messages':sorted(rows,key=lambda r:r['order']),'status':'running' if self.running else 'idle',
             'runtime':{'model':self.selection.get('model'),'effort':self.selection.get('reasoningEffort')},
             'size':self.cursor,'modified':self.modified,'has_more':self.has_more,'next_cursor':self.before,

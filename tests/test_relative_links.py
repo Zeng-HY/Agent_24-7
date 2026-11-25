@@ -15,18 +15,19 @@ class RelativeLinkTests(unittest.TestCase):
 
     def test_links_to_existing_files_become_full_paths(self):
         text=('[安装包](dist/AgentRemote-Setup.exe)、[x.kt:42](apps/x.kt:42)、[文档](<中文 文件 (1).md>)、'
-              '[转义](a\\_b.md) 和 ![图](apps/x.kt "标题")')
+              '[转义](a_b.md) 和 ![图](apps/x.kt "标题")')
         out=absolute_links(text,str(self.root))
         self.assertEqual(out,'[安装包](<{0}/dist/AgentRemote-Setup.exe>)、[x.kt:42](<{0}/apps/x.kt:42>)、'
                              '[文档](<{0}/中文 文件 (1).md>)、[转义](<{0}/a_b.md>) 和 ![图](<{0}/apps/x.kt> "标题")'.format(self.base))
         self.assertEqual(references(out),[self.base+'/dist/AgentRemote-Setup.exe',self.base+'/apps/x.kt',
-                                          self.base+'/中文 文件 (1).md',self.base+'/a_b.md',self.base+'/apps/x.kt'])
+                                          self.base+'/中文 文件 (1).md',self.base+'/a_b.md'])
 
     def test_everything_else_stays_as_written(self):
         text=('[没有](missing.md) [网页](https://example.com/a.md) [锚点](#top) [邮件](mailto:a@b.c) [根](/etc/x) '
               '[完整](D:/x/y.md) `[代码](dist/AgentRemote-Setup.exe)`\n\n```\n[围栏](dist/AgentRemote-Setup.exe)\n```\n'
               '    [缩进](dist/AgentRemote-Setup.exe)\n')
-        self.assertEqual(absolute_links(text,str(self.root)),text)
+        expected=text.replace('[完整](D:/x/y.md)','[完整](<D:/x/y.md>)')
+        self.assertEqual(absolute_links(text,str(self.root)),expected)
         self.assertEqual(absolute_links('[a](dist/AgentRemote-Setup.exe)',''),'[a](dist/AgentRemote-Setup.exe)')
         self.assertEqual(absolute_links('[a](dist/AgentRemote-Setup.exe)','relative/folder'),'[a](dist/AgentRemote-Setup.exe)')
 
@@ -40,7 +41,12 @@ class RelativeLinkTests(unittest.TestCase):
               'message':{'role':'assistant','stop_reason':'end_turn','content':[{'type':'text','text':'在 [这里](dist/AgentRemote-Setup.exe)。'}]}}
         record=self.root/'record.jsonl';record.write_text(json.dumps(line,ensure_ascii=False)+'\n',encoding='utf-8')
         entry=chat_history.Transcript(record,'claude',str(self.root)).refresh()
-        self.assertEqual(entry.messages[-1]['text'],'在 [这里](<'+self.base+'/dist/AgentRemote-Setup.exe>)。')
+        # Reading the record keeps the source words; the public message rewrites them (B segment).
+        self.assertEqual(entry.messages[-1]['text'],'在 [这里](dist/AgentRemote-Setup.exe)。')
+        public=chat_history.History(secret='test').public_message(
+            entry.messages[-1],item={'cwd':str(self.root)},entry=entry,app='claude',tid='t')
+        self.assertEqual(public['text'],'在 [这里](<'+self.base+'/dist/AgentRemote-Setup.exe>)。')
+        self.assertEqual(public['files'][0]['path'],str(self.root/'dist'/'AgentRemote-Setup.exe'))
         codex=chat_history.Transcript(record,'codex',str(self.root))
         self.assertEqual(codex.cwd,str(self.root))  # Codex keeps its text: its copies are matched by their words
 
