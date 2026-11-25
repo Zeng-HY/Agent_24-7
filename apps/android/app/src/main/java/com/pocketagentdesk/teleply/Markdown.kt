@@ -1,21 +1,33 @@
 package com.pocketagentdesk.teleply
 
+import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.commonmark.ext.gfm.tables.*
@@ -50,6 +62,8 @@ class MarkdownCache(private val limit:Int=1500,private val maxChars:Int=800_000)
 }
 private val renderCache=MarkdownCache()
 fun clearMarkdownCache()=renderCache.clear()
+/** A reply tidied for reading and parsed, kept by its source: what the timeline draws, and what finds its pictures. */
+fun answerDocument(source:String):Node = renderCache.document(tidyAnswer(source,shown=true))
 fun children(node: Node): List<Node> = buildList { var child=node.firstChild; while(child!=null) { add(child); child=child.next } }
 fun plain(node: Node): String = when(node) { is MdText -> node.literal; is Code -> node.literal; is SoftLineBreak, is HardLineBreak -> "\n"; else -> children(node).joinToString("") { plain(it) } }
 fun safeWebLink(destination: String): Boolean = runCatching { val u=java.net.URI(destination); u.scheme in listOf("https","http") && !u.host.isNullOrBlank() && u.userInfo==null }.getOrDefault(false)
@@ -125,37 +139,146 @@ fun fileLink(path: String)=FileScheme+java.net.URLEncoder.encode(path,"UTF-8")
 /** The path behind a link drawn by [fileLink]; null for any other address. */
 fun fileLinkPath(link: String): String? = if(link.startsWith(FileScheme)) runCatching { java.net.URLDecoder.decode(link.removePrefix(FileScheme),"UTF-8") }.getOrNull() else null
 
-/** Link colour and inline-code fill: the blue user bubble needs its own colours. */
-private data class MdInk(val link: Color, val code: Color)
+/** Link colour, inline-code fill and the grey of a note saying why a link cannot be opened (§6.1). */
+private data class MdInk(val link: Color, val code: Color, val muted: Color)
 
-private fun inline(node: Node, ink: MdInk): AnnotatedString = buildAnnotatedString {
-    fun appendNode(n: Node) {
-        when(n) {
-            is MdText -> append(n.literal)
-            is Code -> withStyle(SpanStyle(fontFamily=FontFamily.Monospace,background=ink.code)) { append(n.literal) }
-            is SoftLineBreak -> append(" ")
-            is HardLineBreak -> append("\n")
-            is StrongEmphasis -> withStyle(SpanStyle(fontWeight=FontWeight.Bold)) { children(n).forEach(::appendNode) }
-            is Emphasis -> withStyle(SpanStyle(fontStyle=FontStyle.Italic)) { children(n).forEach(::appendNode) }
-            is Link -> {
+/**
+ * A link that opens one of the answer's files by the very entry the computer listed (§5.1, 6.1): the file page opens
+ * with it, without reading the conversation's whole file list first.
+ */
+private const val ItemScheme = "teleply-item:"
+fun itemLink(file: FileRef): String = ItemScheme + java.net.URLEncoder.encode(file.toJson().toString(), "UTF-8")
+fun itemLinkFile(link: String): FileRef? = if (link.startsWith(ItemScheme)) runCatching {
+    parseFileRef(org.json.JSONObject(java.net.URLDecoder.decode(link.removePrefix(ItemScheme), "UTF-8")))
+}.getOrNull() else null
+
+/** The grey note's own link: opening it shows the whole reason (§6.4). */
+private const val WhyScheme = "teleply-why:"
+fun whyLink(note: FileNote): String = WhyScheme + java.net.URLEncoder.encode(
+    org.json.JSONObject().put("href", note.href).put("reason", note.reason).put("text", note.text).toString(), "UTF-8")
+fun whyLinkNote(link: String): FileNote? = if (link.startsWith(WhyScheme)) runCatching {
+    val j = org.json.JSONObject(java.net.URLDecoder.decode(link.removePrefix(WhyScheme), "UTF-8"))
+    FileNote(j.optString("href"), j.optString("reason"), j.optString("text"))
+}.getOrNull() else null
+
+private fun linkStyle(color: Color) = TextLinkStyles(SpanStyle(color = color))
+
+private fun AnnotatedString.Builder.appendChildren(n: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>) {
+    children(n).forEach { appendNode(it, ink, files, notes) }
+}
+
+private fun AnnotatedString.Builder.grey(text: String, ink: MdInk) = withStyle(SpanStyle(color = ink.muted)) { append(text) }
+
+/** The short grey note after a link, and, tapped, the whole reason (§6.1, 6.4). */
+private fun AnnotatedString.Builder.appendNote(note: FileNote, ink: MdInk) {
+    append(" ")
+    withLink(LinkAnnotation.Url(whyLink(note), linkStyle(ink.muted))) { append("（${note.short}）") }
+}
+
+/**
+ * One node as words. With the answer's `files` (a newer computer), a link is matched with them by its path and opens
+ * that entry; one that cannot be given says why in grey (§6.1). Without them (an older computer) every link goes the
+ * 1.0.10 way. `#`, `mailto:` and other protocols are words only; a web address on the computer itself says so.
+ */
+private fun AnnotatedString.Builder.appendNode(n: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>) {
+    when(n) {
+        is MdText -> append(n.literal)
+        is Code -> withStyle(SpanStyle(fontFamily=FontFamily.Monospace,background=ink.code)) { append(n.literal) }
+        is SoftLineBreak -> append(" ")
+        is HardLineBreak -> append("\n")
+        is StrongEmphasis -> withStyle(SpanStyle(fontWeight=FontWeight.Bold)) { appendChildren(n, ink, files, notes) }
+        is Emphasis -> withStyle(SpanStyle(fontStyle=FontStyle.Italic)) { appendChildren(n, ink, files, notes) }
+        is Link -> {
+            val destination = n.destination
+            val file = files?.let { fileForLink(it, destination) }
+            val note = if (files != null) noteForLink(notes, destination) else null
+            val path = localPath(destination)
+            when {
                 // A file on the computer opens its page, to look at, save or share (web: the link downloads it, 10-27).
-                val file=localPath(n.destination)
-                when {
-                    file!=null -> withLink(LinkAnnotation.Url(fileLink(file),TextLinkStyles(SpanStyle(color=ink.link)))) { children(n).forEach(::appendNode) }
-                    safeWebLink(n.destination) -> withLink(LinkAnnotation.Url(n.destination,TextLinkStyles(SpanStyle(color=ink.link)))) { children(n).forEach(::appendNode) }
-                    else -> { children(n).forEach(::appendNode); append("（链接未开放）") }
+                file != null -> withLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
+                path != null && files == null -> withLink(LinkAnnotation.Url(fileLink(path), linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
+                // A newer computer did not list it; its note says why, if it gave one.
+                path != null -> {
+                    appendChildren(n, ink, files, notes)
+                    if (note != null) appendNote(note, ink) else { append(" "); grey("（找不到文件）", ink) }
                 }
+                // A link that looked like a file but cannot be given: its words stay, the reason follows in grey.
+                note != null -> {
+                    withLink(LinkAnnotation.Url(whyLink(note), linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
+                    appendNote(note, ink)
+                }
+                localWebLink(destination) -> { appendChildren(n, ink, files, notes); append(" "); grey("（电脑本机网址，手机打不开）", ink) }
+                safeWebLink(destination) -> withLink(LinkAnnotation.Url(destination, linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
+                // #…, mailto: and the rest: words only, no （链接未开放） any more (§6.1).
+                else -> appendChildren(n, ink, files, notes)
             }
-            is Image -> {
-                val file=localPath(n.destination)
-                if(file!=null) withLink(LinkAnnotation.Url(fileLink(file),TextLinkStyles(SpanStyle(color=ink.link)))) { append("[图片：${plain(n).ifBlank { file.substringAfterLast('/').substringAfterLast('\\') }}]") }
-                else append("[图片：${plain(n).ifBlank { "未命名" }} · 可在当前文件中查看已授权资源]")
+        }
+        is Image -> {
+            val destination = n.destination
+            val file = files?.let { fileForLink(it, destination) }
+            val path = localPath(destination)
+            val label = plain(n).ifBlank { file?.name?.ifBlank { null } ?: path?.substringAfterLast('/')?.substringAfterLast('\\') ?: "未命名" }
+            when {
+                file != null -> withLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link))) { append("[图片：$label]") }
+                path != null -> withLink(LinkAnnotation.Url(fileLink(path), linkStyle(ink.link))) { append("[图片：$label]") }
+                else -> append("[图片：$label · 可在当前文件中查看已授权资源]")
             }
-            is HtmlInline -> append(n.literal)
-            else -> children(n).forEach(::appendNode)
+        }
+        is HtmlInline -> append(n.literal)
+        else -> appendChildren(n, ink, files, notes)
+    }
+}
+
+/** The words of a `code` or `path` file (§5.1 `texts`): each as the answer wrote it becomes a link to that file. */
+private fun AnnotatedString.Builder.linkFileTexts(files: List<FileRef>?, ink: MdInk) {
+    if (files == null || length == 0) return
+    val text = toString()
+    files.forEach { file ->
+        file.texts.forEach { words ->
+            if (words.isBlank()) return@forEach
+            var at = text.indexOf(words)
+            while (at >= 0) {
+                addLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link)), at, at + words.length)
+                at = text.indexOf(words, at + words.length)
+            }
         }
     }
-    appendNode(node)
+}
+
+private fun inline(node: Node, ink: MdInk, files: List<FileRef>? = null, notes: List<FileNote> = emptyList()): AnnotatedString {
+    val builder = AnnotatedString.Builder()
+    builder.appendNode(node, ink, files, notes)
+    builder.linkFileTexts(files, ink)
+    return builder.toAnnotatedString()
+}
+
+/** A paragraph's parts: its words, then a picture where the answer put one, then more words (§6.1). */
+private sealed class ParagraphPiece {
+    class Words(val text: AnnotatedString) : ParagraphPiece()
+    class Picture(val file: FileRef) : ParagraphPiece()
+}
+
+/**
+ * A paragraph split around the pictures drawn where it put them. A paragraph without one stays the single [Words] it
+ * always was, so an answer with no pictures is drawn exactly as before and just as fast.
+ */
+private fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>): List<ParagraphPiece> {
+    if (files == null || "![" !in plain(node)) return listOf(ParagraphPiece.Words(inline(node, ink, files, notes)))
+    val out = mutableListOf<ParagraphPiece>()
+    var words = AnnotatedString.Builder()
+    fun flush() {
+        if (words.length > 0) {
+            words.linkFileTexts(files, ink)
+            out += ParagraphPiece.Words(words.toAnnotatedString())
+            words = AnnotatedString.Builder()
+        }
+    }
+    children(node).forEach { child ->
+        val file = (child as? Image)?.let { pictureForImage(files, it.destination) }
+        if (file != null) { flush(); out += ParagraphPiece.Picture(file) } else words.appendNode(child, ink, files, notes)
+    }
+    flush()
+    return out
 }
 
 /**
@@ -172,45 +295,56 @@ private fun inline(node: Node, ink: MdInk): AnnotatedString = buildAnnotatedStri
     linkColor: Color=Color.Unspecified,
     codeBackground: Color=Color.Unspecified,
     reader: Boolean=false,
+    files: List<FileRef>? = null,
+    notes: List<FileNote> = emptyList(),
 ) {
     val p=LocalTeleply.current
-    val root=remember(source) { renderCache.document(tidyAnswer(source,shown=true)) }
-    val ink=MdInk(if(linkColor==Color.Unspecified) p.accent else linkColor,if(codeBackground==Color.Unspecified) p.codeFill else codeBackground)
+    val root=remember(source) { answerDocument(source) }
+    val ink=MdInk(if(linkColor==Color.Unspecified) p.accent else linkColor,if(codeBackground==Color.Unspecified) p.codeFill else codeBackground,p.muted)
     val blocks=@Composable {
-        Column(verticalArrangement=Arrangement.spacedBy(12.dp)) { children(root).forEachIndexed { index,node -> MarkdownBlock(node,textModifier,ink,index==0,reader) } }
+        Column(verticalArrangement=Arrangement.spacedBy(12.dp)) { children(root).forEachIndexed { index,node -> MarkdownBlock(node,textModifier,ink,index==0,reader,files,notes) } }
     }
     if(selectable) SelectionContainer(modifier) { blocks() } else Box(modifier) { blocks() }
 }
-@Composable private fun MarkdownBlock(node: Node,textModifier:Modifier,ink:MdInk,first:Boolean=false,reader:Boolean=false) {
+@Composable private fun MarkdownBlock(node: Node,textModifier:Modifier,ink:MdInk,first:Boolean=false,reader:Boolean=false,files:List<FileRef>? = null,notes:List<FileNote> = emptyList()) {
     val p=LocalTeleply.current
     val type=MaterialTheme.typography
     val body=if(reader) type.reader else type.reading
     when(node) {
         is Heading -> {
-            val text=remember(node,ink) { inline(node,ink) }
+            val text=remember(node,ink,files,notes) { inline(node,ink,files,notes) }
             val style=when(node.level) { 1 -> type.titleMedium.copy(fontSize=18.sp,lineHeight=26.sp); 2 -> type.titleMedium; else -> body.copy(fontWeight=FontWeight.SemiBold) }
             Text(text,style=style,modifier=textModifier.padding(top=if(first) 0.dp else 8.dp).semantics { heading() })
         }
-        is org.commonmark.node.Paragraph -> { val text=remember(node,ink) { inline(node,ink) }; Text(text,style=body,modifier=textModifier) }
+        is org.commonmark.node.Paragraph -> {
+            val pieces=remember(node,ink,files,notes) { paragraphPieces(node,ink,files,notes) }
+            if(pieces.size==1 && pieces[0] is ParagraphPiece.Words) Text((pieces[0] as ParagraphPiece.Words).text,style=body,modifier=textModifier)
+            else Column(verticalArrangement=Arrangement.spacedBy(8.dp)) { pieces.forEach { piece ->
+                when(piece) {
+                    is ParagraphPiece.Words -> if(piece.text.isNotBlank()) Text(piece.text,style=body,modifier=textModifier)
+                    is ParagraphPiece.Picture -> MarkdownPicture(piece.file)
+                }
+            } }
+        }
         is FencedCodeBlock -> CodePanel(node.info.ifBlank { "代码" },node.literal.removeSuffix("\n"),if(node.info.isBlank()) "复制代码" else "复制 ${node.info} 代码")
         is IndentedCodeBlock -> CodePanel("代码",node.literal.removeSuffix("\n"),"复制代码")
         is BlockQuote -> Row(Modifier.height(IntrinsicSize.Min)) {
             Box(Modifier.width(3.dp).fillMaxHeight().background(p.line))
-            Column(Modifier.padding(start=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) { children(node).forEach { MarkdownBlock(it,textModifier,ink,reader=reader) } }
+            Column(Modifier.padding(start=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) { children(node).forEach { MarkdownBlock(it,textModifier,ink,reader=reader,files=files,notes=notes) } }
         }
         is BulletList, is OrderedList -> Column(verticalArrangement=Arrangement.spacedBy(6.dp)) { children(node).forEachIndexed { index,item ->
             Row {
                 Text(if(node is OrderedList) "${node.markerStartNumber+index}." else "•",style=body,modifier=Modifier.widthIn(min=20.dp))
-                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)) { children(item).forEach { MarkdownBlock(it,textModifier,ink,reader=reader) } }
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)) { children(item).forEach { MarkdownBlock(it,textModifier,ink,reader=reader,files=files,notes=notes) } }
             }
         } }
-        is TableBlock -> MarkdownTable(node,ink)
+        is TableBlock -> MarkdownTable(node,ink,files,notes)
         is ThematicBreak -> HorizontalDivider(color=p.line)
         is HtmlBlock -> Text(node.literal,style=type.bodyMedium,modifier=textModifier) // Native text, never executable HTML.
-        else -> children(node).forEach { MarkdownBlock(it,textModifier,ink,reader=reader) }
+        else -> children(node).forEach { MarkdownBlock(it,textModifier,ink,reader=reader,files=files,notes=notes) }
     }
 }
-@Composable private fun MarkdownTable(node:TableBlock,ink:MdInk) {
+@Composable private fun MarkdownTable(node:TableBlock,ink:MdInk,files:List<FileRef>? = null,notes:List<FileNote> = emptyList()) {
     val p=LocalTeleply.current
     val cellWidth=200.dp*LocalDensity.current.fontScale.coerceIn(1f,1.6f)
     val rows=children(node).flatMap { children(it) }
@@ -218,10 +352,50 @@ private fun inline(node: Node, ink: MdInk): AnnotatedString = buildAnnotatedStri
     Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) { rows.forEachIndexed { index,row ->
         Row(Modifier.background(if(index==0) p.panel else p.page)) {
             children(row).forEach { cell ->
-                val text=remember(cell,ink) { inline(cell,ink) }
+                val text=remember(cell,ink,files,notes) { inline(cell,ink,files,notes) }
                 Text(text,style=MaterialTheme.typography.bodyMedium,fontWeight=if(index==0) FontWeight.SemiBold else FontWeight.Normal,modifier=Modifier.width(cellWidth).padding(12.dp))
             }
         }
         HorizontalDivider(color=p.line)
     } }
+}
+
+/**
+ * A picture drawn where the answer put it (§6.1): the bubble's width, at most about 360 dp high, its place kept by the
+ * computer's `w`/`h` (4:3 when it gave none) while the thumb comes. Grey with the file's name until then; a line and
+ * 重试 when it cannot be had. A tap opens the file's page (the picture page comes with stage B).
+ */
+@Composable private fun MarkdownPicture(file: FileRef) {
+    val p = LocalTeleply.current
+    val loader = LocalAnswerThumb.current
+    val uri = LocalUriHandler.current
+    val width = if (LocalConfiguration.current.screenWidthDp <= 480) 640 else 1280
+    var attempt by remember(file.id) { mutableIntStateOf(0) }
+    var failed by remember(file.id, attempt) { mutableStateOf(false) }
+    val image by produceState<android.graphics.Bitmap?>(null, file.id, file.version, width, attempt) {
+        value = null; failed = false
+        val bitmap = loader?.invoke(file, width)
+        value = bitmap; failed = bitmap == null
+    }
+    val ratio = if (file.width > 0 && file.height > 0) file.width.toFloat() / file.height else 4f / 3f
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        val height = (maxWidth / ratio).coerceAtMost(360.dp)
+        Box(
+            Modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(12.dp)).background(p.panel)
+                .clickable(role = Role.Image) { uri.openUri(itemLink(file)) }
+                .semantics { contentDescription = "查看 ${file.name.ifBlank { "图片" }}" },
+            contentAlignment = Alignment.Center,
+        ) {
+            val bitmap = image
+            when {
+                bitmap != null -> ComposeImage(bitmap.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                failed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("没能加载缩略图", style = MaterialTheme.typography.note, color = p.muted)
+                    Text("重试", style = MaterialTheme.typography.note, color = p.accent,
+                        modifier = Modifier.padding(start = 12.dp).clip(RoundedCornerShape(6.dp)).clickable { attempt++ }.padding(vertical = 4.dp))
+                }
+                else -> Text(file.name.ifBlank { "图片" }, style = MaterialTheme.typography.note, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
+            }
+        }
+    }
 }

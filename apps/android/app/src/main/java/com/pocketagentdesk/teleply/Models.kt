@@ -16,8 +16,98 @@ data class Chat(val id: String, val title: String, val folder: String = "", val 
 /**
  * [phase] is commentary / final_answer / thinking for assistant text; [request] is a user message's client_request_id;
  * [length] is the whole message's length as the computer counts it, what 展开全文 says when [truncated].
+ * [files] is the answer's file list from §5.1 of the file-preview design: an empty list too means a newer computer,
+ * null means the computer is older and the phone falls back to [openLinkedFile]. [fileNotes] say why a file-like link
+ * could not be given (6.4).
  */
-data class Message(val id: String, val role: String, val text: String, val truncated: Boolean = false, val kind: String = "", val status: String = "", val order: Double? = null, val aliases: List<String> = emptyList(),val details:String="{}",val phase:String="",val request:String="",val length:Int=0)
+data class Message(val id: String, val role: String, val text: String, val truncated: Boolean = false, val kind: String = "", val status: String = "", val order: Double? = null, val aliases: List<String> = emptyList(),val details:String="{}",val phase:String="",val request:String="",val length:Int=0,
+                   val files: List<FileRef>? = null, val fileNotes: List<FileNote> = emptyList())
+/**
+ * A file an answer names (file-preview design §5.1), as the computer lists it. [view] picks how the file page shows it
+ * (`image`, `svg`, `code`, …); [version] is the `v` its addresses carry; [texts] are the words a `code` or `path`
+ * file was found as, so that the words themselves can open it. [via] says how it was found (link, image, presented,
+ * code, path, …), which decides whether it goes in the file strip.
+ */
+data class FileRef(
+    val id: String,
+    val name: String = "",
+    val path: String = "",
+    val kind: String = "",
+    val view: String = "",
+    val size: Long = 0,
+    val state: String = "",
+    val version: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    val thumb: Boolean = false,
+    val line: Int = 0,
+    val lang: String = "",
+    val texts: List<String> = emptyList(),
+    val via: List<String> = emptyList(),
+    val preview: String = "",
+) {
+    /** A picture that can be drawn where the answer put it (6.1): an image or SVG the computer can make a thumb of. */
+    val picture: Boolean get() = thumb && (view == "image" || view == "svg")
+    /** The entry a file page reads; the same keys the conversation's file list gives. */
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("name", name).put("path", path).put("kind", kind)
+        .put("view", view).put("size", size).put("state", state).put("v", version)
+        .apply {
+            if (width > 0) put("w", width)
+            if (height > 0) put("h", height)
+            if (thumb) put("thumb", true)
+            if (line > 0) put("line", line)
+            if (lang.isNotBlank()) put("lang", lang)
+            if (preview.isNotBlank()) put("preview", preview)
+        }
+}
+/**
+ * A link that looked like a file but cannot be given (file-preview design §5.1, 6.4). [href] is the address as the
+ * answer wrote it, [reason] one of the design's reasons, [text] the computer's own words when it gave any.
+ */
+data class FileNote(val href: String, val reason: String, val text: String = "") {
+    val short: String get() = fileNoteShort(reason)
+    val full: String get() = fileNoteFull(reason, text)
+}
+fun parseFileRef(j: JSONObject): FileRef = FileRef(
+    id = j.string("id"), name = j.string("name"), path = j.string("path"), kind = j.string("kind"),
+    view = j.string("view"), size = j.optLong("size"), state = j.string("state"), version = j.string("v"),
+    width = j.optInt("w"), height = j.optInt("h"), thumb = j.optBoolean("thumb"), line = j.optInt("line"),
+    lang = j.string("lang"), texts = j.textStrings("texts"), via = j.textStrings("via"), preview = j.string("preview"),
+)
+private fun JSONObject.textStrings(key: String): List<String> = optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+fun parseFileNote(j: JSONObject): FileNote = FileNote(j.string("href"), j.string("reason"), j.string("text"))
+/** The short grey note after a link, §6.1: the design's reason in a few words. */
+fun fileNoteShort(reason: String): String = when (reason) {
+    "missing" -> "文件已删除"
+    "changed" -> "文件刚改过"
+    "not_found" -> "找不到文件"
+    "not_local" -> "网络位置"
+    "denied" -> "不开放"
+    "folder" -> "这是文件夹"
+    "too_large" -> "文件太大"
+    "unsupported" -> "不能直接显示"
+    "decode" -> "读不出编码"
+    "offline" -> "电脑离线"
+    "old_pc" -> "电脑端版本较旧"
+    "local_web" -> "电脑本机网址"
+    else -> "给不了"
+}
+/** The whole reason, in the design's own words (§6.4), for the dialog a grey note opens. */
+fun fileNoteFull(reason: String, text: String = ""): String = when (reason) {
+    "missing" -> "文件已移动或删除"
+    "changed" -> "文件刚改过，重新打开就是新的"
+    "not_found" -> "电脑上没找到这个文件（回答写的是相对位置，在对话文件夹里没找到）"
+    "not_local" -> "文件在网络位置或别的电脑上，遥应只读这台电脑自己的磁盘"
+    "denied" -> "出于安全，遥应不让手机读这个文件（可能含密钥或登录信息）"
+    "folder" -> "这是文件夹，可以在「电脑上的文件」里看"
+    "too_large" -> text.ifBlank { "文件太大，超过手机上直接看的上限；可以保存或用其他应用打开" }
+    "unsupported" -> "这种文件手机上不能直接显示；可以保存或用其他应用打开"
+    "decode" -> "读不出这个文件的文字编码；可以保存后用其他应用打开"
+    "offline" -> "电脑离线，连上后再试"
+    "old_pc" -> "电脑端版本较旧，更新到 dev.55 或以后才能看"
+    "local_web" -> "这是电脑本机的网址，手机打不开"
+    else -> text.ifBlank { "这个文件现在给不了" }
+}
 /** [meta] carries page-level fields as JSON, e.g. a conversation's title, folder, status and runtime. */
 data class Page<T>(val items: List<T>, val cursor: String? = null, val hasMore: Boolean = false, val hasNewer: Boolean = false, val reset: Boolean = false, val meta: String = "{}")
 fun JSONObject.string(key: String) = if (isNull(key)) "" else optString(key, "")
@@ -40,7 +130,14 @@ fun sortsAfter(a: Chat, b: Chat, sort: String): Boolean {
  * wrote it (time), which ties a Claude send's pictures to it (sentPictures).
  */
 private val MessageDetails = listOf("tool","title","changes","activity_turn","items","tool_id","recap","ask","actions","blocked","open","brief","offer","label","child","status","mode","origin","thinking","source_id","time")
-fun parseMessage(j: JSONObject) = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"),j.optInt("length"))
+fun parseMessage(j: JSONObject): Message {
+    val base = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"),j.optInt("length"))
+    // §5.1: an answer carries `files`, an empty list too, once the computer knows about file previews; no field at all
+    // is an older computer, and every link then goes the way it did in 1.0.10.
+    if(!j.has("files") || j.isNull("files")) return base
+    val files = j.optJSONArray("files")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(::parseFileRef) } }.orEmpty()
+    return base.copy(files = files, fileNotes = j.rows("file_notes", ::parseFileNote))
+}
 fun mergeMessages(old: List<Message>, incoming: List<Message>, prepend: Boolean): List<Message> {
     // Server transcript order is authoritative. Never sort by arrival time or deduplicate by text.
     val replacements = incoming.associateBy { it.id }

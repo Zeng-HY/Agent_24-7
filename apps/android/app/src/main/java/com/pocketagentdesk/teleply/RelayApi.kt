@@ -27,6 +27,8 @@ class MemoryCookieVault : CookieVault {
 class PreviewTooLarge(val limit: Long) : Exception("转成的 PDF 超过${limit / (1024 * 1024)}MB预览上限，可保存后使用系统应用打开。")
 /** A file saved or shared from the computer, at most (11-15: was 100 MB, user). A preview is read into memory: 100 MB still. */
 const val DownloadLimit = 500L * 1024 * 1024
+/** A thumbnail is a small WebP (§5.3); this only keeps a wrong answer from filling the phone. */
+const val ThumbLimit = 16L * 1024 * 1024
 fun serviceOrigin(value: String): HttpUrl {
     val url = value.trim().toHttpUrl()
     require(url.scheme == "https" && url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null && url.encodedPath == "/") { "请输入 HTTPS 服务根地址，不含账号、路径或参数。" }
@@ -49,6 +51,8 @@ interface ReadApi {
     suspend fun downloadTo(device:String,chat:String,file:String,output:java.io.OutputStream) { output.write(download(device,chat,file)) }
     /** A picture the computer kept of a send (GET /api/codex/image by its id; [small]: its copy of at most 320 px). */
     suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) { error("下载不可用") }
+    /** A file's thumbnail for an answer or its file strip (GET /api/file/thumb, file-preview design §5.3). */
+    suspend fun thumb(device:String,chat:String,file:String,width:Int,version:String):ByteArray = error("缩略图不可用")
     /** A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (GET /api/file/pdf, 10-27), at most [limit] bytes. */
     suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray = throw ServiceFailure(404,detail="这里不能把文件转成 PDF")
     fun events(device: String, chat: String): kotlinx.coroutines.flow.Flow<LiveFrame> = kotlinx.coroutines.flow.emptyFlow()
@@ -316,6 +320,14 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/file")).addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file).withProtocolQuery().build(),output)
     override suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) =
         streamTo(root.newBuilder().encodedPath(devicePath(device,"/api/codex/image")).apply { if(small) addQueryParameter("thumb","1") }.addQueryParameter("id",id).withProtocolQuery().build(),output)
+    /** §5.3: `app`, the conversation's id, the file's id, a width the computer accepts and the file's `v`. */
+    override suspend fun thumb(device:String,chat:String,file:String,width:Int,version:String):ByteArray {
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file/thumb"))
+            .addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file)
+            .addQueryParameter("w","$width").apply { if(version.isNotBlank()) addQueryParameter("v",version) }
+            .withProtocolQuery().build()
+        return fetch(url,ThumbLimit,client)
+    }
     /**
      * A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (10-27). The first time a version is
      * asked for, Office may take 5-30 s to start before a byte comes, so this waits much longer than other requests;

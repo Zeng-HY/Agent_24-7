@@ -109,10 +109,31 @@ class MainActivity : ComponentActivity() {
  * Wide windows (840dp and 480dp high) show the list and the conversation side by side (spec 6.7).
  */
 @Composable fun ReaderApp(s:ReaderState,vm:ReaderViewModel) {
-    // A file an answer links to opens its page (Markdown fileLink, 10-27); any other link goes to the system as before.
+    // A file an answer links to opens its page (Markdown fileLink, 10-27); a newer computer's entry opens its own page
+    // directly, and a grey note's dialog shows its whole reason (§6.1, 6.4); any other link goes to the system.
     val system=LocalUriHandler.current
-    val links=remember(system,vm) { object:UriHandler { override fun openUri(uri:String) { val path=fileLinkPath(uri);if(path!=null) vm.workspace.openLinkedFile(path) else system.openUri(uri) } } }
-    CompositionLocalProvider(LocalUriHandler provides links, LocalAgentCatalog provides s.catalog) { ReaderScreens(s,vm) }
+    val context=LocalContext.current
+    val caches=remember(context) { context.cacheDir }
+    val links=remember(system,vm) { object:UriHandler { override fun openUri(uri:String) {
+        val note=whyLinkNote(uri)
+        if(note!=null) { vm.showAnswerNote(note);return }
+        val item=itemLinkFile(uri)
+        if(item!=null) { vm.workspace.openAnswerFile(item);return }
+        val path=fileLinkPath(uri)
+        if(path!=null) vm.workspace.openLinkedFile(path) else system.openUri(uri)
+    } } }
+    // Pictures in an answer come from the workspace's reader into this phone's cache (§6.1, §7).
+    val thumbs: suspend (FileRef,Int) -> android.graphics.Bitmap? = remember(vm,caches) { { file,width -> vm.workspace.answerThumb(caches,file,width) } }
+    val note by vm.answerNote.collectAsStateWithLifecycle()
+    CompositionLocalProvider(LocalUriHandler provides links, LocalAnswerThumb provides thumbs, LocalAgentCatalog provides s.catalog) { ReaderScreens(s,vm) }
+    note?.let { n ->
+        AlertDialog(
+            onDismissRequest=vm::dismissAnswerNote,
+            confirmButton={ TextButton(onClick=vm::dismissAnswerNote) { Text("知道了") } },
+            title={ Text("这个文件为什么打不开") },
+            text={ Text(n.full) },
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

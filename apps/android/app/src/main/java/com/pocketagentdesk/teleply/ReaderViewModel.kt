@@ -162,6 +162,10 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     val composer=ChatController(viewModelScope,store)
     val workspace=WorkspaceController(viewModelScope,store)
     val jobs=NewChatJobs(viewModelScope,store)
+    /** The whole reason of a grey note tapped in an answer (§6.4), shown over the page until 知道了. */
+    val answerNote = MutableStateFlow<FileNote?>(null)
+    fun showAnswerNote(note: FileNote) { answerNote.value = note }
+    fun dismissAnswerNote() { answerNote.value = null }
     init {
         composer.catalog={ state.value.catalog }
         workspace.catalog={ state.value.catalog }

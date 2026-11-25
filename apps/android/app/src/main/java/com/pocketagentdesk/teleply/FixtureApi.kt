@@ -40,8 +40,8 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "files/places" -> JSONObject("""{"items":[{"name":"固定目录","path":"D:/fixture","kind":"conversation"}]}""")
         "files/list" -> JSONObject("""{"path":"D:/fixture","items":[{"kind":"file","app":"pc","id":"fixture-file-ref","download_id":"fixture-download","name":"遥应下载测试-${System.currentTimeMillis()}.txt","path":"D:/fixture/测试.txt"}]}""")
         "chat/files" -> JSONObject().put("items", JSONArray(FixtureWorld.FILES))
-        "file/meta" -> if(query["file"]=="fixture-download") JSONObject().put("kind","download").put("size","固定测试内容".toByteArray().size).put("state","current") else FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")).apply { if (it.has("preview")) put("preview", it.string("preview")) } } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
-        "file/text" -> JSONObject().put("text", if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
+        "file/meta" -> previewMeta(query["file"].orEmpty()) ?: if(query["file"]=="fixture-download") JSONObject().put("kind","download").put("size","固定测试内容".toByteArray().size).put("state","current") else FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")).apply { if (it.has("preview")) put("preview", it.string("preview")) } } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
+        "file/text" -> JSONObject().put("text", FixtureWorld.previewText(query["file"].orEmpty()) ?: if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
         "chat/diff" -> JSONObject("""{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}""")
         "chat/projects" -> world.tree(query["more"], device)
         "chat/open" -> world.open(body?.string("id").orEmpty())
@@ -86,12 +86,25 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
             "fixture-png" -> java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
             "fixture-docx" -> java.util.Base64.getDecoder().decode(FixtureWorld.DOCX)
             "fixture-xlsx" -> java.util.Base64.getDecoder().decode(FixtureWorld.XLSX)
+            // The file-preview story's own files: pictures are the fixed PNG, the PDF a one-page one, R and text
+            // read here, and the spreadsheet the fixed workbook.
+            "fp-chart", "fp-logo", "fp-shot-1", "fp-shot-2" -> java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
+            "fp-contract" -> java.util.Base64.getDecoder().decode(FixtureWorld.PDF)
+            "fp-budget" -> java.util.Base64.getDecoder().decode(FixtureWorld.XLSX)
+            "fp-run", "fp-analysis" -> FixtureWorld.R_SOURCE.toByteArray()
+            "fp-report" -> FixtureWorld.REPORT_TEXT.toByteArray()
             else -> "固定测试内容".toByteArray()
         }
     }
 
     // A picture sent with a message is the fixed picture too, small or whole.
     override suspend fun sentPicture(device: String, id: String, small: Boolean, output: java.io.OutputStream) { net(); world.pictureReads++; output.write(java.util.Base64.getDecoder().decode(FixtureWorld.PNG)) }
+
+    // §5.3's thumbnail: the fixed picture for every file, so both the picture in the text and a card's small copy show.
+    override suspend fun thumb(device: String, chat: String, file: String, width: Int, version: String): ByteArray {
+        net(); world.thumbReads++
+        return java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
+    }
 
     // PowerPoint as the computer's Office turns it into PDF (10-27), after a moment (Office starting); any other file
     // not at all, in the computer's words. Word and Excel are drawn on the phone (10-28) and come here only when the
@@ -146,7 +159,13 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         if (query == "performance") return Page(listOf(Chat("performance", "长会话性能示例", "固定数据", "200条消息", "idle", "codex")))
         if (query == "error") throw ServiceFailure(503)
         if (query == "expired") throw ServiceFailure(401)
-        val rows = if (cursor == null) world.firstPage() else listOf(Chat("older", "更早的对话", "测试项目", "第二页", "idle", "codex", FixtureWorld.NOW - 86_400_000L * 3))
+        // 文件预览示例 is an older row (page 2) so that the demo's first page keeps the rows other examples count on;
+        // searching for it finds it on the first page.
+        val rows = when {
+            cursor != null -> listOf(FixtureWorld.PREVIEW_CHAT)
+            query.isNotBlank() -> world.firstPage() + FixtureWorld.PREVIEW_CHAT
+            else -> world.firstPage()
+        }
         val has = world.appsOf(device)
         val shown = rows.filter { it.app in has && (app == "all" || it.app == app) && (query.isBlank() || it.title.contains(query) || it.folder.contains(query)) && statusMatches(it.status, status) }
         // The second page is the one finished row above: a list of another state has none.
@@ -159,6 +178,13 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "waiting" -> value == "waiting"
         "idle" -> value in setOf("idle", "stopped", "failed")
         else -> true
+    }
+
+    /** A file-preview story's file as the file page reads it; null for every other file. */
+    private fun previewMeta(id: String): JSONObject? = FixtureWorld.PREVIEW_FILES.find { it.id == id }?.let { file ->
+        JSONObject().put("kind", file.kind).put("name", file.name).put("state", file.state.ifBlank { "current" })
+            .put("size", file.size).put("view", file.view)
+            .apply { if (file.preview.isNotBlank()) put("preview", file.preview) }
     }
 
     override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int): Page<Message> {
@@ -209,6 +235,8 @@ class FixtureWorld {
     var desktopMenuReads = 0
     /** Pictures sent with messages the demo computer was asked for, small or whole: the phone keeps them after once. */
     var pictureReads = 0
+    /** Answer thumbnails the demo computer was asked for (§5.3). */
+    var thumbReads = 0
     /** Office files the demo computer was asked to turn into PDF; how long it takes (Office starting), or what it waits for (tests). */
     var pdfReads = 0
     @Volatile var pdfDelay = 1_500L
@@ -686,6 +714,7 @@ class FixtureWorld {
             listOf(Message("$chat-1", "user", text.ifBlank { "请查看这些图片或引用。" }), Message("$chat-2", "assistant", "本地示例：收到，这是固定的回复。"))
         }
         chat == MADE_THREAD -> listOf(Message("made-1", "user", "把发布清单单独放到这个对话里整理。"), Message("made-2", "assistant", "好的，这个对话只整理发布清单。"))
+        chat == "file-preview" -> FILE_PREVIEW_MESSAGES
         chat == AWAY_CODEX -> listOf(Message("w1", "user", "把上周的会议记录整理成要点。"), Message("w2", "assistant", AWAY_ANSWER))
         chat == AWAY_CLAUDE -> listOf(Message("w3", "user", "检查一下发布脚本。"), Message("w4", "assistant", "检查完了，脚本没有问题。"))
         app == "claude" && chat == "claude-next" -> listOfNotNull(
@@ -860,6 +889,66 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
 
 改动只在 `docs/` 下，不碰代码。
 """.trimIndent()
+
+        /**
+         * 文件预览示例 (file-preview design §6.1): names, paths and contents all made up. It has a picture drawn where the
+         * answer put it (PNG and SVG), a strip with linked PDF and R source, presented pictures and a spreadsheet, an
+         * inline-code path and one in the words, two reasons, a `#` link, a localhost address, and an older computer's
+         * answer with no `files` at all.
+         */
+        private val PREVIEW_FILLER = (1..6).map { n ->
+            FileRef(id = "fp-data-$n", name = "数据$n.csv", path = "D:\\fixture\\file-preview\\数据$n.csv", kind = "text", view = "table", size = 900L + n, state = "current", version = "v1", via = listOf("presented"))
+        }
+        val PREVIEW_FILES: List<FileRef> = listOf(
+            FileRef(id = "fp-chart", name = "图表.png", path = "D:\\fixture\\file-preview\\chart.png", kind = "image", view = "image", size = 462, state = "current", version = "v1", width = 1200, height = 800, thumb = true, via = listOf("image")),
+            FileRef(id = "fp-logo", name = "标志.svg", path = "D:\\fixture\\file-preview\\logo.svg", kind = "download", view = "svg", size = 300, state = "current", version = "v1", width = 240, height = 120, thumb = true, via = listOf("image")),
+            FileRef(id = "fp-contract", name = "合同.pdf", path = "D:\\fixture\\file-preview\\contract.pdf", kind = "pdf", view = "pdf", size = 36_864, state = "current", version = "v1", via = listOf("link")),
+            FileRef(id = "fp-analysis", name = "分析.R", path = "D:\\fixture\\file-preview\\analysis.R", kind = "text", view = "code", lang = "r", size = 1_200, state = "current", version = "v1", via = listOf("link")),
+            FileRef(id = "fp-budget", name = "预算表.xlsx", path = "D:\\fixture\\file-preview\\budget.xlsx", kind = "download", view = "table", preview = "pdf", size = 2_293, state = "current", version = "v1", via = listOf("link")),
+            FileRef(id = "fp-shot-1", name = "截图一.png", path = "D:\\fixture\\file-preview\\shot-1.png", kind = "image", view = "image", size = 462, state = "current", version = "v1", width = 1080, height = 720, thumb = true, via = listOf("presented")),
+            FileRef(id = "fp-shot-2", name = "截图二.png", path = "D:\\fixture\\file-preview\\shot-2.png", kind = "image", view = "image", size = 462, state = "updated", version = "v2", width = 1080, height = 720, thumb = true, via = listOf("presented")),
+            FileRef(id = "fp-run", name = "run.R", path = "D:\\fixture\\file-preview\\run.R", kind = "text", view = "code", lang = "r", size = 620, state = "current", version = "v1", texts = listOf("D:\\fixture\\file-preview\\run.R"), via = listOf("code")),
+            FileRef(id = "fp-report", name = "报告.txt", path = "D:\\fixture\\file-preview\\report.txt", kind = "text", view = "text", size = 480, state = "current", version = "v1", texts = listOf("D:/fixture/file-preview/report.txt"), via = listOf("path")),
+        ) + PREVIEW_FILLER
+
+        /** The answer, written the way a newer computer marks it up: pictures in place and links that match `files`. */
+        val FILE_PREVIEW_ANSWER = """
+文件都在这儿。
+
+![月度图表](D:/fixture/file-preview/chart.png)
+
+![标志](D:/fixture/file-preview/logo.svg)
+
+[合同.pdf](D:/fixture/file-preview/contract.pdf) 和 [分析.R](D:/fixture/file-preview/analysis.R) 也放好了。
+
+生成的脚本是 `D:\fixture\file-preview\run.R`，说明写在 D:/fixture/file-preview/report.txt。
+
+[#本轮记录](#本轮记录) 只是页内文字，[开发服务器](http://localhost:3000) 在电脑上。
+
+没找到的是 [旧图](out/old.png)，网络上的 [共享报表](//nas/share/report.pdf) 看不了。
+""".trimIndent()
+
+        /** A story's own words: an R script, and the note the answer says it wrote. */
+        val R_SOURCE = "# 固定示例：按天汇总\ncounts <- table(demo[[\"day\"]])\nprint(counts)\n"
+        val REPORT_TEXT = "文件预览示例\n\n这是一段固定的说明文字，用来检查文字页。\n所有名字和路径都是编造的。\n"
+
+        /** The file-preview story's conversation: an older row (page 2), also found by searching its title. */
+        val PREVIEW_CHAT = Chat("file-preview", "文件预览示例", "测试项目", "回答里的图片、文件条和原因", "idle", "codex", NOW - 86_400_000L * 3)
+
+        /** The conversation's messages: an answer with files and reasons, and an older computer's answer without them. */
+        val FILE_PREVIEW_MESSAGES = listOf(
+            Message("fp-1", "user", "看一下这几个文件。"),
+            Message("fp-2", "assistant", FILE_PREVIEW_ANSWER, files = PREVIEW_FILES,
+                fileNotes = listOf(FileNote("out/old.png", "not_found"), FileNote("//nas/share/report.pdf", "not_local"))),
+            Message("fp-3", "assistant", "这是老电脑的回复，没有 files：\n\n[说明.md](D:/fixture/old/说明.md)"),
+        )
+
+        /** A text file of the story, for the file page's text view; null for every other file. */
+        fun previewText(id: String): String? = when (id) {
+            "fp-run", "fp-analysis" -> R_SOURCE
+            "fp-report" -> REPORT_TEXT
+            else -> null
+        }
 
         val FILES = listOf(
             JSONObject().put("id", "fixture-html").put("name", "安全预览.html").put("path", "D:\\fixture\\安全预览.html").put("kind", "text").put("state", "current").put("size", 900),

@@ -84,6 +84,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -763,7 +764,9 @@ private fun AnswerBlock(message: Message, busy: Boolean, vm: ReaderViewModel, me
             .semantics { customActions = listOf(CustomAccessibilityAction("更多操作") { openMenu(null); true }) },
     ) {
         OriginLabel(message)
-        Markdown(message.text, Modifier.fillMaxWidth())
+        Markdown(message.text, Modifier.fillMaxWidth(), files = message.files, notes = message.fileNotes)
+        // The files this answer names that are not drawn where it put them (§6.1): a card each, at most 8.
+        AnswerFileStrip(message)
         // A conversation the reply made (web remote.html renderAssistantText): a button each under the text.
         remember(message.text) { createdThreads(message.text) }.forEach { thread ->
             if (thread.ready) ThreadLink(enabled = !busy) { vm.openCreated(thread.id) }
@@ -772,6 +775,64 @@ private fun AnswerBlock(message: Message, busy: Boolean, vm: ReaderViewModel, me
         if(message.kind=="deliverables") PillButton("查看成果文件",{ vm.workspace.panel("files");vm.workspace.refresh("files",message.id) },style=PillStyle.Text,leading=TeleplyIcons.File)
         if (message.truncated) PillButton(expandLabel(message), { vm.expand(message) }, enabled = !busy, style = PillStyle.Text)
     }
+}
+
+/**
+ * The files an answer names, under its words (§6.1): those it did not draw in place, from link, citation, presented or
+ * tool, by `id` deduplicated. Image and SVG cards show a small thumb; the rest a type mark, the name and the size,
+ * with 已更新 / 已删除 when the computer says so. At most 8; 还有 N 个 shows the rest.
+ */
+@Composable
+private fun AnswerFileStrip(message: Message) {
+    val p = LocalTeleply.current
+    val drawn = remember(message.text, message.files) { drawnPictureIds(message) }
+    val all = remember(message, drawn) { stripFiles(message, drawn) }
+    if (all.isEmpty()) return
+    var expanded by remember(message.id) { mutableStateOf(false) }
+    val shown = if (expanded) all else all.take(FileStripMax)
+    val extra = stripExtra(all)
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        shown.chunked(4).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { file -> FileStripCard(file) } }
+        }
+        if (extra > 0 && !expanded) {
+            Text("还有 $extra 个", style = MaterialTheme.typography.note, color = p.accent,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(role = Role.Button) { expanded = true }.padding(vertical = 4.dp, horizontal = 2.dp))
+        }
+    }
+}
+
+@Composable
+private fun FileStripCard(file: FileRef) {
+    val p = LocalTeleply.current
+    val uri = LocalUriHandler.current
+    val mark = when (file.state) { "updated" -> " · 已更新"; "missing" -> " · 已删除"; else -> "" }
+    Column(
+        Modifier.width(74.dp).clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button) { uri.openUri(itemLink(file)) }
+            .semantics { contentDescription = "打开 ${file.name.ifBlank { "文件" }}" }.padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)).background(p.panel), contentAlignment = Alignment.Center) {
+            if (file.picture) FileStripThumb(file)
+            else Icon(TeleplyIcons.File, contentDescription = null, tint = p.muted, modifier = Modifier.size(22.dp))
+        }
+        Text(file.name.ifBlank { "文件" }, style = MaterialTheme.typography.labelSmall, color = p.text, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(top = 3.dp))
+        if (file.size > 0 || mark.isNotBlank()) {
+            Text(fileSize(file.size) + mark, style = MaterialTheme.typography.labelSmall, color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** The strip's small thumb (§6.3: 320), grey with the type mark until it comes; no retry here, the page has one. */
+@Composable
+private fun FileStripThumb(file: FileRef) {
+    val p = LocalTeleply.current
+    val loader = LocalAnswerThumb.current
+    val image by produceState<android.graphics.Bitmap?>(null, file.id, file.version) { value = loader?.invoke(file, 320) }
+    val bitmap = image
+    if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+    else Icon(TeleplyIcons.Image, contentDescription = null, tint = p.muted.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
 }
 
 /** 打开新建对话 under a Codex reply (web .thread-link): as wide as the reply, the selected fill and ink, the chat mark first. */
@@ -1416,7 +1477,7 @@ private fun PendingSheet(chat: ComposerState, vm: ReaderViewModel, onDismiss: ()
 private fun SelectTextSheet(message: Message, onDismiss: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     TeleplySheet("选择文字", onDismiss) {
-        Markdown(message.text, Modifier.fillMaxWidth(), selectable = true, reader = true)
+        Markdown(message.text, Modifier.fillMaxWidth(), selectable = true, reader = true, files = message.files, notes = message.fileNotes)
         PillButton("复制全部", { clipboard.setText(AnnotatedString(message.text)); onDismiss() }, style = PillStyle.Primary, modifier = Modifier.fillMaxWidth())
     }
 }

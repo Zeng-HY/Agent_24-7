@@ -676,6 +676,33 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         } catch(e:CancellationException) { throw e }
         catch(e:Exception) { if(whole) update(k) { it.copy(error=if(e is ServiceFailure && e.status==404) "电脑上已经没有这张图片了" else e.message ?: "没取到这张图片，请稍后再试") };null }
     }
+    /**
+     * A file the answer listed with it (`files`, §5.1) opens its page directly, carrying that very entry: no read of
+     * the conversation's whole file list first, and the page goes back to the conversation. The page still reads the
+     * file's meta and bytes as before.
+     */
+    fun openAnswerFile(file: FileRef) {
+        if (file.id.isBlank()) return
+        file(file.toJson().put("linked", true))
+    }
+    /**
+     * A picture in an answer (§6.1): the computer's thumb at [width] (320 for a strip, 640 or 1280 in the text), kept
+     * on this phone by (computer, file id, `v`, width) (§7). Null when it cannot be had; the page offers 重试.
+     */
+    suspend fun answerThumb(caches:java.io.File, file:FileRef, width:Int):android.graphics.Bitmap? {
+        val k=key ?: return null;val service=api ?: return null
+        if(file.id.isBlank()) return null
+        val bucket=when { width<=320 -> 320; width<=640 -> 640; else -> 1280 }
+        val cache=ThumbCache(java.io.File(caches,ThumbCacheFolder))
+        val kept=withContext(Dispatchers.IO) { cache.read(k.device,file.id,file.version,bucket) }
+        val bytes=kept ?: try {
+            val fetched=service.thumb(k.device,k.chat,file.id,bucket,file.version)
+            withContext(Dispatchers.IO) { cache.write(k.device,file.id,file.version,bucket,fetched) }
+            fetched
+        } catch(e:CancellationException) { throw e }
+        catch(_:Exception) { return null }
+        return withContext(Dispatchers.IO) { decodeThumb(bytes,bucket) }
+    }
     fun cancelSave() { saveJob?.cancel() }
     fun openSaved(context:Context,uri:String,name:String) {
         try { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),shareMime(name)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"打开已保存的文件")) }

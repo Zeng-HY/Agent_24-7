@@ -447,7 +447,18 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 ### 线三、安卓 1.0.11
 
-（待填）
+**第一段（A）**：完成（`apps/android/`，分支 `fp-android`）。
+
+- 解析：`Message` 增加 `files`、`fileNotes`；回答带 `files`（空列表也算）即为新电脑，没有这个字段按 1.0.10 原路，`AnswerLinksTest` 未改。
+- 链接：地址经 `localPath` 后用 `normalizePath`（再 `looseFilePath`）与 `files[].path` 对上，点击带着该条目直接开文件页（`openAnswerFile`，不再先拉对话的整个文件列表）；对不上按 `file_notes.href`（%-解码后相等）在链接后显示灰色短说明，点一下弹出 §6.4 的完整原因。`#…`、`mailto:` 和别的协议只显示文字，不再加「（链接未开放）」；`localhost`、`127.0.0.1`、`[::1]` 后加「（电脑本机网址，手机打不开）」。
+- 消息里的图：`![…](…)` 对上 `view` 是 `image`/`svg` 且 `thumb` 为真的条目，就在原处画缩略图：宽占满气泡、最高约 360 dp、先按 `w`/`h`（没有就 4:3）占位，加载中灰底加文件名，失败一行原因加「重试」，点开进现有文件页。缩略图按屏幕宽度取 640 或 1280。
+- 缩略图缓存：`cacheDir/answer-thumbs`，按（电脑、文件编号、`v`、宽度）存；先写 `.part` 再改名；上限 200 MB，超了删最久没用的；`BitmapFactory` 按显示尺寸采样解码。
+- 文件条：`link`、`citation`、`presented`、`tool` 来的文件、且没画在原处的，按 `id` 去重，最多 8 个，多了显示「还有 N 个」（点开展开其余）；`code`、`path` 不占卡。
+- `code`、`path`：`texts` 里的字在正文原样找到就让那段字可点（行内代码和正文路径都算）。
+- 示例：`FixtureApi` 新增「文件预览示例」（名字、路径、内容全部编造；放在对话列表第二页，搜索「文件预览示例」也能找到），覆盖 PNG/SVG 原处图、链接来的 PDF/R/xlsx、presented 的两张图、行内代码与正文路径、`not_found`/`not_local`、`#` 链接、localhost、以及一条没有 `files` 的老电脑消息；缩略图接口返回固定小图。
+- 测试：基线（干净 HEAD 副本）`testDebugUnitTest` 311 条全过；本段后 318 条全过（新增 7 条：按 `files` 查找、老电脑退回、原因文字、文件条去重与 8 个上限、缓存命名与清理）。`assembleDebug` 通过。未加 Gradle 依赖，版本号未动。
+- 本段不做（留给 B、C）：看图页的缩放与左右滑、SVG 专用页、PDF 缩放、代码高亮、表格、音视频、zip、附属资源。
+
 
 ### 线四、iOS 0.9.1
 
