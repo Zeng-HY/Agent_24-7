@@ -22,7 +22,7 @@ def log_stream_error(handler,app,tid,exc):
     try:log(f"实时流出错（{app} {tid}）：{type(exc).__name__}: {str(exc)[:200]}")
     except Exception:pass
 
-def merge_live_messages(page,entry,state,previous=None,lite=False):
+def merge_live_messages(page,entry,state,previous=None,lite=False,public=None):
     """Only uncommitted public items from the log's current turn may extend its tail.
 
     The last page is a reading window, not the set of all committed message IDs.
@@ -39,7 +39,8 @@ def merge_live_messages(page,entry,state,previous=None,lite=False):
             text=chats.codex_answer(item.get('text') or '')  # as the log's copy reads (no memory notes, file links)
             candidates=[m for m in entry.messages if m.get('turn_id')==turn_id and m.get('legacy') and not m.get('source_id') and m['role']=='assistant' and (m.get('phase') or '')==(item.get('phase') or '') and m['text']==text]
             return candidates[0] if len(candidates)==1 else None
-        def public(m):
+        def publish(m):
+            if public is not None:return public(m)
             from activity_records import public_message
             result=public_message(m)
             result.pop('legacy',None)
@@ -52,7 +53,7 @@ def merge_live_messages(page,entry,state,previous=None,lite=False):
             if not old.get('streaming'):continue
             m=stored(old,old.get('turn_id'))
             if m:
-                if m['id'] not in ids:messages.append(public(m));ids.add(m['id'])
+                if m['id'] not in ids:messages.append(publish(m));ids.add(m['id'])
                 if old['id']!=m['id']:
                     messages=[{**v,'projection_aliases':[old['id']]} if v['id']==m['id'] else v for v in messages]
             elif old.get('role')=='assistant' and old.get('phase') in (None,'','commentary','final_answer') and old['id'] not in ids:
@@ -92,23 +93,31 @@ def merge_live_messages(page,entry,state,previous=None,lite=False):
                     order=base+(index+1)/(len(items)+1) if before and anchor_cache.get(key)!=anchor_id else positions.get(key,old.get('order',base+(index+1)/(len(items)+1)))
                     anchor_cache[key]=anchor_id
                 positions[key]=order
-                text=chats.codex_answer(item['text']);messages.append({'id':ident,'source_id':ident,'role':'assistant','phase':item.get('phase') or '',
+                text=chats.codex_answer(item['text'])
+                row={'id':ident,'source_id':ident,'role':'assistant','phase':item.get('phase') or '',
                     'turn_id':turn['turnId'],'order':order,
                     'source_sequence':index,'after_id':before[1]['id'] if before else None,'before_id':after[1]['id'] if after else None,
                     'time':datetime.fromtimestamp((turn.get('turnStartedAtMs') or 0)/1000,timezone.utc).isoformat(),
-                    'text':text[:6000],'length':len(text),'truncated':len(text)>6000,'streaming':True})
+                    'text':text,'streaming':True}
+                published=publish(row);published['streaming']=True
+                messages.append(published)
                 ids.add(ident)
     return messages,live_ids
 
 def stream(handler,history,bridge,tasks,app,tid,lite=False):
     from agents import registry
     agent=registry.get(app)
-    if agent.native_stream(handler,tid):
+    if agent.native_stream(handler,tid,history,lite):
         return
     watcher=agent.watch(bridge,tid)
     # Validate before switching the HTTP response into streaming mode.
-    if agent.home_list:history.transcript(app,tid)
-    else:history.conversation(app,tid,5)
+    item,entry=(history.transcript(app,tid) if agent.home_list else (None,None))
+    if not agent.home_list:history.conversation(app,tid,5)
+    publisher=getattr(history,'public_message',None)
+    public=None
+    if callable(publisher):
+        def public(m):
+            return publisher(m,item=item,entry=entry,app=app,tid=tid,lite=lite)
     handler.send_response(200);handler.send_header('Content-Type','text/event-stream; charset=utf-8');handler.send_header('Cache-Control','no-cache, no-store');handler.send_header('X-Accel-Buffering','no');handler.end_headers()
     handler.connection.settimeout(15)
     seq=0;previous={};previous_control=None;previous_meta=None;previous_live_ids=None;last_write=0
@@ -126,8 +135,7 @@ def stream(handler,history,bridge,tasks,app,tid,lite=False):
             if watcher is not None:
                 with watcher.condition:record=watcher.snapshots.get(tid);state=copy.deepcopy(record[2]) if record else None
             if agent.dedupe_twins:
-                _,entry=history.transcript(app,tid)
-                messages,live_ids=agent.merge_live(page,entry,state,previous,lite)
+                messages,live_ids=agent.merge_live(page,entry,state,previous,lite,public)
                 page={**page,'messages':messages}
             meta={k:page.get(k) for k in ('status','runtime','title','folder','activity_turns','activity_current')}
             clean_control={k:v for k,v in (control or {}).items() if k!='observed_at'}
@@ -152,7 +160,7 @@ def stream(handler,history,bridge,tasks,app,tid,lite=False):
         handler.close_connection=True
 
 
-def deepseek_stream(handler,tid):
+def deepseek_stream(handler,tid,history=None,lite=False):
     """Forward the native follow stream, at most five display updates a second.
 
     A gap closes this SSE connection. The phone reconnects for a complete native
@@ -173,6 +181,12 @@ def deepseek_stream(handler,tid):
         if first.get('type')!='item' or first.get('streamId')!='history' or first.get('value',{}).get('type')!='snapshot':
             raise StreamGap('Missing follow snapshot')
         presentation=Presentation(tid,item);presentation.accept(first['value'])
+        if history is not None and callable(getattr(history,'public_message',None)):
+            from agents import registry
+            app=item.get('app')
+            deepseek=registry.get(app)
+            presentation.public=lambda row: history.public_message(
+                row,item=presentation.item,entry=None,app=app,tid=tid,lite=lite,agent=deepseek)
         projections=first['value'].get('projections') or {};values=projections.get('values',projections)
         try:presentation.set_subagent_status(bridge._subagents(tid,values))
         except Exception as exc:log_stream_error(handler,'deepseek',tid,exc)  # its card is optional; the stream is not

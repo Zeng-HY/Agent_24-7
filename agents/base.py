@@ -279,6 +279,10 @@ class Agent:
         """Files this message explicitly presented as deliverables, or None for the usual link scan."""
         return None
 
+    def attach_presented(self, messages: list[dict]) -> None:
+        """Move a tool's presented files to the first answer after it in the same turn (Claude)."""
+        pass
+
     def mark_open_next(self, messages: list[dict]) -> None:
         pass
 
@@ -286,7 +290,7 @@ class Agent:
         """(item, transcript-like entry) for an interface-based assistant."""
         raise Unsupported("这个助手没有本地记录")
 
-    def native_stream(self, handler, tid: str) -> bool:
+    def native_stream(self, handler, tid: str, history=None, lite: bool = False) -> bool:
         return False
 
     def watch(self, bridge, tid: str):
@@ -299,7 +303,7 @@ class Agent:
     def control(self, bridge, tid: str):
         return None
 
-    def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False):
+    def merge_live(self, page: dict, entry, state, previous=None, lite: bool = False, public=None):
         return page["messages"], []
 
     def message_request_ids(self, tid: str) -> dict[str, str]:

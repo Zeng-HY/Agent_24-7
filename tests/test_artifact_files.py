@@ -48,7 +48,9 @@ class Artifacts(unittest.TestCase):
             h,e,paths=self.fixture(Path(d),['allowed.bin','private.bin'])
             e.messages[0]['text']=f'[file](<{paths[0]}>) `[{paths[1]}]({paths[1]})`\n\n```\n[x]({paths[1]})\n```\n[ads](<{paths[0]}:secret>)'
             self.assertEqual(len(h.list_files('codex','a')['items']),1)
-            self.assertEqual(references('plain filename.html and `C:/secret.html`'),[])
+            # 11-25: inline code with only a path is a reference now (handoff §12 decision).
+            self.assertEqual(references('plain filename.html'),[])
+            self.assertEqual(references('`C:/secret.html`'),['C:/secret.html'])
     def test_path_redirect_update_delete(self):
         with tempfile.TemporaryDirectory() as d:
             h,e,paths=self.fixture(Path(d),['a.bin','b.bin']);fid=h.list_files('codex','a')['items'][0]['id']
