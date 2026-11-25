@@ -1001,6 +1001,14 @@ def _send_user_files(name: str, args: dict) -> list[str]:
     return out
 
 
+def _send_user_caption(name: str, args: dict) -> str:
+    """The caption SendUserFile gave its files (the desktop shows it above them), or ''."""
+    if not re.sub(r"[^a-z]", "", str(name or "").casefold()).endswith("senduserfile"):
+        return ""
+    caption = args.get("caption") if isinstance(args, dict) else None
+    return caption.strip()[:2000] if isinstance(caption, str) else ""
+
+
 def _claude_tool(block: dict) -> str:
     name = block.get("name") or "工具"
     args = block.get("input") or {}
@@ -1467,6 +1475,9 @@ def parse_claude(lines: list[bytes], context: dict | None = None,
                         presented = _send_user_files(block.get("name") or "", block.get("input") or {})
                         if presented:
                             public["_presented_files"] = presented
+                            caption = _send_user_caption(block.get("name") or "", block.get("input") or {})
+                            if caption:
+                                public["_presented_caption"] = caption
                         msgs.append(public)
                     else:
                         msgs.append({**card, "time": ts})

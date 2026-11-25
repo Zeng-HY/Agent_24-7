@@ -288,7 +288,9 @@ class ClaudeAgent(Agent):
         return list(paths) if paths else None
 
     def attach_presented(self, messages: list[dict]) -> None:
-        """SendUserFile belongs under the first answer after it in the same turn (handoff §3.1)."""
+        """SendUserFile belongs under the first answer after it in the same turn (handoff §3.1). A line of thinking
+        (phase commentary) is not that answer: the phones give it no file strip. Each call's files and caption also
+        go along as one group, so the answer can show them above its words the way the desktop does (dev.57)."""
         for index, message in enumerate(messages):
             paths = message.get("_presented_files") if message.get("role") == "tool" else None
             if not paths:
@@ -297,7 +299,7 @@ class ClaudeAgent(Agent):
             for later in messages[index + 1:]:
                 if later.get("role") == "user":
                     break
-                if later.get("role") != "assistant":
+                if later.get("role") != "assistant" or later.get("phase") == "commentary":
                     continue
                 before, after = message.get("activity_turn"), later.get("activity_turn")
                 if before is None or after is None or before == after:
@@ -309,7 +311,10 @@ class ClaudeAgent(Agent):
             for path in paths:
                 if path not in keep:
                     keep.append(path)
+            target.setdefault("_presented_groups", []).append(
+                {"files": list(paths), "caption": message.get("_presented_caption") or ""})
             message.pop("_presented_files", None)
+            message.pop("_presented_caption", None)
 
     def mark_open_next(self, messages: list[dict]) -> None:
         chats.mark_open_next(messages)

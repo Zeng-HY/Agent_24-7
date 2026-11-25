@@ -1,5 +1,6 @@
 """B segment: answer files reach every public message and /api/chat/files (temporary records only)."""
 import json
+import re
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -266,6 +267,143 @@ def test_claude_send_user_file_stays_on_the_tool_without_an_answer(tmp_path):
                                     app="claude", tid="chat-1")
     assert public["files"][0]["path"] == str(image)
     assert public["files"][0]["via"] == ["presented"]
+
+
+# -- dev.57: SendUserFile's pictures above the answer, and notes that match the rewritten links
+
+def send_user_file_record(tmp_path: Path, files, *, caption=None, after=()) -> Path:
+    """One Claude turn: a request, SendUserFile with these files (and its tool result), then the given blocks."""
+    tool_input = {"files": [str(f) for f in files]}
+    if caption is not None:
+        tool_input["caption"] = caption
+    lines = [
+        {"type": "user", "uuid": "u1", "timestamp": "2026-11-25T03:00:00Z",
+         "message": {"role": "user", "content": "做图"}},
+        {"type": "assistant", "uuid": "a1", "timestamp": "2026-11-25T03:00:01Z",
+         "message": {"role": "assistant", "stop_reason": "tool_use", "content": [
+             {"type": "text", "text": "我把图发给你。"},
+             {"type": "tool_use", "id": "t1", "name": "SendUserFile", "input": tool_input}]}},
+        {"type": "user", "uuid": "r1", "timestamp": "2026-11-25T03:00:02Z",
+         "message": {"role": "user", "content": [
+             {"type": "tool_result", "tool_use_id": "t1", "content": "sent"}]}},
+    ]
+    if after:
+        lines.append({"type": "assistant", "uuid": "a2", "timestamp": "2026-11-25T03:00:03Z",
+                      "message": {"role": "assistant", "stop_reason": "end_turn", "content": list(after)}})
+    record = tmp_path / "record.jsonl"
+    record.write_text("\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n",
+                      encoding="utf-8")
+    return record
+
+
+def public_answer(tmp_path: Path, record: Path, words: str):
+    entry = chat_history.Transcript(record, "claude", str(tmp_path)).refresh()
+    answer = next(m for m in entry.messages
+                  if m["role"] == "assistant" and m.get("phase") != "commentary" and words in m["text"])
+    history = chat_history.History(secret="test-only")
+    public = history.public_message(answer, item={"cwd": str(tmp_path)}, entry=entry,
+                                    app="claude", tid="chat-1")
+    return entry, answer, public
+
+
+def test_send_user_file_pictures_go_above_the_answer_with_their_caption(tmp_path):
+    first = make(tmp_path, "out/overview.png")
+    second = make(tmp_path, "out/icons.svg")
+    record = send_user_file_record(tmp_path, [first, second], caption="终版总览：两排四个尺寸",
+                                   after=[{"type": "text", "text": "终版做好了，总览图在上面。"}])
+    _, answer, public = public_answer(tmp_path, record, "终版做好了")
+    assert answer["text"] == "终版做好了，总览图在上面。"  # the record's own words are not changed
+    assert public["text"] == (f"终版总览：两排四个尺寸\n\n"
+                              f"![overview.png](<{first.as_posix()}>)\n\n"
+                              f"![icons.svg](<{second.as_posix()}>)\n\n"
+                              f"终版做好了，总览图在上面。")
+    assert [row["path"] for row in public["files"]] == [str(first), str(second)]
+    for row in public["files"]:
+        assert row["via"] == ["image", "presented"]  # drawn in place, so no card in the strip
+    assert [row["index"] for row in public["files"]] == [0, 1]
+    assert public["length"] == len(public["text"])
+
+
+def test_send_user_file_without_caption_and_a_link_to_the_same_picture(tmp_path):
+    record, image = claude_record(tmp_path, with_answer=True)
+    _, _, public = public_answer(tmp_path, record, "图在")
+    assert public["text"] == (f"![chart.png](<{image.as_posix()}>)\n\n"
+                              f"图在 [这里](<{image.as_posix()}>)。")
+    assert public["files"][0]["via"] == ["image", "link", "presented"]
+
+
+def test_send_user_file_keeps_cards_for_what_is_not_a_new_picture(tmp_path):
+    drawn = make(tmp_path, "out/chart.png")
+    report = make(tmp_path, "out/report.pdf")
+    gone = tmp_path / "out" / "gone.png"
+    folder = tmp_path / "out" / "set"
+    folder.mkdir()
+    record = send_user_file_record(tmp_path, [drawn, report, gone, folder], caption="几个文件",
+                                   after=[{"type": "text", "text": "看这张 ![图](out/chart.png)"}])
+    _, _, public = public_answer(tmp_path, record, "看这张")
+    # The picture is already drawn by the answer; a PDF, a missing file and a folder are no pictures to draw.
+    assert public["text"] == f"看这张 ![图](<{drawn.as_posix()}>)"
+    vias = {Path(row["path"]).name: row["via"] for row in public["files"]}
+    assert vias["chart.png"] == ["image", "presented"]
+    assert vias["report.pdf"] == ["presented"]
+    assert vias["gone.png"] == ["presented"]
+    assert [n["reason"] for n in public.get("file_notes", [])] == ["folder"]
+
+
+def test_send_user_file_skips_a_line_of_thinking_for_the_answer(tmp_path):
+    image = make(tmp_path, "out/chart.png")
+    record = send_user_file_record(tmp_path, [image], caption="图",
+                                   after=[{"type": "thinking", "thinking": "再看一眼尺寸"},
+                                          {"type": "text", "text": "做好了。"}])
+    entry, answer, public = public_answer(tmp_path, record, "做好了")
+    thinking = next(m for m in entry.messages if m.get("phase") == "commentary")
+    assert not thinking.get("_presented_files") and not thinking.get("_presented_groups")
+    assert answer["_presented_groups"] == [{"files": [str(image)], "caption": "图"}]
+    assert public["text"].startswith(f"图\n\n![chart.png](<{image.as_posix()}>)\n\n做好了。")
+
+
+def test_two_send_user_file_calls_keep_their_own_captions(tmp_path):
+    first = make(tmp_path, "a.png")
+    second = make(tmp_path, "b.png")
+    lines = [
+        {"type": "user", "uuid": "u1", "timestamp": "2026-11-25T03:00:00Z",
+         "message": {"role": "user", "content": "做图"}},
+        {"type": "assistant", "uuid": "a1", "timestamp": "2026-11-25T03:00:01Z",
+         "message": {"role": "assistant", "stop_reason": "tool_use", "content": [
+             {"type": "tool_use", "id": "t1", "name": "SendUserFile",
+              "input": {"files": [str(first)], "caption": "第一张"}},
+             {"type": "tool_use", "id": "t2", "name": "SendUserFile",
+              "input": {"files": [str(second), str(first)], "caption": "第二张"}}]}},
+        {"type": "assistant", "uuid": "a2", "timestamp": "2026-11-25T03:00:03Z",
+         "message": {"role": "assistant", "stop_reason": "end_turn",
+                     "content": [{"type": "text", "text": "两张都在上面。"}]}},
+    ]
+    record = tmp_path / "record.jsonl"
+    record.write_text("\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n",
+                      encoding="utf-8")
+    _, _, public = public_answer(tmp_path, record, "两张都在")
+    assert public["text"] == (f"第一张\n\n![a.png](<{first.as_posix()}>)\n\n"
+                              f"第二张\n\n![b.png](<{second.as_posix()}>)\n\n两张都在上面。")
+
+
+def test_a_note_carries_the_address_the_rewritten_link_now_has(tmp_path, monkeypatch):
+    (tmp_path / "t" / "icons" / "final").mkdir(parents=True)
+    make(tmp_path, "keys/.env")
+    agent = StubAgent()
+    history, item, entry = make_env(tmp_path, [
+        "放在 [t/icons/final](t/icons/final)，密钥在 [这里](keys/.env)。",
+    ], agent=agent)
+    monkeypatch.setattr(registry, "get", lambda app: agent)
+
+    message = history.conversation("codex", "chat-1")["messages"][0]
+    folder = (tmp_path / "t" / "icons" / "final").as_posix()
+    secret = (tmp_path / "keys" / ".env").as_posix()
+    assert message["text"] == f"放在 [t/icons/final](<{folder}>)，密钥在 [这里](<{secret}>)。"
+    notes = {(note["href"], note["reason"]) for note in message["file_notes"]}
+    # What a phone does: read each link's address out of the text it got and look for a note with it.
+    for address in re.findall(r"\]\(<([^>]*)>\)", message["text"]):
+        assert any(href == address for href, _ in notes), address
+    assert (folder, "folder") in notes and (secret, "denied") in notes
 
 
 def test_deepseek_presented_rows_reach_the_public_page(tmp_path, monkeypatch):

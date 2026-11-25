@@ -382,6 +382,18 @@ def test_presented_files(env):
     assert result.files[0]["path"] == env.path("chart.png")
     assert result.files[0]["via"] == ["presented"]
     assert result.files[0]["index"] == 1000
+    assert "targets" not in result.files[0]  # nothing in the text was rewritten for it
+
+
+def test_rewritten_links_record_where_they_now_point(env):
+    # A note about such a file must name the new address: the phones pair notes with links by it (dev.57).
+    result = env.scan("[文件夹](folder) 和 [代码](src/app.ts:12) 和 [再一次](src/app.ts)")
+    folder, code = result.files
+    assert folder["targets"] == [env.posix_path("folder")] and folder["hrefs"] == ["folder"]
+    assert code["targets"] == [env.posix_path("src/app.ts") + ":12", env.posix_path("src/app.ts")]
+    for target in folder["targets"] + code["targets"]:
+        assert f"](<{target}>)" in result.text
+    assert answer_files.markdown_address(env.path("100%.txt")) == "<" + env.posix_path("100%25.txt") + ">"
 
 
 def test_presented_network_file_is_skipped_without_stat(env):

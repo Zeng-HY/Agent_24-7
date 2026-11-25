@@ -88,6 +88,47 @@ _ANSWER_REASONS={'missing':'文件已移动或删除','not_found':'电脑上没�
                  'not_local':'文件在网络位置或别的电脑上，遥应只读这台电脑自己的磁盘',
                  'denied':'出于安全，遥应不让手机读这个文件（可能含密钥或登录信息）',
                  'folder':'这是文件夹，可以在「电脑上的文件」里看'}
+# What a phone draws in place when an answer writes ![…](…): SendUserFile's pictures go above the answer (dev.57)
+_PICTURE_SUFFIXES=_IMAGE_VIEW|{'.svg'}
+
+
+def _note_hrefs(f):
+    """The addresses a note about a refused file carries: where its rewritten links now point first, then the
+    addresses as written elsewhere. The phones pair a note with a link by the address in the text they are given,
+    and a rewritten link no longer says what the answer wrote (dev.56 kept only that: 「找不到文件」 for a folder)."""
+    out=[]
+    for href in [*(f.get('targets') or ()),*(f.get('hrefs') or ())] or [f['path']]:
+        if href and href not in out:out.append(href)
+    return out
+
+
+def _presented_prefix(groups,scan):
+    """Markdown put above an answer for the pictures SendUserFile sent before it, each call's caption first, the way
+    the desktop shows them; the phones and the web already draw such pictures in place. A picture the answer draws
+    itself, a folder, a file not on disk and anything that is not a picture stay cards under the answer."""
+    by_href={}
+    for f in scan.files:
+        for href in f.get('hrefs') or ():
+            by_href.setdefault(href,f)
+    parts=[];done=set()
+    for group in groups or ():
+        if not isinstance(group,dict):continue
+        pictures=[]
+        for raw in group.get('files') or ():
+            f=by_href.get(raw)
+            if f is None or 'presented' not in f['via'] or 'image' in f['via']:continue
+            if not f.get('exists') or f.get('is_dir'):continue
+            if Path(f['path']).suffix.lower() not in _PICTURE_SUFFIXES:continue
+            key=os.path.normcase(f['path'])
+            if key in done:continue
+            done.add(key);pictures.append(f['path'])
+        if not pictures:continue
+        caption=group.get('caption') if isinstance(group.get('caption'),str) else ''
+        if caption.strip():parts.append(caption.strip())
+        for path in pictures:
+            alt=re.sub(r'([\\\[\]])',r'\\\1',Path(path).name)
+            parts.append(f'![{alt}]({answer_files.markdown_address(path)})')
+    return '\n\n'.join(parts)+'\n\n' if parts else ''
 
 
 def _file_kind(suffix,size):
@@ -458,7 +499,11 @@ class History:
                 try:value=os.fspath(value)
                 except TypeError:continue
                 if isinstance(value,str) and value.strip():presented.append(value)
-        key=(hashlib.sha256(text.encode('utf-8')).hexdigest(),bases,tuple(presented))
+        # SendUserFile's calls before this answer, each with its caption (Claude only; attach_presented makes them)
+        groups=m.get('_presented_groups') if m.get('role')=='assistant' else None
+        group_key=tuple((tuple(str(p) for p in g.get('files') or ()),str(g.get('caption') or ''))
+                        for g in groups or () if isinstance(g,dict))
+        key=(hashlib.sha256(text.encode('utf-8')).hexdigest(),bases,tuple(presented),group_key)
         cached=m.get('_answer_scan')
         if isinstance(cached,_ScanCache) and cached.key==key:return cached.scan
         with self.scan_cache_lock:
@@ -467,6 +512,10 @@ class History:
                 self.scan_cache.move_to_end(key)
         if result is None:
             result=answer_files.scan(text,bases,presented=presented)
+            if group_key:
+                # The pictures go above the words, so the second scan numbers and rewrites them with the rest.
+                prefix=_presented_prefix(groups,result)
+                if prefix:result=answer_files.scan(prefix+text,bases,presented=presented)
             with self.scan_cache_lock:
                 self.scan_cache[key]=result
                 self.scan_cache.move_to_end(key)
@@ -518,8 +567,8 @@ class History:
             if seen is not None and identity in seen:continue
             reason,st=file_policy.inspect(f['path'],fresh=fresh)
             if reason in ('denied','not_local','folder'):
-                href=(f.get('hrefs') or [f['path']])[0]
-                notes.append({'href':href,'reason':reason,'text':_ANSWER_REASONS[reason]})
+                for href in _note_hrefs(f):
+                    notes.append({'href':href,'reason':reason,'text':_ANSWER_REASONS[reason]})
                 continue
             indexes=f.get('indexes') or [f.get('index') or 0]
             for index in (indexes if per_index else [indexes[0]]):

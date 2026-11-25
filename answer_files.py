@@ -114,6 +114,11 @@ def _dest_text(path: str, line: int | None) -> str:
     return "<" + s + ">"
 
 
+def markdown_address(path: str) -> str:
+    """A file's address the way a rewritten link writes it (``<D:/a/b.png>``), for Markdown made on the computer."""
+    return _dest_text(path, None)
+
+
 def _home() -> str:
     return os.path.expanduser("~")
 
@@ -350,8 +355,10 @@ def _attr(tag: str, name: str) -> str | None:
 
 
 def _occurrence(pos: int, via: Sequence[str], src: str, info: tuple,
-                text: str | None = None, href: str | None = None) -> dict:
-    return {"pos": pos, "via": list(via), "src": src, "info": info, "text": text, "href": href}
+                text: str | None = None, href: str | None = None,
+                target: str | None = None) -> dict:
+    return {"pos": pos, "via": list(via), "src": src, "info": info, "text": text, "href": href,
+            "target": target}
 
 
 def _note(notes: list, seen: set, href: str, reason: str, pos: int) -> None:
@@ -436,10 +443,11 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             continue
         info = _recognize(raw, bases, lookup)
         if info[0] == "ok":
+            dest = _dest_text(info[1], info[2])
             occurrences.append(_occurrence(match.start(), ["image" if _is_image(source, match.start())
                                                           else "link"], "markdown", info,
-                                           href=_href_text(raw)))
-            edits.append((start, end, _dest_text(info[1], info[2])))
+                                           href=_href_text(raw), target=dest[1:-1]))
+            edits.append((start, end, dest))
         elif info[0] in ("not_found", "not_local"):
             _note(notes, seen_notes, _href_text(raw), info[0], start)
 
@@ -456,10 +464,11 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             continue
         info = _recognize(raw, bases, lookup)
         if info[0] == "ok":
+            dest = _dest_text(info[1], info[2])
             occurrences.append(_occurrence(match.start(), href_vias.get(key, ["link"]),
-                                           "markdown", info, href=_href_text(raw)))
+                                           "markdown", info, href=_href_text(raw), target=dest[1:-1]))
             start, end = match.span(2)
-            edits.append((start, end, _dest_text(info[1], info[2])))
+            edits.append((start, end, dest))
         elif info[0] in ("not_found", "not_local"):
             _note(notes, seen_notes, _href_text(raw), info[0], match.start())
 
@@ -581,6 +590,12 @@ def scan(text: str, bases: Sequence[str] = (), *, presented: Iterable[str] = (),
             hrefs = row.setdefault("hrefs", [])
             if occurrence["href"] not in hrefs:
                 hrefs.append(occurrence["href"])
+        # Where a rewritten link now points (the address inside < >): a note about this file must carry it,
+        # because the phones pair a note with a link by the link's address in the text they are given.
+        if occurrence.get("target"):
+            targets = row.setdefault("targets", [])
+            if occurrence["target"] not in targets:
+                targets.append(occurrence["target"])
 
     # index: old-web numbering over the rewritten text.  Every local Markdown link/image
     # takes a number (folder and missing files too); HTML/code/path/presented start at 1000.
