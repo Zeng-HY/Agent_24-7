@@ -8,7 +8,7 @@
   var banner = document.getElementById("banner");
   var style = document.getElementById("style");
   var dark = params.get("dark") === "1";
-  if (dark) { document.body.classList.add("dark"); style.href = "/code-dark.css"; }
+  if (dark) { document.documentElement.classList.add("dark"); document.body.classList.add("dark"); style.href = "/code-dark.css"; }
 
   var truncated = params.get("truncated") === "1";
   var shownBytes = parseInt(params.get("size") || "0", 10);

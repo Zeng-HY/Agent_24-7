@@ -9,7 +9,8 @@
      when the page loaded can never leave the code in a zero-height box. */
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: #ffffff; color: #24292f; }
-  body.dark { background: #0d1117; color: #c9d1d9; }
+  /* The page's root takes the dark colour too: a short file must not leave white below its last line. */
+  html.dark, body.dark { background: #0d1117; color: #c9d1d9; }
   .bar { position: sticky; top: 0; z-index: 20; display: flex; gap: 6px; align-items: center; padding: 6px 8px;
          background: #ffffff; border-bottom: 1px solid rgba(127,127,127,.28);
          font: 12px -apple-system, "Noto Sans CJK SC", sans-serif; }
