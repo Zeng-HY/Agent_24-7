@@ -61,6 +61,7 @@ HUB_SECONDS = 2.0         # capabilities_now asks again at most this often
 WAITING_SECONDS = 3.0     # one conversation's waiting steps read at most this often
 LIST_WAITING_SECONDS = 15.0  # the list only uses a result this recent, never reads for itself
 WAITING_TIMEOUT = 5.0     # reading the waiting steps
+QUOTA_TIMEOUT = 10.0      # RetrieveUserQuotaSummary
 SEND_TIMEOUT = 60.0       # SendUserCascadeMessage / agentapi / CancelCascadeInvocation
 ANSWER_TIMEOUT = 10.0     # HandleCascadeUserInteraction / UpdateConversationAnnotations
 SEND_LIMIT = 20000        # agentapi takes the text as one command-line argument
@@ -68,6 +69,12 @@ DETAIL_LIMIT = 4000       # a card's detail is cut here
 NOT_OPEN = "电脑上的 Antigravity 没开"
 QUEUED_SEND = "Antigravity 正在跑，这条会等这一轮做完再交给它"
 NOT_RUNNING = "这个对话没在跑"
+
+# The quota summary's groups and windows (RetrieveUserQuotaSummary): what its own words are in Chinese, and how
+# long each window is. A group or window it does not know is shown as it came.
+QUOTA_GROUPS = {"Gemini Models": "Gemini 模型", "Claude and GPT models": "Claude 和 GPT 模型"}
+QUOTA_MINUTES = {"5h": 300, "weekly": 10080}
+QUOTA_ORDER = {"5h": 0, "weekly": 1}  # within a group, as in Codex's: the five hours, then the week
 
 # New conversations (the same defaults ag.py uses).
 MODEL = "gemini-4-neon-high"
@@ -130,6 +137,8 @@ _LIST_CACHE: dict = {"path": None, "stamp": None, "at": 0.0, "rows": None}
 _MESSAGE_CACHE: dict[str, tuple] = {}
 _FULL_CACHE: dict[str, tuple] = {}
 _HUB_CACHE: dict = {"at": 0.0, "data": None}
+_USAGE_CACHE: dict = {"at": 0.0, "data": None}
+_USAGE_LOCK = threading.Lock()
 _WAITING_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _SENT: dict[str, dict] = {}
 _CREATED: dict[str, dict] = {}
@@ -170,6 +179,7 @@ def reset() -> None:
         _MESSAGE_CACHE.clear()
         _FULL_CACHE.clear()
         _HUB_CACHE.update(at=0.0, data=None)
+        _USAGE_CACHE.update(at=0.0, data=None)
         _WAITING_CACHE.clear()
         _SENT.clear()
         _CREATED.clear()
@@ -873,6 +883,62 @@ def _rpc(method: str, body: dict, timeout: float = WAITING_TIMEOUT) -> dict:
         raise ControlError("Antigravity 的回答看不懂", 502) from None
 
 
+# ---------------------------------------------------------------- usage: the app's own quota summary
+
+
+def _reset_seconds(value):
+    """resetTime ("2026-11-30T20:03:35Z") as Unix seconds; None when it did not come."""
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
+def _quota_windows(reply) -> list[dict]:
+    """One RetrieveUserQuotaSummary answer as the windows the phone shows: the groups in the app's order, the
+    five-hour window before the week inside each group. Only what the phone reads is kept (no bucket ids or
+    descriptions)."""
+    import usage_limits
+    response = reply.get("response") if isinstance(reply, dict) else None
+    if not isinstance(response, dict):
+        raise ValueError("读不懂它回的用量")
+    windows = []
+    groups = response.get("groups")
+    for group in groups if isinstance(groups, list) else []:
+        if not isinstance(group, dict):
+            continue
+        name = _one_line(group.get("displayName"), 40)
+        name = QUOTA_GROUPS.get(name, name) or "Antigravity"
+        found = []
+        for index, bucket in enumerate(group.get("buckets") or []):
+            if not isinstance(bucket, dict):
+                continue
+            remaining = bucket.get("remainingFraction")
+            if not isinstance(remaining, (int, float)) or isinstance(remaining, bool):
+                continue  # no fraction left: the bucket says nothing the phone can show
+            kind = str(bucket.get("window") or "")
+            window = usage_limits.usage_window(QUOTA_MINUTES.get(kind, 0), (1 - remaining) * 100,
+                                               _reset_seconds(bucket.get("resetTime")))
+            window["name"] = f"{name} · {window['name']}"
+            found.append((QUOTA_ORDER.get(window["kind"], 2), index, window))
+        found.sort(key=lambda row: (row[0], row[1]))
+        windows += [row[2] for row in found]
+    return windows
+
+
+def _quota_snapshot(reply) -> dict:
+    return {"available": True, "source": "live", "as_of": int(time.time() * 1000),
+            "windows": _quota_windows(reply)}
+
+
+def _quota_reason(exc: ControlError) -> str:
+    if exc.status == 409:
+        return "Antigravity 没有打开，读不到用量"
+    return "读 Antigravity 用量没成功：" + _one_line(str(exc), 120)
+
+
 def _language_server() -> Path:
     """Where the app puts the program that has the agentapi command."""
     import machines
@@ -1236,6 +1302,7 @@ class AntigravityAgent(Agent):
                 "skills": False,
                 "waiting": True,
                 "approve": True,
+                "usage": True,
                 "statuses": ["running", "waiting", "idle", "unknown"],
             },
             params={"send_timeout_s": 60, "new_timeout_s": 140,
@@ -1260,6 +1327,34 @@ class AntigravityAgent(Agent):
         if item.get("status") not in ("running", "waiting"):
             return {"capabilities": {"stop": False}, "notes": {"stop": NOT_RUNNING}}
         return None
+
+    def usage(self, *, live: bool = False) -> dict:
+        """How much of Antigravity's own limits is left, from its local service's quota summary.
+
+        Its service answers this question itself, so a live read (live=1) uses the same 30-second cache: the
+        phone polling it must not become a stream of requests. A closed app or a broken answer is a reason the
+        phone shows, never an error; the same reason is logged once a day.
+        """
+        import usage_limits
+        now = _now()
+        with _USAGE_LOCK:
+            cached = _USAGE_CACHE
+            if cached["at"] and now - cached["at"] < usage_limits.CACHE_SECONDS:
+                return cached["data"]
+        try:
+            data = _quota_snapshot(_rpc("RetrieveUserQuotaSummary", {}, QUOTA_TIMEOUT))
+        except ControlError as exc:
+            data = {"available": False, "reason": _quota_reason(exc)}
+            _log_once("读不到用量", data["reason"])
+        except Exception as exc:  # an answer of another shape, or a program that would not run
+            reason = ("读 Antigravity 用量没成功：" + _one_line(str(exc), 120)
+                      if isinstance(exc, ValueError) else
+                      "读 Antigravity 用量没成功：" + type(exc).__name__)
+            data = {"available": False, "reason": reason}
+            _log_once("读不到用量", data["reason"])
+        with _USAGE_LOCK:
+            _USAGE_CACHE.update(at=now, data=data)
+        return data
 
     def on_server_start(self, cfg: dict, apps: list[str], log) -> None:
         _LOG_WRITER[0] = log

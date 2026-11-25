@@ -177,17 +177,41 @@ def waiting_step(trajectory: str = "traj-1", index: int = 3, action: str = "run_
     }
 
 
+# The quota summary (RetrieveUserQuotaSummary) as 11-25 answered on this computer: groups of buckets whose
+# remainingFraction is what is left (1 = full) and whose resetTime is UTC; a full bucket may have no resetTime.
+
+def quota(window: str, remaining, reset: str | None = "2026-11-30T20:03:35Z",
+          name: str = "Limit Remaining", bucket_id: str = "bucket-1") -> dict:
+    """One bucket of a made-up quota summary; reset=None leaves resetTime out."""
+    bucket = {"bucketId": bucket_id, "displayName": name, "description": "编的窗口说明",
+              "window": window, "remainingFraction": remaining}
+    if reset is not None:
+        bucket["resetTime"] = reset
+    return bucket
+
+
+def quota_group(name: str, *buckets: dict) -> dict:
+    return {"displayName": name, "description": "编的组说明", "buckets": list(buckets)}
+
+
+def quota_reply(*groups: dict) -> dict:
+    return {"response": {"description": "编的额度说明", "groups": list(groups)}}
+
+
 class FakeHub:
     """A tiny HTTP service on 127.0.0.1 standing in for the language server.
 
-    It checks the CSRF header, answers the two methods this batch may call, and records every request.
+    It checks the CSRF header, answers the methods the service may call (`quota` is its quota summary, None
+    means it has not been given one), and records every request.
     The hub file is written under the fake machines.HOME, with this test process's pid (which is alive).
     """
 
-    def __init__(self, home: Path, token: str = TOKEN, steps: list[dict] | None = None) -> None:
+    def __init__(self, home: Path, token: str = TOKEN, steps: list[dict] | None = None,
+                 quota: dict | None = None) -> None:
         self.home = Path(home)
         self.token = token
         self.steps = list(steps or [])
+        self.quota = quota
         self.requests: list[dict] = []
         self.fail = ""            # a method name that answers HTTP 500
         self.server: ThreadingHTTPServer | None = None
@@ -215,6 +239,10 @@ class FakeHub:
                     return self._send(500, {"error": "boom"})
                 if method == "GetCascadeTrajectorySteps":
                     return self._send(200, {"steps": owner.steps})
+                if method == "RetrieveUserQuotaSummary":
+                    if owner.quota is None:
+                        return self._send(404, {"error": "no quota"})
+                    return self._send(200, owner.quota)
                 if method == "HandleCascadeUserInteraction":
                     owner.steps = []  # answered: the app no longer asks
                     return self._send(200, {"ok": True})

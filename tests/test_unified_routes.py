@@ -312,7 +312,7 @@ class UnifiedRouteTests(unittest.TestCase):
                 code2, u2 = call_api(self.server, "GET", "/api/usage", protocol=2)
                 self.assertEqual(code2, 200)
                 self.assertIn("agents", u2)
-                self.assertEqual(set(u2["agents"].keys()), {"codex", "claude", "testing"})
+                self.assertEqual(set(u2["agents"].keys()), {"codex", "claude", "antigravity", "testing"})
 
             # Testing agent returns None from capabilities_now -> no capabilities_now/capability_notes on protocol 2
             code_ts, ts_state = call_api(self.server, "GET", "/api/agents/testing/state?id=test-running", protocol=2)

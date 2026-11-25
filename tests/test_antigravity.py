@@ -26,6 +26,7 @@ import chats
 import codex_control
 import machines
 import remote
+import usage_limits
 from composer_references import References
 from new_conversations import NewConversations
 from agents import antigravity, claude as claude_agent, codex as codex_agent, deepseek as deepseek_agent, registry
@@ -135,9 +136,10 @@ class DetectTests(Base):
         self.assertEqual(capabilities["send_modes"], ["send"])
         self.assertTrue(capabilities["approve"] and capabilities["waiting"])
         self.assertTrue(capabilities["stop"] and capabilities["new"] and capabilities["attachments"])
+        self.assertTrue(capabilities["usage"])
         self.assertEqual(capabilities["statuses"], ["running", "waiting", "idle", "unknown"])
         for name in ("open", "queue", "steer", "answer", "archive", "restore",
-                     "delete", "usage", "slash_commands", "skills"):
+                     "delete", "slash_commands", "skills"):
             self.assertFalse(capabilities[name], name)
         self.assertEqual(capabilities["settings"], [])
         self.assertEqual(manifest["params"]["max_images"], 5)
@@ -465,6 +467,8 @@ class RouteTests(Base):
             log=SimpleNamespace(write=lambda _text: None),
             tasks=SimpleNamespace(apply_status=lambda items: items),
             history=chat_history.History(),
+            usage=usage_limits.Usage(apps=lambda: list(apps), desktop=None, log=lambda _text: None,
+                                     data_dir=Path(self.temp.name)),
         )
         handler._send = lambda code, body, ctype, extra=None: sent.append((code, body))
         return handler, sent
@@ -543,12 +547,39 @@ class RouteTests(Base):
         handler.do_GET()
         self.assertEqual(sent[0][0], 404)
 
+    def test_usage_reaches_the_phone_as_the_other_assistants_do(self):
+        apps = ["antigravity"]
+        quota = fake.quota_reply(fake.quota_group("Gemini Models", fake.quota("5h", 0.5)))
+        with fake.FakeHub(self.home, quota=quota) as hub:
+            antigravity.reset()
+            # Protocol 2: every assistant the computer has, Antigravity among them.
+            handler, sent = self.handler("/api/usage?t=secret", apps, protocol=2)
+            handler.do_GET()
+            body = json.loads(sent[0][1])
+            self.assertEqual([w["used_percent"] for w in body["agents"]["antigravity"]["windows"]], [50])
+
+            # Protocol 1: the same answer as before, only Codex, Claude and the time.
+            handler, sent = self.handler("/api/usage?t=secret", apps)
+            handler.do_GET()
+            self.assertEqual(sorted(json.loads(sent[0][1])), ["claude", "codex", "now"])
+
+            # The unified address reads it too; an old phone does not reach it.
+            handler, sent = self.handler("/api/agents/antigravity/usage?t=secret", apps, protocol=2)
+            handler.do_GET()
+            self.assertEqual(sent[0][0], 200)
+            self.assertEqual([w["name"] for w in json.loads(sent[0][1])["windows"]],
+                             ["Gemini 模型 · 5 小时"])
+            handler, sent = self.handler("/api/agents/antigravity/usage?t=secret", apps)
+            handler.do_GET()
+            self.assertEqual(sent[0][0], 404)
+            self.assertEqual(len(hub.calls("RetrieveUserQuotaSummary")), 1)
+
 
 class ControlBase(Base):
     """Fake data, a fake local service and a fake agentapi: never the real Antigravity."""
 
-    def hub(self, steps=None, token=fake.TOKEN, clear=True):
-        found = fake.FakeHub(self.home, token=token, steps=steps)
+    def hub(self, steps=None, token=fake.TOKEN, clear=True, quota=None):
+        found = fake.FakeHub(self.home, token=token, steps=steps, quota=quota)
         found.__enter__()
         self.addCleanup(found.__exit__, None, None, None)
         if clear:
@@ -607,6 +638,98 @@ class CapabilitiesTests(ControlBase):
             clock["t"] += 2.1
             self.assertEqual(antigravity.AGENT().capabilities_now(None, "a")["notes"]["stop"],
                              antigravity.NOT_RUNNING)
+
+
+class UsageTests(ControlBase):
+    """Antigravity's own quota summary: the windows the phone shows, the cache, and the reasons a read may give."""
+
+    def usage(self, live: bool = False) -> dict:
+        return antigravity.AGENT().usage(live=live)
+
+    def test_the_groups_and_their_windows_in_the_apps_order(self):
+        self.hub(quota=fake.quota_reply(
+            fake.quota_group("Gemini Models",
+                             fake.quota("weekly", 0.8),
+                             fake.quota("5h", 0.25, reset="2026-11-25T14:00:00Z", bucket_id="five")),
+            fake.quota_group("Claude and GPT models", fake.quota("5h", 1.0, reset=None)),
+            fake.quota_group("Other Models", fake.quota("weekly", 0.5)),
+        ))
+        got = self.usage()
+        self.assertEqual((got["available"], got["source"]), (True, "live"))
+        self.assertEqual([w["name"] for w in got["windows"]],
+                         ["Gemini 模型 · 5 小时", "Gemini 模型 · 每周",
+                          "Claude 和 GPT 模型 · 5 小时", "Other Models · 每周"])
+        self.assertEqual([w["kind"] for w in got["windows"]], ["5h", "weekly", "5h", "weekly"])
+        self.assertEqual([w["minutes"] for w in got["windows"]], [300, 10080, 300, 10080])
+        self.assertEqual([w["used_percent"] for w in got["windows"]], [75, 20, 0, 50])
+        self.assertEqual(got["windows"][1]["resets_at"], int(datetime.fromisoformat(
+            "2026-11-30T20:03:35+00:00").timestamp()))
+        self.assertIsNone(got["windows"][2]["resets_at"])  # a full bucket may have no resetTime
+        self.assertEqual(set(got["windows"][0]), {"kind", "minutes", "used_percent", "resets_at", "name"})
+        self.assertIsInstance(got["as_of"], int)
+        self.assertNotIn(fake.TOKEN, json.dumps(got, ensure_ascii=False))
+
+    def test_an_unknown_window_is_other_and_a_fraction_out_of_range_stays_between_0_and_100(self):
+        self.hub(quota=fake.quota_reply(fake.quota_group(
+            "Unknown Group",
+            fake.quota("days", 0.5),
+            fake.quota("weekly", 1.5),
+            fake.quota("5h", -0.2),
+        )))
+        got = self.usage()
+        self.assertEqual([w["name"] for w in got["windows"]],
+                         ["Unknown Group · 5 小时", "Unknown Group · 每周", "Unknown Group · 用量"])
+        self.assertEqual([w["kind"] for w in got["windows"]], ["5h", "weekly", "other"])
+        self.assertEqual([w["used_percent"] for w in got["windows"]], [100, 0, 50])
+
+    def test_a_bucket_without_a_fraction_is_skipped(self):
+        self.hub(quota=fake.quota_reply(fake.quota_group(
+            "Gemini Models", fake.quota("weekly", 0.5),
+            {"window": "5h", "displayName": "Five Hour Limit Remaining"})))
+        got = self.usage()
+        self.assertEqual([w["kind"] for w in got["windows"]], ["weekly"])
+
+    def test_no_antigravity_is_a_reason_not_an_error(self):
+        self.assertEqual(self.usage(), {"available": False, "reason": "Antigravity 没有打开，读不到用量"})
+
+    def test_an_http_error_says_what_went_wrong(self):
+        hub = self.hub()
+        hub.fail = "RetrieveUserQuotaSummary"
+        got = self.usage()
+        self.assertFalse(got["available"])
+        self.assertEqual(got["reason"], "读 Antigravity 用量没成功：Antigravity 没接受这次请求（HTTP 500）")
+        self.assertNotIn(fake.TOKEN, got["reason"])
+
+    def test_a_reply_of_another_shape_is_a_reason_not_an_error(self):
+        self.hub(quota={})
+        got = self.usage()
+        self.assertEqual(got, {"available": False,
+                               "reason": "读 Antigravity 用量没成功：读不懂它回的用量"})
+
+    def test_the_answer_is_kept_thirty_seconds_for_live_reads_too(self):
+        hub = self.hub(quota=fake.quota_reply(fake.quota_group("Gemini Models", fake.quota("5h", 0.5))))
+        clock = {"t": 1000.0}
+        with patch.object(antigravity, "_now", lambda: clock["t"]):
+            self.usage()
+            self.usage(live=True)
+            self.assertEqual(len(hub.calls("RetrieveUserQuotaSummary")), 1)
+            clock["t"] += usage_limits.CACHE_SECONDS + 1
+            self.usage()
+        self.assertEqual(len(hub.calls("RetrieveUserQuotaSummary")), 2)
+
+    def test_the_same_failure_is_logged_once(self):
+        logs: list[str] = []
+        antigravity.AGENT().on_server_start({}, [], logs.append)
+        hub = self.hub()
+        hub.fail = "RetrieveUserQuotaSummary"
+        clock = {"t": 1000.0}
+        with patch.object(antigravity, "_now", lambda: clock["t"]):
+            self.usage()
+            clock["t"] += usage_limits.CACHE_SECONDS + 1
+            self.usage()
+        self.assertEqual(len(logs), 1)
+        self.assertIn("读不到用量", logs[0])
+        self.assertNotIn(fake.TOKEN, logs[0])
 
 
 class SendTests(ControlBase):
