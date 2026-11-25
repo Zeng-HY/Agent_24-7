@@ -36,7 +36,7 @@ enum InlineCard: Identifiable {
 /// The cards of a source's state: Codex's pending ones and answered ones it lets you change; Claude's desktop
 /// question, or else its plan options; DeepSeek's approvals, then its questions; a new assistant's own cards.
 func inlineCards(app: String, raw: JSONValue, catalog: AgentCatalogSnapshot) -> [InlineCard] {
-    guard !catalog.isLegacy(app) else { return genericCards(raw).map(InlineCard.generic) }
+    guard catalog.isLegacy(app) else { return genericCards(raw).map(InlineCard.generic) }
     switch app {
     case "claude":
         if claudeAsks(raw) { return [.claudePrompt(raw["prompt"])] }

@@ -300,13 +300,17 @@ struct AgentUnifiedFlowTests {
 /// The demo computer with one conversation's state narrowed to nothing: `capabilities_now` turns every flag off and
 /// empties every list, as a computer whose assistant is not open would. The three must not notice; a new assistant
 /// must lose the buttons.
-struct AllOffTransport: RelayTransport {
+struct AllOffTransport: RelayStreamingTransport {
     let demo: DemoTransport
     let paths: [String]
 
     init(world: DemoWorld, paths: [String]) {
         demo = DemoTransport(world: world)
         self.paths = paths
+    }
+
+    func stream(_ request: RelayRequest) async throws -> RelayStream {
+        try await demo.stream(request)
     }
 
     func send(_ request: RelayRequest) async throws -> RelayResponse {

@@ -21,7 +21,7 @@ public struct PendingCard: Equatable, Sendable {
 /// desktop prompt, or else its plan options; DeepSeek's approvals first, then its questions; a new assistant's own
 /// cards (docs §五, handoff 3.4). [catalog] is the caller's copy of the computer's assistants (handoff 第三段).
 public func pendingCards(app: String, raw: JSONValue, catalog: AgentCatalogSnapshot) -> [PendingCard] {
-    guard !catalog.isLegacy(app) else {
+    guard catalog.isLegacy(app) else {
         let cards = genericCards(raw)
         guard let first = cards.first else { return [] }
         let names = catalog.name(app)

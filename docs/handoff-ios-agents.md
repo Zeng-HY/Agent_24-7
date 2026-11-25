@@ -379,3 +379,30 @@
 - README 的 0.9.0 草稿排在最前面；合并时语音修复那一节也在最前面，冲突由用户合。
 - 没推送、没跑 Codemagic、没碰 TestFlight/后台/中转/密钥；版本号没动（`project.yml` 仍是 0.8.0）。
 
+### 审后修改（第三段，2026-11-25，构建 6b06383b523d48c7116c0be7 的失败）
+
+**一、两处 `guard` 把 `isLegacy` 写反了（我换 `.current` 时的错）**
+
+- `TeleplyCore/Sources/TeleplyModel/Interaction.swift` 的 `pendingCards`：`guard !catalog.isLegacy(app) else` → `guard catalog.isLegacy(app) else`。原来的意思是「三家走下面的 switch，新助手走 else 的通用分支」，多一个 `!` 正好反过来。
+- `Teleply/Chat/QuestionCards.swift` 的 `inlineCards`：同样去掉 `!`。
+
+这次失败的 15 条，逐条对得上：
+
+- `InteractionTests` 第 11 行（Codex 的提问卡）、第 18 行（Codex 的批准卡）、第 27/30/31 行（Claude 的 question/actions）、第 49 行（DeepSeek 批准）：三家被当成新助手，`pendingCards` 走 `genericCards`，Codex 的卡变成「Codex 有问题要问你」或种类不对，Claude/DeepSeek 的 `questions` 不在同一个位置而变成空。
+- `AgentUnifiedTests` 第 210 行：`testing`（新助手）被当成三家，走了 Codex 的 `default` 分支，summary 从「测试助手想运行命令」变成「Codex 想运行命令」。
+- `AnsweringTests`（`InteractionTests.swift` 第 146 行）：DeepSeek 的卡片被通用分支当成空。
+- `PendingChoiceTests` 第 85 行：Claude 的待选项变成空；第 82 行是它的连带——`checkAction` 里的 `claudeChoiceCheck` 也用 `pendingCards`，空列表让它说「电脑上已经没有在等的选项」。
+- `AgentUnifiedFlowTests` 第 48 行：`testing` 的 summary 变成「Codex 想运行命令」，同一处。
+
+**二、两个 `control.available` 失败与 `!` 无关：测试用的演示电脑没有实时流**
+
+- 失败在 `AgentHandshakeTests` 第 176 行和 `AgentUnifiedFlowTests` 第 40 行；第 193、227 行的「一条都没发出去」是它带出来的（发送的 `reachable` 要 `control.available`）。
+- 原因：`DemoTransport` 没有实现 `RelayStreamingTransport`，`ChatModel.run` 第一次读到状态后 `control.available = true`，紧接着 `listen` 抛「当前服务不支持实时连接」，catch 把 `control.available` 又置回 false，然后按 `IdlePacer` 等 3600 秒。日志里那个 `Control` 正是 raw 里是完整状态、`available` 却是 false——所以状态本身读对了，不是被当成三家解析。真实电脑的 `URLSessionTransport` 会一直开着流，App 自己的本地演示走 `synthetic`（读到状态就返回，不进 group），都不受这个影响；这是测试 fixture 的缺口。
+- 改法：给 `DemoTransport` 加一个安静、一直开着的流（`RelayStreamingTransport`：200 + 永不结束的空 chunk 流），并让包着它的两个测试传输 `WatchedTransport`（`TestTransports.swift`）和 `AllOffTransport`（`AgentUnifiedFlowTests.swift`）也实现同一协议转发过去。fixture 里的会话读到状态后保持连接，`available` 不再闪回 false；`AppModelTests` 里「fake service 没有流」的注释跟着改成「流开着、是安静的」。
+- 没改生产代码：真流断开时把 `control.available` 置 false（发送键变灰、断开提示）是 0.8.0 的行为，三家要保持。
+
+**三、其余**
+
+- 15 条失败全部归到上面两类，没有第三类；`AgentHandshakeTests` 第 176 行的断言没改，流补上后读到的仍是原来那个状态。
+- 结构检查：6 个改动文件括号/引号 0 问题、原始字符串 0 问题；`DemoTransport.swift` 追加的一段已统一回 LF。
+

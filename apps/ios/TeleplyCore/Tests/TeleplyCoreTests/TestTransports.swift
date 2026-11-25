@@ -15,8 +15,9 @@ func queryValue(_ request: RelayRequest, _ name: String) -> String? {
     URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
 }
 
-/// The demo computer, keeping every request and download as it was asked for.
-struct WatchedTransport: RelayFileTransport {
+/// The demo computer, keeping every request and download as it was asked for. Its live stream is the demo's quiet,
+/// open one, so a conversation in a test keeps the state its first read brought (handoff 第三段 review).
+struct WatchedTransport: RelayFileTransport, RelayStreamingTransport {
     let demo: DemoTransport
     let log = RequestLog()
 
@@ -32,6 +33,10 @@ struct WatchedTransport: RelayFileTransport {
     func download(_ request: RelayRequest, limit: Int64, progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> RelayDownload {
         await log.add(request)
         return try await demo.download(request, limit: limit, progress: progress)
+    }
+
+    func stream(_ request: RelayRequest) async throws -> RelayStream {
+        try await demo.stream(request)
     }
 }
 

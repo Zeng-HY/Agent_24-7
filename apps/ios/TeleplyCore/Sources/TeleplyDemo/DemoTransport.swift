@@ -423,3 +423,12 @@ public struct DemoTransport: RelayFileTransport {
         return Self.json(.object(page))
     }
 }
+
+/// The demo computer is a computer: its live stream is open and quiet. A conversation then keeps the state its first
+/// read brought instead of looking disconnected a moment later — the app's own local demo takes the synthetic path
+/// and never asks for this stream. Tests that want reconnect behaviour use their own transports.
+extension DemoTransport: RelayStreamingTransport {
+    public func stream(_ request: RelayRequest) async throws -> RelayStream {
+        RelayStream(status: 200, chunks: AsyncThrowingStream { _ in })
+    }
+}

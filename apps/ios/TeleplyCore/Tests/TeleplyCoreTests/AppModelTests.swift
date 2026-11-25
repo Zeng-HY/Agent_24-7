@@ -551,7 +551,7 @@ struct AppModelTests {
         model.open(model.chats[0])
         await model.settle()
         #expect(model.conversation.key?.chat == "demo")
-        // The fresh read comes first; the stream is not available on this fake service, so it waits to reconnect.
+        // The fresh read comes first; the demo's live stream is open and quiet, so the state stays as read.
         for _ in 0..<50 where world.stateReads.isEmpty { await Task.yield() }
         #expect(world.stateReads.first?.fresh == true)
     }
