@@ -98,10 +98,14 @@ public final class DemoWorld: Sendable {
     /// The fake `testing` helper is offered too (handoff 3.7): off by default, so the demo answers exactly as it did
     /// before the 0.9.0 work (the screenshot tour's rows and tree must match 0.8.0). `-TeleplyDemoAgents` turns it on.
     public let testingAgent: Bool
+    /// 文件预览示例 is listed too (file-preview design §6.1): off by default, so the screenshot tour's rows stay as they
+    /// were. `-TeleplyDemoFiles` turns it on.
+    public let filesDemo: Bool
 
-    public init(site: DemoSite? = nil, testingAgent: Bool = false) {
+    public init(site: DemoSite? = nil, testingAgent: Bool = false, filesDemo: Bool = false) {
         self.site = site
         self.testingAgent = testingAgent
+        self.filesDemo = filesDemo
         if let site { state.withLock { $0.devices = site.computers } }
     }
 
@@ -434,7 +438,7 @@ public final class DemoWorld: Sendable {
     /// state answering changed saying so (Android FixtureWorld.firstPage).
     func firstPage() -> [JSONValue] {
         state.withLock { state in
-            (Array(state.created.map(\.row).reversed()) + (site?.rows ?? DemoData.firstPage).map { row in
+            let listed = (site?.rows ?? DemoData.firstPage).map { row in
                 var fields = row.object
                 switch row["id"].string() {
                 case "demo":
@@ -473,7 +477,9 @@ public final class DemoWorld: Sendable {
                     break
                 }
                 return .object(fields)
-            }).filter { row in
+            }
+            let extra: [JSONValue] = site == nil && filesDemo ? [DemoData.previewRow] : []
+            return (Array(state.created.map(\.row).reversed()) + listed + extra).filter { row in
                 let key = row["app"].string() + ":" + row["id"].string()
                 return !state.archived.contains(key) && !state.deleted.contains(key)
             }
@@ -846,6 +852,72 @@ enum DemoData {
 
     static let older = row("older", "更早的对话", "测试项目", "第二页", "idle", "codex", now - 86_400_000 * 3)
 
+    /// 文件预览示例 (file-preview design §6.1): an older row, listed only with -TeleplyDemoFiles. Names, paths and
+    /// contents are all made up.
+    static let previewRow = row("file-preview", "文件预览示例", "测试项目", "回答里的图片、文件条和原因", "idle", "codex", now - 86_400_000 * 3)
+
+    /// The files the example answer names: a picture drawn in place (PNG and SVG), a linked PDF, R source and
+    /// spreadsheet, two pictures the agent presented, an inline-code path and one written in the words.
+    static let previewFiles: [FileRef] = [
+        FileRef(id: "fp-chart", name: "图表.png", path: "D:\\fixture\\file-preview\\chart.png", kind: "image", view: "image",
+                size: 462, state: "current", version: "v1", width: 1200, height: 800, thumb: true, via: ["image"]),
+        FileRef(id: "fp-logo", name: "标志.svg", path: "D:\\fixture\\file-preview\\logo.svg", kind: "download", view: "svg",
+                size: 300, state: "current", version: "v1", width: 240, height: 120, thumb: true, via: ["image"]),
+        FileRef(id: "fp-contract", name: "合同.pdf", path: "D:\\fixture\\file-preview\\contract.pdf", kind: "pdf", view: "pdf",
+                size: 36_864, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-analysis", name: "分析.R", path: "D:\\fixture\\file-preview\\analysis.R", kind: "text", view: "code",
+                size: 1_200, state: "current", version: "v1", lang: "r", via: ["link"]),
+        FileRef(id: "fp-budget", name: "预算表.xlsx", path: "D:\\fixture\\file-preview\\budget.xlsx", kind: "download", view: "table",
+                size: 2_293, state: "current", version: "v1", preview: "pdf", via: ["link"]),
+        FileRef(id: "fp-shot-1", name: "截图一.png", path: "D:\\fixture\\file-preview\\shot-1.png", kind: "image", view: "image",
+                size: 462, state: "current", version: "v1", width: 1080, height: 720, thumb: true, via: ["presented"]),
+        FileRef(id: "fp-shot-2", name: "截图二.png", path: "D:\\fixture\\file-preview\\shot-2.png", kind: "image", view: "image",
+                size: 462, state: "updated", version: "v2", width: 1080, height: 720, thumb: true, via: ["presented"]),
+        FileRef(id: "fp-run", name: "run.R", path: "D:\\fixture\\file-preview\\run.R", kind: "text", view: "code",
+                size: 620, state: "current", version: "v1", lang: "r", texts: ["D:\\fixture\\file-preview\\run.R"], via: ["code"]),
+        FileRef(id: "fp-report", name: "报告.txt", path: "D:\\fixture\\file-preview\\report.txt", kind: "text", view: "text",
+                size: 480, state: "current", version: "v1", texts: ["D:/fixture/file-preview/report.txt"], via: ["path"]),
+    ]
+
+    /// The answer, written the way a newer computer marks it up: pictures in place, links that match `files`, an
+    /// inline-code path, a path in the words, a page anchor, a localhost address and two reasons.
+    static let previewAnswer = #"""
+    文件都在这儿。
+
+    ![月度图表](D:/fixture/file-preview/chart.png)
+
+    ![标志](D:/fixture/file-preview/logo.svg)
+
+    [合同.pdf](D:/fixture/file-preview/contract.pdf) 和 [分析.R](D:/fixture/file-preview/analysis.R) 也放好了。
+
+    生成的脚本是 `D:\fixture\file-preview\run.R`，说明写在 D:/fixture/file-preview/report.txt。
+
+    [#本轮记录](#本轮记录) 只是页内文字，[开发服务器](http://localhost:3000) 在电脑上。
+
+    没找到的是 [旧图](out/old.png)，网络上的 [共享报表](//nas/share/report.pdf) 看不了。
+    """#
+
+    /// The example conversation: an answer with files and reasons, and an older computer's answer without them.
+    static let previewMessages: [JSONValue] = [
+        message("fp-1", "user", "看一下这几个文件。"),
+        message("fp-2", "assistant", previewAnswer, [
+            "files": .array(previewFiles.map { $0.pageJSON }),
+            "file_notes": .array([
+                .object(["href": .string("out/old.png"), "reason": .string("not_found"),
+                         "text": .string("电脑上没找到这个文件")]),
+                .object(["href": .string("//nas/share/report.pdf"), "reason": .string("not_local"),
+                         "text": .string("文件在网络位置或别的电脑上")]),
+            ]),
+        ]),
+        message("fp-3", "assistant", "这是老电脑的回复，没有 files：\n\n[说明.md](D:/fixture/old/说明.md)"),
+    ]
+
+    /// The example's own words: an R script, and the note the answer says it wrote.
+    static let previewSource = "# 固定示例：按天汇总\ncounts <- table(demo[[\"day\"]])\nprint(counts)\n"
+    static let previewReport = "文件预览示例\n\n这是一段固定的说明文字，用来检查文字页。\n所有名字和路径都是编造的。\n"
+
+    static func previewFile(_ id: String) -> FileRef? { previewFiles.first { $0.id == id } }
+
     static func message(_ id: String, _ role: String, _ text: String, _ extra: [String: JSONValue] = [:]) -> JSONValue {
         var fields: [String: JSONValue] = ["id": .string(id), "role": .string(role), "text": .string(text)]
         fields.merge(extra) { _, new in new }
@@ -854,6 +926,9 @@ enum DemoData {
 
     /// [nextPressed]: the next-step button pressed so far; the box then keeps its recap and the words show as sent.
     static func messages(app: String, chat: String, nextPressed: String = "") -> [JSONValue] {
+        // 文件预览示例 (file-preview design §6.1), listed only with -TeleplyDemoFiles: names, paths and contents all
+        // made up.
+        if chat == "file-preview" { return previewMessages }
         if app == "claude" && chat == "claude-next" {
             let plan: JSONValue = .array([("读现有测试", "completed"), ("补发布说明的测试", "completed"), ("跑一遍全部测试", "in_progress"), ("更新说明文档", "pending")]
                 .map { ["text": .string($0.0), "status": .string($0.1)] })
@@ -1050,6 +1125,8 @@ enum DemoData {
         switch id {
         case "fixture-md": return markdownFile
         case "fixture-html": return htmlFile
+        case "fp-run", "fp-analysis": return previewSource
+        case "fp-report": return previewReport
         default: return "固定测试内容"
         }
     }
@@ -1068,6 +1145,28 @@ enum DemoData {
     static let markdownFile = "# 说明\n\n这是一个 **Markdown** 文件，默认用阅读视图显示。\n\n- 第一条\n- 第二条\n\n> 也可以切到「查看源码」看原文。"
 
     static let png = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAoCAIAAACO8WhuAAABlUlEQVR42u3QhzICAAAGYM9CyB4hMyF7JDOrsreydyIzhczISNll772P4zjHcRzHOY7jOOcNPIe7/3uETys+6Tcu+Sc25ZuT+sVJ+2Snf7Ay3lmZbzFZr9Hcl2jec1T2U2TOY2TuQ0TePTP/jllwG154E1Z0HVZ8FVpyGVJ6EVx2Hlx+FsQ/ZVScMATHgZVH9KpDuvAgoHrPv2bXv3bbr27Tt37Dt2HNR7Tq3bjsLV7ykix4Ns17NM96tMy4S6dorRpam9qtfdy1Y8y1c8Sla5gqU1G7lc49Coq8n9Lb59Qnd+zvcRyQOSi67Ac77JTtdqpW2yEpebiZPCKxGRVbj4msxxusJupI6lqSptpyUmgxVWkxLTCf4ZvNlpnNlZrOF5ssFBkvFhgv5Rst5xqu5Biu8gzWuMT1TOJGuv5mmt5Wit52su5OImE3gbAXp7Mfq33A1j5kaSEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEIQhCCEIQgBCEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEI+m9BfzQ+a2t+SvdoAAAAAElFTkSuQmCC"
+
+    /// One page, for 文件预览示例's linked PDF.
+    static let pdf = """
+        JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5
+        cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAg
+        UiAvTWVkaWFCb3ggWzAgMCA2MDAgNDIwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIg
+        Pj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0NzEgPj4Kc3RyZWFtCjAuOTMgMC45NSAxIHJnIDI0IDI0IDU1MiAzNzIgcmUgZgowLjE1
+        IDAuMzkgMC45MiByZyAyNCAzNDAgNTUyIDU2IHJlIGYKQlQgL0YxIDIyIFRmIDEgMSAxIHJnIDQ0IDM2MCBUZCAoUXVhcnRlcmx5IHJlcG9y
+        dCAtIGRlbW8pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMzAwIFRkIChDb252ZXJ0ZWQgZnJvbSBQb3dlclBvaW50
+        IG9uIHRoZSBjb21wdXRlci4pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMjcwIFRkICgxLiBXb3JkIGFuZCBFeGNl
+        bCBmaWxlcyBzaG93IG9uIHRoZSBwaG9uZS4pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMjQ1IFRkICgyLiBQb3dl
+        cnBvaW50IHNob3dzIGFzIHRoZSBjb21wdXRlcidzIFBERi4pIFRqIEVUCkJUIC9GMSAxMSBUZiAwLjQ1IDAuNDcgMC41MiByZyA0NCA2MCBU
+        ZCAoVGVsZXBseSBsb2NhbCBkZW1vKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUg
+        L1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUg
+        MDAwMDAgbiAKMDAwMDAwMDA2NCAwMDAwMCBuIAowMDAwMDAwMTIxIDAwMDAwIG4gCjAwMDAwMDAyNDcgMDAwMDAgbiAKMDAwMDAwMDc2
+        OSAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjgzOQolJUVPRgo=
+        """
+
+    /// The spreadsheet 文件预览示例 links, the same fixed workbook the demo has always had.
+    static let xlsx = """
+        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
+        """
 
     static let heard = "好的帮我把发布说明里的升级步骤补上"
     static let tidied = "好的，帮我把发布说明里的升级步骤补上。"

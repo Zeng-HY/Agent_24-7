@@ -451,4 +451,14 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 ### 线四、iOS 0.9.1
 
-（待填）
+#### 第一段（A）
+
+- **解析**：`Message` 多了 `files`（可选）和 `file_notes`。有 `files` 字段（哪怕是空列表）就是新电脑；没有这个字段就是老电脑，`MarkdownReader.blocks` 仍走 0.9.0 的原路，现有测试未改。新增 `AnswerFiles.swift`（FileRef、FileNote、按路径找文件、原因文字、文件条、`texts` 文字链接）和 `ThumbCache.swift`（Caches/answer-thumbs，按电脑分子文件夹，(文件编号, `v`, 宽度) 摘要命名，先写临时文件再改名，全部电脑合计 200 MB、按最久没用的删）。
+- **链接**：地址经 `localPath` 后与 `files[].path` 按「斜杠统一、不分大小写」对上，点开直接进文件页并带上那一项（`teleply-item:`）；对不上的按 `file_notes` 的 `href`（%-解码后）找原因，文字后跟灰色短说明，点开弹完整原因（`teleply-why:`，§6.4 原话）。`#…`、`mailto:` 和别的协议只显示文字；`localhost`、`127.0.0.1`、`[::1]` 加「（电脑本机网址，手机打不开）」。老电脑仍按 0.9.0 加「（链接未开放）」，但 `#…`、`mailto:` 不再加。
+- **消息里的图**：段落按 Markdown 节点拆开（不是找文字 `![`），对 `view` 是 `image`/`svg`、`thumb` 为真的文件在原处画缩略图：宽度占满气泡，最高 360 pt，整张可见，先按 `w`/`h` 占位（4:3 兜底），加载中灰底加文件名，失败一行原因加「重试」，点开进现有文件页。缩略图按气泡像素宽度选 640 或 1280（文件条 320），ImageIO 按显示尺寸解码。
+- **`texts`**：`code`、`path` 来的文件，行内代码和正文里那段字变成可点的链接；已经在别的链接里的字不再加。
+- **文件条**：`link`、`citation`、`presented`、`tool` 来的文件按 `id` 去重，最多 8 个，多了「还有 N 个」（打开这条消息的文件列表）；原处画了的图不再重复；`code`、`path` 不进文件条。
+- **演示数据**：`DemoWorld` 加了「文件预览示例」对话（名字、路径全编造）：原处的 PNG 和 SVG、文件条里的 PDF/R 源码/xlsx、`presented` 的两张图、行内代码路径、正文路径、`not_found` 和 `not_local`、`#` 链接、`localhost` 链接，以及一条没有 `files` 的老电脑消息。只在 `-TeleplyDemoFiles` 下出现，现有截图组和演示电脑 A 的内容未改。
+- **测试**：`AnswerFilesTests` 覆盖 `files` 解析与老电脑退回、按路径找文件、原因文字、段落拆图（真实 swift-markdown）、`texts` 文字链接与「一个字只有一个链接」、文件条去重/上限/「还有 N 个」、入口和原因链接的往返、缩略图命名和 200 MB 清理（临时目录，不碰全局状态）。
+- **没做（留给 B/C 段）**：看图页、SVG/PDF 原文件、原文件缓存、代码高亮、表格、音视频、zip、附属资源。
+- **没验到的**：这台电脑没有 Swift，iOS 代码没有编译或跑过测试；缩略图接口（`/api/file/thumb`）没和真电脑联调过。要等推送后 Codemagic 编译和测试。

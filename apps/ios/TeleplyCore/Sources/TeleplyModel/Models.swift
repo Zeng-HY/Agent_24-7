@@ -72,6 +72,11 @@ public struct Message: Sendable, Equatable, Identifiable {
     /// 0.6.4: the turn this message belongs to, Unix seconds of its start and end.
     public var turnStarted: Int64 = 0
     public var turnEnded: Int64 = 0
+    /// §5.1: the files this answer names, as the computer listed them. An empty list too means a newer computer; nil
+    /// is an older one, whose answers keep 0.9.0's way of showing links. [fileNotes] say why a file-like link could not
+    /// be given (§6.4).
+    public var files: [FileRef]? = nil
+    public var fileNotes: [FileNote] = []
 
     public init(id: String, role: String, text: String) {
         self.id = id
@@ -185,6 +190,12 @@ public func parseMessage(_ json: JSONValue) throws -> Message {
     message.request = json["client_request_id"].string()
     message.turnStarted = json["turn_started"].int64()
     message.turnEnded = json["turn_ended"].int64()
+    // §5.1: an answer carries `files`, an empty list too, once the computer knows about file previews; no field at all
+    // is an older computer, and every link then goes the way it did in 0.9.0.
+    if json.has("files") {
+        message.files = json["files"].array.map(parseFileRef)
+        message.fileNotes = json["file_notes"].array.map(parseFileNote)
+    }
     return message
 }
 

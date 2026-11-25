@@ -89,6 +89,49 @@ extension WorkspaceModel {
         }
     }
 
+    /// A file the answer listed with it (`files`, §5.1) opens its page directly, carrying that very entry: no read of
+    /// the conversation's whole file list first, and the page still reads the file's meta and bytes as before.
+    public func openAnswerFile(_ file: FileRef) {
+        guard key != nil, client != nil, !file.id.isEmpty else { return }
+        if file.state == "missing" {
+            error = "文件已移动或删除"
+            return
+        }
+        error = nil
+        self.file(file.pageJSON)
+    }
+
+    /// Where answer thumbnails are kept on this phone: a folder of its own in the caches, a subfolder per computer
+    /// (file-preview design §7).
+    nonisolated public static let answerThumbFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(ThumbCache.folderName)
+
+    nonisolated static let answerThumbs = ThumbCache(folder: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent(ThumbCache.folderName))
+
+    /// A picture in an answer (§6.1): the computer's thumb at about [width] pixels (320 in a strip, 640 or 1280 in the
+    /// text), kept on this phone by (computer, file id, `v`, width) (§7). Nil when it cannot be had; the page offers
+    /// 重试.
+    public func answerThumb(_ file: FileRef, width: Int) async -> URL? {
+        guard let key, let client, !file.id.isEmpty else { return nil }
+        let bucket = answerThumbWidth(width)
+        let cache = Self.answerThumbs
+        let kept = cache.entry(computer: key.device, file: file.id, version: file.version, width: bucket)
+        if FileManager.default.fileExists(atPath: kept.path) {
+            cache.touch(computer: key.device, file: file.id, version: file.version, width: bucket)
+            return kept
+        }
+        do {
+            let fetched = try await client.thumb(device: key.device, app: key.app, chat: key.chat,
+                                                 file: file.id, width: bucket, version: file.version)
+            return cache.keep(fileAt: fetched, computer: key.device, file: file.id, version: file.version, width: bucket)
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
     /// Where pictures sent with messages are kept once fetched: a folder per picture, the small copy and the whole one
     /// under its own name (Quick Look shows the name and needs the extension).
     nonisolated public static let sentPictureFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]

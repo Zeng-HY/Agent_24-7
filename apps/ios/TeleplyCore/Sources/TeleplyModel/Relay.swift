@@ -498,6 +498,8 @@ public struct RelayClient: Sendable {
     public static let tooLargeToDownload = "文件超过500MB，请在电脑上打开"
     /// A picture, a PDF or another file a file's page shows itself is shown up to 20 MB (web artifact-preview).
     public static let previewLimit: Int64 = 20 * 1024 * 1024
+    /// A thumbnail is a small WebP (§5.3); this only keeps a wrong answer from filling the phone.
+    public static let thumbLimit: Int64 = 16 * 1024 * 1024
 
     /// A picture (codex/upload) or another file (files/upload) for [app]'s conversation [chat], or for a new
     /// conversation's draft by its request id ([draft]), sent from [file] with its length (Android uploadStream).
@@ -540,6 +542,21 @@ public struct RelayClient: Sendable {
         var request = try get(Self.devicePath(device, "/api/codex/image"), query: [("thumb", small ? "1" : nil), ("id", id)], deadline: small ? 40 : 120)
         request.headers["Accept"] = "*/*"
         let answer = try await files.download(request, limit: Self.downloadLimit, progress: nil)
+        if answer.status == 401 { try? vault?.write(origin.key, nil) }
+        guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
+        return saved
+    }
+
+    /// A file's thumbnail for an answer or its file strip (GET /api/file/thumb, file-preview design §5.3): `app`, the
+    /// conversation's id, the file's id, one of the widths the computer accepts (320, 640, 1280) and its `v`, so an
+    /// address never changes content. To a file on this phone; the caller owns it.
+    public func thumb(device: String, app: String, chat: String, file: String, width: Int, version: String) async throws -> URL {
+        guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
+        var request = try get(Self.devicePath(device, "/api/file/thumb"),
+                              query: [("app", app), ("id", chat), ("file", file), ("w", "\(width)"),
+                                      ("v", version.isEmpty ? nil : version)], deadline: 60)
+        request.headers["Accept"] = "*/*"
+        let answer = try await files.download(request, limit: Self.thumbLimit, progress: nil)
         if answer.status == 401 { try? vault?.write(origin.key, nil) }
         guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
         return saved

@@ -28,6 +28,10 @@ enum LaunchOptions {
     /// be looked at without a real computer. Off by default: the screenshots' rows and tree stay as 0.8.0 had them.
     nonisolated static var agentsDemo: Bool { flag("-TeleplyDemoAgents") }
 
+    /// -TeleplyDemoFiles: the local demo also lists 文件预览示例 (file-preview design §6.1). Off by default, so the
+    /// screenshot tour's rows stay as they were.
+    nonisolated static var filesDemo: Bool { flag("-TeleplyDemoFiles") }
+
     /// -TeleplyForceNarrow: the iPad screenshot tour's narrow window, drawn as a phone-wide column on an iPad.
     static var forceNarrow: Bool { flag("-TeleplyForceNarrow") }
 
@@ -65,7 +69,7 @@ nonisolated final class DemoHolder: Sendable {
     func fresh() -> any RelayTransport {
         let next = LaunchOptions.siteShots
             ? DemoWorld(site: DemoSite(english: LaunchOptions.english))
-            : DemoWorld(testingAgent: LaunchOptions.agentsDemo)
+            : DemoWorld(testingAgent: LaunchOptions.agentsDemo, filesDemo: LaunchOptions.filesDemo)
         next.network = chosen.withLock { $0 }
         world.withLock { $0 = next }
         return DemoTransport(world: next)

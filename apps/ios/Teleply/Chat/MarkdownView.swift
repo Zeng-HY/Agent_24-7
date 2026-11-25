@@ -12,19 +12,34 @@ private enum MarkdownCache {
     private static var kept = 0
     private static var clock = 0
 
-    static func blocks(_ source: String) -> [MarkdownBlock] {
+    static func blocks(_ source: String, files: [FileRef]? = nil, notes: [FileNote] = []) -> [MarkdownBlock] {
+        let key = cacheKey(source, files, notes)
         clock += 1
-        if let hit = entries[source] {
-            entries[source]?.used = clock
+        if let hit = entries[key] {
+            entries[key]?.used = clock
             return hit.blocks
         }
-        let parsed = MarkdownReader.blocks(source)
-        let size = source.utf8.count
+        let parsed = MarkdownReader.answerBlocks(source, files: files, notes: notes)
+        let size = key.utf8.count
         guard size <= room / 4 else { return parsed }
-        entries[source] = (parsed, clock)
+        entries[key] = (parsed, clock)
         kept += size
         if kept > room { trim() }
         return parsed
+    }
+
+    /// One text with an older computer's answer is the key; with a computer's files, what the drawings and links rest on
+    /// is part of it, so a file that changed its `v` is parsed again.
+    private static func cacheKey(_ source: String, _ files: [FileRef]?, _ notes: [FileNote]) -> String {
+        guard let files else { return source }
+        var key = source + "\u{1F}files"
+        for file in files {
+            key += "\u{1F}\(file.id)|\(file.path)|\(file.version)|\(file.view)|\(file.thumb ? 1 : 0)|\(file.kind)"
+            key += "|" + file.texts.joined(separator: "\u{1E}")
+        }
+        key += "\u{1F}notes"
+        for note in notes { key += "\u{1F}\(note.href)|\(note.reason)" }
+        return key
     }
 
     /// Drops the least recently used texts until a quarter of the room is free, so this runs once in many misses.
@@ -36,7 +51,6 @@ private enum MarkdownCache {
         }
     }
 }
-
 /// How a message's text looks: answers 16 pt at line height 1.7; links and inline code take the colours the
 /// surface needs (the blue user bubble has its own).
 struct MarkdownLook {
@@ -45,29 +59,37 @@ struct MarkdownLook {
 }
 
 /// Native Markdown blocks in the web's reading style (spec 4.3, 8.3; Android Markdown.kt): headings, paragraphs,
-/// code panels, quotes, lists, tables and rules. HTML stays text and is never run; images are not loaded.
+/// code panels, quotes, lists, tables and rules. HTML stays text and is never run. With the answer's `files` (§5.1), a
+/// picture the computer can thumb is drawn in place and a link opens that very entry; without them (an older computer)
+/// the text is exactly 0.9.0's.
 struct MarkdownView: View {
     let source: String
     var look = MarkdownLook()
     /// Answers take the reading width; a bubble hugs its text.
     var fill = true
+    /// The answer's files and the reasons for those it cannot give (§5.1, §6.4); nil is an older computer.
+    var files: [FileRef]? = nil
+    var notes: [FileNote] = []
+    /// How a picture in the text is fetched: its entry and a width, as a file on this phone (§6.1).
+    var thumb: ((FileRef, Int) async -> URL?)? = nil
 
     var body: some View {
-        let blocks = MarkdownCache.blocks(source)
+        let blocks = MarkdownCache.blocks(source, files: files, notes: notes)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                MarkdownBlockView(block: block, first: index == 0, look: look)
+                MarkdownBlockView(block: block, first: index == 0, look: look, files: files, notes: notes, thumb: thumb)
             }
         }
         .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
     }
 }
 
-/// Inline runs as styled text: bold, italic, code, strikethrough and links that open in the browser. The page's
-/// font applies, so it grows with the system text size.
-func styledText(_ runs: [InlineRun], look: MarkdownLook) -> AttributedString {
+/// Inline runs as styled text: bold, italic, code, strikethrough and links that open in the browser or, with an
+/// answer's files, that very file's page. A code or path file's words become links too (§5.1 `texts`); words already
+/// in a link keep that one. The page's font applies, so it grows with the system text size.
+func styledText(_ runs: [InlineRun], look: MarkdownLook, files: [FileRef]? = nil) -> AttributedString {
     var result = AttributedString()
-    for run in runs {
+    for run in linkingFileTexts(runs, files: files) {
         var piece = AttributedString(run.text)
         var intent: InlinePresentationIntent = []
         if run.bold { intent.insert(.stronglyEmphasized) }
@@ -78,8 +100,9 @@ func styledText(_ runs: [InlineRun], look: MarkdownLook) -> AttributedString {
         if run.code { piece.backgroundColor = look.code }
         if let link = run.link, let url = URL(string: link) {
             piece.link = url
-            piece.foregroundColor = look.link
         }
+        if run.muted { piece.foregroundColor = Palette.muted }
+        else if run.link != nil { piece.foregroundColor = look.link }
         result += piece
     }
     return result
@@ -89,23 +112,42 @@ private struct MarkdownBlockView: View {
     let block: MarkdownBlock
     let first: Bool
     let look: MarkdownLook
+    let files: [FileRef]?
+    let notes: [FileNote]
+    let thumb: ((FileRef, Int) async -> URL?)?
 
     var body: some View {
         switch block {
         case .heading(let level, let runs):
             Group {
                 switch level {
-                case 1: Text(styledText(runs, look: look)).scaledFont(18, .semibold, relativeTo: .title3, lineHeight: 1.45)
-                case 2: Text(styledText(runs, look: look)).scaledFont(16, .semibold, relativeTo: .headline, lineHeight: 1.5)
-                default: Text(styledText(runs, look: look)).scaledFont(16, .semibold, relativeTo: .body, lineHeight: 1.7)
+                case 1: Text(styledText(runs, look: look, files: files)).scaledFont(18, .semibold, relativeTo: .title3, lineHeight: 1.45)
+                case 2: Text(styledText(runs, look: look, files: files)).scaledFont(16, .semibold, relativeTo: .headline, lineHeight: 1.5)
+                default: Text(styledText(runs, look: look, files: files)).scaledFont(16, .semibold, relativeTo: .body, lineHeight: 1.7)
                 }
             }
             .padding(.top, first ? 0 : 8)
             .accessibilityAddTraits(.isHeader)
         case .paragraph(let runs):
-            Text(styledText(runs, look: look))
+            Text(styledText(runs, look: look, files: files))
                 .readingFont()
                 .fixedSize(horizontal: false, vertical: true)
+        case .pictureParagraph(let pieces):
+            // A picture where the answer put it, with the words before and after it (§6.1).
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                    switch piece {
+                    case .words(let runs):
+                        if !runs.isEmpty {
+                            Text(styledText(runs, look: look, files: files))
+                                .readingFont()
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    case .picture(let file):
+                        AnswerPicture(file: file, thumb: thumb)
+                    }
+                }
+            }
         case .code(let language, let text):
             CodePanel(label: language.isEmpty ? "代码" : language, code: text,
                       copyLabel: language.isEmpty ? "复制代码" : "复制 \(language) 代码")
@@ -114,7 +156,7 @@ private struct MarkdownBlockView: View {
                 Rectangle().fill(Palette.line).frame(width: 3)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(children.enumerated()), id: \.offset) { _, child in
-                        MarkdownBlockView(block: child, first: false, look: look)
+                        MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb)
                     }
                 }
             }
@@ -128,7 +170,7 @@ private struct MarkdownBlockView: View {
                             .frame(minWidth: 20, alignment: .leading)
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(item.enumerated()), id: \.offset) { _, child in
-                                MarkdownBlockView(block: child, first: false, look: look)
+                                MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb)
                             }
                         }
                     }

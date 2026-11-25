@@ -35,6 +35,8 @@ struct ConversationView: View {
     @State private var geo = ProbeGeometry()
     /// The question bar's tap moves VoiceOver to the first card too (spec 7).
     @AccessibilityFocusState private var cardFocused: Bool
+    /// A grey note tapped in an answer: its whole reason shows over the page (§6.4).
+    @State private var answerReason: FileNote?
 
     var body: some View {
         let control = model.conversation.control
@@ -47,6 +49,7 @@ struct ConversationView: View {
         let actions = MessageActions(select: { message in model.whole(message) { selecting = $0 } }, expand: { model.expand($0) },
                                      diff: { model.workspace.diff($0) }, files: { model.workspace.filesOf(message: $0) },
                                      thread: { model.openCreated($0) }, picture: { await model.workspace.sentPicture($0, whole: $1) },
+                                     thumb: { await model.workspace.answerThumb($0, width: $1) },
                                      whole: { model.whole($0, $1) }, share: { sharing = $0 }, busy: busy)
         let submissions = model.conversation.submissions
         let receipts = Dictionary(submissions.filter { !$0.request.isEmpty }.map { ($0.request, $0.label) }, uniquingKeysWith: { first, _ in first })
@@ -188,12 +191,24 @@ struct ConversationView: View {
                     .presentationDetents([.medium, .large])
             }
         }
-        // A file an answer links to opens its page, to look at or save (web: the link downloads it).
+        // A file an answer links to opens its page, to look at or save (web: the link downloads it). A newer
+        // computer's entry opens its own page with that very row; a grey note shows its whole reason (§6.1, §6.4).
         .environment(\.openURL, OpenURLAction { url in
+            if let note = answerNote(url) {
+                answerReason = note
+                return .handled
+            }
+            if let file = answerItem(url) {
+                model.workspace.openAnswerFile(file)
+                return .handled
+            }
             guard let path = MarkdownReader.fileLinkPath(url) else { return .systemAction }
             model.workspace.openLinkedFile(path)
             return .handled
         })
+        .alert(item: $answerReason) { note in
+            Alert(title: Text("这个文件为什么打不开"), message: Text(note.full), dismissButton: .default(Text("知道了")))
+        }
         .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } }),
                onDismiss: {
                    // 从电脑选择文件 from an empty 对话文件: its sheet comes once this one has gone.

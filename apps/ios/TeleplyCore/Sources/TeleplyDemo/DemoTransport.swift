@@ -60,6 +60,13 @@ public struct DemoTransport: RelayFileTransport {
         case "fixture-png": Data(base64Encoded: DemoData.png) ?? Data()
         case "fixture-docx", "fixture-report": DemoData.docx
         case "fixture-download": Data(DemoData.computerFile.utf8)
+        // 文件预览示例's own files: pictures are the fixed PNG, the PDF a one-page one, the spreadsheet the fixed
+        // workbook, and the R script and the note read here.
+        case "fp-chart", "fp-logo", "fp-shot-1", "fp-shot-2": Data(base64Encoded: DemoData.png) ?? Data()
+        case "fp-contract": Data(base64Encoded: DemoData.pdf, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-budget": Data(base64Encoded: DemoData.xlsx, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-run", "fp-analysis": Data(DemoData.previewSource.utf8)
+        case "fp-report": Data(DemoData.previewReport.utf8)
         default: Data(DemoData.textFile(file).utf8)
         }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-demo-\(UUID().uuidString)")
@@ -261,10 +268,20 @@ public struct DemoTransport: RelayFileTransport {
             return Self.json(world.voiceTerms(nil))
         case "/api/chat/files":
             // DeepSeek's presented file is listed too; asked for one message, only that message's files.
+            if query["message"] == "fp-2" { return Self.json(["items": .array(DemoData.previewFiles.map { $0.pageJSON })]) }
             let all = world.site?.files ?? (DemoData.files + (app == "deepseek" ? [DemoData.deliverable] : []))
             let message = query["message"] ?? ""
             return Self.json(["items": .array(message.isEmpty ? all : all.filter { $0["message_id"].string() == message })])
         case "/api/file/meta":
+            // 文件预览示例's files: the answer's own entry says what the page shows.
+            if let file = DemoData.previewFile(query["file"] ?? "") {
+                var meta: [String: JSONValue] = ["kind": .string(file.kind),
+                                                 "name": .string(file.name),
+                                                 "state": .string(file.state.isEmpty ? "current" : file.state),
+                                                 "size": .number(Double(file.size))]
+                if !file.preview.isEmpty { meta["preview"] = .string(file.preview) }
+                return Self.json(.object(meta))
+            }
             // A computer file's ticket: always a download, as remote.py answers for pc.… tickets.
             if query["file"] == "fixture-download" {
                 return Self.json(["kind": "download", "name": "遥应下载测试.txt", "state": "current", "size": .number(Double(Data(DemoData.computerFile.utf8).count))])
