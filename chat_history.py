@@ -683,7 +683,7 @@ class History:
                 hits.append({'id':m['id'],'role':m['role'],'origin':m.get('origin'),'time':m.get('time'),'snippet':m['text'][max(0,at-60):at+len(query)+100]})
             more=offset+limit<len(hits)
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
-    def list_files(self,app,tid,message_id=None,fresh=True):
+    def list_files(self,app,tid,message_id=None,fresh=False):
         from agents import registry
         item,entry=self.transcript(app,tid)
         agent=getattr(entry,'agent',None) or registry.get(app)

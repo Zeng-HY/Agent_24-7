@@ -474,13 +474,13 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - `/api/chat/files` 用同一套结果；老字段都在，新字段照 §5.1；`message=` 时同一个文件的每个 `index` 各一行（各自的 `id`），整个对话按路径去重。`History.file()` 仍每次重新走 `list_files()` 的策略复查。
 - `message_files.references`、`absolute_links` 改成 `answer_files` 的薄包装。
 
-审后修（11-25）：`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余照旧不给；盘符列表缓存 30 秒，`file_policy.inspect` 的路径结果缓存 5 秒（时钟可注入，`History.file()` 用 `fresh=True` 绕过读缓存、仍每次重新检查）；`updated` 恢复成一旦发现就一直保持；同样文字的消息共用一次 `answer_files.scan`（`History` 里最多 256 条），所以一万条编造对话第一次列文件从 **4.8 秒降到约 0.10 秒**。
+审后修（11-25）：`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余照旧不给；盘符列表缓存 30 秒，`file_policy.inspect` 的路径结果缓存 5 秒（时钟可注入，`History.file()` 用 `fresh=True` 绕过读缓存、仍每次重新检查；`/api/chat/files` 用缓存）；`updated` 恢复成一旦发现就一直保持；同样文字的消息共用一次 `answer_files.scan`（`History` 里最多 256 条）。
 
 测试：`tests/test_file_policy.py` 52 个通过、1 个符号链接用例跳过（Windows 不许建链接）；`tests/test_answer_files_history.py` 13 个通过（三个出口、空 `files`、`file_notes`、SendUserFile 两种位置、DeepSeek 成果、缓存、同文共用、刷新后仍能称重、updated 保持）；`tests/test_answer_files.py` 80 个、第一段两个旧文件测试也通过。
 
 完整 pytest（第二段当时，工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**；审后修和第三段之后的最终结果见第三段。
 
-速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接的对话，只有两个不同文件）：修前第一次出一页 **0.085 秒**、第一次列整个对话文件 **4.78 秒**；修后 **0.026 秒**和 **0.105 秒**，缓存后再列 0.09 秒、再出页 0.018 秒。脚本在 DeepSeek 工作区，没有提交。
+速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接、只有两个不同文件）：**同一段文字重复**时第一次列文件从 4.78 秒降到约 0.105 秒，第一次出页 0.026 秒；**每条文字都不同**时第一次出页 0.066 秒、第一次列整个对话 **5.53 秒**，缓存后再列 0.072 秒、再出页 0.018 秒。同文共用只对重复文字有效；真实对话由主会话另行用真实数据量过（最大几个 0.7 秒内）。脚本在 DeepSeek 工作区，没有提交。
 
 旧测试的有意改动：
 
