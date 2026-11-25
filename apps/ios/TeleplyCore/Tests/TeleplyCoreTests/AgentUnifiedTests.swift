@@ -205,9 +205,9 @@ struct AgentUnifiedTests {
         let pending = pendingCards(app: "testing", raw: state)
         #expect(pending.map(\.kind) == ["approval"])
         #expect(pending.first?.summary == "测试助手想运行命令" && pending.first?.count == 1)
-        let cards = inlineCards(app: "testing", raw: state)
+        let cards = genericCards(state)
         #expect(cards.count == 1)
-        #expect(cards.first?.id.hasPrefix("generic:approval-7") == true)
+        #expect(cards.first?["id"].string() == "approval-7")
         // Its own title, else the first question's header, else the assistant's name and the kind.
         let header = JSONValue.object(["id": "c", "status": "pending", "kind": "question",
                                        "questions": .array([.object(["id": "q", "header": "选一个方案", "question": "用哪个？",

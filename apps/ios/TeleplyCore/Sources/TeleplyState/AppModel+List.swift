@@ -315,17 +315,65 @@ extension AppModel {
         catalog.info(app ?? self.app).ui.cardLayout
     }
 
-    /// Whether any assistant this computer has can do [capability]: the pages that are worth showing at all.
-    public func hasAny(_ capability: String) -> Bool {
-        (knownApps ?? []).contains { catalog.caps($0).flag(capability) ?? false }
-    }
-
     /// What the composer says while a new assistant cannot take a message now (its app closed, say); nil when it can.
     public func sendBlockedNote(_ app: String? = nil) -> String? {
         let id = app ?? self.app
         guard isGeneric(id), capabilities(id).sendModes.isEmpty else { return nil }
         let note = capabilityNote("send", app: id)
         return note.isEmpty ? "这个对话现在不能从手机发消息，请在电脑上处理" : note
+    }
+
+    // The buttons of the three old assistants never changed (handoff 0 and 3.4): their expressions are exactly the
+    // ones they had before any capability was read. Only an assistant whose layout is not one of the three's goes by
+    // what its manifest (and its conversation's `capabilities_now`) allows.
+
+    /// 停止这一轮: the three always had it; a new assistant needs `stop` now.
+    public func offersStop(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? can("stop", app: id) : true
+    }
+
+    /// The composer's queue tray / 发送并排队: the three always had the state say (`queue_available`); a new one
+    /// needs `queue` in its send modes now.
+    public func offersQueue(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? can("queue", app: id) : true
+    }
+
+    /// Whether the composer may send at all: a new assistant needs a send mode now; the three never asked.
+    public func offersSend(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? !capabilities(id).sendModes.isEmpty : true
+    }
+
+    /// ＋ and its menu: the three always had it; a new one needs `attachments`.
+    public func offersAttachments(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? can("attachments", app: id) : true
+    }
+
+    /// 电脑上打开, in the ⋯ menu and the away chip: the three always had it; a new one needs `open`.
+    public func offersOpenOnComputer(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? can("open", app: id) : true
+    }
+
+    /// The ⋯ menu's 用量: the three had it but DeepSeek's (11-17: it has no plan limits); a new one needs `usage`.
+    public func showsUsage(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? can("usage", app: id) : id != "deepseek"
+    }
+
+    /// The composer's `/` list: the three always offered it; a new one needs `slash_commands`.
+    public func allowsCommands(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? can("slash_commands", app: id) : true
+    }
+
+    /// The composer's `$` list and 引用技能: the three never had it only for DeepSeek; a new one needs its skills.
+    public func allowsSkills(_ app: String? = nil) -> Bool {
+        let id = app ?? self.app
+        return isGeneric(id) ? skillsAvailable(capabilities(id), layout: cardLayout(id)) : id != "deepseek"
     }
 
     // MARK: The sidebar tree (spec 4.2)

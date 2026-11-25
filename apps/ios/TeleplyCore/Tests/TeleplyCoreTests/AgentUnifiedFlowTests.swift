@@ -46,7 +46,7 @@ struct AgentUnifiedFlowTests {
         try await open(model, "test-waiting")
         #expect(model.conversation.control.questions)
         #expect(pendingCards(app: "testing", raw: model.conversation.control.raw).first?.summary == "测试助手想运行命令")
-        #expect(inlineCards(app: "testing", raw: model.conversation.control.raw).count == 1)
+        #expect(genericCards(model.conversation.control.raw).count == 1)
         let paths = await watched.log.items.map(\.url.path)
         #expect(paths.contains("/d/\(a)/api/agents/testing/state"))
         // 批准 goes to the card's own address with this request's id and the chosen option.
@@ -62,7 +62,7 @@ struct AgentUnifiedFlowTests {
         #expect(body["id"].string() == "test-waiting")
         #expect(body["question_id"].string() == DemoData.testingApprovalID)
         #expect(body["answers"]["decision"].array.map { $0.string() } == ["允许一次"])
-        #expect(body["request_id"].string()?.isEmpty == false)
+        #expect(!body["request_id"].string().isEmpty)
     }
 
     @Test func aSendGoesToItsOwnAddressAndItsReceiptIsRead() async throws {
@@ -78,7 +78,7 @@ struct AgentUnifiedFlowTests {
         #expect(body["id"].string() == "test-waiting")
         #expect(body["text"].string() == "跑一下测试")
         #expect(body["intent"].string() == "send")  // Antigravity's only send mode
-        #expect(body["request_id"].string()?.isEmpty == false)
+        #expect(!body["request_id"].string().isEmpty)
         let record = try #require(model.conversation.submissions.first)
         #expect(record.label == "已接收")
         // The receipt at its own address says the computer found it: 已送达.
@@ -179,4 +179,87 @@ struct AgentUnifiedFlowTests {
         }
         #expect(status == 404)
     }
+
+    // MARK: The three's buttons do not follow capabilities_now (handoff 3.4, second review)
+
+    @Test func theThreeKeepEveryButtonWhateverTheStateSays() async throws {
+        let model = makeAgentModel(AllOffTransport(world: DemoWorld(), paths: ["/api/codex/state"]))
+        await enterA(model)
+        let row = try #require(model.chats.first { $0.app == "codex" && $0.id == "demo" })
+        model.open(row)
+        await model.settle()
+        await until { model.conversation.control.available }
+        #expect(model.conversation.control.available)
+        // The state really did turn everything off (the display narrows for anyone), yet the three's buttons are the
+        // ones they always had.
+        #expect(!model.capabilities("codex").stop)
+        #expect(model.capabilities("codex").sendModes.isEmpty)
+        #expect(model.offersStop("codex"))
+        #expect(model.offersQueue("codex"))
+        #expect(model.offersSend("codex"))
+        #expect(model.offersAttachments("codex"))
+        #expect(model.offersOpenOnComputer("codex"))
+        #expect(model.showsUsage("codex"))
+        #expect(model.allowsCommands("codex"))
+        #expect(model.allowsSkills("codex"))
+        // DeepSeek's own rules are the ones they had: no 用量, no $.
+        #expect(!model.showsUsage("deepseek"))
+        #expect(!model.allowsSkills("deepseek"))
+        #expect(model.sendBlockedNote("codex") == nil)
+    }
+
+    @Test func aNewAssistantsButtonsFollowItsState() async throws {
+        let model = makeAgentModel(AllOffTransport(world: DemoWorld(testingAgent: true), paths: ["/api/agents/testing/state"]))
+        await enterA(model)
+        let row = try #require(model.chats.first { $0.app == "testing" && $0.id == "test-waiting" })
+        model.open(row)
+        await model.settle()
+        await until { model.conversation.control.available }
+        #expect(model.conversation.control.available)
+        #expect(!model.offersStop("testing"))
+        #expect(!model.offersQueue("testing"))
+        #expect(!model.offersSend("testing"))
+        #expect(!model.offersAttachments("testing"))
+        #expect(!model.offersOpenOnComputer("testing"))
+        #expect(!model.showsUsage("testing"))
+        #expect(!model.allowsCommands("testing"))
+        #expect(!model.allowsSkills("testing"))
+        #expect(model.sendBlockedNote("testing") != nil)
+        #expect(model.sendBlockedNote("codex") == nil)
+    }
+}
+
+/// The demo computer with one conversation's state narrowed to nothing: `capabilities_now` turns every flag off and
+/// empties every list, as a computer whose assistant is not open would. The three must not notice; a new assistant
+/// must lose the buttons.
+struct AllOffTransport: RelayTransport {
+    let demo: DemoTransport
+    let paths: [String]
+
+    init(world: DemoWorld, paths: [String]) {
+        demo = DemoTransport(world: world)
+        self.paths = paths
+    }
+
+    func send(_ request: RelayRequest) async throws -> RelayResponse {
+        let response = try await demo.send(request)
+        guard response.status == 200, paths.contains(where: { request.url.path.hasSuffix($0) }),
+              var fields = (try? JSONValue.parse(response.body))?.object else { return response }
+        fields["capabilities_now"] = [
+            "list": true, "read": true, "search": true, "open": false, "stop": false, "queue": false, "steer": false,
+            "approve": false, "answer": false, "new": true, "new_projectless": true, "new_permission": false,
+            "archive": false, "restore": false, "delete": false, "usage": false, "waiting": false,
+            "attachments": false, "slash_commands": false, "skills": false, "send_modes": [], "settings": [],
+        ]
+        fields["capability_notes"] = ["send": "电脑上的助手没开", "stop": "电脑上的助手没开"]
+        return RelayResponse(status: 200, headers: ["content-type": "application/json"],
+                             body: (try? JSONValue.object(fields).encoded()) ?? response.body)
+    }
+}
+
+@MainActor
+func makeAgentModel(_ transport: any RelayTransport) -> AppModel {
+    AppModel(services: AppServices(store: LocalStore(folder: temporaryFolder()), vault: MemoryCookieVault(),
+                                   transport: transport, demo: { DemoTransport() }, pacer: IdlePacer(),
+                                   newScope: { "scope-1" }))
 }

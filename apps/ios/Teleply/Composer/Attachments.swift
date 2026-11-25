@@ -42,12 +42,10 @@ struct AttachButton: View {
 
     var body: some View {
         let workspace = model.workspace
-        // What this assistant takes (handoff 3.4): pictures only when its manifest allows attachments; a new
-        // assistant takes no files, references or skills, and its new conversation no pictures yet.
-        let caps = model.capabilities(app)
+        // The three keep their menu exactly as it was; a new assistant takes pictures only, when its manifest allows
+        // attachments, and its new conversation takes none (handoff 3.4).
         let generic = model.isGeneric(app)
         let onNew = workspace.key?.chat == "@new"
-        let skills = !generic && skillsAvailable(caps, layout: model.cardLayout(app))
         let mostImages = AgentCatalogSnapshot.current.info(app).params.maxImages
         Group {
             if generic && onNew {
@@ -55,7 +53,7 @@ struct AttachButton: View {
                 EmptyView()
             } else {
                 Menu {
-                    if caps.attachments {
+                    if model.offersAttachments(app) {
                         Button("拍照", systemImage: "camera") { openCamera() }
                         Button("手机照片", systemImage: "photo.on.rectangle") {
                             openedFor = workspace.key
@@ -69,7 +67,7 @@ struct AttachButton: View {
                         }
                         Button("从电脑选择文件", systemImage: "desktopcomputer") { workspace.openPicker("remote") }
                         Button("引用对话", systemImage: "bubble.left.and.bubble.right") { workspace.openPicker("chat") }
-                        if skills {
+                        if model.allowsSkills(app) {
                             Button("引用技能", systemImage: "wand.and.stars") { workspace.openPicker("skill") }
                         }
                     }

@@ -17,10 +17,7 @@ struct ArchivedView: View {
         let items = data?["items"].array ?? []
         let deletable = Set((data?["deletable"].array ?? []).map { $0.string() })
         let apps = (data?["apps"].array ?? []).map { $0.string() }
-        // A new assistant that cannot restore or delete says so with its manifest; the three are unchanged (3.4).
-        let canDelete = items.filter {
-            $0["can_delete"].bool() && deletable.contains($0["app"].string()) && model.can("delete", app: $0["app"].string())
-        }
+        let canDelete = items.filter { $0["can_delete"].bool() && deletable.contains($0["app"].string()) }
         List {
             Section {
                 if busy { ProgressView().frame(maxWidth: .infinity) }
@@ -61,10 +58,8 @@ struct ArchivedView: View {
                 Section(Labels.sourceName(group.app, catalog: model.catalog)) {
                     ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
                         let key = row["app"].string() + ":" + row["id"].string()
-                        ArchivedRow(row: row, picked: picked.contains(key),
-                                    canPick: row["can_delete"].bool() && deletable.contains(row["app"].string())
-                                        && model.can("delete", app: row["app"].string()) && !busy,
-                                    enabled: !busy && model.can("restore", app: row["app"].string())) {
+                        ArchivedRow(row: row, picked: picked.contains(key), canPick: row["can_delete"].bool() && deletable.contains(row["app"].string()) && !busy,
+                                    enabled: !busy) {
                             if picked.contains(key) { picked.remove(key) } else { picked.insert(key) }
                         } restore: {
                             restore(row)

@@ -178,14 +178,12 @@ struct ComposerCard: View {
         let chat = model.conversation
         let saved = model.workspace.saved
         let app = chat.key?.app ?? model.app
-        // What this assistant can do now (handoff 3.4): its manifest narrowed by the conversation's state.
-        let caps = model.capabilities(app)
-        let queue = chat.control.running && chat.control.queueAvailable && caps.sendModes.contains("queue")
+        // The three keep exactly the buttons they had; only a new assistant goes by what it can do now (handoff 3.4).
+        let queue = chat.control.running && chat.control.queueAvailable && model.offersQueue(app)
         let words = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let extras = !saved["uploads"].array.isEmpty || !saved["references"].array.isEmpty
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
-        // A new assistant with no send mode now (its app closed) cannot take one.
-        let reachable = (chat.control.available && !caps.sendModes.isEmpty) || sendsWhileAway(app)
+        let reachable = (chat.control.available && model.offersSend(app)) || sendsWhileAway(app)
         let canSend = chat.ready && reachable && !chat.submitting && (!words.isEmpty || extras) && words.count <= 20_000
         // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
         let newPage = isNewPage(chat.key?.chat)
@@ -260,8 +258,7 @@ struct ComposerCard: View {
     /// (Android); at the largest text sizes they take their own line above ＋. Send keeps its size.
     private var controls: some View {
         let app = model.conversation.key?.app ?? model.app
-        let caps = model.capabilities(app)
-        let showsAttach = caps.attachments || !model.isGeneric(app)
+        let showsAttach = model.offersAttachments(app)
         let row = ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) { chips }
         }
@@ -289,10 +286,9 @@ struct ComposerCard: View {
         let spot = cursor()
         guard spot.0 == spot.1, let found = composerTrigger(text, cursor: spot.1) else { return nil }
         let app = chat.key?.app ?? model.app
-        let caps = model.capabilities(app)
-        // What the computer offers now decides (handoff 3.4): / only with slash commands, $ only with skills.
-        if found.kind == .command, !caps.slashCommands { return nil }
-        if found.kind == .skill, !skillsAvailable(caps, layout: model.cardLayout(app)) { return nil }
+        // What the three always offered: `/` to all, `$` to all but DeepSeek. A new assistant asks its manifest.
+        if found.kind == .command, !model.allowsCommands(app) { return nil }
+        if found.kind == .skill, !model.allowsSkills(app) { return nil }
         return found
     }
 
@@ -318,13 +314,12 @@ struct ComposerCard: View {
     private var chips: some View {
         let app = model.conversation.key?.app ?? model.app
         let raw = model.conversation.control.raw
-        let caps = model.capabilities(app)
         let labels = chipLabels(app: app, raw: raw, saved: model.workspace.saved)
         let narrow = width + 24 < 370
         let modeName = app == "deepseek" ? "权限" : "模式"
         let generic = model.isGeneric(app)
         return Group {
-            if chipAway(app: app, raw: raw) && (caps.open || !generic) {
+            if chipAway(app: app, raw: raw) && model.offersOpenOnComputer(app) {
                 // Not open on the computer: the chip opens it there; its menus would act on another conversation
                 // (web codex-ui.js, claude-ui.js "away").
                 Button { model.workspace.openOnComputer() } label: {

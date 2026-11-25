@@ -232,8 +232,11 @@ public final class ChatModel {
                 }
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     if key.app != "codex" {
-                        // The interval its manifest asks for (`params.refresh_ms`); the three's own as before.
-                        let every = Duration.milliseconds(Int64(AgentCatalogSnapshot.current.info(key.app).params.refreshMs))
+                        // The three keep their own constants (Claude 5 s, DeepSeek 2.5 s); a new assistant uses the
+                        // interval its manifest asks for (`params.refresh_ms`, handoff 3.4).
+                        let every = AgentCatalogSnapshot.current.isLegacy(key.app)
+                            ? (key.app == "claude" ? Duration.seconds(5) : Duration.milliseconds(2_500))
+                            : Duration.milliseconds(Int64(AgentCatalogSnapshot.current.info(key.app).params.refreshMs))
                         group.addTask { [weak self] in try await self?.poll(key, client, t, every) }
                     }
                     group.addTask { [weak self] in try await self?.listen(key, client, t) }
