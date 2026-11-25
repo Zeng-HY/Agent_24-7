@@ -215,20 +215,15 @@ public final class ChatModel {
             do {
                 connection = "正在核对实时状态"
                 control.available = false
-                // 第一段 (handoff 3.4): a new assistant's state and its actions live at /api/agents/<id>/…, which the
-                // second step brings. Until then its conversation only reads and follows the live stream: no state
-                // read (it has none at the old address), no poll, so no wrong "连接中断" line over a readable page.
-                let stateful = AgentCatalogSnapshot.current.isLegacy(key.app)
-                if stateful {
-                    let state = try await client.control(device: key.device, app: key.app, chat: key.chat)
-                    guard t == token else { return }
-                    take(state, key)
-                    // Recovery reads receipts only; nothing is sent again.
-                    for record in submissions where unsettledLabels.contains(record.label) || record.action == "stop" {
-                        try? await reconcile(record, client)
-                    }
-                    guard t == token else { return }
+                // A new assistant reads its state at its own address (handoff 3.4); the three keep theirs.
+                let state = try await client.control(device: key.device, app: key.app, chat: key.chat)
+                guard t == token else { return }
+                take(state, key)
+                // Recovery reads receipts only; nothing is sent again.
+                for record in submissions where unsettledLabels.contains(record.label) || record.action == "stop" {
+                    try? await reconcile(record, client)
                 }
+                guard t == token else { return }
                 // The local demo has no live stream (Android: an empty flow).
                 if synthetic {
                     connection = "本地固定场景"
@@ -236,8 +231,9 @@ public final class ChatModel {
                     return
                 }
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    if stateful && key.app != "codex" {
-                        let every: Duration = key.app == "claude" ? .seconds(5) : .milliseconds(2_500)
+                    if key.app != "codex" {
+                        // The interval its manifest asks for (`params.refresh_ms`); the three's own as before.
+                        let every = Duration.milliseconds(Int64(AgentCatalogSnapshot.current.info(key.app).params.refreshMs))
                         group.addTask { [weak self] in try await self?.poll(key, client, t, every) }
                     }
                     group.addTask { [weak self] in try await self?.listen(key, client, t) }
@@ -458,6 +454,10 @@ public final class ChatModel {
     func submit(_ action: String, queue: Bool = false, message: String = "", promote: Bool = false, plan: String? = nil) {
         guard let key, let client else { return }
         let planned = plan != nil
+        // A new assistant's capabilities as this conversation's state narrows them (handoff 3.4): an app that is not
+        // open offers no send mode, so nothing goes out.
+        let generic = !AgentCatalogSnapshot.current.isLegacy(key.app)
+        let caps = generic ? AgentCatalogSnapshot.current.caps(key.app).narrowed(by: control.capabilitiesNow) : AgentCapabilities()
         let words = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if action == "send", !planned, submissions.contains(where: { $0.action == "send" && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ["提交中", "送达状态待确认"].contains($0.label) }) {
             error = "相同内容的原提交尚待确认，请先核对状态，不能重复发送。"
@@ -474,7 +474,12 @@ public final class ChatModel {
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
         let reachable = control.available || action == "send" && !planned && !promote && sendsWhileAway(key.app)
         guard foreground, ready, reachable, !inFlight.contains(key) else { return }
-        if action == "send" && !planned && (words.isEmpty && !hasExtras || words.count > 20_000 || queue && !control.queueAvailable)
+        if generic && action == "send" && !planned && caps.sendModes.isEmpty {
+            let note = control.note("send")
+            error = note.isEmpty ? "这个对话现在不能从手机发消息，请在电脑上处理" : note
+            return
+        }
+        if action == "send" && !planned && (words.isEmpty && !hasExtras || words.count > 20_000 || queue && !(generic ? caps.sendModes.contains("queue") : control.queueAvailable))
             || action == "stop" && !control.running || promote && !control.running || planned && (key.app != "codex" || control.running) {
             return
         }
@@ -501,8 +506,18 @@ public final class ChatModel {
             } else {
                 body["request_id"] = .string(rid)
                 body["text"] = .string(words)
-                body["intent"] = .string(queue ? "queue" : control.running ? "steer" : "auto")
-                if control.running { body["expected_turn"] = .string(control.turn) }
+                if generic {
+                    // `intent` follows the send modes this conversation may use now (Antigravity offers "send" only):
+                    // a running turn takes a message queued, and a send while it runs is still just "send".
+                    let modes = caps.sendModes
+                    let intent = queue && modes.contains("queue") ? "queue"
+                        : control.running && modes.contains("steer") ? "steer" : "send"
+                    body["intent"] = .string(intent)
+                    if control.running && intent == "steer" { body["expected_turn"] = .string(control.turn) }
+                } else {
+                    body["intent"] = .string(queue ? "queue" : control.running ? "steer" : "auto")
+                    if control.running { body["expected_turn"] = .string(control.turn) }
+                }
                 for (name, value) in extra.object { body[name] = value }
             }
         case "stop":
@@ -608,7 +623,11 @@ public final class ChatModel {
                     done.label = "该轮已结束"
                 } else {
                     let state = result["delivery_state"].string()
-                    done.label = receiptLabel(state: state.isEmpty ? (result["accepted"].bool() ? "accepted" : "unknown") : state, result: result, action: action)
+                    // A new assistant's action replies say `ok` (and `accepted` when it took it); the three keep
+                    // their own reading of `accepted` (handoff 3.4).
+                    let generic = !AgentCatalogSnapshot.current.isLegacy(key.app)
+                    let took = result["accepted"].bool() || (generic && result["ok"].bool(or: true))
+                    done.label = receiptLabel(state: state.isEmpty ? (took ? "accepted" : "unknown") : state, result: result, action: action)
                     if action == "send", !result["command"].string().isEmpty {
                         notes[SendNote.command] = result["command"]
                         changed = true
@@ -721,7 +740,13 @@ public final class ChatModel {
         let response = try await client.receipt(device: record.device, app: record.app, chat: record.chat, request: record.request)
         let echoed = response["request_id"].string()
         guard echoed == record.request || echoed.isEmpty && response["state"].string() == "unknown" else { throw ReadFailure("回执身份不匹配") }
-        var label = receiptLabel(state: response["state"].string(), result: response["result"], action: record.action)
+        // Codex and DeepSeek keep what they found under `result`; a new assistant's own receipt puts `delivered`,
+        // `queued` and `stage` at the top (handoff 3.4).
+        let detail = response["result"].isObject ? response["result"] : response
+        let state = response["state"].string()
+        var label = AgentCatalogSnapshot.current.isLegacy(record.app)
+            ? receiptLabel(state: state, result: response["result"], action: record.action)
+            : agentReceiptLabel(state: state, result: detail, action: record.action)
         if record.action == "stop" {
             let state = try await client.control(device: record.device, app: record.app, chat: record.chat)
             switch state.turns[record.turn] {

@@ -220,4 +220,64 @@
 
 ### 第二段
 
+**结论**：3.4 做完了（统一地址的控制态、此刻能力、发送/回执、通用卡片、新建三步、上传，以及按能力位显隐和演示/测试）。三家（Codex / Claude / DeepSeek）的老路由、请求体、回执读法和界面保持不变。本机没有 Swift，**没编译、没跑测试**，等 Codemagic。
+
+**改了的文件**（都在 `apps/ios/` 下；20 改 3 新）
+
+- `TeleplyModel/AgentCatalog.swift`：`AgentCapabilities.narrowed(by:)`（按控制态的 `capabilities_now` 逐键收窄：false 不能变 true、列表取交集、没写的键等于说明书；和安卓 `AgentCaps.capsNow` 一致）、`flag(_:)`（按名字取能力位）、`skillsAvailable(caps:layout:)`。
+- `TeleplyModel/ChatCore.swift`：`Control` 增加 `capabilitiesNow`、`capabilityNotes`、`narrowed(_:)`、`note(_:)`（去空白）；新增 `agentReceiptLabel`（新助手回执的 `delivered`/`queued` 读成「已送达 / 已排队」，三家的 `receiptLabel` 一个字节没动）。
+- `TeleplyModel/Relay.swift`：统一地址 `agentState`（`params.state_timeout_s`）、`agentSend`（`send_timeout_s`）、`agentStop`、`agentQueue`、`agentAnswer`、`agentOpen`（`open_timeout_s`）、`agentReceipt`、`agentOptions`、`agentCreate`（`new_timeout_s`）、`agentCreateState`、`agentUpload`（`params.max_image_bytes`），以及 `agentPath`（先校验 id）。`control` / `command` / `receipt` / `upload` 对 `legacy=false` 走这些地址，三家走原来的分支（同一个函数，原代码未改）。
+- `TeleplyModel/Interaction.swift`：`genericCards`（只认 `status=pending`、有 id、至少一题）、`genericCardTitle`（title → 第一题 header → 「<助手名> 等你批准 / 有问题要问你」）；`pendingCards`、`inlineCards` 为新助手加通用分支。
+- `TeleplyState/AppModel+List.swift`：`capabilities(_:)`（说明书再按当前对话的 `capabilities_now` 收窄）、`can(_:app:)`、`capabilityNote(_:app:)`、`isGeneric(_:)`、`cardLayout(_:)`、`hasAny(_:)`（这台电脑上有没有哪家助手能做某件事）、`sendBlockedNote(_:)`（不能发时输入区的说明）。
+- `TeleplyState/ChatModel.swift`：删掉第一段「新助手不读控制态」的临时处理；统一地址读控制态，轮询间隔改读 `params.refresh_ms`（三家仍是 Claude 5 s、DeepSeek 2.5 s）；发送的 `intent` 按 `send_modes`（Antigravity 只有 `send`，在跑也照发、由电脑排队），`expected_turn` 只在 `steer` 时带；`dispatch` 的动作回执对 `ok` 的新助手算「已接收」；`reconcile` 对新助手用 `agentReceiptLabel`，三家原样。
+- `TeleplyState/WorkspaceModel.swift`：`generic/answer` 走 `agentAnswer`；`openOnComputer` 对新助手走 `agentOpen`；`checkAction` 认 `generic/answer`（卡片还在不在）；`loadChoices` 对新助手不读模型列表。
+- `TeleplyState/WorkspaceModel+New.swift`：新助手的 `options`（项目→文件夹行、模型行只留电脑给的一句话）、`create` 的字段按能力位（`new_projectless` 是否给「无项目」、`new_permission`、`settings` 里有没有 model、不带 references）、必须选项目时的中文提示。
+- `TeleplyState/WorkspaceModel+Uploads.swift`：新助手只收图片、张数 `params.max_images`、单张 `params.max_image_bytes`；新会话的草稿上传不提供。
+- `TeleplyState/NewChatJobs.swift`：新助手的提交走 `create`、核对走 `create/state`；「继续发送」按同一请求号重发 `create`（电脑按请求号只建一次），三家仍走原地址。
+- 新 `Teleply/Chat/GenericCards.swift`：通用卡片（`generic.v1`）：标题、等宽 `detail`（超过 12 行折叠）、1–3 题、选项单选/多选、`isOther` 自由填写、`isSecret` 密码框、批准卡点选项即提交、提问卡「提交」；按 `approve`/`answer` 此刻能力灰掉并显示 `capability_notes` 的原因或「请在电脑上处理」；`expires_at` 过了写「已过时，请在电脑上处理」，为 0 就一直等；失败只把原因显示在卡片下面，不清已选已填。
+- `Teleply/Chat/QuestionCards.swift`：`InlineCard.generic`，按状态画通用卡片。
+- `Teleply/Composer/ComposerView.swift`：能不能发看此刻 `send_modes`（关着的 Antigravity 发送键灰、状态行写电脑的原因）；排队只在 `queue` 模式下；新助手不显示模型/模式 chip；`/` 只在有 `slash_commands` 时、`$` 只在有技能时；附件入口按 `attachments`。
+- `Teleply/Composer/Attachments.swift`：新助手的 ＋ 只有拍照/手机照片（`params.max_images`），没有文件、电脑文件、引用对话/技能；新会话不提供图片。
+- `Teleply/Chat/ConversationView.swift`：停止键看 `stop` 此刻能力；⋯ 菜单里「电脑上打开」「用量」按 `open`/`usage` 显隐（三家不变）。
+- `Teleply/NewChat/NewChatSheet.swift`：项目/模型/权限行按能力位显隐；没有模型时显示电脑给的一句话；「创建并发送」在没有 `new_projectless` 时必须先选项目。
+- `Teleply/Settings/ArchivedView.swift`、`SettingsView.swift`：归档行的恢复/删除按 `restore`/`delete` 显隐；设置里「已归档对话」「用量」只在有相应能力的电脑上出现。
+- 演示（`TeleplyDemo/DemoWorld.swift`、`DemoTransport.swift`）：只在 `testingAgent` 打开时，`testing` 的统一地址照 `agents/testing.py` 回答——控制态（A 在跑、B 等你并带一张批准卡，`capabilities_now` 全开）、发送与回执（在跑排成 queued）、停止、回答（只一次、只收自己的选项）、`options`（一个项目）、`create`/`create/state`（按请求号只建一次）、上传（图片）；关着时这些地址 404，演示的其余回答与 0.8.0 一样。
+- 测试：新 `AgentUnifiedTests.swift`（每个统一地址的网址/查询/超时/请求体、回执文字、能力位收窄、状态里的 `capabilities_now`/原因、通用卡片与问题条、id 校验、三家地址和请求体不变）、新 `AgentUnifiedFlowTests.swift`（演示上整条路：控制态与卡片→回答、发送→回执「已送达」、停止、新建三步、上传、关着时 404）。另把第一段 `AgentHandshakeTests.aNewAssistantsConversationOpensAndReads` 的「只读」断言改成「有控制态、能发、能批」（第一段的临时行为已按要求删掉）。
+
+**自己怎么核对的**（本机没有 Swift，没有编译）
+
+1. 对着电脑端真代码逐项比：`agents/base.py`（`http_get`/`http_post`/`http_upload` 的子路径与参数、`attach_capabilities_now`、`_now_capabilities`、`can_now`、收据形状）、`agents/antigravity.py`（`state` 字段、`send` 的 body/attachments/`delivery_state`、`check`→`delivered/queued/stage`、`_waiting_cards` 的卡片、`new_options`/`create`/`create_status`、上传上限）、`static/generic-ui.js`（标题回退、detail 12 行、单选直提、写字清选项、不能答/过时的说法）、`docs/adding-an-agent.md` §五（回答 body 与 400/409）。
+2. 对着安卓 1.0.10（`RelayApi.kt` 的 `withLegacyFallback` 一支、`AgentCaps.kt`、`ComposerUi`/`ChatUi`）核了「统一地址、`intent` 按 `send_modes`、此刻能力逐键收窄、列表/新建的能力位显隐」。
+3. 逐个文件读过改动（可选值、`switch` 穷尽、`public`、`@MainActor`/`Sendable`）；括号/引号配对脚本对 23 个改动文件 0 问题，原始字符串扫描 0 问题，22 个原始字符串 JSON 字面量都能解析。
+4. 三家不变是「同一个函数里加分支」做到的：`control`/`command`/`receipt`/`upload` 的旧代码原样保留；`ChatModel` 的三家 `intent`/`expected_turn`、回执读法、轮询间隔（5 s / 2.5 s）与原值一致；`receiptLabel` 未改，新助手另用 `agentReceiptLabel`。现有测试里只改了第一段那条「只读」断言（上面已写原因），其余期望值没动。
+
+**最可能编不过的地方**（Codemagic 报错时按这里对）
+
+- `TeleplyCore/Sources/TeleplyModel/Relay.swift:273`（`agentState` 起的十个统一方法；`RelayRequest` 的 `upload:` 与 `origin.url(try …)`）、`:383`（`control` 的三元/guard 分支）、`:419` 起的 `command`（统一分支的 `switch route` 返回值）。
+- `TeleplyCore/Sources/TeleplyModel/AgentCatalog.swift:124`（`narrowed(by:)` 里的局部 `func flag`/`words` 与 `guard let now`简写）、`:190` 起的 `flag(_:)`。
+- `TeleplyCore/Sources/TeleplyModel/ChatCore.swift:56`（`extension Control` 的计算属性与新方法）、`:202`（`agentReceiptLabel`）。
+- `TeleplyCore/Sources/TeleplyModel/Interaction.swift:67`（`genericCards` 的闭包过滤、`genericCardTitle` 的默认参数）。
+- `TeleplyCore/Sources/TeleplyState/ChatModel.swift:219`（统一控制态 + `Duration.milliseconds(Int64(...))`）、`:454`（`submit` 里 `generic`/`caps` 与嵌套三元 intent）、`:629`（`let took` 的 `ok` 回退）、`:736` 起（`reconcile` 里 `let state` 与外层 `state` 同名遮蔽、三元 label）。
+- `TeleplyCore/Sources/TeleplyState/WorkspaceModel+New.swift:75`（`loadAgentOptions` 的 Task 捕获与 `lists`/`newData` 写入）、`:179` 起的 `create`（能力位三元、`ReadFailure` 里的字符串拼接）。
+- `TeleplyCore/Sources/TeleplyState/NewChatJobs.swift:112`（`send` 的弱 `self?` 与 `?? [:]`）、`:236` 起（重发 create 的三元）。
+- `TeleplyCore/Sources/TeleplyState/WorkspaceModel.swift:514`（`action` 的 generic 分支与 `checkAction` 的嵌套三元）。
+- 新 `Teleply/Chat/GenericCards.swift:10`（`QuestionCard` 里混 `ForEach`/`Button`；`GenericQuestion` 的两个尾随闭包 `{…} submit: {…}`；`Group`+`SecureField`/`TextField` 的 `.fieldBox`）。
+- `Teleply/NewChat/NewChatSheet.swift:147`（`modelNote` 返回 `String?`、`Text(LK(note))`）、项目行的 `projectlessAllowed` 参数与 `detail` 嵌套三元。
+- `Teleply/Composer/Attachments.swift:47`（`Group { if … EmptyView() else Menu … }`，`.photosPicker` 挂在 Group 上）。
+- `Teleply/Composer/ComposerView.swift:262` 起（`controls` 里的 `showsAttach`、`chips` 的 `else if !generic`、`StatusLine` 的 `blocked` 优先）。
+- `TeleplyCore/Sources/TeleplyDemo/DemoWorld.swift:259` 起的 `testing*` 六个方法（`withLock` 里返回字典字面量、`(status:reply:)` 元组）、`:985` 起的 `testingApprovalCard`/`testingCapsNow`（`JSONValue` 字面量）。
+- `TeleplyCore/Sources/TeleplyDemo/DemoTransport.swift:76`（`agentRoute` 里先 GET 后 POST 的 `switch`、`let reply` 只在分支里赋值）、`uploaded` 对 testing 的识别。
+- 测试：`AgentUnifiedTests.swift`（`#expect(try await …)`、`#expect(await …count == 1)`、`ReadFailure` 相等比较）、`AgentUnifiedFlowTests.swift`（`until` 的 MainActor 闭包、`#require` 里的闭包、`model.openJob`/`jobs.check`）。
+
+**没做的 / 要用户看的**
+
+- 第三段（3.5、3.6）：推送 `n/k/m`、岛上的名字/颜色、`UsageView` 按能力分组、`README` 的 0.9.0 草稿——都还没做。
+- 通用助手的 `/` 命令**列表**仍走老地址 `composer/commands`（Antigravity 的 `slash_commands` 是 false，所以看不到）；以后哪家开了 true，要接 `/api/agents/<id>/commands`。
+- 新助手的新建对话不收图片（电脑的 `create` 不收），所以新会话面板不给图片；建好之后能发图。
+- 新助手的停止成功后，气泡先写「停止请求已接收，等待轮次确认」，要等回执/状态说停下来了才变「已停止」——真机上要看一眼。
+- 设置里「用量」现在要求这台电脑有助手支持用量：只有 DeepSeek 的电脑不再显示这一节（那页本来只列 Codex 和 Claude）；三家的其它页面不变。
+- 新助手的实时流（`/api/events?app=<新助手>`）没有在真电脑上验过；控制态轮询和实时流在同一个重连循环里（原来的结构），真机上要看它是否也推事件。
+- 演示里 `testing` 只有开着 `-TeleplyDemoAgents`/`DemoWorld(testingAgent: true)` 才有；截图巡览不传这个参数，列表行、树、说明书和 0.8.0 一样。
+- 没推送、没跑 Codemagic、没碰 TestFlight/苹果后台/中转/密钥；版本号没动。
+
 ### 第三段

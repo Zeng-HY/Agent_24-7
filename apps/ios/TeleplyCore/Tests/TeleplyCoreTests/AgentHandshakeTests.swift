@@ -170,8 +170,11 @@ struct AgentHandshakeTests {
         await model.settle()
         #expect(model.screen == .reading && model.app == "testing")
         #expect(model.messages.map(\.text) == ["选一个方案", "请选择 A 或 B"])
-        // 第一段 only reads: the state address of a new assistant comes in the second step, so nothing of it is
-        // available and the composer cannot send (handoff 3.3, 3.4).
-        #expect(!model.conversation.control.available)
+        // 第二段 (handoff 3.4): its own state address answers, so the conversation has a live control state and can
+        // take a message — the first step's read-only stand-in is gone.
+        for _ in 0..<200 where !model.conversation.control.available { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.conversation.control.available)
+        #expect(model.capabilities("testing").sendModes.contains("send"))
+        #expect(model.can("approve", app: "testing"))
     }
 }

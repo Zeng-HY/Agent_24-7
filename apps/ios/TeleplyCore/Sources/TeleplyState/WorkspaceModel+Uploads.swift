@@ -19,15 +19,35 @@ extension WorkspaceModel {
             dropPreview(preview)
             return
         }
+        // A new assistant takes pictures only, at most `params.max_images`, each up to `params.max_image_bytes`
+        // (handoff 3.4); its new conversation has no pictures yet.
+        let catalog = AgentCatalogSnapshot.current
+        let generic = !catalog.isLegacy(key.app)
+        let params = catalog.info(key.app).params
+        if generic {
+            guard image, key.chat != "@new" else {
+                try? FileManager.default.removeItem(at: file)
+                dropPreview(preview)
+                error = image ? "这个助手的新对话还不能带图片，建好后再发" : "这个助手只能发图片"
+                return
+            }
+        }
         let saved = current(key)
         let uploads = saved["uploads"].array
-        if image && uploads.filter({ $0["image"].bool() }).count >= 5 {
+        let mostImages = generic ? params.maxImages : 5
+        if image && uploads.filter({ $0["image"].bool() }).count >= mostImages {
             try? FileManager.default.removeItem(at: file)
             dropPreview(preview)
-            error = "最多5张图片"
+            error = "最多\(mostImages)张图片"
             return
         }
         let size = ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        if generic, size > Int64(params.maxImageBytes) {
+            try? FileManager.default.removeItem(at: file)
+            dropPreview(preview)
+            error = "图片超过 \(params.maxImageBytes / (1024 * 1024))MB，传不上去"
+            return
+        }
         let local = newID()
         var next = saved.object
         var row: [String: JSONValue] = ["local": .string(local), "name": .string(name), "image": .bool(image), "status": "uploading",

@@ -249,9 +249,12 @@ struct ConversationView: View {
         }
     }
 
-    /// 停止这一轮 shows while the source runs; Claude stops with the token its desktop gives.
+    /// 停止这一轮 shows while the source runs; Claude stops with the token its desktop gives. A new assistant also
+    /// needs `stop` in what its state allows now (handoff 3.4).
     private func canStop(_ control: Control) -> Bool {
-        control.running && (model.app != "claude" || !control.raw["stop_token"].string().isEmpty)
+        let app = model.conversation.key?.app ?? model.app
+        return control.running && model.can("stop", app: app)
+            && (app != "claude" || !control.raw["stop_token"].string().isEmpty)
     }
 
     @ViewBuilder
@@ -444,8 +447,12 @@ private struct ConversationMenu: View {
                 ContextRing(percent: percent) { runtimeShown = true }
             }
             Menu {
-                Button("电脑上打开", systemImage: "arrow.up.forward.app") { model.workspace.openOnComputer() }
-                    .disabled(model.workspace.busy)
+                // What this assistant can do (handoff 3.4): a new one usually opens no desktop window and has no
+                // 用量, so those rows are not shown for it.
+                if model.can("open") {
+                    Button("电脑上打开", systemImage: "arrow.up.forward.app") { model.workspace.openOnComputer() }
+                        .disabled(model.workspace.busy)
+                }
                 Button("会话状态", systemImage: "info.circle") {
                     // The menu closes first; the panel then opens from the ring.
                     Task {
@@ -455,7 +462,7 @@ private struct ConversationMenu: View {
                 }
                 Button("查找消息", systemImage: "magnifyingglass") { searchShown = true }
                 // 11-17: DeepSeek has no plan limits, so no 用量 for its conversations.
-                if model.app != "deepseek" {
+                if model.can("usage") {
                     Button("用量", systemImage: "clock") { usageShown = true }
                 }
                 Button("对话文件", systemImage: "doc.on.doc") { model.workspace.panel("files") }

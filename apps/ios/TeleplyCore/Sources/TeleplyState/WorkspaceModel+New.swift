@@ -41,21 +41,73 @@ extension WorkspaceModel {
     /// Models and DeepSeek's permissions are read when their menu opens. Nothing here shows a progress bar.
     func openNew() {
         guard let key, let client, key.chat == "@new" else { return }
-        loadNewFolders()
+        if AgentCatalogSnapshot.current.isLegacy(key.app) {
+            loadNewFolders()
+        } else {
+            loadAgentOptions()
+        }
         newIDRead = Task { [weak self] in _ = try? await self?.ensureNewID(key, client) }
     }
 
     public func loadNewFolders() {
+        if isGenericNew() { loadAgentOptions(); return }
         loadNewList("folders") { key, client in try await client.detail(device: key.device, route: "chat/folders", query: [("app", key.app)]) }
     }
 
     /// The models a new conversation may start on; the computer answers from what its menus showed before (cheap).
     public func loadNewModels() {
+        if isGenericNew() { loadAgentOptions(); return }
         loadNewList("models") { key, client in try await client.detail(device: key.device, route: "chat/new/options", query: [("app", key.app)]) }
     }
 
     public func loadNewPermissions() {
         loadNewList("permissions") { key, client in try await client.detail(device: key.device, route: "deepseek/permissions") }
+    }
+
+    /// Whether the new-conversation sheet is for an assistant with its own addresses (handoff 3.4).
+    func isGenericNew() -> Bool {
+        guard let key, key.chat == "@new" else { return false }
+        return !AgentCatalogSnapshot.current.isLegacy(key.app)
+    }
+
+    /// A new assistant's 新建对话 lists, read once and filling both the project row and the model row: its own
+    /// `/options` names the projects (each folder shown under its project's name) and says what the model is.
+    public func loadAgentOptions() {
+        guard let key, let client, key.chat == "@new", newReads["options"] == nil,
+              !AgentCatalogSnapshot.current.isLegacy(key.app) else { return }
+        let synthetic = synthetic
+        newReads["options"] = Task { [weak self] in
+            do {
+                let options = try await client.agentOptions(device: key.device, agent: key.app)
+                guard let self else { return }
+                self.newReads["options"] = nil
+                guard self.key == key else { return }
+                var folders: [JSONValue] = []
+                for project in options["projects"].array {
+                    let name = project["name"].string()
+                    for path in project["folders"].array {
+                        let value = path.string()
+                        guard !value.isEmpty else { continue }
+                        folders.append(["path": .string(value), "name": .string(name.isEmpty ? lastPathPart(value) : name)])
+                    }
+                }
+                var next = (self.lists[key] ?? [:]).object
+                next["folders"] = ["folders": .array(folders.map { $0["path"] }), "items": .array(folders)]
+                next["models"] = options
+                self.lists[key] = .object(next)
+                self.newData = .object(next)
+                self.newNote = nil
+                if !synthetic {
+                    await self.store?.setDetail(scope: key.scope, device: key.device, app: key.app, chat: key.chat, kind: "new_lists",
+                                                value: jsonText(.object(next)))
+                }
+            } catch {
+                guard let self else { return }
+                self.newReads["options"] = nil
+                guard self.key == key, !(error is CancellationError) else { return }
+                self.newNote = "电脑上的项目这次没读到：\(describe(error))，先用手机上记着的"
+            }
+        }
     }
 
     func loadNewList(_ name: String, _ read: @escaping (ChatKey, RelayClient) async throws -> JSONValue) {
@@ -127,26 +179,33 @@ extension WorkspaceModel {
                 let references = extras["references"]
                 let images = saved["uploads"].array.filter { $0["image"].bool() && $0["meta"].isObject }.map { $0["meta"] }
                 guard !text.isEmpty || !images.isEmpty || !references.array.isEmpty else { throw ReadFailure("请输入首条消息") }
-                // No folder is 无项目, as the sheet shows it; DeepSeek always needs one of its workspaces.
+                // The fields follow the manifest (handoff 3.4): 无项目 only when it allows one (Antigravity must pick
+                // a project), 权限 only when it has one, settings only when it offers models.
+                let catalog = AgentCatalogSnapshot.current
+                let caps = catalog.caps(key.app)
+                let generic = !catalog.isLegacy(key.app)
                 let folder = saved["folder"].string()
-                let projectless = key.app != "deepseek" && (saved["projectless"].bool() || folder.isEmpty)
-                guard !folder.isEmpty || projectless else { throw ReadFailure("DeepSeek 要选一个工作区") }
+                let projectless = caps.newProjectless && (saved["projectless"].bool() || folder.isEmpty)
+                guard !folder.isEmpty || projectless else {
+                    throw ReadFailure(generic ? catalog.name(key.app) + " 的新对话要选一个项目" : "DeepSeek 要选一个工作区")
+                }
                 var body: [String: JSONValue] = ["request_id": .string(rid), "app": .string(key.app), "folder": .string(projectless ? "" : folder),
-                                                 "text": .string(text), "attachments": extras["attachments"], "references": references]
+                                                 "text": .string(text), "attachments": extras["attachments"],
+                                                 "references": generic ? [] : references]
                 if projectless { body["projectless"] = true }
                 let model = saved["new_model"].string()
-                if !model.isEmpty {
+                if !model.isEmpty, caps.settings.contains("model") {
                     let effort = saved["new_effort"].string()
                     body["settings"] = ["model": .string(model), "effort": effort.isEmpty ? .null : .string(effort)]
                 }
-                if key.app == "deepseek", !saved["new_permission"].string().isEmpty {
+                if caps.newPermission, !saved["new_permission"].string().isEmpty {
                     body["permission"] = saved["new_permission"]
                     body["permission_confirmed"] = .bool(saved["permission_confirmed"].bool())
                 }
                 let name = self.newData["folders"]["items"].array.first { $0["path"].string() == folder }?["name"].string() ?? ""
                 let job = NewJob(request: rid, app: key.app, folder: projectless ? "" : folder, projectless: projectless,
                                  label: projectless ? "" : (name.isEmpty ? lastPathPart(folder) : name), text: text,
-                                 references: references, images: .array(images), body: .object(body),
+                                 references: generic ? [] : references, images: .array(images), body: .object(body),
                                  pending: ["state": "creating", "message": "正在创建对话…"], created: self.now())
                 // The sheet starts afresh: same source, project and picks; the words, files and request id go with the job.
                 var fresh = saved.object

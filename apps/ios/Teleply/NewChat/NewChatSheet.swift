@@ -41,6 +41,9 @@ struct NewChatSheet: View {
         let target = model.pendingNew
         let key = workspace.key
         let app = target?.app ?? key?.app ?? model.app
+        // The fields a new conversation shows follow the assistant's manifest (handoff 3.4): 无项目 only where it
+        // allows one, 权限 only where it has one, 模型 only where it offers models. The three are unchanged.
+        let caps = model.catalog.caps(app)
         // Only the apps this computer has, as read when it was entered: nothing is read while the sheet moves.
         let known = model.knownApps
         let apps = known ?? [app]
@@ -69,9 +72,18 @@ struct NewChatSheet: View {
                             .foregroundStyle(Palette.muted)
                     }
                     VStack(spacing: 0) {
-                        folderRow(app: app, saved: saved, ready: ready)
-                        modelRow(app: app, saved: saved, ready: ready)
-                        if app == "deepseek" { permissionRow(saved: saved, ready: ready) }
+                        folderRow(app: app, saved: saved, ready: ready, projectlessAllowed: caps.newProjectless)
+                        if caps.settings.contains("model") {
+                            modelRow(app: app, saved: saved, ready: ready)
+                        } else if let note = modelNote(ready: ready) {
+                            Text(LK(note))
+                                .noteFont()
+                                .foregroundStyle(Palette.muted)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 8)
+                        }
+                        if caps.newPermission { permissionRow(saved: saved, ready: ready) }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -130,22 +142,33 @@ struct NewChatSheet: View {
         }
     }
 
+    /// What the model row says for an assistant that offers no models (Antigravity's model is fixed): the computer's
+    /// own line from `/options`.
+    private func modelNote(ready: Bool) -> String? {
+        let note = (ready ? model.workspace.newData : [:])["models"]["note"].string()
+        return note.isEmpty ? nil : note
+    }
+
     // MARK: 项目
 
     @ViewBuilder
-    private func folderRow(app: String, saved: JSONValue, ready: Bool) -> some View {
+    private func folderRow(app: String, saved: JSONValue, ready: Bool, projectlessAllowed: Bool) -> some View {
         let workspace = model.workspace
         let data = ready ? workspace.newData : [:]
         let folders = RecentFolders.ordered(app, data["folders"]["items"].array)
         let folder = saved["folder"].string()
         let projectless = saved["projectless"].bool()
         let current = folders.first { $0["path"].string() == folder }
-        let none = folder.isEmpty && app != "deepseek"
+        let none = folder.isEmpty && projectlessAllowed
         let title = none ? "无项目" : current.map { $0["name"].string().isEmpty ? folder : $0["name"].string() } ?? (folder.isEmpty ? "选择工作区" : lastPart(folder))
-        let detail = none ? "不放进任何项目" : !folder.isEmpty ? folder : data.has("folders") ? "DeepSeek 的工作区" : "读取电脑上的项目…"
+        let detail = none ? "不放进任何项目"
+            : !folder.isEmpty ? folder
+            : !data.has("folders") ? "读取电脑上的项目…"
+            : app == "deepseek" ? "DeepSeek 的工作区"
+            : data["folders"]["items"].array.isEmpty ? "电脑上还没有项目文件夹" : "选择一个项目"
         Menu {
             Group {
-                if app != "deepseek" {
+                if projectlessAllowed {
                     CheckRow(title: "无项目", detail: app == "claude" ? "Claude 不选文件夹，电脑上显示 No folder" : "在「文档\\Codex」下新建一个文件夹",
                              on: folder.isEmpty) {
                         workspace.chooseFolder("", projectless: true)
@@ -339,8 +362,9 @@ private struct NewComposer: View {
         let extras = uploads.count + saved["references"].array.count
         let uploading = uploads.contains { $0["status"].string() != "ready" }
         let folder = saved["folder"].string()
+        // 创建并发送 waits for a project where the assistant needs one (handoff 3.4; the three are unchanged).
         let canCreate = ready && !workspace.busy && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || extras > 0) && !uploading
-            && (app != "deepseek" || !folder.isEmpty)
+            && (!folder.isEmpty || model.catalog.caps(app).newProjectless)
         VStack(alignment: .leading, spacing: 0) {
             if ready { AttachmentTiles(workspace: workspace, saved: saved) }
             TextField("", text: Binding(get: { text }, set: { workspace.edit("first_message", .string($0)) }),
@@ -403,7 +427,7 @@ private struct FolderSearch: View {
         }
         let folder = workspace.saved["folder"].string()
         List {
-            if app != "deepseek" && (words.isEmpty || "无项目".contains(words)) {
+            if model.catalog.caps(app).newProjectless, words.isEmpty || "无项目".contains(words) {
                 pick(title: "无项目", detail: "不放进任何项目", on: folder.isEmpty) { workspace.chooseFolder("", projectless: true) }
             }
             ForEach(Array(hits.enumerated()), id: \.offset) { _, row in

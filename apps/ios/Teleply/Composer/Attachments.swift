@@ -42,32 +42,50 @@ struct AttachButton: View {
 
     var body: some View {
         let workspace = model.workspace
-        Menu {
-            Button("拍照", systemImage: "camera") { openCamera() }
-            Button("手机照片", systemImage: "photo.on.rectangle") {
-                openedFor = workspace.key
-                photosShown = true
+        // What this assistant takes (handoff 3.4): pictures only when its manifest allows attachments; a new
+        // assistant takes no files, references or skills, and its new conversation no pictures yet.
+        let caps = model.capabilities(app)
+        let generic = model.isGeneric(app)
+        let onNew = workspace.key?.chat == "@new"
+        let skills = !generic && skillsAvailable(caps, layout: model.cardLayout(app))
+        let mostImages = AgentCatalogSnapshot.current.info(app).params.maxImages
+        Group {
+            if generic && onNew {
+                // Nothing to add before the conversation exists.
+                EmptyView()
+            } else {
+                Menu {
+                    if caps.attachments {
+                        Button("拍照", systemImage: "camera") { openCamera() }
+                        Button("手机照片", systemImage: "photo.on.rectangle") {
+                            openedFor = workspace.key
+                            photosShown = true
+                        }
+                    }
+                    if !generic {
+                        Button("手机文件", systemImage: "doc") {
+                            openedFor = workspace.key
+                            filesShown = true
+                        }
+                        Button("从电脑选择文件", systemImage: "desktopcomputer") { workspace.openPicker("remote") }
+                        Button("引用对话", systemImage: "bubble.left.and.bubble.right") { workspace.openPicker("chat") }
+                        if skills {
+                            Button("引用技能", systemImage: "wand.and.stars") { workspace.openPicker("skill") }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(Palette.muted)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                }
+                .menuOrder(.fixed)
+                .disabled(!enabled)
+                .accessibilityLabel(Text("添加附件或引用"))
             }
-            Button("手机文件", systemImage: "doc") {
-                openedFor = workspace.key
-                filesShown = true
-            }
-            Button("从电脑选择文件", systemImage: "desktopcomputer") { workspace.openPicker("remote") }
-            Button("引用对话", systemImage: "bubble.left.and.bubble.right") { workspace.openPicker("chat") }
-            if app != "deepseek" {
-                Button("引用技能", systemImage: "wand.and.stars") { workspace.openPicker("skill") }
-            }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(Palette.muted)
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
         }
-        .menuOrder(.fixed)
-        .disabled(!enabled)
-        .accessibilityLabel(Text("添加附件或引用"))
-        .photosPicker(isPresented: $photosShown, selection: $photos, maxSelectionCount: 5, matching: .images)
+        .photosPicker(isPresented: $photosShown, selection: $photos, maxSelectionCount: generic ? mostImages : 5, matching: .images)
         .onChange(of: photos) {
             let picked = photos
             photos = []

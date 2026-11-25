@@ -82,6 +82,13 @@ public final class DemoWorld: Sendable {
         var recent: [JSONValue] = []
         var terms = "遥应\nTeleply\nCodex"
         var voicePieces = 0
+        // The fake testing helper's own addresses (handoff 3.7): the cards it has answered, the sends it has taken,
+        // where each request stands, and the conversations its new-conversation steps made.
+        var testingAnswered: Set<String> = []
+        var testingStopped = false
+        var testingSends: [String: JSONValue] = [:]
+        var testingCreates: [String: JSONValue] = [:]
+        var testingNew = 0
     }
 
     let state = Mutex(State())
@@ -245,6 +252,128 @@ public final class DemoWorld: Sendable {
         state.withLock { $0.receipts[request] }
     }
 
+    // MARK: The fake testing helper's own addresses (handoff 3.7; agents/testing.py)
+
+    /// GET /api/agents/testing/state?id=…: 测试对话 A 在跑, 测试对话 B 等你处理 (with one generic approval card),
+    /// anything else idle. `capabilities_now` mirrors the manifest, so the app's own narrowing runs on the demo too.
+    func testingState(_ chat: String) -> JSONValue {
+        state.withLock { state in
+            let answered = state.testingAnswered.contains(DemoData.testingApprovalID)
+            let running = chat == "test-running" && !state.testingStopped
+            let waiting = chat == "test-waiting" && !answered
+            return [
+                "available": true,
+                "running": .bool(running),
+                "status": .string(running ? "running" : waiting ? "waiting" : "idle"),
+                "turn_id": "",
+                "turn_started": .number(Double(running ? DemoData.startedSeconds : 0)),
+                "turn_ended": 0,
+                "step": .string(running ? "run" : ""),
+                "settings": [:], "runtime": [:], "tasks": [],
+                "questions": .array(waiting ? [DemoData.testingApprovalCard] : []),
+                "queued": [], "queue_available": false, "stop_token": "",
+                "capabilities_now": DemoData.testingCapsNow,
+                "capability_notes": [:],
+            ]
+        }
+    }
+
+    /// POST /api/agents/testing/send: taken once, queued while a turn runs (as Antigravity's own send does).
+    func testingSend(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            let id = body["id"].string()
+            let text = body["text"].string()
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !body["attachments"].array.isEmpty else {
+                return (400, ["error": "消息不能为空", "not_submitted": true])
+            }
+            guard id == "test-running" || id == "test-waiting" else { return (404, ["error": "找不到这个对话"]) }
+            let rid = body["request_id"].string()
+            let busy = id == "test-running" && !state.testingStopped
+            state.testingSends[rid] = ["delivered": true, "queued": .bool(busy), "stage": .string(busy ? "queued" : "accepted")]
+            return (200, ["ok": true, "accepted": true, "pressed": false, "offset": 0, "request_id": .string(rid),
+                          "text": .string(busy ? "测试助手正在跑，这条会等这一轮做完再交给它" : "已交给测试助手"),
+                          "delivery_state": .string(busy ? "queued" : "accepted"),
+                          "accepted_at": .number(Double(Int64(Date().timeIntervalSince1970 * 1000)))])
+        }
+    }
+
+    /// GET /api/agents/testing/receipt?request_id=…: a send is delivered at once; an unknown id says so.
+    func testingReceipt(_ request: String) -> JSONValue {
+        state.withLock { state in
+            guard let sent = state.testingSends[request] else {
+                return ["state": "unknown", "request_id": .string(request), "delivered": false, "queued": false, "stage": ""]
+            }
+            return ["state": .string(sent["delivered"].bool() ? "accepted" : "unknown"), "request_id": .string(request),
+                    "delivered": sent["delivered"], "queued": sent["queued"], "stage": sent["stage"]]
+        }
+    }
+
+    /// POST /api/agents/testing/stop: only 测试对话 A runs.
+    func testingStop(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            guard body["id"].string() == "test-running", !state.testingStopped else {
+                return (409, ["error": "这个对话没在跑"])
+            }
+            state.testingStopped = true
+            return (200, ["ok": true, "text": "已停止测试助手这一轮"])
+        }
+    }
+
+    /// POST /api/agents/testing/answer: the one card, once, with one of its own options.
+    func testingAnswer(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            let card = body["question_id"].string()
+            guard card == DemoData.testingApprovalID else { return (404, ["error": "没有这张卡片"]) }
+            guard !state.testingAnswered.contains(card) else { return (409, ["error": "这张卡片已经答过了"]) }
+            let choice = body["answers"]["decision"].array.first?.string() ?? ""
+            guard DemoData.testingApprovalOptions.contains(choice) else { return (400, ["error": "回答的选项不对"]) }
+            state.testingAnswered.insert(card)
+            return (200, ["ok": true, "accepted": true, "text": .string("已交给测试助手：\(choice)")])
+        }
+    }
+
+    /// GET /api/agents/testing/options: one project, its folder, and a fixed model (nothing to pick).
+    func testingOptions() -> JSONValue {
+        ["models": [], "note": "新建对话固定用测试模型，手机上不用选模型",
+         "projects": [["id": "p-testing", "name": "测试项目", "folders": ["D:/fixture/测试项目"]]],
+         "default_project": "p-testing"]
+    }
+
+    /// POST /api/agents/testing/create: one conversation per request id, with its first words as the title.
+    func testingCreate(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            let rid = body["request_id"].string()
+            guard !rid.isEmpty else { return (400, ["error": "请求编号不对", "not_submitted": true]) }
+            if let known = state.testingCreates[rid] { return (200, known) }
+            guard body["attachments"].array.isEmpty, body["references"].array.isEmpty else {
+                return (400, ["error": "新建对话只收一句话，图片和引用请建好后再发", "not_submitted": true])
+            }
+            let text = body["text"].string().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return (400, ["error": "新建对话要先写一句话", "not_submitted": true]) }
+            let folder = body["folder"].string()
+            guard !folder.isEmpty || body["projectless"].bool() else {
+                return (400, ["error": "测试助手的新对话要选一个项目", "not_submitted": true])
+            }
+            state.testingNew += 1
+            let id = "test-new-\(state.testingNew)"
+            let title = String(text.prefix(20))
+            let row = DemoData.row(id, title, folder, "新对话", "idle", "testing",
+                                   Int64(Date().timeIntervalSince1970 * 1000))
+            state.created.append((row: row, text: text))
+            let reply: JSONValue = ["request_id": .string(rid), "state": "accepted", "app": "testing", "id": .string(id),
+                                    "title": .string(title), "folder": .string(folder), "message": "对话已建好"]
+            state.testingCreates[rid] = reply
+            return (200, reply)
+        }
+    }
+
+    /// GET /api/agents/testing/create/state?request_id=…: accepted once created, unconfirmed before that.
+    func testingCreateState(_ request: String) -> JSONValue {
+        state.withLock { state in
+            state.testingCreates[request] ?? ["request_id": .string(request), "state": "unconfirmed", "message": "没确认这次建好没有"]
+        }
+    }
+
     /// Claude read the message on the second look; while it runs, the first two looks find it queued.
     func claudeCheck(offset: Int64) -> JSONValue {
         state.withLock { state in
@@ -328,6 +457,17 @@ public final class DemoWorld: Sendable {
                     if state.planDone {
                         fields["preview"] = "已按计划开始"
                         if state.running["codex"] == true { fields["status"] = "running" }
+                    }
+                case "test-running":
+                    // The fake testing helper's own addresses move its rows too (handoff 3.7).
+                    if state.testingStopped {
+                        fields["status"] = "idle"
+                        fields["preview"] = "已停止"
+                    }
+                case "test-waiting":
+                    if state.testingAnswered.contains(DemoData.testingApprovalID) {
+                        fields["status"] = "idle"
+                        fields["preview"] = "已处理批准"
                     }
                 default:
                     break
@@ -840,6 +980,31 @@ enum DemoData {
     static func parse(_ text: String) -> JSONValue {
         (try? JSONValue.parse(Data(text.utf8))) ?? [:]
     }
+
+    /// The fake testing helper's one generic card, word for word as agents/testing.py builds it (docs §五): an
+    /// approval to run `npm test`, three choices, no time limit (`expires_at` 0 waits as long as the computer does).
+    static let testingApprovalID = "approval-7"
+    static let testingApprovalOptions = ["允许一次", "本对话里这条都允许", "拒绝"]
+    static let testingApprovalCard: JSONValue = .object([
+        "id": .string(testingApprovalID), "status": "pending", "kind": "approval", "turn_id": "turn-3",
+        "title": "测试助手想运行命令", "detail": .string("npm test\n在 D:\\fixture\\测试项目"),
+        "questions": .array([.object([
+            "id": .string("decision"), "header": "",
+            "question": "允许运行这条命令吗？",
+            "options": .array(testingApprovalOptions.map { .object(["label": .string($0), "description": ""]) }),
+            "isOther": false, "isSecret": false, "isMultiple": false,
+        ])]),
+        "answer_revision": "", "expires_at": 0,
+    ])
+
+    /// The testing helper's capabilities as its state reports them (`capabilities_now`), all of its manifest's on.
+    static let testingCapsNow: JSONValue = [
+        "list": true, "read": true, "search": true, "open": true, "stop": true, "queue": true, "steer": true,
+        "approve": true, "answer": true, "new": true, "new_projectless": true, "new_permission": true,
+        "archive": true, "restore": true, "delete": true, "usage": true, "waiting": true, "attachments": true,
+        "slash_commands": true, "settings": ["model", "effort"], "send_modes": ["send", "steer", "queue"],
+        "statuses": ["running", "waiting", "idle", "unknown"],
+    ]
 
     static let codexState = parse(#"{"available":true,"settings":{"model":"fixture-model","effort":"medium","mode":"default","service_tier":null},"catalog":{"models":[{"id":"fixture-model","name":"测试模型","efforts":["low","medium"],"default_effort":"medium"}]},"questions":[{"id":"fixture-question","answer_revision":"v1","status":"pending","kind":"native","turn_id":"fixture-question-turn","questions":[{"id":"q1","header":"方案","question":"选择固定测试方案","options":[{"label":"方案A","description":"固定选项"},{"label":"方案B","description":"另一选项"}]}]}]}"#)
 

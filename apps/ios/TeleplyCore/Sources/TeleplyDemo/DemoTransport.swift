@@ -71,13 +71,40 @@ public struct DemoTransport: RelayFileTransport {
     }
 
     /// A picture or file taken by the demo computer: its record, as the computer answers (Android FixtureApi upload).
+    /// The fake testing helper's own addresses (handoff 3.7; agents/testing.py): its state and its one generic card,
+    /// its sends and receipts, stop, answer, the three new-conversation steps, and its upload.
+    func agentRoute(_ route: String, _ query: [String: String], _ method: HTTPMethod, _ body: JSONValue) -> RelayResponse {
+        let sub = String(route.dropFirst("/api/agents/testing/".count))
+        if method == .get {
+            switch sub {
+            case "state": return Self.json(world.testingState(query["id"] ?? ""))
+            case "receipt": return Self.json(world.testingReceipt(query["request_id"] ?? ""))
+            case "options": return Self.json(world.testingOptions())
+            case "create/state": return Self.json(world.testingCreateState(query["request_id"] ?? ""))
+            default: return Self.notFound
+            }
+        }
+        let reply: (status: Int, reply: JSONValue)
+        switch sub {
+        case "send": reply = world.testingSend(body)
+        case "stop": reply = world.testingStop(body)
+        case "answer": reply = world.testingAnswer(body)
+        case "create": reply = world.testingCreate(body)
+        default: return Self.notFound
+        }
+        return Self.json(reply.reply, status: reply.status)
+    }
+
     func uploaded(_ route: String, _ query: [String: String], _ file: URL) -> RelayResponse {
-        guard route == "/api/codex/upload" || route == "/api/files/upload" else { return Self.notFound }
+        let testing = route == "/api/agents/testing/upload"
+        guard route == "/api/codex/upload" || route == "/api/files/upload" || testing else { return Self.notFound }
         let size = ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.int64Value ?? 0
         let name = query["name"] ?? "文件"
-        let image = route == "/api/codex/upload"
-        return Self.json(["id": .string(UUID().uuidString.lowercased()), "kind": "file", "app": .string(image ? query["app"] ?? "codex" : "pc"),
-                          "name": .string(name), "path": .string("D:/fixture/" + name), "original_size": .number(Double(size)), "size": .number(Double(size))])
+        let image = route == "/api/codex/upload" || testing
+        return Self.json(["id": .string(UUID().uuidString.lowercased()), "kind": "file",
+                          "app": .string(testing ? "testing" : image ? query["app"] ?? "codex" : "pc"),
+                          "name": .string(name), "path": .string("D:/fixture/" + name),
+                          "original_size": .number(Double(size)), "size": .number(Double(size))])
     }
 
     static let notFound = RelayResponse.json(#"{"error":"本地示例没有这个地址"}"#, status: 404)
@@ -168,6 +195,10 @@ public struct DemoTransport: RelayFileTransport {
     // MARK: A demo computer
 
     func computer(_ device: String, _ route: String, _ query: [String: String], _ method: HTTPMethod = .get, _ body: JSONValue = [:]) -> RelayResponse {
+        // The fake testing helper's own addresses, only when the demo was opened with it (handoff 3.7).
+        if route.hasPrefix("/api/agents/testing/"), world.testingAgent {
+            return agentRoute(route, query, method, body)
+        }
         if method == .post, let answer = action(route, body) { return answer }
         let app = query["app"] ?? "codex"
         let chat = query["id"] ?? ""

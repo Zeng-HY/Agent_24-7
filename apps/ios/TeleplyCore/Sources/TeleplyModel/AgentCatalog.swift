@@ -117,6 +117,80 @@ public struct AgentCapabilities: Sendable, Equatable {
         self.sendModes = sendModes
         self.statuses = statuses
     }
+
+    /// The capabilities that apply now: the manifest's, narrowed by a control state's `capabilities_now` (handoff
+    /// 3.4; Android AgentCaps.capsNow). A flag can only go from true to false; a list keeps the manifest's order and
+    /// drops what the computer no longer offers; a key `capabilities_now` does not mention keeps the manifest's value.
+    public func narrowed(by now: JSONValue?) -> AgentCapabilities {
+        guard let now, now.isObject else { return self }
+        func flag(_ key: String, _ current: Bool) -> Bool { now.has(key) ? current && now[key].bool() : current }
+        func words(_ key: String, _ current: [String]) -> [String] {
+            guard now.has(key) else { return current }
+            let offered = now[key].array.map { $0.string() }
+            return current.filter { offered.contains($0) }
+        }
+        var next = self
+        next.list = flag("list", list)
+        next.read = flag("read", read)
+        next.search = flag("search", search)
+        next.open = flag("open", open)
+        next.stop = flag("stop", stop)
+        next.queue = flag("queue", queue)
+        next.steer = flag("steer", steer)
+        next.approve = flag("approve", approve)
+        next.answer = flag("answer", answer)
+        next.new = flag("new", new)
+        next.newProjectless = flag("new_projectless", newProjectless)
+        next.newPermission = flag("new_permission", newPermission)
+        next.archive = flag("archive", archive)
+        next.restore = flag("restore", restore)
+        next.delete = flag("delete", delete)
+        next.usage = flag("usage", usage)
+        next.waiting = flag("waiting", waiting)
+        next.attachments = flag("attachments", attachments)
+        next.slashCommands = flag("slash_commands", slashCommands)
+        if now.has("skills") {
+            next.skills = skills == false ? false : now["skills"].bool()
+        }
+        next.settings = words("settings", settings)
+        next.sendModes = words("send_modes", sendModes)
+        next.statuses = words("statuses", statuses)
+        return next
+    }
+
+    /// One capability by its name as the manifest and `capability_notes` write it (docs §三); nil for a name this
+    /// app does not know.
+    public func flag(_ name: String) -> Bool? {
+        switch name {
+        case "list": return list
+        case "read": return read
+        case "search": return search
+        case "open": return open
+        case "stop": return stop
+        case "queue": return queue
+        case "steer": return steer
+        case "approve": return approve
+        case "answer": return answer
+        case "new": return new
+        case "new_projectless": return newProjectless
+        case "new_permission": return newPermission
+        case "archive": return archive
+        case "restore": return restore
+        case "delete": return delete
+        case "usage": return usage
+        case "waiting": return waiting
+        case "attachments": return attachments
+        case "slash_commands": return slashCommands
+        case "skills": return skills
+        default: return nil
+        }
+    }
+}
+
+/// Whether the composer's `$` list (引用技能) can show: a manifest that says `skills` decides; one that does not (an
+/// older computer) keeps the old rule — commands and not DeepSeek (Android AgentCaps.skillsAvailable).
+public func skillsAvailable(_ caps: AgentCapabilities, layout: String) -> Bool {
+    caps.skills ?? (caps.slashCommands && layout != "deepseek.v1")
 }
 
 /// How long the computer may take and how much it takes at once (docs §三: 运行参数).

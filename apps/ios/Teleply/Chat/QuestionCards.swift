@@ -17,6 +17,8 @@ enum InlineCard: Identifiable {
     case claudeActions([JSONValue])
     case deepseekApproval(JSONValue)
     case deepseekQuestion(JSONValue)
+    /// A new assistant's own card (docs §五): the layout is not one of the three's.
+    case generic(JSONValue)
 
     var id: String {
         switch self {
@@ -26,13 +28,15 @@ enum InlineCard: Identifiable {
         case .claudeActions: return "claude-actions"
         case .deepseekApproval(let event): return "approval:" + event["eventId"].string()
         case .deepseekQuestion(let card): return "question:" + card["callId"].string()
+        case .generic(let card): return "generic:" + card["id"].string() + ":" + card["answer_revision"].string()
         }
     }
 }
 
 /// The cards of a source's state: Codex's pending ones and answered ones it lets you change; Claude's desktop
-/// question, or else its plan options; DeepSeek's approvals, then its questions.
+/// question, or else its plan options; DeepSeek's approvals, then its questions; a new assistant's own cards.
 func inlineCards(app: String, raw: JSONValue) -> [InlineCard] {
+    guard AgentCatalogSnapshot.current.isLegacy(app) else { return genericCards(raw).map(InlineCard.generic) }
     switch app {
     case "claude":
         if claudeAsks(raw) { return [.claudePrompt(raw["prompt"])] }
@@ -59,6 +63,7 @@ struct InlineCardView: View {
         case .claudeActions(let actions): ClaudeActionsCard(model: model, actions: actions)
         case .deepseekApproval(let event): DeepSeekApprovalCard(model: model, event: event)
         case .deepseekQuestion(let question): DeepSeekQuestionCard(model: model, card: question)
+        case .generic(let card): GenericQuestionCard(model: model, card: card)
         }
     }
 }

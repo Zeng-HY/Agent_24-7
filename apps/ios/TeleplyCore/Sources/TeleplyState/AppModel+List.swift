@@ -281,6 +281,53 @@ extension AppModel {
         }
     }
 
+    // MARK: What an assistant can do now (handoff 3.4)
+
+    /// One assistant's capabilities as they apply now: the manifest's, narrowed by the open conversation's
+    /// `capabilities_now` when it is this assistant's conversation (docs §八). An older computer sends no such state,
+    /// so the manifest's own values stand, exactly as before.
+    public func capabilities(_ app: String? = nil) -> AgentCapabilities {
+        let id = app ?? self.app
+        let base = catalog.caps(id)
+        guard id == self.app, conversation.key?.app == id else { return base }
+        return conversation.control.narrowed(base)
+    }
+
+    /// Whether [capability] can be used now by this assistant (or [app]).
+    public func can(_ capability: String, app: String? = nil) -> Bool {
+        capabilities(app).flag(capability) ?? false
+    }
+
+    /// Why [capability] cannot be used now, in the computer's words; "" when it gave none.
+    public func capabilityNote(_ capability: String, app: String? = nil) -> String {
+        let id = app ?? self.app
+        guard id == self.app, conversation.key?.app == id else { return "" }
+        return conversation.control.note(capability)
+    }
+
+    /// Whether this assistant (or [app]) draws the generic panel and cards: every layout but the three's own.
+    public func isGeneric(_ app: String? = nil) -> Bool {
+        !catalog.info(app ?? self.app).legacy
+    }
+
+    /// The layout its cards and panel follow (`generic.v1` for a new assistant).
+    public func cardLayout(_ app: String? = nil) -> String {
+        catalog.info(app ?? self.app).ui.cardLayout
+    }
+
+    /// Whether any assistant this computer has can do [capability]: the pages that are worth showing at all.
+    public func hasAny(_ capability: String) -> Bool {
+        (knownApps ?? []).contains { catalog.caps($0).flag(capability) ?? false }
+    }
+
+    /// What the composer says while a new assistant cannot take a message now (its app closed, say); nil when it can.
+    public func sendBlockedNote(_ app: String? = nil) -> String? {
+        let id = app ?? self.app
+        guard isGeneric(id), capabilities(id).sendModes.isEmpty else { return nil }
+        let note = capabilityNote("send", app: id)
+        return note.isEmpty ? "这个对话现在不能从手机发消息，请在电脑上处理" : note
+    }
+
     // MARK: The sidebar tree (spec 4.2)
 
     /// Read when the drawer opens and at most every 15 s, and on entering a computer: its groups are the apps that

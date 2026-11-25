@@ -18,8 +18,17 @@ public struct PendingCard: Equatable, Sendable {
 }
 
 /// What waits for an answer in a source's state (Android pendingCards): Codex's pending question cards; Claude's
-/// desktop prompt, or else its plan options; DeepSeek's approvals first, then its questions.
+/// desktop prompt, or else its plan options; DeepSeek's approvals first, then its questions; a new assistant's own
+/// cards (docs §五, handoff 3.4).
 public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
+    guard AgentCatalogSnapshot.current.isLegacy(app) else {
+        let cards = genericCards(raw)
+        guard let first = cards.first else { return [] }
+        let names = AgentCatalogSnapshot.current.name(app)
+        let approval = first["kind"].string() == "approval"
+        return [PendingCard(kind: approval ? "approval" : "question", summary: genericCardTitle(first, app: app, assistant: names),
+                            count: cards.count)]
+    }
     switch app {
     case "claude":
         let prompt = raw["prompt"]
@@ -51,6 +60,25 @@ public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
             return PendingCard(kind: "question", summary: question.isEmpty ? "Codex 有问题要问你" : question)
         }
     }
+}
+
+/// The generic cards a state still waits on (docs §五, handoff 3.4): `status` pending, an id, and at least one
+/// question. Everything else in `questions` is ignored — an answered card is gone from the computer's state anyway.
+public func genericCards(_ raw: JSONValue) -> [JSONValue] {
+    raw["questions"].array.filter {
+        $0["status"].string() == "pending" && !$0["id"].string().isEmpty && !$0["questions"].array.isEmpty
+    }
+}
+
+/// A generic card's heading: its own `title`, else the first question's `header`, else "<assistant> 等你批准 /
+/// 有问题要问你" (docs §五; the web's generic-ui.js titleOf).
+public func genericCardTitle(_ card: JSONValue, app: String, assistant: String = "") -> String {
+    let title = card["title"].string()
+    if !title.isEmpty { return title }
+    let header = card["questions"].array.first?["header"].string() ?? ""
+    if !header.isEmpty { return header }
+    let named = assistant.isEmpty ? AgentCatalogSnapshot.current.name(app) : assistant
+    return card["kind"].string() == "approval" ? named + " 等你批准" : named + " 有问题要问你"
 }
 
 /// Whether Claude's desktop shows a question laid out for the phone (web askParts): a prompt with choices or

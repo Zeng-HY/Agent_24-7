@@ -177,11 +177,15 @@ struct ComposerCard: View {
     var body: some View {
         let chat = model.conversation
         let saved = model.workspace.saved
-        let queue = chat.control.running && chat.control.queueAvailable
+        let app = chat.key?.app ?? model.app
+        // What this assistant can do now (handoff 3.4): its manifest narrowed by the conversation's state.
+        let caps = model.capabilities(app)
+        let queue = chat.control.running && chat.control.queueAvailable && caps.sendModes.contains("queue")
         let words = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let extras = !saved["uploads"].array.isEmpty || !saved["references"].array.isEmpty
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
-        let reachable = chat.control.available || sendsWhileAway(chat.key?.app ?? model.app)
+        // A new assistant with no send mode now (its app closed) cannot take one.
+        let reachable = (chat.control.available && !caps.sendModes.isEmpty) || sendsWhileAway(app)
         let canSend = chat.ready && reachable && !chat.submitting && (!words.isEmpty || extras) && words.count <= 20_000
         // A new conversation's page: words only, sent once the conversation exists; no files or chips yet.
         let newPage = isNewPage(chat.key?.chat)
@@ -256,6 +260,8 @@ struct ComposerCard: View {
     /// (Android); at the largest text sizes they take their own line above ＋. Send keeps its size.
     private var controls: some View {
         let app = model.conversation.key?.app ?? model.app
+        let caps = model.capabilities(app)
+        let showsAttach = caps.attachments || !model.isGeneric(app)
         let row = ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) { chips }
         }
@@ -264,11 +270,11 @@ struct ComposerCard: View {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 4) {
                     row
-                    AttachButton(model: model, app: app, enabled: model.workspace.ready)
+                    if showsAttach { AttachButton(model: model, app: app, enabled: model.workspace.ready) }
                 }
             } else {
                 HStack(spacing: 4) {
-                    AttachButton(model: model, app: app, enabled: model.workspace.ready)
+                    if showsAttach { AttachButton(model: model, app: app, enabled: model.workspace.ready) }
                     row
                 }
             }
@@ -282,7 +288,11 @@ struct ComposerCard: View {
         guard focused, chat.ready, !newPage, !voice.active, text != picked else { return nil }
         let spot = cursor()
         guard spot.0 == spot.1, let found = composerTrigger(text, cursor: spot.1) else { return nil }
-        if found.kind == .skill, (chat.key?.app ?? model.app) == "deepseek" { return nil }
+        let app = chat.key?.app ?? model.app
+        let caps = model.capabilities(app)
+        // What the computer offers now decides (handoff 3.4): / only with slash commands, $ only with skills.
+        if found.kind == .command, !caps.slashCommands { return nil }
+        if found.kind == .skill, !skillsAvailable(caps, layout: model.cardLayout(app)) { return nil }
         return found
     }
 
@@ -308,11 +318,13 @@ struct ComposerCard: View {
     private var chips: some View {
         let app = model.conversation.key?.app ?? model.app
         let raw = model.conversation.control.raw
+        let caps = model.capabilities(app)
         let labels = chipLabels(app: app, raw: raw, saved: model.workspace.saved)
         let narrow = width + 24 < 370
         let modeName = app == "deepseek" ? "权限" : "模式"
+        let generic = model.isGeneric(app)
         return Group {
-            if chipAway(app: app, raw: raw) {
+            if chipAway(app: app, raw: raw) && (caps.open || !generic) {
                 // Not open on the computer: the chip opens it there; its menus would act on another conversation
                 // (web codex-ui.js, claude-ui.js "away").
                 Button { model.workspace.openOnComputer() } label: {
@@ -321,7 +333,7 @@ struct ComposerCard: View {
                 .buttonStyle(.plain)
                 .disabled(model.workspace.busy)
                 .accessibilityLabel(Text("电脑上打开这个对话"))
-            } else {
+            } else if !generic {
                 modelChip(labels: labels, narrow: narrow)
                 modeChip(labels: labels, narrow: narrow, modeName: modeName)
             }
@@ -516,22 +528,24 @@ private struct StatusLine: View {
     private var lines: some View {
         let chat = model.conversation
         let workspace = model.workspace
+        let app = chat.key?.app ?? model.app
         let receipt = chat.submissions.first { $0.label != removedLabel }?.label
         let unknown = workspace.saved["pending_action"]["status"].string() == "unknown"
         // The computer's words on why the next message cannot go, in place of an old receipt (user 10-27); 11-17:
-        // they also win over a kept result of 电脑上打开.
-        let away = awayReason(app: chat.key?.app ?? model.app, raw: chat.control.raw)
-        let text = statusLineText(chatError: chat.error, workspaceError: workspace.error, note: "",
-                                  result: workspace.result, unknown: unknown, away: away, receipt: receipt)
+        // they also win over a kept result of 电脑上打开. A new assistant's state says the same in capability_notes.
+        let away = awayReason(app: app, raw: chat.control.raw)
+        let blocked = model.sendBlockedNote(app)
+        let text = blocked ?? statusLineText(chatError: chat.error, workspaceError: workspace.error, note: "",
+                                             result: workspace.result, unknown: unknown, away: away, receipt: receipt)
         let isError = chat.error != nil || workspace.error != nil
-        let opens = away != nil && text == away
+        let opens = blocked == nil && away != nil && text == away
         if let text {
             HStack(spacing: 4) {
                 Text(text)
                     .noteFont()
                     .foregroundStyle(isError ? Palette.danger : Palette.muted)
                     // The computer's reason whole: it says what to do.
-                    .lineLimit(opens ? 3 : 2)
+                    .lineLimit(opens || blocked != nil ? 3 : 2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
                 if unknown {

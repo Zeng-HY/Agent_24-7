@@ -1,0 +1,182 @@
+import Foundation
+import Testing
+@testable import TeleplyDemo
+import TeleplyModel
+@testable import TeleplyState
+
+/// A new assistant through the whole app on the local demo: the fake `testing` helper only exists when the demo was
+/// opened with it (handoff 3.7), and its own addresses then answer state, send, receipt, stop, answer, the three
+/// new-conversation steps and the upload.
+@MainActor
+struct AgentUnifiedFlowTests {
+    let a = String(repeating: "a", count: 32)
+
+    func makeModel(_ world: DemoWorld) -> (AppModel, WatchedTransport) {
+        let watched = WatchedTransport(world: world)
+        let model = AppModel(services: AppServices(store: LocalStore(folder: temporaryFolder()), vault: MemoryCookieVault(),
+                                                   transport: watched, demo: { DemoTransport() }, pacer: IdlePacer(),
+                                                   newScope: { "scope-1" }))
+        return (model, watched)
+    }
+
+    func enterA(_ model: AppModel) async {
+        model.start()
+        await model.settle()
+        model.login(name: "账号", password: "密码")
+        await model.settle()
+        if let computer = model.account?.devices.first(where: { $0.id == a }) { model.select(computer) }
+        await model.settle()
+    }
+
+    func until(_ ready: @escaping @MainActor () -> Bool) async {
+        for _ in 0..<300 where !ready() { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    func open(_ model: AppModel, _ id: String) async throws {
+        let row = try #require(model.chats.first { $0.app == "testing" && $0.id == id })
+        model.open(row)
+        await model.settle()
+        await until { model.conversation.control.available && model.conversation.ready && model.workspace.ready }
+        #expect(model.conversation.control.available && model.conversation.ready && model.workspace.ready)
+    }
+
+    @Test func itsStateAndItsCardComeFromItsOwnAddress() async throws {
+        let (model, watched) = makeModel(DemoWorld(testingAgent: true))
+        await enterA(model)
+        try await open(model, "test-waiting")
+        #expect(model.conversation.control.questions)
+        #expect(pendingCards(app: "testing", raw: model.conversation.control.raw).first?.summary == "测试助手想运行命令")
+        #expect(inlineCards(app: "testing", raw: model.conversation.control.raw).count == 1)
+        let paths = await watched.log.items.map(\.url.path)
+        #expect(paths.contains("/d/\(a)/api/agents/testing/state"))
+        // 批准 goes to the card's own address with this request's id and the chosen option.
+        model.workspace.action("generic/answer", ["question_id": .string(DemoData.testingApprovalID),
+                                                  "answers": ["decision": .array(["允许一次"])]])
+        await model.workspace.settle()
+        #expect(model.workspace.error == nil)
+        await until { !model.conversation.control.questions }
+        #expect(!model.conversation.control.questions)
+        let answers = await watched.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/answer") }
+        #expect(answers.count == 1)
+        let body = try JSONValue.parse(try #require(answers.first?.body))
+        #expect(body["id"].string() == "test-waiting")
+        #expect(body["question_id"].string() == DemoData.testingApprovalID)
+        #expect(body["answers"]["decision"].array.map { $0.string() } == ["允许一次"])
+        #expect(body["request_id"].string()?.isEmpty == false)
+    }
+
+    @Test func aSendGoesToItsOwnAddressAndItsReceiptIsRead() async throws {
+        let (model, watched) = makeModel(DemoWorld(testingAgent: true))
+        await enterA(model)
+        try await open(model, "test-waiting")
+        model.conversation.edit("跑一下测试")
+        model.conversation.send()
+        await model.conversation.settleSends()
+        let sends = await watched.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/send") }
+        #expect(sends.count == 1)
+        let body = try JSONValue.parse(try #require(sends.first?.body))
+        #expect(body["id"].string() == "test-waiting")
+        #expect(body["text"].string() == "跑一下测试")
+        #expect(body["intent"].string() == "send")  // Antigravity's only send mode
+        #expect(body["request_id"].string()?.isEmpty == false)
+        let record = try #require(model.conversation.submissions.first)
+        #expect(record.label == "已接收")
+        // The receipt at its own address says the computer found it: 已送达.
+        model.conversation.check(record)
+        await until { model.conversation.submissions.first?.label == "已送达" }
+        #expect(model.conversation.submissions.first?.label == "已送达")
+        let receipts = await watched.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/receipt") }
+        #expect(receipts.count >= 1)
+    }
+
+    @Test func stopGoesToItsOwnAddress() async throws {
+        let (model, watched) = makeModel(DemoWorld(testingAgent: true))
+        await enterA(model)
+        try await open(model, "test-running")
+        #expect(model.conversation.control.running)
+        #expect(model.can("stop", app: "testing"))
+        model.conversation.stop()
+        await model.conversation.settleSends()
+        let stops = await watched.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/stop") }
+        #expect(stops.count == 1)
+        let body = try JSONValue.parse(try #require(stops.first?.body))
+        #expect(body["id"].string() == "test-running")
+        // The state after it says the turn is over; the stop button goes with it.
+        await until { !model.conversation.control.running }
+        #expect(!model.conversation.control.running)
+    }
+
+    @Test func itsNewConversationUsesItsOwnThreeSteps() async throws {
+        let (model, watched) = makeModel(DemoWorld(testingAgent: true))
+        await enterA(model)
+        model.startNew(app: "testing")
+        await model.applying?.value
+        await model.workspace.settle()
+        await until { !model.workspace.newData["folders"]["items"].array.isEmpty }
+        let items = model.workspace.newData["folders"]["items"].array
+        #expect(items.map { $0["path"].string() } == ["D:/fixture/测试项目"])
+        #expect(items.first?["name"].string() == "测试项目")
+        #expect(model.workspace.newData["models"]["models"].array.isEmpty)
+        #expect(model.workspace.newData["models"]["note"].string().isEmpty == false)
+        model.workspace.chooseFolder("D:/fixture/测试项目", projectless: false)
+        model.workspace.edit("first_message", "写一个测试")
+        model.workspace.create()
+        await model.workspace.settle()
+        await model.settle()
+        let job = try #require(model.jobs.jobs.first)
+        #expect(job.app == "testing" && job.folder == "D:/fixture/测试项目")
+        // The fields follow the manifest: no projectless, no settings, no permission, no references.
+        #expect(job.body["projectless"].isNull && job.body["settings"].isNull && job.body["permission"].isNull)
+        #expect(job.body["references"].array.isEmpty)
+        for _ in 0..<6 {
+            if let next = model.jobs.jobs.first {
+                if next.accepted { model.openJob(next) } else { model.jobs.check(next) }
+            }
+            await model.jobs.settle()
+            await model.settle()
+        }
+        let creates = await watched.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/create") }
+        #expect(creates.count >= 1)
+        let body = try JSONValue.parse(try #require(creates.first?.body))
+        #expect(body["folder"].string() == "D:/fixture/测试项目" && body["text"].string() == "写一个测试")
+        let checked = await watched.log.items
+        #expect(checked.contains { $0.url.path.hasSuffix("/api/agents/testing/create/state") })
+        #expect(model.chat?.id == "test-new-1")
+        model.back()
+        await model.settle()
+        #expect(model.chats.first?.id == "test-new-1")
+    }
+
+    @Test func aPictureGoesToItsOwnUploadAddress() async throws {
+        let (model, watched) = makeModel(DemoWorld(testingAgent: true))
+        await enterA(model)
+        try await open(model, "test-waiting")
+        let folder = temporaryFolder()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("picture.png")
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: file)
+        model.workspace.importFile(file, name: "picture.png", image: true)
+        await until {
+            let rows = model.workspace.saved["uploads"].array
+            return !rows.isEmpty && rows.allSatisfy { $0["status"].string() == "ready" }
+        }
+        let uploads = model.workspace.saved["uploads"].array
+        #expect(uploads.count == 1 && uploads.first?["status"].string() == "ready")
+        let items = await watched.log.items
+        let request = try #require(items.first { $0.url.path.hasSuffix("/api/agents/testing/upload") })
+        #expect(request.method == .post)
+        #expect(queryValue(request, "id") == "test-waiting" && queryValue(request, "name") == "picture.png")
+    }
+
+    @Test func withoutTheHelperItsAddressesAreNotThere() async throws {
+        let plain = RelayClient(origin: .default, transport: DemoTransport(world: DemoWorld()), vault: MemoryCookieVault())
+        let catalog = AgentCatalogSnapshot.fromServer(AgentCatalogTests.agents(#"{"id":"testing","name":{"zh":"测试助手"}}"#))
+        var status = 0
+        do {
+            _ = try await plain.control(device: a, app: "testing", chat: "test-waiting", catalog: catalog)
+        } catch let failure as ServiceFailure {
+            status = failure.status
+        }
+        #expect(status == 404)
+    }
+}

@@ -108,6 +108,14 @@ public final class NewChatJobs {
         jobs.first { $0.request == request }
     }
 
+    /// The first message's request: a new assistant at its own create address (handoff 3.4), the three at chat/new.
+    func send(_ job: NewJob, owner: ChatKey, _ client: RelayClient) async throws -> JSONValue {
+        guard !AgentCatalogSnapshot.current.isLegacy(job.app) else {
+            return try await client.detail(device: owner.device, route: "chat/new", body: job.body)
+        }
+        return try await client.agentCreate(device: owner.device, agent: job.app, body: job.body)
+    }
+
     /// Sends a first message once and follows it (web send).
     func submit(_ job: NewJob) {
         put(job)
@@ -118,7 +126,7 @@ public final class NewChatJobs {
             let pending: JSONValue
             let started = ContinuousClock.now
             do {
-                pending = try await client.detail(device: owner.device, route: "chat/new", body: job.body)
+                pending = try await self?.send(job, owner: owner, client) ?? [:]
                 self?.timed("新对话提交", ContinuousClock.now - started, speedOutcome(pending))
             } catch {
                 let refused = (error as? ServiceFailure)?.notSubmitted == true
@@ -148,7 +156,9 @@ public final class NewChatJobs {
             var again: Duration = .milliseconds(500)
             var done = false
             do {
-                let reply = try await client.detail(device: owner.device, route: "chat/new/state", query: [("request_id", rid)])
+                let reply = AgentCatalogSnapshot.current.isLegacy(job.app)
+                    ? try await client.detail(device: owner.device, route: "chat/new/state", query: [("request_id", rid)])
+                    : try await client.agentCreateState(device: owner.device, agent: job.app, request: rid)
                 guard let self, self.owner == owner, var now = self.current(rid) else {
                     self?.checking.remove(rid)
                     self?.working[rid] = nil
@@ -224,8 +234,10 @@ public final class NewChatJobs {
             let started = ContinuousClock.now
             let label = previous["can_submit"].bool() ? "新对话提交" : "新对话重试"
             do {
-                pending = previous["can_submit"].bool()
-                    ? try await client.detail(device: owner.device, route: "chat/new", body: job.body)
+                // A new assistant's create is idempotent per request id (docs §四.3), so the same request is simply
+                // posted again; the three keep their own retry.
+                pending = !AgentCatalogSnapshot.current.isLegacy(job.app) || previous["can_submit"].bool()
+                    ? try await self?.send(job, owner: owner, client) ?? [:]
                     : try await client.detail(device: owner.device, route: "chat/new/retry", body: ["request_id": .string(rid)])
                 self?.timed(label, ContinuousClock.now - started, speedOutcome(pending))
             } catch {

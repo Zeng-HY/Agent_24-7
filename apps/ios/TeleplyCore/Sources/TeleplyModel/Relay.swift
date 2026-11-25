@@ -260,6 +260,95 @@ public struct RelayClient: Sendable {
         return Page(items: items, cursor: Self.cursor(page), hasMore: page["has_more"].bool())
     }
 
+    // MARK: One assistant's own addresses (protocol 2; docs/adding-an-agent.md §四.3)
+
+    /// "/api/agents/{id}/{sub}"; an id that is not one is refused before a request exists.
+    public static func agentPath(_ agent: String, _ sub: String) throws -> String {
+        guard isValidAgentId(agent) else { throw ReadFailure("来源应用无效") }
+        return "/api/agents/\(agent)/\(sub)"
+    }
+
+    /// This conversation's state from the assistant's own address (GET /api/agents/<id>/state), within the timeout
+    /// its manifest allows (`params.state_timeout_s`; handoff 3.4).
+    public func agentState(device: String, agent: String, chat: String, fresh: Bool = true,
+                           catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
+        let params = catalog.info(agent).params
+        return try await json(get(Self.devicePath(device, try Self.agentPath(agent, "state")),
+                                  query: [("id", chat), ("fresh", fresh ? "1" : nil)],
+                                  deadline: TimeInterval(params.stateTimeoutS)))
+    }
+
+    /// A message to a new assistant (POST /api/agents/<id>/send): `id`, `request_id`, `text`, `intent` and the
+    /// pictures' ids travel here; the computer queues it after the running turn.
+    public func agentSend(device: String, agent: String, body: JSONValue,
+                          catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
+        try await json(post(Self.devicePath(device, try Self.agentPath(agent, "send")), json: body,
+                            deadline: TimeInterval(catalog.info(agent).params.sendTimeoutS)))
+    }
+
+    public func agentStop(device: String, agent: String, body: JSONValue) async throws -> JSONValue {
+        try await json(post(Self.devicePath(device, try Self.agentPath(agent, "stop")), json: body))
+    }
+
+    public func agentQueue(device: String, agent: String, body: JSONValue) async throws -> JSONValue {
+        try await json(post(Self.devicePath(device, try Self.agentPath(agent, "queue")), json: body))
+    }
+
+    /// One phone approval or answer (POST /api/agents/<id>/answer; docs §五).
+    public func agentAnswer(device: String, agent: String, body: JSONValue) async throws -> JSONValue {
+        try await json(post(Self.devicePath(device, try Self.agentPath(agent, "answer")), json: body))
+    }
+
+    /// 电脑上打开 for a new assistant (POST /api/agents/<id>/open), within `params.open_timeout_s`.
+    public func agentOpen(device: String, agent: String, chat: String,
+                          catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
+        try await json(post(Self.devicePath(device, try Self.agentPath(agent, "open")), json: ["id": .string(chat)],
+                            deadline: TimeInterval(catalog.info(agent).params.openTimeoutS)))
+    }
+
+    /// A send's receipt (GET /api/agents/<id>/receipt): `state` plus what the assistant checked (`delivered`,
+    /// `queued`, `stage`).
+    public func agentReceipt(device: String, agent: String, chat: String, request: String) async throws -> JSONValue {
+        try await json(get(Self.devicePath(device, try Self.agentPath(agent, "receipt")),
+                           query: [("id", chat), ("request_id", request)]))
+    }
+
+    /// The projects and models a new conversation of this assistant may start on (GET /api/agents/<id>/options).
+    public func agentOptions(device: String, agent: String) async throws -> JSONValue {
+        try await json(get(Self.devicePath(device, try Self.agentPath(agent, "options"))))
+    }
+
+    /// 创建并发送 for a new assistant (POST /api/agents/<id>/create), within `params.new_timeout_s`; the same
+    /// request id creates only one conversation (docs §四.3).
+    public func agentCreate(device: String, agent: String, body: JSONValue,
+                            catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
+        try await json(post(Self.devicePath(device, try Self.agentPath(agent, "create")), json: body,
+                            deadline: TimeInterval(catalog.info(agent).params.newTimeoutS)))
+    }
+
+    /// Where a new conversation stands (GET /api/agents/<id>/create/state?request_id=…).
+    public func agentCreateState(device: String, agent: String, request: String) async throws -> JSONValue {
+        try await json(get(Self.devicePath(device, try Self.agentPath(agent, "create/state")),
+                           query: [("request_id", request)]))
+    }
+
+    /// A picture for this assistant's conversation (POST /api/agents/<id>/upload), up to `params.max_image_bytes`.
+    public func agentUpload(device: String, agent: String, chat: String, draft: Bool, name: String, file: URL, size: Int64,
+                            catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
+        guard size > 0 else { throw ReadFailure("文件是空的，没有上传") }
+        let params = catalog.info(agent).params
+        guard size <= Int64(params.maxImageBytes) else {
+            throw ReadFailure("图片超过 \(params.maxImageBytes / (1024 * 1024))MB，传不上去")
+        }
+        let request = RelayRequest(method: .post,
+                                   url: origin.url(try Self.devicePath(device, try Self.agentPath(agent, "upload")),
+                                                   query: [(draft ? "draft" : "id", chat), ("name", name)]),
+                                   headers: try signed(["Accept": "application/json", "Content-Type": "application/octet-stream",
+                                                        "Origin": origin.header]),
+                                   deadline: 300, upload: file)
+        return try await json(request)
+    }
+
     /// A page of one conversation; title, folder, cwd, status and runtime (the context ring) travel as meta.
     public func history(device: String, app: String, chat: String, before: String? = nil, around: String? = nil) async throws -> Page<Message> {
         let page = try await json(get(Self.devicePath(device, "/api/chat"),
@@ -289,8 +378,13 @@ public struct RelayClient: Sendable {
     }
 
     /// The source's state. [fresh] reads the desktop now; without it the computer may answer from a read of the
-    /// last 4 s (the web's state polls). Claude's read holds its window, so it gets 20 s.
-    public func control(device: String, app: String, chat: String, fresh: Bool = true) async throws -> Control {
+    /// last 4 s (the web's state polls). Claude's read holds its window, so it gets 20 s. A new assistant (handoff
+    /// 3.4) answers from its own address, within the timeout its manifest allows.
+    public func control(device: String, app: String, chat: String, fresh: Bool = true,
+                        catalog: AgentCatalogSnapshot = .current) async throws -> Control {
+        guard catalog.isLegacy(app) else {
+            return parseControl(try await agentState(device: device, agent: app, chat: chat, fresh: fresh, catalog: catalog))
+        }
         var state = try await json(get(Self.devicePath(device, "/api/\(app)/state"), query: [("id", chat), ("fresh", fresh ? "1" : nil)],
                                        deadline: app == "claude" ? 20 : Self.defaultDeadline))
         if app == "deepseek", case .object(var fields) = state {
@@ -325,9 +419,26 @@ public struct RelayClient: Sendable {
 
     /// A send, stop, queue action or answer, the way each source takes it (Android RelayApi.command): DeepSeek
     /// names its routes and fields its own way; Claude sends through chat/send and does the rest with desktop
-    /// tokens; Codex takes them as they are. Posted once; never again by itself.
-    public func command(device: String, app: String, route: String, body: JSONValue) async throws -> JSONValue {
+    /// tokens; Codex takes them as they are; a new assistant takes them at its own addresses (handoff 3.4).
+    /// Posted once; never again by itself.
+    public func command(device: String, app: String, route: String, body: JSONValue,
+                        catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
         guard ["send", "stop", "queue-action", "answer"].contains(route) else { throw ReadFailure("当前来源不支持操作") }
+        guard catalog.isLegacy(app) else {
+            switch route {
+            case "send":
+                return try await agentSend(device: device, agent: app, body: body, catalog: catalog)
+            case "stop":
+                return try await agentStop(device: device, agent: app, body: body)
+            case "queue-action":
+                var outgoing = body.object
+                outgoing["item_id"] = .string(body["message_id"].string())
+                outgoing["action"] = .string(body["action"].string() == "promote" ? "promote" : "remove")
+                return try await agentQueue(device: device, agent: app, body: .object(outgoing))
+            default:
+                return try await agentAnswer(device: device, agent: app, body: body)
+            }
+        }
         switch app {
         case "deepseek":
             var outgoing = body.object
@@ -361,8 +472,13 @@ public struct RelayClient: Sendable {
         }
     }
 
-    /// A send's receipt by its request id (Codex, DeepSeek); Claude keeps none, its record is checked instead.
-    public func receipt(device: String, app: String, chat: String, request: String) async throws -> JSONValue {
+    /// A send's receipt by its request id (Codex, DeepSeek, and a new assistant at its own address); Claude keeps
+    /// none, its record is checked instead.
+    public func receipt(device: String, app: String, chat: String, request: String,
+                        catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
+        guard catalog.isLegacy(app) else {
+            return try await agentReceipt(device: device, agent: app, chat: chat, request: request)
+        }
         guard app != "claude" else { return ["state": "unknown"] }
         let response = try await json(get(Self.devicePath(device, "/api/\(app)/receipt"), query: [("id", chat), ("request_id", request)]))
         guard app == "deepseek", response["state"].string() != "unknown", case .object(var fields) = response else { return response }
@@ -385,8 +501,15 @@ public struct RelayClient: Sendable {
 
     /// A picture (codex/upload) or another file (files/upload) for [app]'s conversation [chat], or for a new
     /// conversation's draft by its request id ([draft]), sent from [file] with its length (Android uploadStream).
-    public func upload(device: String, app: String, chat: String, draft: Bool, name: String, file: URL, size: Int64, image: Bool) async throws -> JSONValue {
+    /// A new assistant takes pictures at its own upload address, up to the size its manifest allows (handoff 3.4).
+    public func upload(device: String, app: String, chat: String, draft: Bool, name: String, file: URL, size: Int64, image: Bool,
+                       catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
         guard size > 0 else { throw ReadFailure("文件是空的，没有上传") }
+        guard catalog.isLegacy(app) else {
+            guard image else { throw ReadFailure("这个助手只能发图片") }
+            return try await agentUpload(device: device, agent: app, chat: chat, draft: draft, name: name, file: file,
+                                         size: size, catalog: catalog)
+        }
         guard size <= (image ? Self.imageLimit : Self.fileLimit) else {
             throw ReadFailure(image ? "图片超过 20MB，传不上去" : "文件超过 64MB，中转一次最多传 64MB")
         }

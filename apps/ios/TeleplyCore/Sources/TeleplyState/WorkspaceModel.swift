@@ -397,9 +397,9 @@ public final class WorkspaceModel {
 
     /// The model and mode menus' lists: shown at once as last read, then asked of the computer, which answers
     /// from the list it keeps. [fresh] (刷新电脑上的列表) has it open Claude's menus on the desktop again. Codex
-    /// needs none: its catalog comes with the conversation state.
+    /// needs none: its catalog comes with the conversation state. A new assistant has no such menus here (3.4).
     public func loadChoices(fresh: Bool = false, model: String = "") {
-        guard let key, let client, key.app != "codex" else { return }
+        guard let key, let client, key.app != "codex", AgentCatalogSnapshot.current.isLegacy(key.app) else { return }
         choiceRead?.cancel()
         var shown = remembered(key, model: model)
         if fresh { shown["refreshing"] = true }
@@ -507,9 +507,16 @@ public final class WorkspaceModel {
                 next["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "unknown", "at": at]
                 await self.persist(key, .object(next))
                 posted = true
-                let reply = route == "codex/answer"
-                    ? try await client.command(device: key.device, app: key.app, route: "answer", body: .object(payload))
-                    : try await client.detail(device: key.device, route: route, body: .object(payload))
+                let reply: JSONValue
+                if !AgentCatalogSnapshot.current.isLegacy(key.app) {
+                    // A new assistant's answers go to its own address (handoff 3.4): the route names the action, the
+                    // body carries the card and this request's id.
+                    reply = try await client.agentAnswer(device: key.device, agent: key.app, body: .object(payload))
+                } else {
+                    reply = route == "codex/answer"
+                        ? try await client.command(device: key.device, app: key.app, route: "answer", body: .object(payload))
+                        : try await client.detail(device: key.device, route: route, body: .object(payload))
+                }
                 var done = self.current(key).object
                 done["pending_action"] = ["route": .string(route), "body": .object(payload), "status": "done", "at": at]
                 await self.persist(key, .object(done))
@@ -585,10 +592,16 @@ public final class WorkspaceModel {
                         // Shown as read, so a choice still waiting comes with tokens that work now.
                         self?.stateRead(key, actual)
                         confirmed = true
+                    case "generic/answer":
+                        // A new assistant's card: it is answered once the computer no longer waits on it.
+                        let card = body["question_id"].string()
+                        confirmed = !genericCards(actual).contains { $0["id"].string() == card }
                     default:
                         confirmed = false
                     }
                     line = route == "claude/choose" ? claudeChoiceCheck(actual)
+                        : route == "generic/answer"
+                        ? (confirmed ? "电脑上已经没有在等这张卡片，上次的回答已处理。" : "电脑上还在等这张卡片；上次那一下可能没送到，请再答一次。")
                         : confirmed ? "已读回所选设置" : "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。"
                 }
                 guard let self else { return }
@@ -629,7 +642,7 @@ public final class WorkspaceModel {
 
     /// 电脑上打开: the computer shows this conversation in its desktop app. Not a message; nothing is sent.
     /// 11-17: when Codex did not take the conversation it says why in the state that follows, shown instead of a red
-    /// error, so the state is read again at once.
+    /// error, so the state is read again at once. A new assistant has its own address for it (handoff 3.4).
     public func openOnComputer() {
         guard let key, let client, !busy else { return }
         busy = true
@@ -637,7 +650,12 @@ public final class WorkspaceModel {
         result = ""
         work = Task { [weak self] in
             do {
-                let reply = try await client.detail(device: key.device, route: "chat/open", body: ["app": .string(key.app), "id": .string(key.chat)])
+                let reply: JSONValue
+                if !AgentCatalogSnapshot.current.isLegacy(key.app) {
+                    reply = try await client.agentOpen(device: key.device, agent: key.app, chat: key.chat)
+                } else {
+                    reply = try await client.detail(device: key.device, route: "chat/open", body: ["app": .string(key.app), "id": .string(key.chat)])
+                }
                 let text = reply["text"].string()
                 if self?.key == key {
                     self?.result = text.isEmpty ? "已在电脑上打开" : text

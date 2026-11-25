@@ -20,15 +20,21 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 if model.device != nil {
-                    Section("对话") {
-                        NavigationLink("已归档对话") { ArchivedView(model: model) }
+                    // A new assistant with no archive, restore or usage of its own leaves these pages out
+                    // (handoff 3.4); a computer with the three shows them exactly as before.
+                    if model.hasAny("archive") || model.hasAny("restore") {
+                        Section("对话") {
+                            NavigationLink("已归档对话") { ArchivedView(model: model) }
+                        }
+                        .listRowBackground(Palette.controlFill)
                     }
-                    .listRowBackground(Palette.controlFill)
                     // 11-17: Codex's and Claude's limits and when each resets, and one Codex reset from the phone.
-                    Section("用量") {
-                        NavigationLink("Codex 和 Claude 的用量") { UsageView(model: model) }
+                    if model.hasAny("usage") {
+                        Section("用量") {
+                            NavigationLink("Codex 和 Claude 的用量") { UsageView(model: model) }
+                        }
+                        .listRowBackground(Palette.controlFill)
                     }
-                    .listRowBackground(Palette.controlFill)
                 }
                 Section("外观") {
                     AppearanceChoice(selection: model.theme) { model.setAppearance($0) }

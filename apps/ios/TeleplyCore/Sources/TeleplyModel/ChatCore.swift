@@ -51,6 +51,23 @@ public struct Queued: Sendable, Equatable {
     }
 }
 
+/// 此刻能力 (handoff 3.4, docs §八): a protocol 2 state may carry `capabilities_now` — the manifest's capabilities with
+/// what changed during this turn laid over them — and `capability_notes`, the computer's Chinese reasons.
+extension Control {
+    public var capabilitiesNow: JSONValue { raw["capabilities_now"] }
+
+    public var capabilityNotes: JSONValue { raw["capability_notes"] }
+
+    /// The manifest's capabilities as they apply to this conversation now: narrowed by `capabilities_now` when the
+    /// state has it, the manifest's own values otherwise (an older computer).
+    public func narrowed(_ base: AgentCapabilities) -> AgentCapabilities { base.narrowed(by: capabilitiesNow) }
+
+    /// Why [capability] cannot be used now, in the computer's words; "" when it gave none.
+    public func note(_ capability: String) -> String {
+        capabilityNotes[capability].string().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 private let terminalTurns: Set<String> = ["completed", "interrupted", "failed"]
 
 /// A reconnect never brings a finished turn back to running; a new turn may run (spec B11).
@@ -178,4 +195,12 @@ public func receiptLabel(state: String, result: JSONValue, action: String) -> St
     default: words = "送达状态待确认"
     }
     return Hints.text(words)
+}
+
+/// A new assistant's receipt (handoff 3.4): its own address says `delivered` and `queued` itself, so those words
+/// carry the same meanings the three's receipts have; everything else reads as before.
+public func agentReceiptLabel(state: String, result: JSONValue, action: String) -> String {
+    if state == "accepted" && result["delivered"].bool() { return Hints.text("已送达") }
+    if state == "unknown" && result["queued"].bool() { return Hints.text("已排队") }
+    return receiptLabel(state: state, result: result, action: action)
 }
