@@ -232,7 +232,7 @@ struct AnswerFilesTests {
         let many = (1...12).map { ref("f\($0)", view: "code", via: ["presented"]) }
         var message = Message(id: "m", role: "assistant", text: "t")
         message.files = many + [
-            ref("pic", view: "image", thumb: true, via: ["image"]),
+            ref("pic", view: "image", via: ["image"], thumb: true),
             ref("code", via: ["code"]),
             ref("path", via: ["path"]),
             ref("dup", via: ["link"]),

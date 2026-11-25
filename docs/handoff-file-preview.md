@@ -462,5 +462,6 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **测试**：`AnswerFilesTests` 覆盖 `files` 解析与老电脑退回、按路径找文件、原因文字、段落拆图（真实 swift-markdown）、`texts` 文字链接与「一个字只有一个链接」、文件条去重/上限/「还有 N 个」、入口和原因链接的往返、缩略图命名和 200 MB 清理（临时目录，不碰全局状态）。
 - **编译修正（11-25，构建 `6b0685161cde674f5039c318`）**：TeleplyModel、TeleplyState 已编过；按日志把 `FileRef` 的 `via` 调到 `preview` 前，所有 `FileRef`、`FileNote` 和新结构体的初始化都按声明顺序核对了一遍；`MarkdownReader` 里未使用的 `path` 改成布尔判断；原因弹窗换成不弃用的 `alert(_:isPresented:presenting:)`，演示消息改成显式 `JSONValue`。App 和测试待下一次编译。
 - **编译修正二（11-25，构建 `6b06869bac94586db6de0acf`）**：`firstPage()` 拆出来的 `listed` 补上 `[JSONValue]` 类型；这一段新写的、返回 `.object`/`.string`/`.array`/`.number` 的闭包和变量又逐个查过，演示消息、文件条目和原因都带显式类型。App 和测试仍待下一次编译。
+- **编译修正三（11-25，构建 `6b06881ce56bd84021a46665`）**：测试里 `ref("pic", view: "image", thumb: true, via: ["image"])` 的 `via` 应在 `thumb` 前；并用脚本把 `FileRef`、`FileNote`、`InlineRun`、`ThumbCache`、`DemoWorld`、`AnswerPicture`、`AnswerFileStrip`、`FileStripCard`、`MarkdownView`、`MarkdownBlockView`、`MessageActions` 的声明参数顺序和所有调用点逐个比对，测试里再没有顺序不对的调用。
 - **没做（留给 B/C 段）**：看图页、SVG/PDF 原文件、原文件缓存、代码高亮、表格、音视频、zip、附属资源。
 - **没验到的**：这台电脑没有 Swift，iOS 代码没有编译或跑过测试；缩略图接口（`/api/file/thumb`）没和真电脑联调过。要等推送后 Codemagic 编译和测试。
