@@ -52,13 +52,13 @@ struct MediaViewer: View {
 
 /// The system player, with its own play, pause and seek controls. The sign-in goes as an HTTP cookie, the only way
 /// AVFoundation lets a player carry one (`AVURLAssetHTTPCookiesKey`); no private header key is used.
-private struct PlayerView: UIViewRepresentable {
+private struct PlayerView: UIViewControllerRepresentable {
     let source: MediaSource
     let onFailed: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onFailed: onFailed) }
 
-    func makeUIView(context: Context) -> AVPlayerViewController {
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         let options: [String: Any] = [AVURLAssetHTTPCookiesKey: source.cookies]
         let asset = AVURLAsset(url: source.url, options: options)
@@ -72,9 +72,9 @@ private struct PlayerView: UIViewRepresentable {
         return controller
     }
 
-    func updateUIView(_ controller: AVPlayerViewController, context: Context) {}
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {}
 
-    static func dismantleUIView(_ controller: AVPlayerViewController, coordinator: Coordinator) {
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.stop()
         controller.player?.pause()
         controller.player = nil
@@ -95,9 +95,9 @@ private struct PlayerView: UIViewRepresentable {
                     case .failed:
                         self?.onFailed()
                         return
-                    case .readyToPlay:
-                        player.play()
                     default:
+                        // Ready or still loading: the player keeps its own play and pause (playing again here
+                        // would undo the user's pause every few hundred milliseconds).
                         break
                     }
                     try? await Task.sleep(for: .milliseconds(400))
