@@ -18,7 +18,7 @@ import org.json.JSONObject
  * [newData] is what the new-conversation sheet lists (folders, models, permissions): what this phone had first, the
  * computer's lists when they come (0.8, web new-chat-ui.js); [newNote] a line under the sheet when a list did not come.
  */
-data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null,
+data class WorkspaceState(val key:ChatKey?=null,val ready:Boolean=false,val pane:String?=null,val busy:Boolean=false,val error:String?=null,val data:String="{}",val saved:String="{}",val result:String="",val preview:ByteArray?=null,val previewFile:String?=null,val transfer:String="",val savingFile:Boolean=false,val savedUri:String?=null,val choices:String="{}",val choicesBusy:Boolean=false,val choicesError:String?=null,val cards:Map<String,String> = emptyMap(),val newData:String="{}",val newNote:String?=null,
                           /** 核对上次操作 reading the computer: the button waits; nothing else does. */
                           val checking:Boolean=false,
                           /** A file being turned into PDF on the computer (PowerPoint, the old .doc and .ppt), and why there is no preview ([previewNote]). */
@@ -35,6 +35,12 @@ const val ClaudePressLife=120_000L
 
 /** The most a picture, PDF, Word or Excel file drawn on a file's page may be, the computer's PDF of an Office file too. */
 const val PreviewLimit=20L*1024*1024
+/** §5.8: a picture's original may be this large in the viewer (past it the 2048 thumb is shown). */
+const val PicturePreviewLimit=30L*1024*1024
+/** §5.8: a PDF may be this large and still open on its page, kept on disk rather than in memory. */
+const val PdfPreviewLimit=100L*1024*1024
+/** §5.8: a Word or Excel file may be this large to be drawn by the phone's own pages. */
+const val OfficePreviewLimit=30L*1024*1024
 
 /** Why the computer's Office gave no PDF: in its own words when it gave some (10-27). */
 fun pdfFailure(e:Exception):String = when(e) {
@@ -64,6 +70,8 @@ fun claudePressFound(pending:JSONObject,state:Control):String {
 class WorkspaceController(private val scope:CoroutineScope,private val store:ReaderStore) {
     private val mutable=MutableStateFlow(WorkspaceState());val state=mutable.asStateFlow()
     private var api:ReadApi?=null;private var key:ChatKey?=null;private var fixture=false
+    /** Where this phone keeps answer thumbs and originals (§7); set by the app, absent in tests. */
+    var mediaDir:java.io.File?=null
     private var saveJob:Job?=null
     private var generation=0;private var read:Job?=null;private var choiceRead:Job?=null
     private val mutex=Mutex();private val demo=mutableMapOf<ChatKey,String>()
@@ -140,10 +148,10 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         launchSafe { try { mutex.withLock { if(synthetic) demo[k]=j.toString() else store.detail(k,"workspace",j.toString()) } } catch(_:Exception) { update(k) { it.copy(ready=false,error="交互草稿保存失败") } } }
     }
     /** A file page keeps the file's text in [WorkspaceState.result]: it goes with the page, not into the status line. */
-    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,busy=false,error=null,result=if(it.pane=="file") "" else it.result,converting=false,previewNote="") } }
+    fun close() { saveJob?.cancel();read?.cancel();generation++;mutable.update { it.copy(pane=null,data="{}",preview=null,previewFile=null,busy=false,error=null,result=if(it.pane=="file") "" else it.result,converting=false,previewNote="") } }
     fun panel(name:String) {
         saveJob?.cancel();read?.cancel();generation++
-        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,newNote=if(name=="new") null else it.newNote,result=if(it.pane=="file") "" else it.result,converting=false,previewNote="") }
+        mutable.update { it.copy(pane=name,data="{}",busy=false,error=null,preview=null,previewFile=null,newNote=if(name=="new") null else it.newNote,result=if(it.pane=="file") "" else it.result,converting=false,previewNote="") }
         if(name=="new") openNew() else refresh(name)
     }
     /**
@@ -686,14 +694,15 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         file(file.toJson().put("linked", true))
     }
     /**
-     * A picture in an answer (§6.1): the computer's thumb at [width] (320 for a strip, 640 or 1280 in the text), kept
-     * on this phone by (computer, file id, `v`, width) (§7). Null when it cannot be had; the page offers 重试.
+     * A picture in an answer (§6.1): the computer's thumb at [width] (320 for a strip, 640 or 1280 in the text, 2048 or
+     * 4096 for the viewer), kept on this phone by (computer, file id, `v`, width) (§7). Null when it cannot be had; the
+     * page offers 重试.
      */
     suspend fun answerThumb(caches:java.io.File, file:FileRef, width:Int):android.graphics.Bitmap? {
         val k=key ?: return null;val service=api ?: return null
         if(file.id.isBlank()) return null
-        val bucket=when { width<=320 -> 320; width<=640 -> 640; else -> 1280 }
-        val cache=ThumbCache(java.io.File(caches,ThumbCacheFolder))
+        val bucket=when { width<=320 -> 320; width<=640 -> 640; width<=1280 -> 1280; width<=2048 -> 2048; else -> 4096 }
+        val cache=ThumbCache(java.io.File(java.io.File(caches,ThumbCacheFolder),k.device))
         val kept=withContext(Dispatchers.IO) { cache.read(k.device,file.id,file.version,bucket) }
         val bytes=kept ?: try {
             val fetched=service.thumb(k.device,k.chat,file.id,bucket,file.version)
@@ -702,6 +711,34 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         } catch(e:CancellationException) { throw e }
         catch(_:Exception) { return null }
         return withContext(Dispatchers.IO) { decodeThumb(bytes,bucket) }
+    }
+    /**
+     * The original of a file the answer listed, kept under `answer-files` per computer (§7): the same file is not
+     * downloaded twice for its page, the viewer, saving or sharing. Null when this phone has no cache or the fetch fails.
+     */
+    suspend fun cachedAnswerFile(file:FileRef):java.io.File? {
+        val k=key ?: return null;val service=api ?: return null;val dir=mediaDir ?: return null
+        if(file.id.isBlank()) return null
+        val cache=FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit)
+        val ext=FileCache.safeExt(file.name)
+        cache.read(k.device,file.id,file.version,ext)?.let { return it }
+        return withContext(Dispatchers.IO) {
+            cache.writeStream(k.device,file.id,file.version,ext) { output -> service.downloadTo(k.device,k.chat,file.id,output) }
+        }
+    }
+    /** The kept original of an open file, when there is one already: saving and sharing then copy it, no second fetch. */
+    fun cachedFileFor(file:JSONObject):java.io.File? {
+        val k=key ?: return null;val dir=mediaDir ?: return null
+        val id=file.string("id");if(id.isBlank()) return null
+        return FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).read(k.device,id,file.string("v"),FileCache.safeExt(file.string("name")))
+    }
+    /** The pictures of one answer, in the order it shows them, in the viewer (§6.2): a full-screen page of its own. */
+    fun openPictures(files:List<FileRef>, index:Int) {
+        val k=key ?: return
+        val pictures=files.filter { it.picture }
+        if(pictures.isEmpty()) return
+        val items=JSONArray(pictures.map { it.toJson() })
+        update(k) { it.copy(pane="picture",busy=false,error=null,data=JSONObject().put("items",items).put("index",index.coerceIn(0,pictures.lastIndex)).toString(),result="",transfer="",savedUri=null,preview=null,previewFile=null) }
     }
     fun cancelSave() { saveJob?.cancel() }
     fun openSaved(context:Context,uri:String,name:String) {
@@ -719,29 +756,36 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      */
     fun file(file:JSONObject) {
         val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
-        update(k) { it.copy(pane="file",busy=true,data=file.toString(),error=null,preview=null,result="",transfer="",savedUri=null,savingFile=false,converting=false,previewNote="") }
+        update(k) { it.copy(pane="file",busy=true,data=file.toString(),error=null,preview=null,previewFile=null,result="",transfer="",savedUri=null,savingFile=false,converting=false,previewNote="") }
         read=launchSafe { try {
             val q=mapOf("app" to k.app,"id" to k.chat,"file" to file.getString("id"))
             val meta=service.detail(k.device,"file/meta",q)
             val kind=meta.string("kind")
             val name=file.string("name").ifBlank { meta.string("name") }
             val size=meta.optLong("size")
+            val version=file.string("v").ifBlank { meta.string("v") }
+            // New limits (§5.8) when the app's cache is here; a plain JVM (tests) keeps 1.0.10's 20 MB.
+            val cached = mediaDir!=null
+            val pictureLimit = if(cached) PicturePreviewLimit else PreviewLimit
+            val pdfLimit = if(cached) PdfPreviewLimit else PreviewLimit
+            val officeLimit = if(cached) OfficePreviewLimit else PreviewLimit
             // A CSV or TSV is read here as text, whatever the computer calls it; it never goes through a PDF.
             val sheet=sheetKind(name)
             val pdf=kind=="download" && sheet==null && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
-            val phone=phoneOffice(name)!=null && size<=PreviewLimit && (kind=="download" || sheet!=null)
+            val phone=phoneOffice(name)!=null && (size<=0 || size<=officeLimit) && (kind=="download" || sheet!=null)
             val data=JSONObject(file.toString()).put("kind",kind).put("name",name).put("meta",meta).apply {
                 remove("preview");remove("pdf")
                 if(pdf) put("pdf",true)
                 if(phone) put("preview","phone") else if(pdf) put("preview","pdf")
+                if(version.isNotBlank()) put("v",version)
             }
             if(pdf && !phone) {
                 // The page and its buttons at once; the PDF when Office on the computer has made it (5-30 s the first time).
                 if(g==generation) update(k) { it.copy(data=data.toString(),busy=false,converting=true) }
-                convert(k,service,file.getString("id"),g)
+                convert(k,service,FileRef(id=file.getString("id"),name=name,version=version),g)
                 return@launchSafe
             }
-            var text="";var bytes:ByteArray?=null;var note="";var unshown=""
+            var text="";var bytes:ByteArray?=null;var keptFile:String?=null;var note="";var unshown=""
             try {
                 if(sheet!=null) {
                     if(size<=PreviewLimit) try {
@@ -751,20 +795,37 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                     } catch(e:CharacterCodingException) { unshown="手机上显示不了这个文件，可保存后使用系统应用打开。" }
                 } else {
                     if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
-                    if((phone || kind in listOf("image","pdf")) && size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                    // Pictures, PDFs and Word/Excel are kept on disk (§7), not read whole into memory first.
+                    val picture=kind=="image" && (size<=0 || size<=pictureLimit)
+                    val document=(kind=="pdf" || pdf) && (size<=0 || size<=pdfLimit)
+                    if(picture || document || phone) {
+                        val ref=FileRef(id=file.getString("id"),name=name,version=version)
+                        // With the app's cache, the file goes to disk; a plain JVM (tests) keeps the old in-memory way.
+                        if(cached) {
+                            val kept=cachedAnswerFile(ref)
+                            if(kept!=null) { keptFile=kept.path;if(phone) bytes=kept.readBytes() }
+                            else if(phone && size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                        } else if(size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                    }
                 }
             } catch(e:CancellationException) { throw e } catch(_:Exception) { note="预览未能加载，仍可尝试保存原文件。" }
             // A CSV that could not be read, or is empty, says why instead of showing an empty table.
             if(sheet!=null && bytes==null) data.put("preview","failed")
-            if(g==generation) update(k) { it.copy(data=data.toString(),result=text,preview=bytes,busy=false,transfer=note,previewNote=unshown) }
+            if(g==generation) update(k) { it.copy(data=data.toString(),result=text,preview=bytes,previewFile=keptFile,busy=false,transfer=note,previewNote=unshown) }
         } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false,converting=false) } } }
     }
-    /** The computer's PDF of a file for the page of generation [g]; the computer's words when it gives none. */
-    private suspend fun convert(k:ChatKey,service:ReadApi,id:String,g:Int) {
-        val pdf=try { service.filePdf(k.device,k.chat,id,PreviewLimit) }
+    /** The computer's PDF of a file for the page of generation [g]; kept on disk like any other original (§7). */
+    private suspend fun convert(k:ChatKey,service:ReadApi,file:FileRef,g:Int) {
+        var note=""
+        val pdf=try { service.filePdf(k.device,k.chat,file.id,if(mediaDir!=null) PdfPreviewLimit else PreviewLimit) }
             catch(e:CancellationException) { throw e }
-            catch(e:Exception) { if(g==generation) update(k) { it.copy(converting=false,previewNote=pdfFailure(e)) };null }
-        if(pdf!=null && g==generation) update(k) { it.copy(converting=false,preview=pdf) }
+            catch(e:Exception) { note=pdfFailure(e);null }
+        if(pdf==null) { if(g==generation) update(k) { it.copy(converting=false,previewNote=note) };return }
+        val dir=mediaDir
+        val kept=if(dir==null) null else withContext(Dispatchers.IO) {
+            FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).writeStream(k.device,file.id,file.version.ifBlank { "pdf" },"pdf") { it.write(pdf) }
+        }
+        if(g==generation) update(k) { it.copy(converting=false,preview=if(kept==null) pdf else null,previewFile=kept?.path) }
     }
     /**
      * The phone could not draw the open Word or Excel file (a damaged or protected one), or the table of a CSV or TSV:
@@ -777,12 +838,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         if(s.pane!="file" || data.string("preview")!="phone") return
         // A CSV or TSV is read here and the computer has no PDF of it: show the source that is already here.
         if(data.string("sheet").isNotBlank() || sheetKind(data.string("name"))!=null) {
-            update(k) { it.copy(preview=null,data=data.put("preview","failed").toString(),previewNote="表格显示不了，下面是原文") }
+            update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="表格显示不了，下面是原文") }
             return
         }
-        if(!data.optBoolean("pdf")) { update(k) { it.copy(preview=null,data=data.put("preview","failed").toString(),previewNote="手机上显示不了这个文件，可保存后使用系统应用打开。") };return }
-        update(k) { it.copy(preview=null,data=data.put("preview","pdf").toString(),converting=true,previewNote="") }
-        read=launchSafe { convert(k,service,data.getString("id"),g) }
+        if(!data.optBoolean("pdf")) { update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="手机上显示不了这个文件，可保存后使用系统应用打开。") };return }
+        update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","pdf").toString(),converting=true,previewNote="") }
+        read=launchSafe { convert(k,service,FileRef(id=data.getString("id"),name=data.string("name"),version=data.string("v")),g) }
     }
     @Volatile private var listing:Pair<ChatKey,JSONObject>?=null
     /**
@@ -807,12 +868,13 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val k=key ?: return;val service=api ?: return;val g=generation
         if(saveJob?.isActive==true) return
         update(k) { it.copy(savingFile=true,transfer="正在保存…",savedUri=null) }
+        val kept=cachedFileFor(file)
         saveJob=scope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri,"w")?.use { output ->
                         var count=0L;var last=-1L
-                        val size=file.optJSONObject("meta")?.optLong("size") ?: file.optLong("size")
+                        val size=kept?.length()?.takeIf { it>0 } ?: file.optJSONObject("meta")?.optLong("size") ?: file.optLong("size")
                         val guarded=object:java.io.FilterOutputStream(output) {
                             override fun write(buffer:ByteArray,offset:Int,length:Int) {
                                 require(state.value.key==k && g==generation) { "会话已切换，保存已停止" }
@@ -821,7 +883,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                                 if(percent!=last) { last=percent;update(k) { it.copy(transfer=if(size>0) "正在保存 $percent%" else "已接收 $percent MB") } }
                             }
                         }
-                        service.downloadTo(k.device,k.chat,file.getString("id"),guarded)
+                        // A kept original is copied, not fetched a second time (§7).
+                        if(kept!=null) kept.inputStream().use { input ->
+                            val buffer=ByteArray(65536)
+                            while(true) { val n=input.read(buffer);if(n<0) break;guarded.write(buffer,0,n) }
+                        }
+                        else service.downloadTo(k.device,k.chat,file.getString("id"),guarded)
                         require(size<0 || count==size) { "文件接收不完整，请重试" }
                     } ?: error("无法保存到所选位置")
                 }
@@ -840,10 +907,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val k=key ?: return;val service=api ?: return;val g=generation
         if(state.value.busy) return
         update(k) { it.copy(busy=true,error=null) }
+        val kept=cachedFileFor(file)
         val job=launchSafe {
             try {
-                val cached=PlatformFiles.prepare(context,service,k,file.getString("id"),file.string("name")) { state.value.key==k && generation==g }
-                if(valid(k) && generation==g) { PlatformFiles.launch(context,cached,open);update(k) { it.copy(result="已打开系统选择器，请在所选应用中确认后续操作。") } }
+                val shared=PlatformFiles.prepare(context,service,k,file.getString("id"),file.string("name"),{ state.value.key==k && generation==g },kept)
+                if(valid(k) && generation==g) { PlatformFiles.launch(context,shared,open);update(k) { it.copy(result="已打开系统选择器，请在所选应用中确认后续操作。") } }
             } catch(e:Exception) { update(k) { it.copy(error=e.message ?: "没有可用的接收应用") } }
             finally { update(k) { it.copy(busy=false) } }
         };jobs+=job

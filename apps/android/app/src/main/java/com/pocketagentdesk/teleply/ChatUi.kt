@@ -764,9 +764,13 @@ private fun AnswerBlock(message: Message, busy: Boolean, vm: ReaderViewModel, me
             .semantics { customActions = listOf(CustomAccessibilityAction("更多操作") { openMenu(null); true }) },
     ) {
         OriginLabel(message)
-        Markdown(message.text, Modifier.fillMaxWidth(), files = message.files, notes = message.fileNotes)
-        // The files this answer names that are not drawn where it put them (§6.1): a card each, at most 8.
-        AnswerFileStrip(message)
+        // The answer's pictures, in its order, for the viewer a tap opens (§6.2).
+        val pictures = remember(message) { messagePictures(message) }
+        CompositionLocalProvider(LocalAnswerPicture provides { picture -> vm.workspace.openPictures(pictures, pictures.indexOfFirst { it.id == picture.id }) }) {
+            Markdown(message.text, Modifier.fillMaxWidth(), files = message.files, notes = message.fileNotes)
+            // The files this answer names that are not drawn where it put them (§6.1): a card each, at most 8.
+            AnswerFileStrip(message)
+        }
         // A conversation the reply made (web remote.html renderAssistantText): a button each under the text.
         remember(message.text) { createdThreads(message.text) }.forEach { thread ->
             if (thread.ready) ThreadLink(enabled = !busy) { vm.openCreated(thread.id) }
@@ -806,9 +810,10 @@ private fun AnswerFileStrip(message: Message) {
 private fun FileStripCard(file: FileRef) {
     val p = LocalTeleply.current
     val uri = LocalUriHandler.current
+    val opener = LocalAnswerPicture.current
     val mark = when (file.state) { "updated" -> " · 已更新"; "missing" -> " · 已删除"; else -> "" }
     Column(
-        Modifier.width(74.dp).clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button) { uri.openUri(itemLink(file)) }
+        Modifier.width(74.dp).clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button) { if (file.picture && opener != null) opener(file) else uri.openUri(itemLink(file)) }
             .semantics { contentDescription = "打开 ${file.name.ifBlank { "文件" }}" }.padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

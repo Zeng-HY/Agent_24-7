@@ -88,8 +88,9 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
             "fixture-xlsx" -> java.util.Base64.getDecoder().decode(FixtureWorld.XLSX)
             // The file-preview story's own files: pictures are the fixed PNG, the PDF a one-page one, R and text
             // read here, and the spreadsheet the fixed workbook.
-            "fp-chart", "fp-logo", "fp-shot-1", "fp-shot-2" -> java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
-            "fp-contract" -> java.util.Base64.getDecoder().decode(FixtureWorld.PDF)
+            "fp-chart", "fp-logo", "fp-shot-1", "fp-shot-2", "fp-huge" -> java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
+            "fp-gif" -> java.util.Base64.getDecoder().decode(FixtureWorld.GIF)
+            "fp-contract", "fp-manual" -> java.util.Base64.getDecoder().decode(FixtureWorld.PDF)
             "fp-budget" -> java.util.Base64.getDecoder().decode(FixtureWorld.XLSX)
             "fp-run", "fp-analysis" -> FixtureWorld.R_SOURCE.toByteArray()
             "fp-report" -> FixtureWorld.REPORT_TEXT.toByteArray()
@@ -909,6 +910,10 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
             FileRef(id = "fp-shot-2", name = "截图二.png", path = "D:\\fixture\\file-preview\\shot-2.png", kind = "image", view = "image", size = 462, state = "updated", version = "v2", width = 1080, height = 720, thumb = true, via = listOf("presented")),
             FileRef(id = "fp-run", name = "run.R", path = "D:\\fixture\\file-preview\\run.R", kind = "text", view = "code", lang = "r", size = 620, state = "current", version = "v1", texts = listOf("D:\\fixture\\file-preview\\run.R"), via = listOf("code")),
             FileRef(id = "fp-report", name = "报告.txt", path = "D:\\fixture\\file-preview\\report.txt", kind = "text", view = "text", size = 480, state = "current", version = "v1", texts = listOf("D:/fixture/file-preview/report.txt"), via = listOf("path")),
+            // B's own pieces: an original over 30 MB (the viewer takes the 2048 thumb), a GIF that moves, and a PDF.
+            FileRef(id = "fp-huge", name = "大图.png", path = "D:\\fixture\\file-preview\\huge.png", kind = "image", view = "image", size = 48L * 1024 * 1024, state = "current", version = "v1", width = 6000, height = 4000, thumb = true, via = listOf("image")),
+            FileRef(id = "fp-gif", name = "动图.gif", path = "D:\\fixture\\file-preview\\moving.gif", kind = "image", view = "image", size = 308, state = "current", version = "v1", width = 48, height = 32, thumb = true, via = listOf("presented")),
+            FileRef(id = "fp-manual", name = "使用说明.pdf", path = "D:\\fixture\\file-preview\\manual.pdf", kind = "pdf", view = "pdf", size = 1_022, state = "current", version = "v1", via = listOf("link")),
         ) + PREVIEW_FILLER
 
         /** The answer, written the way a newer computer marks it up: pictures in place and links that match `files`. */
@@ -916,6 +921,8 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
 文件都在这儿。
 
 ![月度图表](D:/fixture/file-preview/chart.png)
+
+![大图](<D:/fixture/file-preview/huge.png>)
 
 ![标志](D:/fixture/file-preview/logo.svg)
 
@@ -981,6 +988,9 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
         val MARKDOWN_FILE = "# 说明\n\n这是一个 **Markdown** 文件，默认用阅读视图显示。\n\n- 第一条\n- 第二条\n\n> 也可以切到「查看源码」看原文。"
 
         const val PNG = "iVBORw0KGgoAAAANSUhEUgAAAGAAAAAoCAIAAACO8WhuAAABlUlEQVR42u3QhzICAAAGYM9CyB4hMyF7JDOrsreydyIzhczISNll772P4zjHcRzHOY7jOOcNPIe7/3uETys+6Tcu+Sc25ZuT+sVJ+2Snf7Ay3lmZbzFZr9Hcl2jec1T2U2TOY2TuQ0TePTP/jllwG154E1Z0HVZ8FVpyGVJ6EVx2Hlx+FsQ/ZVScMATHgZVH9KpDuvAgoHrPv2bXv3bbr27Tt37Dt2HNR7Tq3bjsLV7ykix4Ns17NM96tMy4S6dorRpam9qtfdy1Y8y1c8Sla5gqU1G7lc49Coq8n9Lb59Qnd+zvcRyQOSi67Ac77JTtdqpW2yEpebiZPCKxGRVbj4msxxusJupI6lqSptpyUmgxVWkxLTCf4ZvNlpnNlZrOF5ssFBkvFhgv5Rst5xqu5Biu8gzWuMT1TOJGuv5mmt5Wit52su5OImE3gbAXp7Mfq33A1j5kaSEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEIQhCCEIQgBCEIQQhCEIIQhCAEIQhBCEIQghCEIAQhCEEI+m9BfzQ+a2t+SvdoAAAAAElFTkSuQmCC"
+
+        /** A two-frame GIF (48 × 32, red then blue), made for the demo, so 动图 moves from Android 9 on. */
+        const val GIF = "R0lGODlhMAAgAIEAAMg8PAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAKAAAACwAAAAAMAAgAAAIQQABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFixgzatzIsaPHjyBDihxJsqTJkyhTqlzJsqXLlzBjypxJs6bNmQEBACH5BAEoAAEALAAAAAAwACAAgTx4yAAAAAAAAAAAAAhBAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWLGDNq3Mixo8ePIEOKHEmypMmTKFOqXMmypcuXMGPKnEmzps2ZAQEAOw=="
 
         val EXAMPLE = """
 # 原生阅读示例

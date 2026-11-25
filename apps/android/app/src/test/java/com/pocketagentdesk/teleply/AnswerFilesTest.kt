@@ -47,6 +47,31 @@ class AnswerFilesTest {
         assertEquals(1, paragraphPieces(paragraph, ink, svg, emptyList()).size)
     }
 
+    @Test fun theDemoStoryHasTheBigPictureTheGifAndThePdf() {
+        val files = FixtureWorld.PREVIEW_FILES
+        val huge = files.first { it.id == "fp-huge" }
+        assertTrue(huge.size > OriginalPictureLimit)
+        assertTrue(huge.picture)
+        assertEquals("image", files.first { it.id == "fp-gif" }.view)
+        assertTrue(files.first { it.id == "fp-gif" }.picture)
+        assertEquals("pdf", files.first { it.id == "fp-manual" }.view)
+        // The answer lists the big picture where it belongs, so the viewer's order starts with the drawn ones.
+        assertTrue(messagePictures(FixtureWorld.FILE_PREVIEW_MESSAGES[1]).any { it.id == "fp-huge" })
+    }
+
+    @Test fun theViewerGetsThePicturesInTheOrderTheAnswerShowsThem() {
+        val files = listOf(
+            ref("inline-a", "D:\\a\\a.png", view = "image", thumb = true, via = listOf("image")),
+            ref("presented-b", "D:\\a\\b.png", view = "image", thumb = true, via = listOf("presented")),
+            ref("not-thumbed", "D:\\a\\c.png", view = "image", thumb = false, via = listOf("presented")),
+            ref("code", "D:\\a\\d.R", view = "code", via = listOf("code")),
+        )
+        val message = Message("m", "assistant", "前 ![a](<D:/a/a.png>) 后", files = files)
+        assertEquals(listOf("inline-a", "presented-b"), messagePictures(message).map { it.id })
+        // An older computer answers nothing: the viewer is only for a newer computer's listed files.
+        assertTrue(messagePictures(Message("o", "assistant", "![a](<D:/a/a.png>)")).isEmpty())
+    }
+
     @Test fun theThumbWidthFollowsTheBubbleInPixels() {
         assertEquals(640, pictureWidth(320f))
         assertEquals(640, pictureWidth(640f))

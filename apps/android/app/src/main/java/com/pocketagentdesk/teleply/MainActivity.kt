@@ -77,6 +77,8 @@ class MainActivity : ComponentActivity() {
                 @Suppress("UNCHECKED_CAST") override fun <T:ViewModel> create(modelClass:Class<T>):T = (ReaderViewModel(store,prepare={ withContext(Dispatchers.IO) { moveService(store,vault) { from,to -> graph.watch.moved(from,to);graph.push.moved(from,to) } } },accountDeleted={ graph.watch.disable() }) { origin -> RelayApi(origin,vault) }).also { it.pushSignedOut={ graph.push.signedOut() } } as T
             })
             val state by vm.state.collectAsStateWithLifecycle()
+            // The app keeps answer thumbs and originals under its cache (§7); clearing on sign-out uses the same place.
+            SideEffect { vm.mediaDir=cacheDir;vm.workspace.mediaDir=cacheDir }
             LaunchedEffect(watchToken,state.busy,state.account) {
                 val token=watchToken
                 if(token!=null && !state.busy && state.account!=null) {

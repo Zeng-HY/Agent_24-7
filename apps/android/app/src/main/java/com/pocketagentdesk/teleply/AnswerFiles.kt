@@ -67,7 +67,28 @@ fun fileLikeLink(destination: String): Boolean {
     return '/' in destination || '\\' in destination
 }
 
-/** The thumbnail width for a bubble that is [bubblePx] pixels wide: 640 up to there, 1280 past it (§6.3). */
+/**
+ * The pictures of one answer in the order it shows them (§6.2): those drawn in its words first, then the picture cards
+ * under it, by `id` once. The viewer pages through them with 2/5 at the top.
+ */
+fun messagePictures(message: Message): List<FileRef> {
+    val files = message.files ?: return emptyList()
+    if (files.isEmpty()) return emptyList()
+    val out = mutableListOf<FileRef>()
+    val seen = HashSet<String>()
+    fun walk(node: Node) {
+        if (node is Image) pictureForImage(files, node.destination)?.let { if (seen.add(it.id)) out += it }
+        var child = node.firstChild
+        while (child != null) { walk(child); child = child.next }
+    }
+    walk(answerDocument(message.text))
+    stripFiles(message, drawnPictureIds(message)).filter { it.picture }.forEach { if (seen.add(it.id)) out += it }
+    return out
+}
+
+/**
+ * The thumbnail width for a bubble that is [bubblePx] pixels wide: 640 up to there, 1280 past it (§6.3).
+ */
 fun pictureWidth(bubblePx: Float): Int = if (bubblePx <= 640f) 640 else 1280
 
 /** The ways a file reaches the strip: linked, cited or sent by an agent, not a path written in code (§6.1). */

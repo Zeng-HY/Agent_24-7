@@ -3,13 +3,22 @@ package com.pocketagentdesk.teleply
 import android.content.Context
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -71,6 +80,7 @@ fun JSONObject.strings(name:String)=optJSONArray(name)?.let { a -> (0 until a.le
         "remote" -> TeleplySheet("从电脑选择文件",back) { PaneStatus(s,j,c);RemotePane(k,data,c) }
         "files" -> TeleplySheet("对话文件",c::close) { PaneStatus(s,j,c);FilesPane(data,c) }
         "file" -> DetailPage(data.string("name").ifBlank { "文件" },fileBack(data,c)) { FilePage(vm,k,data,s) }
+        "picture" -> DetailPage("看图",c::close) { PictureViewerPage(vm,data) }
         "diff" -> DetailPage("本轮差异",c::close) { DiffPage(data,c,s) }
         else -> LaunchedEffect(pane) { c.close() }
     }
@@ -440,10 +450,13 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     // How the file shows: "phone", Word or Excel drawn here from the file itself (10-28), a CSV or TSV as a table
     // (11-16); "pdf", the PDF the computer's Office makes (PowerPoint, the old .doc and .ppt; 10-27); "failed", neither.
     val shown=data.string("preview");val kind=data.string("kind");val bytes=s.preview
+    val keptFile=s.previewFile?.let { java.io.File(it) }
     val meta=data.optJSONObject("meta") ?: JSONObject()
     val ready=!s.busy && s.error==null
     val table=sheet!=null && shown=="phone" && bytes!=null && !asSource
-    val fill=s.converting || table || (sheet==null && bytes!=null && (shown=="phone" || shown=="pdf" || kind=="pdf" || kind=="image")) || (html && rendered && s.result.isNotBlank())
+    val shownPicture=kind=="image" && (keptFile!=null || bytes!=null)
+    val shownPdf=(kind=="pdf" || shown=="pdf") && (keptFile!=null || bytes!=null)
+    val fill=s.converting || table || shownPicture || shownPdf || (sheet==null && bytes!=null && shown=="phone" && !asSource) || (html && rendered && s.result.isNotBlank())
     val menus=LocalMenuHost.current;val more=remember { MenuAnchor() }
     PageFrame(name,null,fileBack(data,c),fill=fill,actions={
         CapsuleToolbar(Modifier.menuAnchor(more)) {
@@ -471,8 +484,10 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
                         Text("正在用电脑上的 Office 转成 PDF…",style=MaterialTheme.typography.note,color=p.muted)
                     }
                     bytes!=null && shown=="phone" -> OfficePreview(bytes,data,c::officeFailed,Modifier.fillMaxSize())
-                    bytes!=null && (shown=="pdf" || kind=="pdf") -> PdfPages(bytes)
-                    bytes!=null && kind=="image" -> PicturePreview(bytes)
+                    shownPdf && keptFile!=null -> PdfPages(keptFile)
+                    shownPdf && bytes!=null -> PdfPages(bytes)
+                    shownPicture && keptFile!=null -> PicturePreview(keptFile)
+                    shownPicture && bytes!=null -> PicturePreview(bytes)
                     else -> HtmlPreview(s.result,data,vm,Modifier.fillMaxSize())
                 }
             }
@@ -502,7 +517,7 @@ fun fileSize(bytes:Long):String = when {
     val p=LocalTeleply.current
     val size=data.optJSONObject("meta")?.optLong("size") ?: 0L
     val why=s.previewNote.ifBlank { s.transfer.takeIf { !s.savingFile && s.savedUri==null && it.startsWith("预览未能加载") }
-        ?: if(size>PreviewLimit) "超过 20MB，不直接显示" else if(data.string("kind")=="text") "文件是空的" else "手机上看不了这类文件" }
+        ?: if(data.string("kind")=="image" && size>PicturePreviewLimit) "这张图超过 30MB，不直接显示" else if(data.string("kind")=="pdf" && size>PdfPreviewLimit) "这个 PDF 超过 100MB，不直接显示" else if(size>PreviewLimit) "超过 20MB，不直接显示" else if(data.string("kind")=="text") "文件是空的" else "手机上看不了这类文件" }
     Column(Modifier.fillMaxWidth().padding(top=72.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(12.dp)) {
         Icon(TeleplyIcons.File,contentDescription=null,tint=p.muted,modifier=Modifier.size(48.dp))
         Text(data.string("name").ifBlank { "文件" },style=MaterialTheme.typography.bodyLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
@@ -524,7 +539,7 @@ fun fileSize(bytes:Long):String = when {
 }
 
 /** One open PDF for [PdfPages]: how many pages, and one page drawn at a time (PdfRenderer opens one page at a time). */
-private class OpenPdf(private val file:java.io.File,private val renderer:android.graphics.pdf.PdfRenderer):java.io.Closeable {
+private class OpenPdf(private val renderer:android.graphics.pdf.PdfRenderer):java.io.Closeable {
     val count=renderer.pageCount
     private var closed=false
     /** Page [index], [width] pixels wide on white; null once the page has gone. */
@@ -536,36 +551,79 @@ private class OpenPdf(private val file:java.io.File,private val renderer:android
             }
         }
     }
-    override fun close() = synchronized(this) { if(!closed) { closed=true;runCatching { renderer.close() };file.delete() } }
+    override fun close() = synchronized(this) { if(!closed) { closed=true;runCatching { renderer.close() } } }
     companion object {
-        fun open(folder:java.io.File,bytes:ByteArray):OpenPdf {
-            val file=java.io.File.createTempFile("preview-",".pdf",folder)
-            try { file.writeBytes(bytes);return OpenPdf(file,android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(file,android.os.ParcelFileDescriptor.MODE_READ_ONLY))) }
-            catch(e:Throwable) { file.delete();throw e }
-        }
+        /** A PDF already kept on this phone (§7), opened where it lies; closing the page leaves the file. */
+        fun open(file:java.io.File):OpenPdf =
+            OpenPdf(android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(file,android.os.ParcelFileDescriptor.MODE_READ_ONLY)))
     }
 }
 
 /**
  * A PDF's pages one under another on grey, each as wide as the screen, drawn as it comes into view (WeChat, 10-28; was
- * one page at a time with 上一页 and 下一页). The open file goes with the page.
+ * one page at a time with 上一页 and 下一页). A pinch zooms 1–3× (§6.2): while the fingers are down the page is drawn
+ * enlarged, and when they stop the visible pages are drawn again at the new scale (at most 4096 px wide), so they stay
+ * sharp; pages not on screen keep the enlarged old drawing until they come back.
  */
-@Composable private fun PdfPages(bytes:ByteArray) {
-    val context=LocalContext.current;val p=LocalTeleply.current
-    var pdf by remember(bytes) { mutableStateOf<OpenPdf?>(null) }
-    var failed by remember(bytes) { mutableStateOf(false) }
-    LaunchedEffect(bytes) {
-        val opened=withContext(Dispatchers.IO+kotlinx.coroutines.NonCancellable) { runCatching { OpenPdf.open(context.cacheDir,bytes) }.getOrNull() }
+@Composable private fun PdfPages(file:java.io.File) {
+    val p=LocalTeleply.current
+    var pdf by remember(file) { mutableStateOf<OpenPdf?>(null) }
+    var failed by remember(file) { mutableStateOf(false) }
+    LaunchedEffect(file) {
+        val opened=withContext(Dispatchers.IO+kotlinx.coroutines.NonCancellable) { runCatching { OpenPdf.open(file) }.getOrNull() }
         if(opened==null) { failed=true;return@LaunchedEffect }
         pdf=opened
         try { kotlinx.coroutines.awaitCancellation() } finally { pdf=null;opened.close() }
     }
+    var zoom by remember(file) { mutableFloatStateOf(1f) }
+    var renderZoom by remember(file) { mutableFloatStateOf(1f) }
+    var pan by remember(file) { mutableStateOf(Offset.Zero) }
+    // The page is shown scaled at once; once the fingers stop, the visible pages are drawn again at that scale.
+    LaunchedEffect(zoom) { kotlinx.coroutines.delay(300);renderZoom=zoom }
     val open=pdf
     if(failed) Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=p.muted,modifier=Modifier.padding(16.dp))
     else if(open!=null) BoxWithConstraints(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(if(p.dark) 0xFF2C2C2E else 0xFFE9E9EC))) {
-        val width=constraints.maxWidth.coerceIn(1,1440)
-        androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(vertical=8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-            items(open.count) { index -> PdfPage(open,index,width) }
+        val base=constraints.maxWidth.coerceIn(1,1440)
+        val density=LocalDensity.current
+        val maxX=with(density) { (constraints.maxWidth*(zoom-1f))/2f }
+        val maxY=with(density) { (constraints.maxHeight*(zoom-1f))/2f }
+        val zoomNow by rememberUpdatedState(zoom)
+        Box(
+            Modifier.fillMaxSize()
+                .pointerInput(open) { pdfViewerGestures({ zoomNow }, { next -> zoom=next }, { moved -> pan += moved }) }
+                .graphicsLayer {
+                    scaleX=zoom;scaleY=zoom
+                    translationX=pan.x.coerceIn(-maxX,maxX);translationY=pan.y.coerceIn(-maxY,maxY)
+                },
+        ) {
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(vertical=8.dp),verticalArrangement=Arrangement.spacedBy(8.dp),userScrollEnabled=zoom<=1.01f) {
+                items(open.count) { index -> PdfPage(open,index,(base*renderZoom).toInt().coerceIn(1,4096)) }
+            }
+        }
+    }
+}
+
+/** A PDF's pinch (§6.2): two fingers zoom and pan; one finger pans only while enlarged, so the pages still scroll at 1×. */
+private suspend fun PointerInputScope.pdfViewerGestures(zoom:()->Float,onZoom:(Float)->Unit,onPan:(Offset)->Unit) {
+    awaitEachGesture {
+        var scale=zoom()
+        awaitFirstDown(requireUnconsumed=false)
+        while(true) {
+            val event=awaitPointerEvent()
+            if(event.changes.size>=2) {
+                val factor=event.calculateZoom();val moved=event.calculatePan()
+                if(factor!=1f || moved!=Offset.Zero) {
+                    scale=pdfZoomBy(scale,factor);onZoom(scale);onPan(moved)
+                    event.changes.forEach { it.consume() }
+                }
+            } else if(scale>1.01f) {
+                val change=event.changes.firstOrNull()
+                if(change!=null) {
+                    val moved=change.positionChange()
+                    if(moved!=Offset.Zero) { onPan(moved);change.consume() }
+                }
+            }
+            if(event.changes.none { it.pressed }) break
         }
     }
 }
@@ -574,24 +632,41 @@ private class OpenPdf(private val file:java.io.File,private val renderer:android
     var drawn by remember(pdf,index,width) { mutableStateOf<android.graphics.Bitmap?>(null) }
     LaunchedEffect(pdf,index,width) { drawn=withContext(Dispatchers.IO) { runCatching { pdf.draw(index,width) }.getOrNull() } }
     val page=drawn
-    if(page!=null) Image(page.asImageBitmap(),contentDescription="第 ${index+1} 页，共 ${pdf.count} 页",modifier=Modifier.fillMaxWidth().aspectRatio(page.width.toFloat()/page.height))
-    else Box(Modifier.fillMaxWidth().aspectRatio(0.707f).background(androidx.compose.ui.graphics.Color.White))
+    Box(Modifier.fillMaxWidth()) {
+        if(page!=null) Image(page.asImageBitmap(),contentDescription="第 ${index+1} 页，共 ${pdf.count} 页",modifier=Modifier.fillMaxWidth().aspectRatio(page.width.toFloat()/page.height))
+        else Box(Modifier.fillMaxWidth().aspectRatio(0.707f).background(androidx.compose.ui.graphics.Color.White))
+        // 页码 (§6.2): which page of the file this is.
+        androidx.compose.material3.Text("${index+1}",style=MaterialTheme.typography.labelSmall,color=androidx.compose.ui.graphics.Color(0xFF6B6B70),
+            modifier=Modifier.align(Alignment.TopEnd).padding(6.dp).background(androidx.compose.ui.graphics.Color.White.copy(alpha=0.85f),RoundedCornerShape(4.dp)).padding(horizontal=4.dp,vertical=1.dp))
+    }
 }
 
-/** A picture fitted to the page, at most 2048 px on its longer side. */
+/** Kept-file first; a PDF still in memory (a plain JVM, or a cache that could not be written) goes through a temp file. */
+@Composable private fun PdfPages(bytes:ByteArray) {
+    val context=LocalContext.current
+    val file=remember(bytes) { runCatching { java.io.File.createTempFile("preview-",".pdf",context.cacheDir).apply { writeBytes(bytes);deleteOnExit() } }.getOrNull() }
+    if(file!=null) PdfPages(file) else Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=LocalTeleply.current.muted,modifier=Modifier.padding(16.dp))
+}
+
+/** A picture already in memory (a plain JVM test, or a cache that could not be written), at most 2048 px. */
 @Composable private fun PicturePreview(bytes:ByteArray) {
-    var bitmap by remember(bytes) { mutableStateOf<android.graphics.Bitmap?>(null) };var failed by remember(bytes) { mutableStateOf(false) }
-    LaunchedEffect(bytes) {
-        val decoded=withContext(Dispatchers.IO) { runCatching {
-            val info=android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds=true };android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,info)
-            require(info.outWidth>0 && info.outHeight>0)
-            android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,android.graphics.BitmapFactory.Options().apply { inSampleSize=maxOf(1,maxOf(info.outWidth,info.outHeight)/2048) })
-        }.getOrNull() }
-        if(decoded==null) failed=true else bitmap=decoded
+    val bitmap=remember(bytes) { runCatching { decodeThumb(bytes,2048) }.getOrNull() }
+    Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
+        if(bitmap!=null) Image(bitmap.asImageBitmap(),contentDescription="文件预览",modifier=Modifier.fillMaxSize(),contentScale=androidx.compose.ui.layout.ContentScale.Fit)
+        else Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=LocalTeleply.current.muted)
+    }
+}
+
+/** A picture fitted to the page, at most 2048 px on its longer side, decoded from the phone's kept original. */
+@Composable private fun PicturePreview(file:java.io.File) {
+    var done by remember(file) { mutableStateOf(false) }
+    val bitmap by produceState<android.graphics.Bitmap?>(null,file) {
+        value=withContext(Dispatchers.IO) { runCatching { decodePictureFile(file,2048) }.getOrNull() }
+        done=true
     }
     Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(),contentDescription="文件预览",modifier=Modifier.fillMaxSize(),contentScale=androidx.compose.ui.layout.ContentScale.Fit) }
-        if(failed) Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=LocalTeleply.current.muted)
+        if(done && bitmap==null) Text("无法原生预览，可保存后使用系统应用打开。",style=MaterialTheme.typography.note,color=LocalTeleply.current.muted)
     }
 }
 

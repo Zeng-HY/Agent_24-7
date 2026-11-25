@@ -95,13 +95,16 @@ object PlatformFiles {
         val root=File(context.cacheDir,"share").canonicalFile
         root.listFiles()?.filter { it.isDirectory && runCatching { UUID.fromString(it.name) }.isSuccess && it.canonicalFile.parentFile==root && now-it.lastModified()>24*60*60*1000L }?.forEach { it.deleteRecursively() }
     }
-    suspend fun prepare(context:Context,api:ReadApi,key:ChatKey,id:String,name:String,valid:()->Boolean):File=withContext(Dispatchers.IO) {
+    suspend fun prepare(context:Context,api:ReadApi,key:ChatKey,id:String,name:String,valid:()->Boolean,cached:File?=null):File=withContext(Dispatchers.IO) {
         cleanExpired(context)
         val root=File(context.cacheDir,"share").apply { mkdirs() }.canonicalFile
         val folder=File(root,UUID.randomUUID().toString()).apply { check(mkdir()) }
         val file=File(folder,safeShareName(name))
         try {
-            file.outputStream().use { output ->
+            // A file already kept on this phone (§7) is copied, not downloaded again.
+            if(cached!=null && cached.isFile) {
+                cached.inputStream().use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+            } else file.outputStream().use { output ->
                 val guarded=object:java.io.FilterOutputStream(output) {
                     override fun write(buffer:ByteArray,offset:Int,length:Int) { check(valid()) { "会话已切换，分享已取消" };out.write(buffer,offset,length) }
                 }

@@ -406,6 +406,7 @@ internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, note
 @Composable private fun MarkdownPicture(file: FileRef) {
     val p = LocalTeleply.current
     val loader = LocalAnswerThumb.current
+    val opener = LocalAnswerPicture.current
     val uri = LocalUriHandler.current
     val density = LocalDensity.current
     // The bubble's width in pixels, not in dp: a 411 dp phone at 2.6 draws a bubble over 1,000 px wide, where 640
@@ -426,7 +427,7 @@ internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, note
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Box(
                 Modifier.width(shownWidth).height(height).clip(RoundedCornerShape(12.dp)).background(p.panel)
-                    .clickable(role = Role.Image) { uri.openUri(itemLink(file)) }
+                    .clickable(role = Role.Image) { opener?.invoke(file) ?: uri.openUri(itemLink(file)) }
                     .semantics { contentDescription = "查看 ${file.name.ifBlank { "图片" }}" },
                 contentAlignment = Alignment.Center,
             ) {

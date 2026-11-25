@@ -162,6 +162,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     val composer=ChatController(viewModelScope,store)
     val workspace=WorkspaceController(viewModelScope,store)
     val jobs=NewChatJobs(viewModelScope,store)
+    /** Where this phone keeps answer thumbs and originals (§7): set by the app; null in tests, which clear nothing. */
+    var mediaDir:java.io.File?=null
     /** The whole reason of a grey note tapped in an answer (§6.4), shown over the page until 知道了. */
     val answerNote = MutableStateFlow<FileNote?>(null)
     fun showAnswerNote(note: FileNote) { answerNote.value = note }
@@ -355,6 +357,7 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     }
     /** What 退出登录 leaves: 登录 on the same service, nothing of the account or of where it was; [note] under the form. */
     private suspend fun signedOut(g:Int,s:ReaderState,note:String?=null) {
+        mediaDir?.let { AnswerCaches.clearAll(it) }
         persistSelection(s.scope,"","","")
         commit(g) { ReaderState(app=s.app,origin=s.origin,screen=Screen.Login,theme=s.theme,dynamic=s.dynamic,serverVersion=s.serverVersion,emailEnabled=s.emailEnabled,fixture=s.fixture,accountNote=note) }
     }
@@ -370,6 +373,8 @@ class ReaderViewModel(private val store: ReaderStore, private val defaultOrigin:
     fun removeDevice(device: Computer) = operation { g ->
         val service = requireNotNull(api)
         service.revokeDevice(device.id)
+        // This computer's cache goes with it (§7).
+        mediaDir?.let { AnswerCaches.clearComputer(it, device.id) }
         val account = service.account()
         commit(g) { it.copy(account=account,device=if(it.device?.id==device.id) null else it.device,chats=if(it.device?.id==device.id) emptyList() else it.chats) }
     }
