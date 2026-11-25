@@ -172,14 +172,18 @@
     showAnswerDialog('文件打不开',[el('p','answer-reason-short',info.short),el('p','answer-reason-full',info.full)]);}
   function openAnswerFile(file){if(!cur||!file||!file.id)return;const target={...cur};
     if(file.state==='missing'){openAnswerReason({reason:'missing',text:'文件已移动或删除'});return;}
-    if(file.kind==='download'&&file.preview!=='pdf')download(target,file);else preview(target,file);}
-  function answerCard(file,{thumb=false}={}){
+    const view=file.view||'';
+    const showPage=['image','svg','pdf','table','markdown','html','code','text'].includes(view)
+      ||file.kind!=='download'||file.preview==='pdf';
+    if(showPage)preview(target,file);else download(target,file);}
+  function answerCard(file,{thumb=false,owner=null}={}){
     const card=el('button','answer-file'+(file.state==='missing'?' missing':''));
     card.type='button';card.dataset.fileId=file.id||'';
     card.setAttribute('aria-label',(file.name||'文件')+(file.state==='missing'?'，文件已移动或删除':'，打开文件'));
     let media=null;
-    if(thumb&&file.view==='image'&&file.state!=='missing'){
-      media=el('img','answer-file-thumb');media.alt='';media.loading='lazy';
+    const showPicture=thumb&&(file.view==='image'||file.view==='svg')&&file.state!=='missing'&&(file.view==='image'||file.thumb);
+    if(showPicture){
+      media=el('img','answer-file-thumb');media.alt='';
       media.onerror=()=>{media.remove();card.prepend(answerIcon(file));};
       media.src=answerImageUrl(cur?{...cur}:{},file,320);
     }
@@ -187,8 +191,9 @@
     card.append(el('span','answer-file-name',file.name||'文件'));
     const bits=[answerSize(file.size),answerState(file)].filter(Boolean);
     card.append(el('span','answer-file-meta',bits.join(' · ')));
-    card._answerFile=file;
-    card.onclick=e=>{e.preventDefault();e.stopPropagation();if(answerDialog?.open)answerDialog.close();openAnswerFile(file);};
+    card._answerFile=file;card._owner=owner;
+    card.onclick=e=>{e.preventDefault();e.stopPropagation();if(answerDialog?.open)answerDialog.close();
+      if(owner&&(file.view==='image'||file.view==='svg')&&file.state!=='missing')openImageAt(owner,file);else openAnswerFile(file);};
     return card;
   }
   function answerNoteChip(note){const info=answerReasonInfo(note.reason,note.text);
@@ -201,9 +206,9 @@
     if(text)span.append(document.createTextNode(text));span.append(answerNoteChip(note));return span;}
   function answerPlaceholderText(ph,key){const alt=ph.querySelector('img')?.getAttribute('alt')||'';
     return alt||String(key||'').split(/[\\/]/).pop()||'图片';}
-  function answerInlineImage(file,key,index){
+  function answerInlineImage(file,key,index,node){
     const target=cur?{...cur}:null;
-    const fig=el('figure','local-image msg-image loading');
+    const fig=el('figure','local-image msg-image loading'+(file.view==='svg'?' msg-svg':''));
     fig.dataset.observed='1';fig.dataset.answerRendered='1';fig.dataset.fileId=file.id||'';fig.dataset.resultKey=key;fig.dataset.resultIndex=index||'';
     fig.style.aspectRatio=Number(file.w)>0&&Number(file.h)>0?file.w+' / '+file.h:'4 / 3';
     const img=el('img');img.alt=file.name||'';img.loading='lazy';img.decoding='async';
@@ -214,11 +219,12 @@
       retry.onclick=e=>{e.preventDefault();e.stopPropagation();fig.classList.add('loading');fig.classList.remove('failed');state.hidden=true;
         img.src=answerImageUrl(target,file,answerImageWidth())+'&retry='+(++fig._retries||1);};
       state.replaceChildren(el('span','','图片读取失败'),retry);};
-    fig.onclick=e=>{if(e.target.closest('button'))return;e.preventDefault();e.stopPropagation();openAnswerFile(file);};
+    fig._answerFile=file;fig._owner=node;
+    fig.onclick=e=>{if(e.target.closest('button'))return;e.preventDefault();e.stopPropagation();openImageAt(node,file);};
     img.src=answerImageUrl(target,file,answerImageWidth());
     return fig;
   }
-  function answerInlineCard(file,key,index){const card=answerCard(file);
+  function answerInlineCard(file,key,index,node){const card=answerCard(file,{owner:node});
     card.classList.add('local-image','msg-file-card');
     card.dataset.observed='1';card.dataset.answerRendered='1';card.dataset.resultKey=key;card.dataset.resultIndex=index||'';
     return card;}
@@ -233,17 +239,31 @@
     }
     if(!eligible.length)return;
     const strip=el('div','answer-files');strip.setAttribute('aria-label','这条消息的文件');
-    for(const f of eligible.slice(0,8))strip.append(answerCard(f,{thumb:true}));
+    for(const f of eligible.slice(0,8))strip.append(answerCard(f,{thumb:true,owner:node}));
     if(eligible.length>8){
       const more=el('button','answer-more','还有 '+(eligible.length-8)+' 个');more.type='button';
-      more.onclick=e=>{e.preventDefault();e.stopPropagation();openAnswerMessageFiles(files);};
+      more.onclick=e=>{e.preventDefault();e.stopPropagation();openAnswerMessageFiles(files,node);};
       strip.append(more);
     }
     node.append(strip);
   }
-  function openAnswerMessageFiles(files){
+  function answerImageItems(node){
+    const items=[],seen=new Set(),entry=answerMessageFiles.get(node);
+    const add=file=>{if(!file||!file.id||seen.has(file.id)||!['image','svg'].includes(file.view)||file.state==='missing')return;
+      seen.add(file.id);items.push(file);};
+    if(entry){for(const file of entry.files||[])add(file);}
+    else for(const card of node.querySelectorAll('[data-file-id]'))if(card.matches('.msg-image,.answer-file'))add(card._answerFile);
+    return items;
+  }
+  function openImageAt(node,file){
+    if(!cur||!node||!file)return;
+    const items=answerImageItems(node);let at=items.findIndex(f=>f.id===file.id);
+    if(at<0){items.unshift(file);at=0;}
+    if(window.imageViewer)window.imageViewer.open({...cur},items,at);else openAnswerFile(file);
+  }
+  function openAnswerMessageFiles(files,owner){
     const list=el('div','answer-file-list');
-    for(const f of files||[])if(f&&f.id)list.append(answerCard(f));
+    for(const f of files||[])if(f&&f.id)list.append(answerCard(f,{owner}));
     if(!list.children.length)list.append(el('p','','这条消息没有文件'));
     showAnswerDialog('这条消息的文件',[list]);
   }
@@ -308,9 +328,12 @@
       const key=ph.dataset.resultKey||'',file=answerFileFor(files,key);
       if(file&&(file.view==='image'||file.view==='svg')){
         if(file.view==='image'&&file.state!=='missing'&&(file.thumb||!file.size||Number(file.size)<=16<<20)){
-          ph.replaceWith(answerInlineImage(file,key,ph.dataset.resultIndex));rendered.add(file.id);continue;
+          ph.replaceWith(answerInlineImage(file,key,ph.dataset.resultIndex,node));rendered.add(file.id);continue;
         }
-        ph.replaceWith(answerInlineCard(file,key,ph.dataset.resultIndex));rendered.add(file.id);continue;
+        if(file.view==='svg'&&file.thumb&&file.state!=='missing'){
+          ph.replaceWith(answerInlineImage(file,key,ph.dataset.resultIndex,node));rendered.add(file.id);continue;
+        }
+        ph.replaceWith(answerInlineCard(file,key,ph.dataset.resultIndex,node));rendered.add(file.id);continue;
       }
       const note=answerNoteFor(notes,key);
       if(note){ph.replaceWith(answerNoteBlock(answerPlaceholderText(ph,key),note));continue;}
@@ -599,6 +622,12 @@
   $('newMessages').onclick=()=>{if(historyWindow)loadConversation(true);else jumpToLatest();};
   // hidden: what was running out is shown whole; back on screen, what came meanwhile shows as it is
   document.addEventListener('visibilitychange',()=>{if(document.hidden){pauseStream();settleFlows();}else{quietUntil=performance.now()+2000;if(!window.workspaceUI?.paused)resumeStream();}});
-  window.readingUI={loadList,onOpen,loadConversation,decorateMessage,decorateRows(){},flowText,holding,closeMenu,pauseStream,resumeStream,get streamActive(){return streamActive;},get historyWindow(){return historyWindow;}};
+  function decorateFilesOnly(node,m){
+    node.querySelectorAll('.answer-files').forEach(n=>n.remove());
+    if(!Array.isArray(m.files))return;
+    answerMessageFiles.set(node,{files:m.files,notes:Array.isArray(m.file_notes)?m.file_notes:[]});
+    answerStrip(node,m.files,new Set());
+  }
+  window.readingUI={loadList,onOpen,loadConversation,decorateMessage,decorateRows(){},decorateFilesOnly,flowText,holding,closeMenu,pauseStream,resumeStream,get streamActive(){return streamActive;},get historyWindow(){return historyWindow;}};
   if(cur){onOpen({},cur);loadConversation(true);}else loadList(false,true);
 })();
