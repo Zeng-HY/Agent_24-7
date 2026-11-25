@@ -471,6 +471,17 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - 测试：第二段后 334 条全过（新增 12 条：缩放上下限、双击目标、放大不翻页、原图/2048、SVG 何时 4096、采样尺寸、文件缓存命名与清理、按电脑清缓存、退出登录清缓存、示例新增文件、看图顺序）；`assembleDebug` 通过。未加 Gradle 依赖，版本号未动。
 - 本段不做（留给 C）：代码高亮、表格走文本接口、音视频、zip、附属资源；看图页的分享面板仍走系统选择器。
 
+**第三段（C）**：完成（`apps/android/`，分支 `fp-android`）。
+
+- 代码高亮：`assets/viewer/` 放 highlight.js **11.12.0**（`@highlightjs/cdn-assets`，BSD-3，见 `assets/licenses/highlight.js-LICENSE.txt`；`assets/viewer/README.md` 记了版本、下载地址和每个文件的 SHA-256），通用包之外另加 R、PowerShell、LaTeX、Dockerfile。代码页在 WebView 里画：行号、自动换行、页内查找、复制全部、打开时跳到 `line` 并标出、深色样式跟随 App；超过 200 KB 只给行号不高亮；文字走 `/api/file/text`（有 `lang` 用它，否则按后缀），截断时顶上写「只显示了开头 X MB，共 Y MB，可以保存后看全文」。这个 WebView 只读 `assets/viewer/` 和这一份文字：不联网、没有 App 的 cookie、没有 JS 桥。
+- 表格：CSV/TSV 连新电脑改走 `/api/file/text`，只显示前 5000 行并说明；老电脑照旧 `decodeCsvText`。
+- 音频、视频：系统 `MediaPlayer` / `VideoView` 直接流 `/api/file`，带和接口相同的 Cookie、`X-Teleply-Protocol`、`X-Teleply-Client`；能播放、暂停、拖动；放不了显示文件卡和「用其他应用打开」，不预先整个下载。
+- 压缩包：`/api/file/zip` 列名字、大小、文件夹，最多 2000 项并说明；7z、rar 只显示文件卡，不解压。
+- 附属资源：新电脑的 HTML、Markdown 同目录资源改走 `/api/file/resource`；Markdown 阅读视图里的相对图片按消息里画图的做法（宽占满、整张可见）画出；老电脑仍走对话文件列表。
+- 示例：`FixtureApi` 的「文件预览示例」补了带 `line` 的 R 脚本、超过 200 KB 的日志、GBK CSV（`/api/file/text` 返回解好的文字）、两段很短的编造 MP3/MP4、zip 目录、带同目录图片的 Markdown。
+- 测试：第三段后 345 条全过（新增 9 条：高亮大小线、跳行、截断说明、CSV 走哪条路、播放器请求头、zip 解析与上限、附属资源走哪条路、老电脑退回、语言判定）；`assembleDebug` 通过。未加 Gradle 依赖，版本号未动。
+- 本段没在真机走查（不连手机、不装 APK）：代码页、播放器、zip 页面只过了编译和纯逻辑测试。
+
 
 ### 线四、iOS 0.9.1
 

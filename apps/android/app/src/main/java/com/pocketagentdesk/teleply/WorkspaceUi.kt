@@ -456,7 +456,10 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     val table=sheet!=null && shown=="phone" && bytes!=null && !asSource
     val shownPicture=kind=="image" && (keptFile!=null || bytes!=null)
     val shownPdf=(kind=="pdf" || shown=="pdf") && (keptFile!=null || bytes!=null)
-    val fill=s.converting || table || shownPicture || shownPdf || (sheet==null && bytes!=null && shown=="phone" && !asSource) || (html && rendered && s.result.isNotBlank())
+    val codeView=data.string("view") in setOf("code","text") && s.result.isNotBlank()
+    val mediaView=data.string("view") in setOf("audio","video")
+    val archiveView=data.string("view")=="archive" && zipFile(name)
+    val fill=s.converting || table || shownPicture || shownPdf || codeView || mediaView || archiveView || (sheet==null && bytes!=null && shown=="phone" && !asSource) || (html && rendered && s.result.isNotBlank())
     val menus=LocalMenuHost.current;val more=remember { MenuAnchor() }
     PageFrame(name,null,fileBack(data,c),fill=fill,actions={
         CapsuleToolbar(Modifier.menuAnchor(more)) {
@@ -476,6 +479,7 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     }) {
         if(fill) {
             ProgressLine(s.busy,p.line)
+            if(table && data.optBoolean("rowsTruncated")) Text("只显示了前 5000 行",style=MaterialTheme.typography.note,color=p.muted,modifier=Modifier.padding(horizontal=16.dp,vertical=4.dp))
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     s.converting -> Row(Modifier.align(Alignment.Center).semantics { liveRegion=LiveRegionMode.Polite },verticalAlignment=Alignment.CenterVertically) {
@@ -483,6 +487,9 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
                         Spacer(Modifier.width(8.dp))
                         Text("正在用电脑上的 Office 转成 PDF…",style=MaterialTheme.typography.note,color=p.muted)
                     }
+                    codeView -> CodeView(s.result,data,p.dark,Modifier.fillMaxSize())
+                    mediaView -> MediaPage(vm,data)
+                    archiveView -> ZipPage(data)
                     bytes!=null && shown=="phone" -> OfficePreview(bytes,data,c::officeFailed,Modifier.fillMaxSize())
                     shownPdf && keptFile!=null -> PdfPages(keptFile)
                     shownPdf && bytes!=null -> PdfPages(bytes)
@@ -497,7 +504,12 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
             s.error?.let { Text(it,style=MaterialTheme.typography.note,color=p.error) }
             if(s.result.isNotBlank()) {
                 if(sheet!=null && shown=="failed") Text(s.previewNote.ifBlank { "表格显示不了，下面是原文" },style=MaterialTheme.typography.note,color=p.muted)
-                if(markdown && rendered) Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
+                if(markdown && rendered && data.string("view")=="markdown") {
+                    // A newer computer's Markdown: relative pictures come through /api/file/resource (§5.6).
+                    CompositionLocalProvider(LocalMarkdownResource provides { path -> vm.workspace.previewResource(data,path) }) {
+                        Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
+                    }
+                } else if(markdown && rendered) Markdown(s.result,Modifier.fillMaxWidth(),reader=true)
                 else CodePanel(name,s.result,"复制文件内容")
             } else if(ready) UnshownFile(data,s,c,context)
             FileStatus(s,c,context,data)

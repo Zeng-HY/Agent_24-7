@@ -14,6 +14,9 @@ val LocalAnswerThumb = staticCompositionLocalOf<(suspend (FileRef, Int) -> Bitma
 /** A picture tapped in an answer or its strip: opens the answer's pictures at that one (§6.2). */
 val LocalAnswerPicture = staticCompositionLocalOf<((FileRef) -> Unit)?> { null }
 
+/** A relative picture in a Markdown file's reading view (§5.6), fetched through the computer's resource route. */
+val LocalMarkdownResource = staticCompositionLocalOf<(suspend (String) -> ByteArray?)?> { null }
+
 /**
  * A thumb decoded at about the width it is shown at (§7): the smaller copy halves until the long edge no longer
  * exceeds [width], so a 2400 px photo is not held as 2400 px on a phone.

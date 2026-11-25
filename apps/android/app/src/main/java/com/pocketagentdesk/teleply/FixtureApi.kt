@@ -42,6 +42,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         "chat/files" -> JSONObject().put("items", JSONArray(FixtureWorld.FILES))
         "file/meta" -> previewMeta(query["file"].orEmpty()) ?: if(query["file"]=="fixture-download") JSONObject().put("kind","download").put("size","固定测试内容".toByteArray().size).put("state","current") else FixtureWorld.FILES.find { it.string("id") == query["file"] }?.let { JSONObject().put("kind", it.string("kind")).put("name", it.string("name")).put("state", "current").put("size", it.optLong("size")).apply { if (it.has("preview")) put("preview", it.string("preview")) } } ?: JSONObject("""{"kind":"text","name":"安全预览.html","state":"current","size":60}""")
         "file/text" -> JSONObject().put("text", FixtureWorld.previewText(query["file"].orEmpty()) ?: if (query["file"] == "fixture-md") FixtureWorld.MARKDOWN_FILE else FixtureWorld.HTML_FILE)
+        "file/zip" -> fixtureZipListing()
         "chat/diff" -> JSONObject("""{"ref":"fixture-diff","path":"测试.txt","hunks":["@@ -1 +1 @@\n-旧内容\n+新内容"],"next":null}""")
         "chat/projects" -> world.tree(query["more"], device)
         "chat/open" -> world.open(body?.string("id").orEmpty())
@@ -94,6 +95,9 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
             "fp-budget" -> java.util.Base64.getDecoder().decode(FixtureWorld.XLSX)
             "fp-run", "fp-analysis" -> FixtureWorld.R_SOURCE.toByteArray()
             "fp-report" -> FixtureWorld.REPORT_TEXT.toByteArray()
+            "fp-audio" -> java.util.Base64.getDecoder().decode(MP3)
+            "fp-video" -> java.util.Base64.getDecoder().decode(MP4)
+            "fp-note" -> FixtureWorld.previewText("fp-note")!!.toByteArray()
             else -> "固定测试内容".toByteArray()
         }
     }
@@ -105,6 +109,23 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     override suspend fun thumb(device: String, chat: String, file: String, width: Int, version: String): ByteArray {
         net(); world.thumbReads++
         return java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
+    }
+
+    // §5.6: a picture beside the Markdown file comes from the computer, not from the conversation's file list.
+    override suspend fun fileResource(device: String, chat: String, file: String, path: String): ByteArray {
+        net(); world.resourceReads++
+        if (path.endsWith(".png", true) || path.endsWith(".jpg", true)) return java.util.Base64.getDecoder().decode(FixtureWorld.PNG)
+        throw ServiceFailure(404, detail = "这个文件旁边没有它")
+    }
+
+    override suspend fun fileZip(device: String, chat: String, file: String): JSONObject { net(); world.zipReads++; return fixtureZipListing() }
+
+    // Media streams from an address of the demo computer; tests check the headers.
+    override suspend fun mediaSource(device: String, chat: String, file: String, version: String): MediaSource {
+        net(); world.mediaReads++
+        return MediaSource("https://fixture.invalid/api/file?file=$file", mapOf(
+            "X-Teleply-Protocol" to "$TeleplyProtocol", "X-Teleply-Client" to teleplyClientTag(), "Cookie" to "fixture=1",
+        ))
     }
 
     // PowerPoint as the computer's Office turns it into PDF (10-27), after a moment (Office starting); any other file
@@ -238,6 +259,10 @@ class FixtureWorld {
     var pictureReads = 0
     /** Answer thumbnails the demo computer was asked for (§5.3). */
     var thumbReads = 0
+    /** C's routes: same-folder resources, zip listings and media sources. */
+    var resourceReads = 0
+    var zipReads = 0
+    var mediaReads = 0
     /** Office files the demo computer was asked to turn into PDF; how long it takes (Office starting), or what it waits for (tests). */
     var pdfReads = 0
     @Volatile var pdfDelay = 1_500L
@@ -909,7 +934,16 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
             FileRef(id = "fp-shot-1", name = "截图一.png", path = "D:\\fixture\\file-preview\\shot-1.png", kind = "image", view = "image", size = 462, state = "current", version = "v1", width = 1080, height = 720, thumb = true, via = listOf("presented")),
             FileRef(id = "fp-shot-2", name = "截图二.png", path = "D:\\fixture\\file-preview\\shot-2.png", kind = "image", view = "image", size = 462, state = "updated", version = "v2", width = 1080, height = 720, thumb = true, via = listOf("presented")),
             FileRef(id = "fp-run", name = "run.R", path = "D:\\fixture\\file-preview\\run.R", kind = "text", view = "code", lang = "r", size = 620, state = "current", version = "v1", texts = listOf("D:\\fixture\\file-preview\\run.R"), via = listOf("code")),
+            FileRef(id = "fp-run", name = "run.R", path = "D:\\fixture\\file-preview\\run.R", kind = "text", view = "code", lang = "r", size = 620, state = "current", version = "v1", line = 2, texts = listOf("D:\\fixture\\file-preview\\run.R"), via = listOf("code")),
             FileRef(id = "fp-report", name = "报告.txt", path = "D:\\fixture\\file-preview\\report.txt", kind = "text", view = "text", size = 480, state = "current", version = "v1", texts = listOf("D:/fixture/file-preview/report.txt"), via = listOf("path")),
+            // C's own pieces: a code page with a line, a log over 200 KB, a GBK CSV the computer decodes, media, a zip,
+            // and a Markdown file with a picture beside it.
+            FileRef(id = "fp-log", name = "构建日志.log", path = "D:\\fixture\\file-preview\\build.log", kind = "text", view = "text", size = 250_000, state = "current", version = "v1"),
+            FileRef(id = "fp-gbk", name = "名单.csv", path = "D:\\fixture\\file-preview\\names.csv", kind = "text", view = "table", size = 800, state = "current", version = "v1"),
+            FileRef(id = "fp-note", name = "说明文档.md", path = "D:\\fixture\\file-preview\\note.md", kind = "text", view = "markdown", size = 900, state = "current", version = "v1"),
+            FileRef(id = "fp-audio", name = "提示音.mp3", path = "D:\\fixture\\file-preview\\beep.mp3", kind = "download", view = "audio", size = 2_000, state = "current", version = "v1"),
+            FileRef(id = "fp-video", name = "示例短片.mp4", path = "D:\\fixture\\file-preview\\clip.mp4", kind = "download", view = "video", size = 6_000, state = "current", version = "v1"),
+            FileRef(id = "fp-zip", name = "归档.zip", path = "D:\\fixture\\file-preview\\archive.zip", kind = "download", view = "archive", size = 1_000, state = "current", version = "v1"),
             // B's own pieces: an original over 30 MB (the viewer takes the 2048 thumb), a GIF that moves, and a PDF.
             FileRef(id = "fp-huge", name = "大图.png", path = "D:\\fixture\\file-preview\\huge.png", kind = "image", view = "image", size = 48L * 1024 * 1024, state = "current", version = "v1", width = 6000, height = 4000, thumb = true, via = listOf("image")),
             FileRef(id = "fp-gif", name = "动图.gif", path = "D:\\fixture\\file-preview\\moving.gif", kind = "image", view = "image", size = 308, state = "current", version = "v1", width = 48, height = 32, thumb = true, via = listOf("presented")),
@@ -933,6 +967,8 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
 [#本轮记录](#本轮记录) 只是页内文字，[开发服务器](http://localhost:3000) 在电脑上。
 
 没找到的是 [旧图](out/old.png)，网络上的 [共享报表](//nas/share/report.pdf) 看不了。
+
+代码页：[run.R](D:/fixture/file-preview/run.R)。其余：[构建日志](D:/fixture/file-preview/build.log)、[名单](D:/fixture/file-preview/names.csv)、[说明文档](D:/fixture/file-preview/note.md)、[提示音](D:/fixture/file-preview/beep.mp3)、[示例短片](D:/fixture/file-preview/clip.mp4)、[归档](D:/fixture/file-preview/archive.zip)。
 """.trimIndent()
 
         /** A story's own words: an R script, and the note the answer says it wrote. */
@@ -952,10 +988,23 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
 
         /** A text file of the story, for the file page's text view; null for every other file. */
         fun previewText(id: String): String? = when (id) {
-            "fp-run", "fp-analysis" -> R_SOURCE
+            "fp-run" -> "# 固定示例：按天汇总\ncounts <- table(demo[[\"day\"]])\nprint(counts)\n"
+            "fp-analysis" -> R_SOURCE
             "fp-report" -> REPORT_TEXT
+            "fp-log" -> buildString { repeat(6000) { append("2026-11-25 10:00:00 INFO 第 $it 行：固定的构建日志，用来检查超过 200KB 时只给行号。\n") } }
+            "fp-gbk" -> "姓名,城市,备注\n张三,北京,固定数据\n李四,上海,固定数据\n王五,广州,固定数据\n"
+            "fp-note" -> "# 说明文档\n\n这是 **Markdown** 示例。\n\n![流程图](diagram.png)\n\n同目录的图片由电脑给。\n"
             else -> null
         }
+
+        /** A zip's listing as §5.7 gives it (made-up names). */
+        fun previewZip(): JSONObject = JSONObject()
+            .put("entries", JSONArray(listOf(
+                JSONObject().put("name", "docs/").put("size", 0).put("packed", 0).put("modified", NOW).put("dir", true),
+                JSONObject().put("name", "docs/说明.md").put("size", 812).put("packed", 402).put("modified", NOW).put("dir", false),
+                JSONObject().put("name", "data.csv").put("size", 1536).put("packed", 620).put("modified", NOW).put("dir", false),
+            )))
+            .put("total", 3).put("truncated", false)
 
         val FILES = listOf(
             JSONObject().put("id", "fixture-html").put("name", "安全预览.html").put("path", "D:\\fixture\\安全预览.html").put("kind", "text").put("state", "current").put("size", 900),
@@ -1040,3 +1089,8 @@ val message = "A deliberately long line to verify horizontal scrolling without m
         private const val DEEPSEEK_STATE = """{"available":true,"settings":{"provider":"deepseek","model":"deepseek-v4","reasoningEffort":"high"},"permission":"workspace","permission_name":"工作区内修改","interactions":[{"event":"approval/request","eventId":"e-approval-1","request":{"toolName":"shell","reason":"rm -rf build/","displayReason":"删除 build 目录（构建缓存）"}}],"questions":[]}"""
     }
 }
+
+        /** Tiny made-up media for the demo: 0.4 s of silence and a 64×48 clip, generated for this fixture. */
+        const val MP3 = "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjQ1LjEwMAAAAAAAAAAAAAAA/+PIwAAAAAAAAAAAAEluZm8AAAAPAAAAAAAABIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAExhdmM1OC45MQAAAAAAAAAAAAAAAAAAAAAAAAAAAASAAACkSwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        const val MP4 = "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"
+fun fixtureZipListing(): JSONObject = JSONObject().put("entries", JSONArray(listOf(JSONObject().put("name", "docs/").put("size", 0).put("packed", 0).put("dir", true), JSONObject().put("name", "docs/说明.md").put("size", 812).put("packed", 402).put("dir", false), JSONObject().put("name", "data.csv").put("size", 1536).put("packed", 620).put("dir", false)))).put("total", 3).put("truncated", false)

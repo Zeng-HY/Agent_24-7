@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<link id="style" rel="stylesheet" href="/code-light.css">
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; color: #24292f; }
+  body.dark { background: #0d1117; color: #c9d1d9; }
+  .bar { position: sticky; top: 0; z-index: 5; display: flex; gap: 6px; align-items: center; padding: 6px 8px;
+         background: inherit; border-bottom: 1px solid rgba(127,127,127,.28); font: 12px -apple-system, "Noto Sans CJK SC", sans-serif; }
+  .bar button, .bar input { font: inherit; color: inherit; background: transparent; border: 1px solid rgba(127,127,127,.5);
+         border-radius: 6px; padding: 4px 8px; }
+  .bar input { flex: 1; min-width: 80px; }
+  #banner { display: none; padding: 6px 10px; font: 12px -apple-system, "Noto Sans CJK SC", sans-serif;
+         background: rgba(255,193,7,.18); color: inherit; }
+  #banner.show { display: block; }
+  #scroller { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: auto; }
+  #gutter { position: absolute; left: 0; top: 0; width: 44px; padding: 10px 6px 40px 0; text-align: right;
+         color: #8b949e; background: inherit; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         white-space: pre; user-select: none; z-index: 2; }
+  #pre { margin: 0 0 0 50px; padding: 10px 12px 40px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         white-space: pre; tab-size: 4; }
+  body.wrap #pre { white-space: pre-wrap; word-break: break-word; }
+  #mark { position: absolute; left: 0; right: 0; height: 18px; background: rgba(255,214,10,.26); display: none; z-index: 1; }
+  #pre code { font: inherit; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<div class="bar">
+  <button id="wrap">自动换行</button>
+  <input id="find" placeholder="页内查找" autocomplete="off">
+  <button id="prev">↑</button>
+  <button id="next">↓</button>
+  <button id="copy">复制全部</button>
+</div>
+<div id="scroller">
+  <div id="mark"></div>
+  <div id="gutter"></div>
+  <pre id="pre"><code id="code" class="hljs"></code></pre>
+</div>
+<script src="/highlight.min.js"></script>
+<script src="/highlight.r.min.js"></script>
+<script src="/highlight.powershell.min.js"></script>
+<script src="/highlight.latex.min.js"></script>
+<script src="/highlight.dockerfile.min.js"></script>
+<script src="/code.js"></script>
+</body>
+</html>

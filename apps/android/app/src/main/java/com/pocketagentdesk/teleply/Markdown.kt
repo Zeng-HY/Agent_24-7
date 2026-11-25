@@ -273,6 +273,7 @@ private fun inline(node: Node, ink: MdInk, files: List<FileRef>? = null, notes: 
 internal sealed class ParagraphPiece {
     internal class Words(val text: AnnotatedString) : ParagraphPiece()
     internal class Picture(val file: FileRef) : ParagraphPiece()
+    internal class Resource(val source: String) : ParagraphPiece()
 }
 
 /** Whether a node holds an `Image` anywhere: a link or emphasis wrapped around one counts (§6.1). */
@@ -299,7 +300,7 @@ private fun wrappedImage(node: Node): Image? {
  * one stays the single [Words] it always was, so an answer with no pictures is drawn exactly as before and as fast.
  */
 internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>): List<ParagraphPiece> {
-    if (files == null || !containsImage(node)) return listOf(ParagraphPiece.Words(inline(node, ink, files, notes)))
+    if (!containsImage(node)) return listOf(ParagraphPiece.Words(inline(node, ink, files, notes)))
     val out = mutableListOf<ParagraphPiece>()
     var words = AnnotatedString.Builder()
     val links = mutableListOf<IntRange>()
@@ -312,8 +313,12 @@ internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, note
         }
     }
     children(node).forEach { child ->
-        val file = wrappedImage(child)?.let { pictureForImage(files, it.destination) }
-        if (file != null) { flush(); out += ParagraphPiece.Picture(file) } else words.appendNode(child, ink, files, notes, links)
+        val image = wrappedImage(child)
+        val file = image?.let { files?.let { list -> pictureForImage(list, it.destination) } }
+        val relative = image?.destination?.takeIf { files == null && localPath(it) == null && relativeResource(it) }
+        if (file != null) { flush(); out += ParagraphPiece.Picture(file) }
+        else if (relative != null) { flush(); out += ParagraphPiece.Resource(relative) }
+        else words.appendNode(child, ink, files, notes, links)
     }
     flush()
     return out
@@ -361,6 +366,7 @@ internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, note
                 when(piece) {
                     is ParagraphPiece.Words -> if(piece.text.isNotBlank()) Text(piece.text,style=body,modifier=textModifier)
                     is ParagraphPiece.Picture -> MarkdownPicture(piece.file)
+                    is ParagraphPiece.Resource -> MarkdownResourcePicture(piece.source)
                 }
             } }
         }
@@ -399,10 +405,28 @@ internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, note
 }
 
 /**
- * A picture drawn where the answer put it (§6.1): the bubble's width, at most about 360 dp high, its place kept by the
- * computer's `w`/`h` (4:3 when it gave none) while the thumb comes. Grey with the file's name until then; a line and
- * 重试 when it cannot be had. A tap opens the file's page (the picture page comes with stage B).
+ * A relative picture in a Markdown file's reading view (§5.6): fetched through the computer's resource route and drawn
+ * where the file put it, the bubble's width and whole (a 4:3 place until it comes). Without a loader the old words show.
  */
+@Composable private fun MarkdownResourcePicture(source: String) {
+    val p = LocalTeleply.current
+    val loader = LocalMarkdownResource.current
+    if (loader == null) { Text("[图片：$source]", style = MaterialTheme.typography.bodySmall, color = p.muted); return }
+    val bytes by produceState<ByteArray?>(null, source) { value = loader.invoke(source) }
+    val bitmap = remember(bytes) { bytes?.let { runCatching { decodeThumb(it, pictureWidth(1600f)) }.getOrNull() } }
+    if (bitmap == null) {
+        Box(Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)).background(p.panel), contentAlignment = Alignment.Center) {
+            Text(source.substringAfterLast('/').substringAfterLast('\\'), style = MaterialTheme.typography.note, color = p.muted)
+        }
+        return
+    }
+    val ratio = bitmap.width.toFloat() / bitmap.height
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val height = (maxWidth / ratio).coerceAtMost(360.dp)
+        ComposeImage(bitmap.asImageBitmap(), contentDescription = "图片：$source", contentScale = ContentScale.Fit,
+            modifier = Modifier.width(height * ratio).height(height).clip(RoundedCornerShape(12.dp)))
+    }
+}
 @Composable private fun MarkdownPicture(file: FileRef) {
     val p = LocalTeleply.current
     val loader = LocalAnswerThumb.current

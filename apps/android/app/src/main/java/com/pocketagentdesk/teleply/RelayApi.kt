@@ -40,6 +40,9 @@ fun sameService(a: String, b: String) = runCatching { serviceOrigin(a) == servic
 const val TeleplyProtocol = 2
 fun teleplyClientTag(): String = "android/${BuildConfig.VERSION_NAME}"
 
+/** A media stream's address and the headers the file routes carry (Cookie, protocol, client) for MediaPlayer/VideoView. */
+data class MediaSource(val url: String, val headers: Map<String, String>)
+
 interface ReadApi {
     fun forSource(app:String):ReadApi = this
     /** Assistant manifests from GET /api/agents; null when the computer does not have it (404 / legacy host). */
@@ -53,6 +56,12 @@ interface ReadApi {
     suspend fun sentPicture(device:String,id:String,small:Boolean,output:java.io.OutputStream) { error("下载不可用") }
     /** A file's thumbnail for an answer or its file strip (GET /api/file/thumb, file-preview design §5.3). */
     suspend fun thumb(device:String,chat:String,file:String,width:Int,version:String):ByteArray = error("缩略图不可用")
+    /** A same-folder resource a Markdown or HTML file names (GET /api/file/resource, §5.6). */
+    suspend fun fileResource(device:String,chat:String,file:String,path:String):ByteArray = throw ServiceFailure(404,detail="这台电脑还不能给附属文件")
+    /** A zip's listing (GET /api/file/zip, §5.7). */
+    suspend fun fileZip(device:String,chat:String,file:String):JSONObject = throw ServiceFailure(404,detail="这台电脑还不能读压缩包")
+    /** Where a file's bytes stream from, with the same cookie and protocol headers as every request (§6.2 audio/video). */
+    suspend fun mediaSource(device:String,chat:String,file:String,version:String):MediaSource = throw ServiceFailure(404,detail="这台电脑还不能播放")
     /** A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (GET /api/file/pdf, 10-27), at most [limit] bytes. */
     suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray = throw ServiceFailure(404,detail="这里不能把文件转成 PDF")
     fun events(device: String, chat: String): kotlinx.coroutines.flow.Flow<LiveFrame> = kotlinx.coroutines.flow.emptyFlow()
@@ -286,7 +295,7 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         val LegacyApps=setOf("codex","claude","deepseek")
         /** Fields of DeepSeek's state that change on every read while it works and that the phone does not show. */
         val DeepSeekUnshown=listOf("seq","subagents","inbox")
-        val DetailRoutes=setOf("chat/new/options","chat/folders","chat/new/draft","chat/new","chat/new/state","chat/new/retry","chat/new/references","composer/references","files/places","files/list","files/image","files/remove","codex/remove-attachment","codex/attachments","chat/files","chat/diff","file/text","file/meta","deepseek/models","deepseek/permissions","deepseek/model","deepseek/permission","deepseek/answer","deepseek/approval","claude/catalog","claude/setting","claude/choose","claude/menu","claude/close-menu","chat/projects","chat/open","chat/resolve",
+        val DetailRoutes=setOf("chat/new/options","chat/folders","chat/new/draft","chat/new","chat/new/state","chat/new/retry","chat/new/references","composer/references","files/places","files/list","files/image","files/remove","codex/remove-attachment","codex/attachments","chat/files","chat/diff","file/text","file/meta","file/zip","deepseek/models","deepseek/permissions","deepseek/model","deepseek/permission","deepseek/answer","deepseek/approval","claude/catalog","claude/setting","claude/choose","claude/menu","claude/close-menu","chat/projects","chat/open","chat/resolve",
             "claude/next","claude/task","chat/check","chat/archive","chat/unarchive","chat/delete","chat/archived","chats/children","notify","notify/ntfy","notify/automations","notify/test","voice/status","voice/terms","voice/tidy","status","usage","usage/codex-reset")
         /** Seconds the computer may take: Claude's buttons wait for its window (web 65 s), archiving for its records. */
         val SlowRoutes=mapOf("claude/next" to 65L,"claude/task" to 65L,"chat/archive" to 65L,"chat/unarchive" to 95L,"chat/delete" to 125L,"chat/archived" to 25L,"notify" to 35L,"notify/ntfy" to 35L,"notify/automations" to 35L,"notify/test" to 35L,"voice/tidy" to 65L,"status" to 10L,"usage" to 45L,"usage/codex-reset" to 75L)
@@ -327,6 +336,26 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
             .addQueryParameter("w","$width").apply { if(version.isNotBlank()) addQueryParameter("v",version) }
             .withProtocolQuery().build()
         return fetch(url,ThumbLimit,client)
+    }
+    /** §5.6: the file's own folder, checked by the computer; the same cookie and protocol as every request. */
+    override suspend fun fileResource(device:String,chat:String,file:String,path:String):ByteArray {
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file/resource"))
+            .addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file)
+            .addQueryParameter("path",path).withProtocolQuery().build()
+        return fetch(url,64L*1024*1024,client)
+    }
+    /** §5.7: only the listing, never the archive's bytes. */
+    override suspend fun fileZip(device:String,chat:String,file:String):JSONObject =
+        detail(device,"file/zip",mapOf("app" to app,"id" to chat,"file" to file))
+    /** §6.2: MediaPlayer/VideoView open this address with these headers, and stream it themselves. */
+    override suspend fun mediaSource(device:String,chat:String,file:String,version:String):MediaSource {
+        val url=root.newBuilder().encodedPath(devicePath(device,"/api/file"))
+            .addQueryParameter("app",app).addQueryParameter("id",chat).addQueryParameter("file",file)
+            .apply { if(version.isNotBlank()) addQueryParameter("v",version) }
+            .withProtocolQuery().build()
+        val headers=mutableMapOf("X-Teleply-Protocol" to "$TeleplyProtocol","X-Teleply-Client" to teleplyClientTag())
+        vault.read(key)?.let { raw -> Cookie.parse(root,raw)?.takeIf { it.expiresAt>System.currentTimeMillis() }?.let { headers["Cookie"]="${it.name}=${it.value}" } }
+        return MediaSource(url.toString(),headers)
     }
     /**
      * A Word, Excel or PowerPoint file as the computer's Office turns it into PDF (10-27). The first time a version is

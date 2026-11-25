@@ -746,6 +746,32 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         val items=JSONArray(pictures.map { it.toJson() })
         update(k) { it.copy(pane="picture",busy=false,error=null,data=JSONObject().put("items",items).put("index",index.coerceIn(0,pictures.lastIndex)).toString(),result="",transfer="",savedUri=null,preview=null,previewFile=null) }
     }
+    /** The address and headers for MediaPlayer/VideoView to stream a file (§6.2); null when it cannot be played. */
+    suspend fun mediaSource(file:FileRef):MediaSource? {
+        val k=key ?: return null;val service=api ?: return null
+        // The local demo has no stream of its own: its made-up clip is played from a file on this phone.
+        if(service is FixtureApi) {
+            val dir=mediaDir
+            if(dir!=null) {
+                val bytes=runCatching { withContext(Dispatchers.IO) { service.download(k.device,k.chat,file.id) } }.getOrNull()
+                if(bytes!=null && bytes.isNotEmpty()) {
+                    val kept=java.io.File(dir,"fixture-${file.id}.${FileCache.safeExt(file.name)}")
+                    withContext(Dispatchers.IO) { kept.writeBytes(bytes) }
+                    return MediaSource(android.net.Uri.fromFile(kept).toString(), emptyMap())
+                }
+            }
+        }
+        return try { service.mediaSource(k.device,k.chat,file.id,file.version) }
+        catch(e:CancellationException) { throw e }
+        catch(_:Exception) { null }
+    }
+    /** A zip's listing (§5.7); null when the computer cannot read it. */
+    suspend fun zipListing(file:FileRef):JSONObject? {
+        val k=key ?: return null;val service=api ?: return null
+        return try { service.fileZip(k.device,k.chat,file.id) }
+        catch(e:CancellationException) { throw e }
+        catch(_:Exception) { null }
+    }
     fun cancelSave() { saveJob?.cancel() }
     fun openSaved(context:Context,uri:String,name:String) {
         try { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),shareMime(name)).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"打开已保存的文件")) }
@@ -791,16 +817,45 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 convert(k,service,FileRef(id=file.getString("id"),name=name,version=version,size=size,modified=meta.optLong("modified")),g)
                 return@launchSafe
             }
+            // A zip lists what is inside (§5.7); audio and video stream from the file route themselves (§6.2).
+            if(data.string("view")=="archive" && zipFile(name)) {
+                val zipped=zipListing(FileRef(id=file.getString("id"),name=name,version=version,size=size))
+                val why=if(zipped!=null) { data.put("zip",zipped.toString());"" } else "这个压缩包读不了，可以保存后用其他应用打开。"
+                if(g==generation) update(k) { it.copy(data=data.toString(),busy=false,previewNote=why) }
+                return@launchSafe
+            }
+            if(data.string("view") in setOf("audio","video")) {
+                if(g==generation) update(k) { it.copy(data=data.toString(),busy=false) }
+                return@launchSafe
+            }
             var text="";var bytes:ByteArray?=null;var keptFile:String?=null;var note="";var unshown=""
+            val newComputer=data.string("view").isNotBlank()
             try {
                 if(sheet!=null) {
-                    if(size<=PreviewLimit) try {
+                    // A newer computer's CSV/TSV comes already decoded by it (§5.4); an older one is read here as before.
+                    if(csvSource(newComputer)==CsvSource.TEXT && size<=5L*1024*1024) {
+                        val reply=service.detail(k.device,"file/text",q)
+                        text=reply.string("text")
+                        val (limited,more)=limitCsvRows(text)
+                        if(more) { text=limited;data.put("rowsTruncated",true) }
+                        if(text.isNotBlank()) { bytes=text.toByteArray(Charsets.UTF_8);data.put("sheet",sheet) }
+                    } else if(size<=PreviewLimit) try {
                         text=decodeCsvText(service.download(k.device,k.chat,file.getString("id")))
                         // The table page reads UTF-8, as the phone's own text (3.3); the page is told the separator.
                         if(text.isNotBlank()) { bytes=text.toByteArray(Charsets.UTF_8);data.put("sheet",sheet) }
                     } catch(e:CharacterCodingException) { unshown="手机上显示不了这个文件，可保存后使用系统应用打开。" }
                 } else {
-                    if(kind=="text") text=service.detail(k.device,"file/text",q).string("text")
+                    if(kind=="text") {
+                        val reply=service.detail(k.device,"file/text",q)
+                        text=reply.string("text")
+                        if(newComputer) {
+                            data.put("truncated",reply.optBoolean("truncated"))
+                            if(reply.optLong("total_size")>0) data.put("total_size",reply.optLong("total_size"))
+                            if(data.string("lang").isBlank() && reply.string("lang").isNotBlank()) data.put("lang",reply.string("lang"))
+                            if(data.optInt("line")<=0 && reply.optInt("line")>0) data.put("line",reply.optInt("line"))
+                            if(reply.string("encoding").isNotBlank()) data.put("encoding",reply.string("encoding"))
+                        }
+                    }
                     // Pictures, PDFs and Word/Excel are kept on disk (§7), not read whole into memory first.
                     val picture=kind=="image" && (size<=0 || size<=pictureLimit)
                     val document=(kind=="pdf" || pdf) && (size<=0 || size<=pdfLimit)
@@ -859,6 +914,15 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     suspend fun previewResource(file:JSONObject,path:String):ByteArray? {
         val k=key ?: return null;val service=api ?: return null
         if(path.isBlank() || file.string("path").isBlank()) return null
+        val id=file.string("id")
+        // A newer computer checks and reads the file beside the page itself (§5.6); an older one still goes through the
+        // conversation's file list below.
+        if(file.string("view").isNotBlank() && id.isNotBlank()) {
+            try { return service.fileResource(k.device,k.chat,id,path) }
+            catch(e:CancellationException) { throw e }
+            catch(e:ServiceFailure) { if(e.status!=404) return null }
+            catch(_:Exception) { return null }
+        }
         val items=(listing?.takeIf { it.first==k }?.second ?: service.detail(k.device,"chat/files",mapOf("app" to k.app,"id" to k.chat)).also { listing=k to it }).rows("items") { it }
         val target=normalizePath(path)
         val match=items.find { it.string("id").isNotBlank() && it.string("path").isNotBlank() && normalizePath(it.string("path"))==target } ?: return null
