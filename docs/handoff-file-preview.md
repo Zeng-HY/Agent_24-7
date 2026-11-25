@@ -529,13 +529,32 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 审后修（11-25）：所有 `Image.open` 都传 `formats=`，只允许 PNG、JPEG、WebP、GIF、BMP、TIFF 和已注册的 HEIF/AVIF；内容是 EPS 等别的格式时按坏图处理，不会让 Pillow 去调 Ghostscript。
 
-完整 pytest（工作区 `full-pytest-d.log`）：**1555 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。没做：第五段（附件资源、zip）；`If-Range` 仍照第三段没有另改；打包脚本没改。
+完整 pytest（工作区 `full-pytest-d.log`）：**1555 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。第五段见下；`If-Range` 仍照第三段没有另改；打包脚本没改。
 
 要审：
 
 - `resvg_py` 是 cp310-abi3 的 Windows wheel，Python 3.11 可用；打包时 PyInstaller 需要把它的 `.pyd`（和 DLL）一起带上，这一步没改打包脚本，留给你决定。
 - SVG 带外部引用时不是整张拒绝，而是把外部引用删掉后照常画剩下的内容（避免一张报告里的一个外链图让整页没有缩略图）。
 - 缩略图缓存不检查 `file_policy`，只由 `/api/file/thumb` 对已经授权的文件调用；缓存目录本身仍然不会作为答案文件发给手机。
+
+#### 第五段（zip 目录、附属资源）
+
+已做：
+
+- 新增 `file_resources.py`。`/api/file/zip`：先和 `/api/file` 一样走 `History.file()` 的授权和 `v` 复查；只给 `view` 为 `archive` 且后缀 `.zip` 的；只读 zip 的中央目录，解出 `{entries: [{name, size, packed, modified, dir}], total, truncated}`，最多 2000 项，不解压、不读任何条目内容。名字没标 UTF-8 时先按 GBK（中文 Windows 打的包），不行再回 cp437。坏的 zip、7z/rar 都有清楚的原因。
+- `/api/file/resource`：父 md/html 先过 `History.file()` 的授权；只认父文件文字里真的出现过的相对引用（Markdown 图片/链接、HTML 的 `src`/`href`、CSS `url()`），解析结果按（页面路径、大小、修改时间）缓存。请求路径先归一化再查，绝对路径和 `..` 走出去都拒绝，解析出的文件必须在页面文件夹或其子文件夹里，并且再走 `file_policy` 的检查。
+- 资源类型只限图片、CSS、字体（HTML 页面另可 JS），每个 ≤8 MB；只认页面文字里前 64 个不同的相对引用，第 65 个起拒绝，电脑上不记任何计数。返回原文件，`Content-Type` 按固定表，全部带 `X-Content-Type-Options: nosniff`；SVG 这类会执行的一律 `attachment`，CSS/JS 等就地给。
+- 测试：`tests/test_file_resources.py` 7 个（zip 的 UTF-8/GBK 名字、目录项、2001 项截断、坏 zip、7z/rar、`v` 409；资源文字里有的能取、没有的拒绝、`..`/绝对路径拒绝、子文件夹能取、类型不对拒绝、超大拒绝、密钥文件拒绝、第 65 个拒绝、页面缓存）。
+
+完整 pytest（工作区 `full-pytest-e.log`）：**1562 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。没做：打包、安装、发布、推送、改版本号；也没改中转。
+
+审后修（11-25）：zip 条目的修改时间按打包电脑的本地钟解释（zip 里不带时区），不再当 UTC；测试用固定时间按本地时区算毫秒数，不写死 +8。
+
+要审：
+
+- zip 只读中央目录，不检查压缩包里的内容是否可解压；坏 zip 靠 `zipfile` 的中央目录校验发现。
+- 附属资源的“前 64 个”按页面里不同相对引用计，包含指向不存在或类型不对的引用；它们也占号。解析结果按页面文件大小/修改时间缓存，不做 5 秒过期。
+- 页面资源只支持一层：CSS 文件里再 `url()` 引用的字体/CSS 不在这段范围内；HTML 的 `<script>` 由资源接口给，但页面本身的 CSP/sandbox 由网页线处理。
 
 ### 线二、网页
 
