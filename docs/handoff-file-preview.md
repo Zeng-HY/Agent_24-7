@@ -411,12 +411,12 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 | 线 | 分支和工作树 | 从哪里开 | 改哪些文件 | 分段 | 依赖 |
 |---|---|---|---|---|---|
-| 一、电脑 | `fp-pc`，`D:\Personal\agent_remote_lanes\fp-pc` | dev54 合进以后的 `agent-registry` | `answer_files.py`（新）、`file_policy.py`（新）、`file_renders.py`（新）、`message_files.py`、`chat_history.py`、`chats.py`、`agents/*.py`（Claude 的 SendUserFile）、`remote.py` 的文件接口、`tests/` | A 认文件和改写；B 授权、`files`、`file_notes`、列表；C 文本接口、类型表、速度、老测试；D 缩略图、SVG、`v`；E zip、附属资源 | 无 |
+| 一、电脑 | `fp-pc`，`D:\Personal\agent_remote_lanes\fp-pc` | `file-preview`；B 段前合入 dev54 合并后的 `agent-registry` | `answer_files.py`（新）、`file_policy.py`（新）、`file_renders.py`（新）、`message_files.py`、`chat_history.py`、`chats.py`、`agents/*.py`（Claude 的 SendUserFile）、`remote.py` 的文件接口、`tests/` | A 认文件和改写；B 授权、`files`、`file_notes`、列表；C 文本接口、类型表、速度、老测试；D 缩略图、SVG、`v`；E zip、附属资源 | 无 |
 | 二、网页 | `fp-web`，`D:\Personal\agent_remote_lanes\fp-web` | 线一 B 段的提交 | `static/*.js`、`static/*.css`、`static/vendor-lock.json`、`highlight.js`、网页测试 | A 消息里的图、文件条、原因；B 看图页、SVG、表格、高亮；C 音视频、zip、附属资源 | 线一 B 段（A 段可以先拿 5.1 的样例 JSON 做） |
 | 三、安卓 1.0.11 | `fp-android`，`D:\Personal\agent_remote_lanes\fp-android` | `android-push-caps`（cfef820，即 1.0.10） | `Markdown.kt`、`ChatUi.kt`、`WorkspaceController.kt`、`WorkspaceUi.kt`、`PreviewUi.kt`、`RelayApi.kt`、`PlatformFiles.kt`、`FixtureApi.kt`、`assets/viewer/`、测试 | A 按 `files` 找链接、消息里的图、文件条、原因；B 看图页（缩放、左右滑）、SVG、PDF 缩放、存缓存不进内存；C 代码高亮、表格改走文本接口、音视频、zip | 第 5 节的约定；联调要等线一 D 段装到这台电脑上 |
 | 四、iOS 0.9.1 | `fp-ios`，`D:\Personal\agent_remote_lanes\fp-ios` | 0.9.0 发出后的分支（ipad-adapt 和 ios-agents 合并后） | `MarkdownReader.swift`、对话页、`Files/*`、`WorkspaceModel+Panes.swift`、`RelayClient`、`DemoWorld`、测试 | 和安卓一样三段；每段推送后在 Codemagic 编译 | 0.9.0 发出；第 5 节的约定 |
 
-线三现在就能开；线一等 dev54 合进 `agent-registry`（主会话正在发 dev.54）；线二等线一 B 段；线四等 0.9.0 发出。线一和线三可以同时跑。
+线一、线三 11-25 同时开工（用户：「交给 DeepSeek」）。线一的 A 段只加新文件，所以先从 `file-preview`（dev54 的 527ebb2 加这份文档）切出；B 段开始前，主会话把合了 dev54 的 `agent-registry` 合进 `fp-pc`。线三从 cfef820 切出，再拣入这份文档。线二等线一 B 段；线四等 0.9.0 发出。
 
 各线都不做的事：版本号和更新说明（主会话做）、打包、安装、发布、推送、TestFlight、中转、Codemagic 网站、Apple 网站；不打印密钥和令牌；不打开 `remote_config.json`；不把真实对话的文字、标题写进代码、测试或文档。
 
