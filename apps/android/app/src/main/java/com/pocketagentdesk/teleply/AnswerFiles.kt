@@ -50,6 +50,26 @@ fun localWebLink(destination: String): Boolean = runCatching {
         uri.host?.lowercase() in setOf("localhost", "127.0.0.1", "[::1]", "::1")
 }.getOrDefault(false)
 
+/**
+ * An address that looks like a file on the computer, even though [localPath] did not match it: a relative path with
+ * slashes, `/D:/…`, `file:` or `~`. An older computer says （链接未开放） after such a link, as 1.0.10 did; `#…` and
+ * `mailto:` are plainly not files and stay without it (§6.1).
+ */
+fun fileLikeLink(destination: String): Boolean {
+    if (destination.startsWith("#")) return false
+    val lower = destination.lowercase()
+    if (lower.startsWith("mailto:")) return false
+    if (lower.startsWith("file:")) return true
+    if (destination.startsWith("~")) return true
+    if (Regex("""^/[A-Za-z]:[\\/]""").containsMatchIn(destination)) return true
+    // Any other scheme names something that is not a path (http is handled before this reaches here).
+    if (runCatching { URI(destination).scheme }.getOrNull() != null) return false
+    return '/' in destination || '\\' in destination
+}
+
+/** The thumbnail width for a bubble that is [bubblePx] pixels wide: 640 up to there, 1280 past it (§6.3). */
+fun pictureWidth(bubblePx: Float): Int = if (bubblePx <= 640f) 640 else 1280
+
 /** The ways a file reaches the strip: linked, cited or sent by an agent, not a path written in code (§6.1). */
 val FileStripVias = setOf("link", "citation", "presented", "tool")
 

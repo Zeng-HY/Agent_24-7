@@ -140,7 +140,7 @@ fun fileLink(path: String)=FileScheme+java.net.URLEncoder.encode(path,"UTF-8")
 fun fileLinkPath(link: String): String? = if(link.startsWith(FileScheme)) runCatching { java.net.URLDecoder.decode(link.removePrefix(FileScheme),"UTF-8") }.getOrNull() else null
 
 /** Link colour, inline-code fill and the grey of a note saying why a link cannot be opened (§6.1). */
-private data class MdInk(val link: Color, val code: Color, val muted: Color)
+internal data class MdInk(val link: Color, val code: Color, val muted: Color)
 
 /**
  * A link that opens one of the answer's files by the very entry the computer listed (§5.1, 6.1): the file page opens
@@ -163,16 +163,23 @@ fun whyLinkNote(link: String): FileNote? = if (link.startsWith(WhyScheme)) runCa
 
 private fun linkStyle(color: Color) = TextLinkStyles(SpanStyle(color = color))
 
-private fun AnnotatedString.Builder.appendChildren(n: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>) {
-    children(n).forEach { appendNode(it, ink, files, notes) }
+/** A link over the words [block] adds, its range kept so that no second target is put over the same words (§5.1). */
+private fun AnnotatedString.Builder.linkTo(url: String, color: Color, links: MutableList<IntRange>, block: AnnotatedString.Builder.() -> Unit) {
+    val start = length
+    withLink(LinkAnnotation.Url(url, linkStyle(color)), block)
+    links.add(start until length)
+}
+
+private fun AnnotatedString.Builder.appendChildren(n: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>, links: MutableList<IntRange>) {
+    children(n).forEach { appendNode(it, ink, files, notes, links) }
 }
 
 private fun AnnotatedString.Builder.grey(text: String, ink: MdInk) = withStyle(SpanStyle(color = ink.muted)) { append(text) }
 
 /** The short grey note after a link, and, tapped, the whole reason (§6.1, 6.4). */
-private fun AnnotatedString.Builder.appendNote(note: FileNote, ink: MdInk) {
+private fun AnnotatedString.Builder.appendNote(note: FileNote, ink: MdInk, links: MutableList<IntRange>) {
     append(" ")
-    withLink(LinkAnnotation.Url(whyLink(note), linkStyle(ink.muted))) { append("（${note.short}）") }
+    linkTo(whyLink(note), ink.muted, links) { append("（${note.short}）") }
 }
 
 /**
@@ -180,14 +187,14 @@ private fun AnnotatedString.Builder.appendNote(note: FileNote, ink: MdInk) {
  * that entry; one that cannot be given says why in grey (§6.1). Without them (an older computer) every link goes the
  * 1.0.10 way. `#`, `mailto:` and other protocols are words only; a web address on the computer itself says so.
  */
-private fun AnnotatedString.Builder.appendNode(n: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>) {
+private fun AnnotatedString.Builder.appendNode(n: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>, links: MutableList<IntRange>) {
     when(n) {
         is MdText -> append(n.literal)
         is Code -> withStyle(SpanStyle(fontFamily=FontFamily.Monospace,background=ink.code)) { append(n.literal) }
         is SoftLineBreak -> append(" ")
         is HardLineBreak -> append("\n")
-        is StrongEmphasis -> withStyle(SpanStyle(fontWeight=FontWeight.Bold)) { appendChildren(n, ink, files, notes) }
-        is Emphasis -> withStyle(SpanStyle(fontStyle=FontStyle.Italic)) { appendChildren(n, ink, files, notes) }
+        is StrongEmphasis -> withStyle(SpanStyle(fontWeight=FontWeight.Bold)) { appendChildren(n, ink, files, notes, links) }
+        is Emphasis -> withStyle(SpanStyle(fontStyle=FontStyle.Italic)) { appendChildren(n, ink, files, notes, links) }
         is Link -> {
             val destination = n.destination
             val file = files?.let { fileForLink(it, destination) }
@@ -195,22 +202,26 @@ private fun AnnotatedString.Builder.appendNode(n: Node, ink: MdInk, files: List<
             val path = localPath(destination)
             when {
                 // A file on the computer opens its page, to look at, save or share (web: the link downloads it, 10-27).
-                file != null -> withLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
-                path != null && files == null -> withLink(LinkAnnotation.Url(fileLink(path), linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
+                file != null -> linkTo(itemLink(file), ink.link, links) { appendChildren(n, ink, files, notes, links) }
+                path != null && files == null -> linkTo(fileLink(path), ink.link, links) { appendChildren(n, ink, files, notes, links) }
                 // A newer computer did not list it; its note says why, if it gave one.
                 path != null -> {
-                    appendChildren(n, ink, files, notes)
-                    if (note != null) appendNote(note, ink) else { append(" "); grey("（找不到文件）", ink) }
+                    appendChildren(n, ink, files, notes, links)
+                    if (note != null) appendNote(note, ink, links) else { append(" "); grey("（找不到文件）", ink) }
                 }
                 // A link that looked like a file but cannot be given: its words stay, the reason follows in grey.
                 note != null -> {
-                    withLink(LinkAnnotation.Url(whyLink(note), linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
-                    appendNote(note, ink)
+                    linkTo(whyLink(note), ink.link, links) { appendChildren(n, ink, files, notes, links) }
+                    appendNote(note, ink, links)
                 }
-                localWebLink(destination) -> { appendChildren(n, ink, files, notes); append(" "); grey("（电脑本机网址，手机打不开）", ink) }
-                safeWebLink(destination) -> withLink(LinkAnnotation.Url(destination, linkStyle(ink.link))) { appendChildren(n, ink, files, notes) }
-                // #…, mailto: and the rest: words only, no （链接未开放） any more (§6.1).
-                else -> appendChildren(n, ink, files, notes)
+                localWebLink(destination) -> { appendChildren(n, ink, files, notes, links); append(" "); grey("（电脑本机网址，手机打不开）", ink) }
+                safeWebLink(destination) -> linkTo(destination, ink.link, links) { appendChildren(n, ink, files, notes, links) }
+                // An older computer keeps 1.0.10's words for an address that looks like a file; #, mailto: and the
+                // rest are words only (§6.1).
+                else -> {
+                    appendChildren(n, ink, files, notes, links)
+                    if (files == null && fileLikeLink(destination)) append("（链接未开放）")
+                }
             }
         }
         is Image -> {
@@ -219,27 +230,32 @@ private fun AnnotatedString.Builder.appendNode(n: Node, ink: MdInk, files: List<
             val path = localPath(destination)
             val label = plain(n).ifBlank { file?.name?.ifBlank { null } ?: path?.substringAfterLast('/')?.substringAfterLast('\\') ?: "未命名" }
             when {
-                file != null -> withLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link))) { append("[图片：$label]") }
-                path != null -> withLink(LinkAnnotation.Url(fileLink(path), linkStyle(ink.link))) { append("[图片：$label]") }
+                file != null -> linkTo(itemLink(file), ink.link, links) { append("[图片：$label]") }
+                path != null -> linkTo(fileLink(path), ink.link, links) { append("[图片：$label]") }
                 else -> append("[图片：$label · 可在当前文件中查看已授权资源]")
             }
         }
         is HtmlInline -> append(n.literal)
-        else -> appendChildren(n, ink, files, notes)
+        else -> appendChildren(n, ink, files, notes, links)
     }
 }
 
-/** The words of a `code` or `path` file (§5.1 `texts`): each as the answer wrote it becomes a link to that file. */
-private fun AnnotatedString.Builder.linkFileTexts(files: List<FileRef>?, ink: MdInk) {
+/** The words of a `code` or `path` file (§5.1 `texts`): each as the answer wrote it becomes a link to that file. Words
+ *  already inside another link ([occupied]) stay as that link: one piece of text never carries two targets. */
+internal fun AnnotatedString.Builder.linkFileTexts(files: List<FileRef>?, ink: MdInk, occupied: MutableList<IntRange>) {
     if (files == null || length == 0) return
-    val text = toString()
+    val text = toAnnotatedString().text
     files.forEach { file ->
         file.texts.forEach { words ->
             if (words.isBlank()) return@forEach
             var at = text.indexOf(words)
             while (at >= 0) {
-                addLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link)), at, at + words.length)
-                at = text.indexOf(words, at + words.length)
+                val end = at + words.length
+                if (occupied.none { at < it.last + 1 && end > it.first }) {
+                    addLink(LinkAnnotation.Url(itemLink(file), linkStyle(ink.link)), at, end)
+                    occupied.add(at until end)
+                }
+                at = text.indexOf(words, end)
             }
         }
     }
@@ -247,35 +263,57 @@ private fun AnnotatedString.Builder.linkFileTexts(files: List<FileRef>?, ink: Md
 
 private fun inline(node: Node, ink: MdInk, files: List<FileRef>? = null, notes: List<FileNote> = emptyList()): AnnotatedString {
     val builder = AnnotatedString.Builder()
-    builder.appendNode(node, ink, files, notes)
-    builder.linkFileTexts(files, ink)
+    val links = mutableListOf<IntRange>()
+    builder.appendNode(node, ink, files, notes, links)
+    builder.linkFileTexts(files, ink, links)
     return builder.toAnnotatedString()
 }
 
 /** A paragraph's parts: its words, then a picture where the answer put one, then more words (§6.1). */
-private sealed class ParagraphPiece {
-    class Words(val text: AnnotatedString) : ParagraphPiece()
-    class Picture(val file: FileRef) : ParagraphPiece()
+internal sealed class ParagraphPiece {
+    internal class Words(val text: AnnotatedString) : ParagraphPiece()
+    internal class Picture(val file: FileRef) : ParagraphPiece()
+}
+
+/** Whether a node holds an `Image` anywhere: a link or emphasis wrapped around one counts (§6.1). */
+private fun containsImage(node: Node): Boolean {
+    var child = node.firstChild
+    while (child != null) {
+        if (child is Image || containsImage(child)) return true
+        child = child.next
+    }
+    return false
+}
+
+/** The picture a node is, or wraps whole (a link or emphasis whose only child is the picture). */
+private fun wrappedImage(node: Node): Image? {
+    if (node is Image) return node
+    if (node !is Link && node !is Emphasis && node !is StrongEmphasis) return null
+    val only = node.firstChild ?: return null
+    return if (only.next == null) wrappedImage(only) else null
 }
 
 /**
- * A paragraph split around the pictures drawn where it put them. A paragraph without one stays the single [Words] it
- * always was, so an answer with no pictures is drawn exactly as before and just as fast.
+ * A paragraph split around the pictures drawn where it put them. The test is by node, not by its words: an image's
+ * alt text never contains `![`, so looking at the words alone kept every picture as a line of text. A paragraph without
+ * one stays the single [Words] it always was, so an answer with no pictures is drawn exactly as before and as fast.
  */
-private fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>): List<ParagraphPiece> {
-    if (files == null || "![" !in plain(node)) return listOf(ParagraphPiece.Words(inline(node, ink, files, notes)))
+internal fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, notes: List<FileNote>): List<ParagraphPiece> {
+    if (files == null || !containsImage(node)) return listOf(ParagraphPiece.Words(inline(node, ink, files, notes)))
     val out = mutableListOf<ParagraphPiece>()
     var words = AnnotatedString.Builder()
+    val links = mutableListOf<IntRange>()
     fun flush() {
         if (words.length > 0) {
-            words.linkFileTexts(files, ink)
+            words.linkFileTexts(files, ink, links)
             out += ParagraphPiece.Words(words.toAnnotatedString())
             words = AnnotatedString.Builder()
+            links.clear()
         }
     }
     children(node).forEach { child ->
-        val file = (child as? Image)?.let { pictureForImage(files, it.destination) }
-        if (file != null) { flush(); out += ParagraphPiece.Picture(file) } else words.appendNode(child, ink, files, notes)
+        val file = wrappedImage(child)?.let { pictureForImage(files, it.destination) }
+        if (file != null) { flush(); out += ParagraphPiece.Picture(file) } else words.appendNode(child, ink, files, notes, links)
     }
     flush()
     return out
@@ -369,7 +407,10 @@ private fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, notes
     val p = LocalTeleply.current
     val loader = LocalAnswerThumb.current
     val uri = LocalUriHandler.current
-    val width = if (LocalConfiguration.current.screenWidthDp <= 480) 640 else 1280
+    val density = LocalDensity.current
+    // The bubble's width in pixels, not in dp: a 411 dp phone at 2.6 draws a bubble over 1,000 px wide, where 640
+    // would be soft (§6.3).
+    val width = pictureWidth(LocalConfiguration.current.screenWidthDp * density.density)
     var attempt by remember(file.id) { mutableIntStateOf(0) }
     var failed by remember(file.id, attempt) { mutableStateOf(false) }
     val image by produceState<android.graphics.Bitmap?>(null, file.id, file.version, width, attempt) {
@@ -379,22 +420,26 @@ private fun paragraphPieces(node: Node, ink: MdInk, files: List<FileRef>?, notes
     }
     val ratio = if (file.width > 0 && file.height > 0) file.width.toFloat() / file.height else 4f / 3f
     BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        // A tall picture keeps its whole height: the box narrows instead of cropping its middle.
         val height = (maxWidth / ratio).coerceAtMost(360.dp)
-        Box(
-            Modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(12.dp)).background(p.panel)
-                .clickable(role = Role.Image) { uri.openUri(itemLink(file)) }
-                .semantics { contentDescription = "查看 ${file.name.ifBlank { "图片" }}" },
-            contentAlignment = Alignment.Center,
-        ) {
-            val bitmap = image
-            when {
-                bitmap != null -> ComposeImage(bitmap.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                failed -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("没能加载缩略图", style = MaterialTheme.typography.note, color = p.muted)
-                    Text("重试", style = MaterialTheme.typography.note, color = p.accent,
-                        modifier = Modifier.padding(start = 12.dp).clip(RoundedCornerShape(6.dp)).clickable { attempt++ }.padding(vertical = 4.dp))
+        val shownWidth = height * ratio
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.width(shownWidth).height(height).clip(RoundedCornerShape(12.dp)).background(p.panel)
+                    .clickable(role = Role.Image) { uri.openUri(itemLink(file)) }
+                    .semantics { contentDescription = "查看 ${file.name.ifBlank { "图片" }}" },
+                contentAlignment = Alignment.Center,
+            ) {
+                val bitmap = image
+                when {
+                    bitmap != null -> ComposeImage(bitmap.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                    failed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("没能加载缩略图", style = MaterialTheme.typography.note, color = p.muted)
+                        Text("重试", style = MaterialTheme.typography.note, color = p.accent,
+                            modifier = Modifier.padding(start = 12.dp).clip(RoundedCornerShape(6.dp)).clickable { attempt++ }.padding(vertical = 4.dp))
+                    }
+                    else -> Text(file.name.ifBlank { "图片" }, style = MaterialTheme.typography.note, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
                 }
-                else -> Text(file.name.ifBlank { "图片" }, style = MaterialTheme.typography.note, color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
             }
         }
     }

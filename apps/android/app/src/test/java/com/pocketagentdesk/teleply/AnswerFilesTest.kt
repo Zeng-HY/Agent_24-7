@@ -1,6 +1,12 @@
 package com.pocketagentdesk.teleply
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
 import java.nio.file.Files
+import org.commonmark.node.Node
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -16,6 +22,63 @@ class AnswerFilesTest {
         thumb: Boolean = false, texts: List<String> = emptyList(), state: String = "current",
     ) = FileRef(id = id, name = id, path = path, kind = if (view == "image" || view == "svg") "image" else "text",
         view = view, state = state, version = "v1", thumb = thumb, texts = texts, via = via)
+
+    @Test fun aParagraphWithAPictureSplitsIntoWordsPictureWords() {
+        val ink = MdInk(Color.Black, Color.LightGray, Color.Gray)
+        val files = listOf(ref("fig", "D:\\a\\fig.png", view = "image", thumb = true))
+        fun pieces(markdown: String): List<ParagraphPiece> {
+            val paragraph: Node = children(markdownDocument(markdown)).first()
+            return paragraphPieces(paragraph, ink, files, emptyList())
+        }
+        val three = pieces("前文 ![图](<D:/a/fig.png>) 后文")
+        assertEquals(3, three.size)
+        assertEquals("fig", (three[1] as ParagraphPiece.Picture).file.id)
+        assertTrue((three[0] as ParagraphPiece.Words).text.text.contains("前文"))
+        assertTrue((three[2] as ParagraphPiece.Words).text.text.contains("后文"))
+        // A picture inside a link or emphasis is still found, not turned into a line of text.
+        assertTrue(pieces("[![图](<D:/a/fig.png>)](https://example.invalid)").any { it is ParagraphPiece.Picture })
+        assertTrue(pieces("**![图](<D:/a/fig.png>)**").any { it is ParagraphPiece.Picture })
+        // Without a picture (or without the newer computer's files) the paragraph stays one piece.
+        assertEquals(1, pieces("只有文字，没有图。").size)
+        val paragraph: Node = children(markdownDocument("前文 ![图](<D:/a/fig.png>) 后文")).first()
+        assertEquals(1, paragraphPieces(paragraph, ink, null, emptyList()).size)
+        // A picture the computer cannot thumb stays words, as §5.1 says.
+        val svg = listOf(ref("svg", "D:\\a\\fig.svg", view = "svg", thumb = false))
+        assertEquals(1, paragraphPieces(paragraph, ink, svg, emptyList()).size)
+    }
+
+    @Test fun theThumbWidthFollowsTheBubbleInPixels() {
+        assertEquals(640, pictureWidth(320f))
+        assertEquals(640, pictureWidth(640f))
+        assertEquals(1280, pictureWidth(641f))
+        assertEquals(1280, pictureWidth(1069f))
+    }
+
+    @Test fun anOlderComputerStillSaysWhenAFileLikeLinkCannotOpen() {
+        assertTrue(fileLikeLink("out/old.png"))
+        assertTrue(fileLikeLink("/D:/work/out/a.pdf"))
+        assertTrue(fileLikeLink("file:///D:/a/b.png"))
+        assertTrue(fileLikeLink("~/notes/a.md"))
+        assertTrue(fileLikeLink("docs\\release.md"))
+        assertFalse(fileLikeLink("https://example.invalid/a"))
+        assertFalse(fileLikeLink("#part-2"))
+        assertFalse(fileLikeLink("mailto:a@example.invalid"))
+        assertFalse(fileLikeLink("javascript:alert(1)"))
+    }
+
+    @Test fun wordsAlreadyInALinkKeepOneTarget() {
+        val ink = MdInk(Color.Black, Color.LightGray, Color.Gray)
+        val builder = AnnotatedString.Builder()
+        builder.withLink(LinkAnnotation.Url("https://example.invalid", TextLinkStyles())) { append("D:/a/run.R") }
+        builder.linkFileTexts(listOf(ref("run", texts = listOf("D:/a/run.R"))), ink, mutableListOf(0 until 8))
+        val linked = builder.toAnnotatedString()
+        assertEquals(1, linked.getLinkAnnotations(0, linked.length).size)
+        // Words not inside a link do become one.
+        val plain = AnnotatedString.Builder().apply { append("见 D:/a/run.R。") }
+        plain.linkFileTexts(listOf(ref("run", texts = listOf("D:/a/run.R"))), ink, mutableListOf())
+        val plainText = plain.toAnnotatedString()
+        assertEquals(1, plainText.getLinkAnnotations(0, plainText.length).size)
+    }
 
     @Test fun aNewComputerSaysSoWithFilesEvenAnEmptyList() {
         val plain = parseMessage(JSONObject("""{"id":"m1","role":"assistant","text":"hi"}"""))
