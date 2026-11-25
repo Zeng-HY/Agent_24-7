@@ -72,3 +72,46 @@
 - 主会话会在本机用真的 Antigravity 读一次（只看形状），再打包 dev.54。
 
 ## 5. 结果（DeepSeek 填）
+
+2026-11-25 做完。两件事分开提交，后来补了一个测试替身的修复和本节。没有推送、合并、打包、安装、发布，没改版本号文件；没有调用真的 Antigravity，也没有运行 `ag.py`；测试只用编的数据、假的本机服务和临时目录。
+
+### 提交
+
+- `911120b` A：Antigravity 用量（`agents/antigravity.py`、`tests/antigravity_fixtures.py`、`tests/test_antigravity.py`、`tests/test_unified_routes.py`）。
+- `8e5e3aa` B：旧手机列表先滤再分页（`chat_history.py`、`remote.py`、`tests/test_chats_visible_apps.py`）。
+- 之后一个提交：`tests/test_machines.py` 的假 `conversations` 跟上新参数，以及本文这一节。
+
+### A 做了什么
+
+- `AntigravityAgent.usage()` 用 `_rpc("RetrieveUserQuotaSummary", {}, 10)` 读本机服务的额度汇总：
+  - `window` 为 `5h` → 300 分钟，`weekly` → 10080，别的 → 0；组内 5 小时在前、每周在后，组按 Antigravity 给的顺序。
+  - `used_percent = round((1 − remainingFraction) × 100)`，夹在 0–100；缺 `remainingFraction`（或不是数字）的 bucket 跳过；`resetTime` 换成秒，没有或读不懂就 `None`。
+  - 名字是「组名 · 窗口名」：`Gemini Models` → 「Gemini 模型」、`Claude and GPT models` → 「Claude 和 GPT 模型」，别的组名原样；输出只有 `kind`、`minutes`、`used_percent`、`resets_at`、`name`，不带 `bucketId`、`description`。
+- 缓存 30 秒（`usage_limits.CACHE_SECONDS`），`live=1` 也用同一份缓存；测试里数过假服务的请求次数。
+- 读不到不抛错：没开 → `{"available": False, "reason": "Antigravity 没有打开，读不到用量"}`；接口出错 → `"读 Antigravity 用量没成功：<一句简短原因>"`。失败照 `_log_once` 每天同一原因只记一次；返回值和日志里都没有 csrf 令牌。
+- 说明书只改了 `capabilities.usage = true`。协议 1 的 `/api/usage` 仍只有 `codex`、`claude`、`now`；协议 2 的 `agents.antigravity` 有窗口；`/api/agents/antigravity/usage` 能读（协议 1 仍是 404）。
+- 测试：`tests/antigravity_fixtures.py` 的 `FakeHub` 增加 `RetrieveUserQuotaSummary`（`quota`/`fail`）；`tests/test_antigravity.py::UsageTests` 覆盖窗口换算与排序、中文/不认识的组名、没有 `resetTime`、`remainingFraction` 越界或缺失、没开、HTTP 出错、回的格式不对、缓存、失败只记一次；`RouteTests` 覆盖协议 1/2 的 `/api/usage` 与统一地址。
+
+### B 做了什么
+
+- `chat_history.conversations(..., apps=None)`：给了 `apps` 就先滤 `found` 和 `stray`，再取 `limit`、算 `cursor` 和 `total`；搜索、子对话、未分组那一行也只在看得见的助手里找。
+- `/api/chats` 协议 1 把 `_visible_apps()` 传进去；协议 2 仍按原来的范围取数，末尾的过滤照旧，所以结果和改前一字不差。
+- 测试 `tests/test_chats_visible_apps.py`：14 条新助手 + 12 条旧助手时，协议 1 第一页正好满 `limit`（10 行）、`total = 12`；逐页翻是 5、5、2 共 12 条，不重复不遗漏；搜索和未分组不漏出新助手；协议 2 的回答和不带 `apps` 的同一调用逐字相同（去掉 `now` 后对比）。
+- `tests/test_read_golden.py`、`tests/test_action_golden.py` 原样通过。
+
+### 测试数字
+
+- A 改前（`tests/test_antigravity.py tests/test_usage_limits.py`）：154 passed，24 subtests passed。
+- A 改后：`tests/test_antigravity.py` 108 passed、5 subtests；`tests/test_usage_limits.py tests/test_unified_routes.py` 59 passed、19 subtests。
+- B 改后：`tests/test_chats_visible_apps.py tests/test_agents.py` 32 passed；`tests/test_machines.py` 42 passed。
+- golden 与列表相关的合并跑：76 passed；同一次里 `tests/test_list_status_filter.py` 的 7 条失败都是本机缺 Playwright webkit（`BrowserType.launch: Executable doesn't exist …webkit-2359\Playwright.exe`），与这次改动无关。
+- 完整 pytest（`full-pytest-2.log`，2026-11-25）：**34 failed, 1360 passed, 6 skipped, 105 subtests passed**，10 分 23 秒。34 条失败里 33 条是这台机器没装 Playwright webkit（启动就失败），1 条是设计里已知的 `test_mobile_polish` 点击超时（`Locator.tap: Timeout 30000ms exceeded`）。没有本次改动引起的失败。
+  - 第一次完整跑（`full-pytest.log`）多出 1 条 `tests/test_machines.py::PageTests::test_the_list_holds_only_the_apps_this_computer_has` 的 `KeyError: 'items'`：那条旧测试的假 `conversations` 只收 7 个参数，不接受新的 `apps`。已让假函数接受并按 `apps` 过滤，`tests/test_machines.py` 42 passed，重跑全量后这条不再出现（35 → 34，`KeyError` 0 条）。
+- 这台机器没装 Playwright 浏览器，所以全量失败数比设计里写的「3 条」多；33 条启动失败是环境问题，和 dev.53 那几份交接里记的基线一致。
+
+### 没做 / 留给主会话
+
+- 没有推送、合并、打包、安装、发布；没改 `windows-version.json`、`windows-release-notes.json`。
+- 没有用真的 Antigravity 读额度，也没有运行 `ag.py`：按设计，形状来自已有的证据，测试用假回答；真机读一次留给主会话。
+- 没修这台机器缺 Playwright 浏览器的问题（要下载安装，属于停下来问用户的事）。
+
