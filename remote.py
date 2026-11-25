@@ -46,6 +46,7 @@ from pathlib import Path
 from app_paths import DATA
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 import file_renders
+import file_resources
 
 HERE = Path(__file__).resolve().parent
 CONFIG_FILE = DATA / "remote_config.json"
@@ -635,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
             try:self._json(self.server.new_chats.options(app))
             except chats.ChatError as exc:self._json({'error':str(exc)},400)
             return
-        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta", "/api/file/pdf", "/api/file/thumb"):
+        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta", "/api/file/pdf", "/api/file/thumb", "/api/file/zip", "/api/file/resource"):
             self._reading_get(path)
             return
         if path.startswith("/api/chat") and chats is None:
@@ -945,6 +946,18 @@ class Handler(BaseHTTPRequestHandler):
                     except (TypeError,ValueError):raise file_renders.RenderError('缩略图宽度不支持')
                     self._send(200,file_renders.thumbnail(meta['path'],meta.get('view'),width),'image/webp',
                                {'X-Content-Type-Options':'nosniff'})
+                elif path=='/api/file/zip':
+                    if q.get('v') and q['v']!=meta.get('v'):raise chat_history.HistoryError('文件已变化',409)
+                    if meta.get('view')!='archive' or meta['path'].suffix.lower()!='.zip':
+                        raise file_resources.ResourceError('这种压缩包只能下载')
+                    self._json(file_resources.zip_entries(meta['path']))
+                elif path=='/api/file/resource':
+                    target,mime,attachment,size=file_resources.resolve_resource(
+                        meta['path'],meta.get('view'),q.get('path',''))
+                    with target.open('rb') as source:data=source.read()
+                    extra={'X-Content-Type-Options':'nosniff'}
+                    if attachment:extra['Content-Disposition']="attachment; filename*=UTF-8''"+quote(target.name)
+                    self._send(200,data,mime,extra)
                 elif path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime'),'v':meta.get('v'),'view':meta.get('view'),'mime':meta.get('mime'),'lang':meta.get('lang')}
                                                      |({'preview':'pdf'} if meta['kind']=='download' and office_preview.offers(meta['path']) else {}))
                 elif path=='/api/file/pdf':
@@ -962,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
                                 'truncated':made['truncated'],'total_size':made['total_size'],
                                 'lines':made['lines'],'lang':meta.get('lang'),'line':meta.get('line')})
                 else:self._serve_result_file(meta,q.get('download')=='1')
-        except (chat_history.HistoryError,pc_files.FileError,chats.ChatError,file_renders.RenderError,OSError,ValueError,TypeError) as exc:
+        except (chat_history.HistoryError,pc_files.FileError,chats.ChatError,file_renders.RenderError,file_resources.ResourceError,OSError,ValueError,TypeError) as exc:
             self._json({'error':str(exc)},getattr(exc,'status',400))
 
     def _serve_result_file(self,meta,download=False):
