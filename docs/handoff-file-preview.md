@@ -478,7 +478,7 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 测试：`tests/test_file_policy.py` 52 个通过、1 个符号链接用例跳过（Windows 不许建链接）；`tests/test_answer_files_history.py` 13 个通过（三个出口、空 `files`、`file_notes`、SendUserFile 两种位置、DeepSeek 成果、缓存、同文共用、刷新后仍能称重、updated 保持）；`tests/test_answer_files.py` 80 个、第一段两个旧文件测试也通过。
 
-完整 pytest（第二段当时，工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**。
+完整 pytest（第二段当时，工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**；审后修和第三段之后的最终结果见第三段。
 
 速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接的对话，只有两个不同文件）：修前第一次出一页 **0.085 秒**、第一次列整个对话文件 **4.78 秒**；修后 **0.026 秒**和 **0.105 秒**，缓存后再列 0.09 秒、再出页 0.018 秒。脚本在 DeepSeek 工作区，没有提交。
 
@@ -496,6 +496,25 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - `file_policy` 把 `~/.aws`、`~/.ssh` 等整个目录都算不给；`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余不给。浏览器文件只在路径带 Chrome/Edge/Firefox/User Data 等标记时按文件名拒绝。
 - HTML 的 `<img src>` / `<a href>` 仍按网址做 %-解码；审后修里「不做 %-解码」只指 presented、Codex 引用、行内代码、正文路径。
 - 整个对话第一次列文件在 10,000 条时约 0.10 秒（同文共用一次 scan；不同文字的长对话仍是逐条认）。
+
+#### 第三段（文本接口、类型、原文件接口）
+
+已做：
+
+- 新增 `file_text.py`：开头 8 KB 没有 NUL，并且能按 UTF-8（带不带 BOM）、UTF-16（带 BOM）、GB18030 之一解开，才算文本；开头结果按（路径、大小、修改时间）缓存 5 秒。≤2 MB 给全文；更大给开头 2 MB，并在行尾截断。
+- `kind`：老四种不变；扩展名在老 20 种里，或者按内容能当文本，并且 ≤2 MB，就是 `text`；SVG、gif 仍 `download`。`view`：后缀表认不出的，按内容能当文本就是 `text`，认得出语言时是 `code`。按内容判断读文件开头，和文件信息一起缓存。
+- `/api/file/text`：返回 `text`、`name`、`encoding`（`utf-8` / `utf-8-sig` / `utf-16` / `gb18030`）、`truncated`、`total_size`、`lines`、`lang`、`line`；不能当文本时回到原来的原因文字（`kind` 不是 text 用「这个文件不提供文本预览」，否则用解码失败的说法）。
+- `/api/file/meta`：加了 `v`、`view`、`mime`、`lang`。
+- `/api/file`：`Content-Type` 用固定表；`html`、`htm`、`xhtml`、`svg`、`xml`、`js`、`mjs` 一律 `application/octet-stream` + `attachment`；图片、PDF、音频、视频、文本用 `inline`；地址带 `v=` 且和当前文件对不上回 409「文件已变化」；`Range` 照旧，`If-Range` 没有另改。
+- 测试：`tests/test_file_text.py` 10 个（UTF-8、BOM、UTF-16、GB18030 的 R/CSV、NUL、空文件、2 MB 行尾截断、缓存、语言表）；`tests/test_file_api.py` 6 个（kind/view 按内容、大文本仍 code、文本接口各编码和截断、meta 新字段、会执行类型一律下载、`v` 409）。
+
+完整 pytest（工作区 `full-pytest-c.log`）：**1544 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。运行时设了 `PLAYWRIGHT_BROWSERS_PATH=D:/Personal/agent_remote_lanes/ms-playwright`。没做：第四段的缩略图、`w`/`h`、附件资源、zip；也没有改中转。
+
+要审：
+
+- 文本截断按字节读 2 MB，再在最后一个换行处切；如果 2 MB 内一个换行都没有，就保留这 2 MB。
+- `kind` 对老 20 种后缀不读内容（例如 `.txt` 里有 NUL 仍算 text）；这是为了不改老 App 对已知后缀的看法。内容判断只用于列表里认不出的后缀。
+- `/api/file` 的文本、Markdown、表格也用了 `inline`；会执行的六类后缀除外。
 
 ### 线二、网页
 

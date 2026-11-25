@@ -936,7 +936,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 meta=self.server.files.download_meta(q['file']) if q.get('file','').startswith('pc.') else self.history.file(app,tid,q.get('file',''))
                 import office_preview
-                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime')}
+                if path=='/api/file' and q.get('v') and q['v']!=meta.get('v'):
+                    raise chat_history.HistoryError('文件已变化',409)
+                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime'),'v':meta.get('v'),'view':meta.get('view'),'mime':meta.get('mime'),'lang':meta.get('lang')}
                                                      |({'preview':'pdf'} if meta['kind']=='download' and office_preview.offers(meta['path']) else {}))
                 elif path=='/api/file/pdf':
                     # Word, Excel and PowerPoint as PDF, made by this computer's Office (10-27); the original stays at /api/file
@@ -944,12 +946,14 @@ class Handler(BaseHTTPRequestHandler):
                     made=office_preview.pdf(meta['path']);st=made.stat()
                     self._serve_result_file({'path':made,'size':st.st_size,'mtime':st.st_mtime_ns,'kind':'pdf','mime':'application/pdf','name':meta['path'].stem+'.pdf'})
                 elif path=='/api/file/text':
-                    if meta['kind']!='text':raise chat_history.HistoryError('这个文件不提供文本预览')
-                    with meta['path'].open('rb') as source:raw=source.read((1<<20)+1)
-                    if len(raw)>1<<20:raise chat_history.HistoryError('文件超过文本预览上限，请下载原文件')
-                    try:text=raw.decode('utf-16' if raw.startswith((b'\xff\xfe',b'\xfe\xff')) else 'utf-8-sig')
-                    except UnicodeError:raise chat_history.HistoryError('无法按 UTF-8 或 UTF-16 预览，请下载原文件') from None
-                    self._json({'text':text,'name':meta['path'].name})
+                    import file_text
+                    made=file_text.read(meta['path'])
+                    if made is None:
+                        if meta.get('kind')!='text':raise chat_history.HistoryError('这个文件不提供文本预览')
+                        raise chat_history.HistoryError('无法按 UTF-8、UTF-16 或 GB18030 预览，请下载原文件')
+                    self._json({'text':made['text'],'name':meta['path'].name,'encoding':made['encoding'],
+                                'truncated':made['truncated'],'total_size':made['total_size'],
+                                'lines':made['lines'],'lang':meta.get('lang'),'line':meta.get('line')})
                 else:self._serve_result_file(meta,q.get('download')=='1')
         except (chat_history.HistoryError,pc_files.FileError,chats.ChatError,OSError,ValueError,TypeError) as exc:
             self._json({'error':str(exc)},getattr(exc,'status',400))
@@ -967,12 +971,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(416,b'', 'text/plain',{'Content-Range':f'bytes */{size}'});return
             status=206
         length=end-start+1 if size else 0
+        suffix=(meta.get('ext') or meta['path'].suffix.lstrip('.')).lower()
+        executable=suffix in ('html','htm','xhtml','svg','xml','js','mjs')
+        view=meta.get('view')
+        media=suffix in ('pdf','png','jpg','jpeg','webp','gif','bmp','tif','tiff','heic','heif',
+                         'mp3','m4a','aac','wav','flac','ogg','mp4','m4v','mov','webm','mkv')
+        inline=not executable and not download and (view in ('image','pdf','audio','video','text','code','markdown','table') or media)
+        mime='application/octet-stream' if executable else meta['mime']
         with meta['path'].open('rb') as f:
             opened=os.fstat(f.fileno())
             if opened.st_size!=size or (meta.get('mtime') is not None and opened.st_mtime_ns!=meta['mtime']):
                 self._json({'error':'文件已变化，请重新打开后下载'},409);return
-            self.send_response(status);self.send_header('Content-Type',meta['mime']);self.send_header('Content-Length',str(length));self.send_header('Accept-Ranges','bytes');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
-            self.send_header('Content-Disposition',('attachment' if download or meta['kind']=='download' else 'inline')+"; filename*=UTF-8''"+quote(meta.get('name') or meta['path'].name))
+            self.send_response(status);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(length));self.send_header('Accept-Ranges','bytes');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
+            self.send_header('Content-Disposition',('inline' if inline else 'attachment')+"; filename*=UTF-8''"+quote(meta.get('name') or meta['path'].name))
             if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
             self.end_headers();f.seek(start)
             try:

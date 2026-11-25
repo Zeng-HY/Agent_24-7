@@ -10,6 +10,7 @@ import chats
 import activity_records
 import answer_files
 import file_policy
+import file_text
 
 class HistoryError(Exception):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -81,13 +82,7 @@ _AUDIO_MIME={'.mp3':'audio/mpeg','.m4a':'audio/mp4','.aac':'audio/aac','.wav':'a
              '.flac':'audio/flac','.ogg':'audio/ogg'}
 _VIDEO_MIME={'.mp4':'video/mp4','.m4v':'video/x-m4v','.mov':'video/quicktime','.webm':'video/webm',
              '.mkv':'video/x-matroska'}
-_LANG={'.r':'r','.py':'python','.js':'javascript','.mjs':'javascript','.ts':'typescript',
-       '.tsx':'typescript','.jsx':'javascript','.json':'json','.yaml':'yaml','.yml':'yaml',
-       '.xml':'xml','.sql':'sql','.sh':'bash','.ps1':'powershell','.kt':'kotlin','.kts':'kotlin',
-       '.swift':'swift','.java':'java','.c':'c','.h':'c','.cpp':'cpp','.hpp':'cpp','.cs':'csharp',
-       '.go':'go','.rs':'rust','.css':'css','.scss':'css','.less':'css','.md':'markdown',
-       '.markdown':'markdown','.ini':'ini','.cfg':'ini','.conf':'ini','.toml':'ini',
-       '.diff':'diff','.patch':'diff','.tex':'latex'}
+_CONTENT_SKIP=_IMAGE_KIND|_TEXT_KIND|_OFFICE|_AUDIO|_VIDEO|_ARCHIVE|{'.pdf','.svg','.gif'}
 _ANSWER_REASONS={'missing':'文件已移动或删除','not_found':'电脑上没找到这个文件',
                  'not_local':'文件在网络位置或别的电脑上，遥应只读这台电脑自己的磁盘',
                  'denied':'出于安全，遥应不让手机读这个文件（可能含密钥或登录信息）',
@@ -484,6 +479,9 @@ class History:
         import office_preview
         path=Path(f['path']);size=st.st_size if st else 0;suffix=path.suffix.lower()
         kind=_file_kind(suffix,size);view=_file_view(suffix);ext=suffix[1:]
+        if st is not None and suffix not in _CONTENT_SKIP and file_text.probe(path,st):
+            if size<=2<<20:kind='text'
+            if view=='none':view='code' if file_text.lang_for(suffix) else 'text'
         fid=self._file_id(app,tid,m.get('id'),index,path)
         old=self.files.get((app,tid,fid))
         updated=bool(old and old.get('mtime') is not None and st
@@ -494,7 +492,7 @@ class History:
              'ext':ext,'mime':_file_mime(suffix,view),'size':size,
              'modified':int(st.st_mtime*1000) if st else None,'state':state,
              'v':_file_version(st) if st else '','line':f.get('line'),
-             'lang':_LANG.get(suffix) if view in ('code','text') else None,
+             'lang':file_text.lang_for(suffix) if view in ('code','text') else None,
              'via':list(f.get('via') or []),'thumb':False,'message_id':m.get('id')}
         if f.get('texts'):row['texts']=list(f['texts'])
         if kind=='download' and st and office_preview.offers(path):row['preview']='pdf'
