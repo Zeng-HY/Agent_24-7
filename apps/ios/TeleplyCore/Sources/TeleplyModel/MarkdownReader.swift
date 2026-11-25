@@ -301,7 +301,7 @@ public enum MarkdownReader {
             var inner = look; inner.link = fileLink(path)
             return runs(link.children, inner)
         }
-        if let path {
+        if path != nil {
             // A newer computer did not list it; its note says why, if it gave one.
             var words = runs(link.children, look)
             words.append(InlineRun(" "))

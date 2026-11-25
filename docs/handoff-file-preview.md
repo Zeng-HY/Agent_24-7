@@ -460,5 +460,6 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **文件条**：`link`、`citation`、`presented`、`tool` 来的文件按 `id` 去重，最多 8 个，多了「还有 N 个」（打开这条消息的文件列表）；原处画了的图不再重复；`code`、`path` 不进文件条。
 - **演示数据**：`DemoWorld` 加了「文件预览示例」对话（名字、路径全编造）：原处的 PNG 和 SVG、文件条里的 PDF/R 源码/xlsx、`presented` 的两张图、行内代码路径、正文路径、`not_found` 和 `not_local`、`#` 链接、`localhost` 链接，以及一条没有 `files` 的老电脑消息。只在 `-TeleplyDemoFiles` 下出现，现有截图组和演示电脑 A 的内容未改。
 - **测试**：`AnswerFilesTests` 覆盖 `files` 解析与老电脑退回、按路径找文件、原因文字、段落拆图（真实 swift-markdown）、`texts` 文字链接与「一个字只有一个链接」、文件条去重/上限/「还有 N 个」、入口和原因链接的往返、缩略图命名和 200 MB 清理（临时目录，不碰全局状态）。
+- **编译修正（11-25，构建 `6b0685161cde674f5039c318`）**：TeleplyModel、TeleplyState 已编过；按日志把 `FileRef` 的 `via` 调到 `preview` 前，所有 `FileRef`、`FileNote` 和新结构体的初始化都按声明顺序核对了一遍；`MarkdownReader` 里未使用的 `path` 改成布尔判断；原因弹窗换成不弃用的 `alert(_:isPresented:presenting:)`，演示消息改成显式 `JSONValue`。App 和测试待下一次编译。
 - **没做（留给 B/C 段）**：看图页、SVG/PDF 原文件、原文件缓存、代码高亮、表格、音视频、zip、附属资源。
 - **没验到的**：这台电脑没有 Swift，iOS 代码没有编译或跑过测试；缩略图接口（`/api/file/thumb`）没和真电脑联调过。要等推送后 Codemagic 编译和测试。

@@ -206,8 +206,12 @@ struct ConversationView: View {
             model.workspace.openLinkedFile(path)
             return .handled
         })
-        .alert(item: $answerReason) { note in
-            Alert(title: Text("这个文件为什么打不开"), message: Text(note.full), dismissButton: .default(Text("知道了")))
+        .alert("这个文件为什么打不开",
+               isPresented: Binding(get: { answerReason != nil }, set: { if !$0 { answerReason = nil } }),
+               presenting: answerReason) { _ in
+            Button("知道了", role: .cancel) { answerReason = nil }
+        } message: { note in
+            Text(note.full)
         }
         .sheet(isPresented: Binding(get: { model.workspace.pane == "files" }, set: { if !$0 && model.workspace.pane == "files" { model.workspace.close() } }),
                onDismiss: {

@@ -868,7 +868,7 @@ enum DemoData {
         FileRef(id: "fp-analysis", name: "分析.R", path: "D:\\fixture\\file-preview\\analysis.R", kind: "text", view: "code",
                 size: 1_200, state: "current", version: "v1", lang: "r", via: ["link"]),
         FileRef(id: "fp-budget", name: "预算表.xlsx", path: "D:\\fixture\\file-preview\\budget.xlsx", kind: "download", view: "table",
-                size: 2_293, state: "current", version: "v1", preview: "pdf", via: ["link"]),
+                size: 2_293, state: "current", version: "v1", via: ["link"], preview: "pdf"),
         FileRef(id: "fp-shot-1", name: "截图一.png", path: "D:\\fixture\\file-preview\\shot-1.png", kind: "image", view: "image",
                 size: 462, state: "current", version: "v1", width: 1080, height: 720, thumb: true, via: ["presented"]),
         FileRef(id: "fp-shot-2", name: "截图二.png", path: "D:\\fixture\\file-preview\\shot-2.png", kind: "image", view: "image",
@@ -900,17 +900,23 @@ enum DemoData {
     /// The example conversation: an answer with files and reasons, and an older computer's answer without them.
     static let previewMessages: [JSONValue] = [
         message("fp-1", "user", "看一下这几个文件。"),
-        message("fp-2", "assistant", previewAnswer, [
-            "files": .array(previewFiles.map { $0.pageJSON }),
-            "file_notes": .array([
-                .object(["href": .string("out/old.png"), "reason": .string("not_found"),
-                         "text": .string("电脑上没找到这个文件")]),
-                .object(["href": .string("//nas/share/report.pdf"), "reason": .string("not_local"),
-                         "text": .string("文件在网络位置或别的电脑上")]),
-            ]),
-        ]),
+        previewAnswerMessage,
         message("fp-3", "assistant", "这是老电脑的回复，没有 files：\n\n[说明.md](D:/fixture/old/说明.md)"),
     ]
+
+    /// The answer with its files and reasons, written as the computer sends a message.
+    private static let previewAnswerMessage: JSONValue = .object([
+        "id": .string("fp-2"),
+        "role": .string("assistant"),
+        "text": .string(previewAnswer),
+        "files": .array(previewFiles.map { $0.pageJSON }),
+        "file_notes": .array([
+            .object(["href": .string("out/old.png"), "reason": .string("not_found"),
+                     "text": .string("电脑上没找到这个文件")]),
+            .object(["href": .string("//nas/share/report.pdf"), "reason": .string("not_local"),
+                     "text": .string("文件在网络位置或别的电脑上")]),
+        ]),
+    ])
 
     /// The example's own words: an R script, and the note the answer says it wrote.
     static let previewSource = "# 固定示例：按天汇总\ncounts <- table(demo[[\"day\"]])\nprint(counts)\n"
