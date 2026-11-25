@@ -37,6 +37,91 @@ struct VoiceTextTests {
     }
 }
 
+/// iOS's own recogniser starts afresh after a pause, and its answers then hold only the new words (Apple developer
+/// forums 731761, 762952): what was said before the pause stays (11-24, on an iPad).
+struct HeardStretchesTests {
+    func hear(_ answers: String...) -> HeardStretches {
+        var heard = HeardStretches()
+        for answer in answers { heard.take(answer) }
+        return heard
+    }
+
+    @Test func wordsBeforeAPauseStayWhenTheRecogniserStartsAfresh() {
+        var heard = HeardStretches()
+        for answer in ["今", "今天", "今天天气", "今天天气很好"] { heard.take(answer) }
+        heard.take("今天天气很好", closes: true)  // the stretch's last answer carries metadata
+        for answer in ["我", "我们去", "我们去公园"] { heard.take(answer) }
+        #expect(heard.text == "今天天气很好我们去公园")
+        // shown as the settled words, then the open stretch in grey
+        #expect(heard.settled == "今天天气很好")
+        #expect(String(heard.text.dropFirst(heard.settled.count)) == "我们去公园")
+        // after ✓ the final answer holds the last stretch only, or no words at all
+        heard.take("我们去公园。", closes: true)
+        heard.take("")
+        #expect(heard.text == "今天天气很好我们去公园。")
+    }
+
+    @Test func aFreshStartIsSeenWithoutTheClosingMarkToo() {
+        // the words fall back to the first of the new ones (a log on the forum: 105 segments, then 1)
+        #expect(hear("今天天气很好", "我", "我们去公园").text == "今天天气很好我们去公园")
+        // an answer with no words in between
+        #expect(hear("好的", "", "那我们走吧").text == "好的那我们走吧")
+        // the new words start after the open stretch ended
+        var heard = HeardStretches()
+        heard.take("好的", start: 0.4, end: 0.9)
+        heard.take("那我们走吧", start: 3.1, end: 4.2)
+        #expect(heard.text == "好的那我们走吧")
+    }
+
+    @Test func aNewStretchMayStartWithTheSameWords() {
+        var heard = HeardStretches()
+        heard.take("我们走吧")
+        heard.take("我们走吧", closes: true)
+        heard.take("我们")
+        heard.take("我们明天再说")
+        #expect(heard.text == "我们走吧我们明天再说")
+        #expect(heard.earlier == ["我们走吧"])
+    }
+
+    @Test func revisionsReplaceOnlyTheirOwnStretch() {
+        #expect(hear("是的", "实际上", "实际上我们").text == "实际上我们")
+        #expect(hear("今天天气很好", "今天天气真好我们").text == "今天天气真好我们")
+        #expect(hear("一二三", "123").text == "123")
+        // a recogniser that keeps everything, closing marks and all, is not written twice
+        var heard = HeardStretches()
+        heard.take("今天天气很好")
+        heard.take("今天天气很好。", closes: true)
+        heard.take("今天天气很好。我们")
+        heard.take("今天天气很好。我们去公园。", closes: true)
+        #expect(heard.text == "今天天气很好。我们去公园。")
+        #expect(heard.earlier.isEmpty)
+    }
+
+    @Test func wordsHeardAgainAreTakenBackNotDoubled() {
+        // all of it once more in the final answer
+        var heard = HeardStretches()
+        heard.take("今天天气很好")
+        heard.take("今天天气很好", closes: true)
+        heard.take("我们去公园")
+        heard.take("今天天气很好。我们去公园。", closes: true)
+        #expect(heard.text == "今天天气很好。我们去公园。")
+        // a revision first taken for new words
+        #expect(hear("我们走吧", "我们", "我们走吧好").text == "我们走吧好")
+        // answers without words change nothing
+        #expect(hear("今天天气很好", "。", " ").text == "今天天气很好")
+    }
+
+    @Test func stretchesJoinLikeTheComputersRecogniser() {
+        var heard = HeardStretches()
+        heard.take("hello there")
+        heard.take("Hello there.", closes: true)
+        heard.take("How")
+        heard.take("How are you")
+        #expect(heard.text == "Hello there. How are you")
+        #expect(joinStretches(["v1.2", "ok", "好的", "OK", " ", "了"]) == "v1.2 ok好的OK了")
+    }
+}
+
 /// Voice and notifications through the demo computer (Android ReaderUiScenarios voice and ntfy cases, Bark here).
 @MainActor
 struct VoiceAndNotifyTests {
