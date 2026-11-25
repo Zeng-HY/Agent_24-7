@@ -93,6 +93,13 @@ def test_broken_and_too_large_images(tmp_path):
     with pytest.raises(file_renders.RenderError):
         file_renders.thumbnail(broken, "image", 320, cache_dir=tmp_path / "thumbs")
 
+    disguised = tmp_path / "disguised.png"
+    disguised.write_bytes(b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n")
+    assert file_renders.size(disguised, "image") == (None, None, False)
+    with pytest.raises(file_renders.RenderError) as error:
+        file_renders.thumbnail(disguised, "image", 320, cache_dir=tmp_path / "thumbs")
+    assert "不是支持的图片格式" in str(error.value)
+
     big = image(tmp_path, "big.png", (100, 100))
     assert file_renders.size(big, "image", max_pixels=10) == (100, 100, False)
     with pytest.raises(file_renders.RenderError):

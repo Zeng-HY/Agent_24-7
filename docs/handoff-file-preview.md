@@ -527,6 +527,8 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - `w`、`h`：图片用 Pillow 只读文件头（EXIF 方向按摆正后的尺寸），SVG 读根元素的 `width`/`height`/`viewBox`；结果和文件信息一起缓存。读不到就不给。`thumb`：`view` 是 `image` 且图片能打开、或 `view` 是 `svg` 且 resvg 能转时为 true。
 - 测试：`tests/test_file_renders.py` 10 个（png/jpg/gif/heic/webp、EXIF 方向、坏图、注入像素上限、SVG/外部引用/坏 SVG/大 SVG、4096、缓存命中、300 MB 清理、宽度、`v` 409、`w`/`h`/`thumb` 字段）。
 
+审后修（11-25）：所有 `Image.open` 都传 `formats=`，只允许 PNG、JPEG、WebP、GIF、BMP、TIFF 和已注册的 HEIF/AVIF；内容是 EPS 等别的格式时按坏图处理，不会让 Pillow 去调 Ghostscript。
+
 完整 pytest（工作区 `full-pytest-d.log`）：**1555 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。没做：第五段（附件资源、zip）；`If-Range` 仍照第三段没有另改；打包脚本没改。
 
 要审：

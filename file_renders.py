@@ -25,6 +25,15 @@ try:  # an optional component; without it SVG keeps its file card
 except Exception:  # pragma: no cover - only when the component is absent
     pillow_heif = None
 
+Image.init()
+ALLOWED_FORMATS = ["PNG", "JPEG", "WEBP", "GIF", "BMP", "TIFF"]
+if "HEIF" in Image.OPEN:
+    ALLOWED_FORMATS.append("HEIF")
+if "AVIF" in Image.OPEN:
+    ALLOWED_FORMATS.append("AVIF")
+FORMATS = tuple(ALLOWED_FORMATS)
+FORMAT_TEXT = "PNG、JPEG、WebP、GIF、BMP、TIFF、HEIC"
+
 try:
     import resvg_py
     RESVG_VERSION = getattr(resvg_py, "__resvg_version__", "unknown")
@@ -212,7 +221,7 @@ def _image_size(path, st, max_source, max_pixels):
     if st.st_size > max_source:
         return None, None, False
     try:
-        with Image.open(path) as im:
+        with Image.open(path, formats=FORMATS) as im:
             width, height = _oriented_size(im)
     except Exception:
         return None, None, False
@@ -276,7 +285,7 @@ def _render_image(path, width, max_source, max_pixels):
     if st.st_size > max_source:
         raise RenderError("图片超过 100 MB，无法生成缩略图", 413)
     try:
-        with Image.open(path) as im:
+        with Image.open(path, formats=FORMATS) as im:
             if im.width * im.height > max_pixels:
                 raise RenderError("图片像素太多，无法生成缩略图", 413)
             im.seek(0)
@@ -285,6 +294,8 @@ def _render_image(path, width, max_source, max_pixels):
             return _webp(im, width)
     except RenderError:
         raise
+    except Image.UnidentifiedImageError:
+        raise RenderError(f"不是支持的图片格式（只支持 {FORMAT_TEXT}）", 400) from None
     except Image.DecompressionBombError:
         raise RenderError("图片像素太多，无法生成缩略图", 413) from None
     except Exception as exc:
@@ -312,7 +323,7 @@ def _render_svg(path, width, max_svg):
     out_w, out_h = max(1, round(sway * scale)), max(1, round(sh * scale))
     try:
         png = resvg_py.svg_to_bytes(svg_string=text, width=out_w, height=out_h)
-        with Image.open(io.BytesIO(png)) as im:
+        with Image.open(io.BytesIO(png), formats=("PNG",)) as im:
             im.load()
             return _webp(im, width)
     except Exception as exc:
