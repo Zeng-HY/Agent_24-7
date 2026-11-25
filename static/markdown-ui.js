@@ -3,7 +3,9 @@
   const parser=window.markdownit({html:true,breaks:false,linkify:false});
   const local=value=>{try{return /^[A-Za-z]:[\\/]/.test(decodeURIComponent(value));}catch{return false;}};
   const validate=parser.validateLink.bind(parser);
-  parser.validateLink=url=>local(url)||validate(url);
+  // A file: URL is kept as a token so a file note can be shown for it; link_open below never
+  // gives any scheme but http(s) a live address, so nothing here can be opened or executed.
+  parser.validateLink=url=>local(url)||/^file:/i.test(url||'')||validate(url);
   const escape=parser.utils.escapeHtml;
   // One panel contract for fenced text and public tool command/result details.
   const panelStates=new WeakMap();
@@ -33,9 +35,14 @@
   parser.renderer.rules.html_block=parser.renderer.rules.html_inline=(tokens,i)=>tokens[i].content.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,'').replace(/<[^>]*>/g,tag=>/^<\/?(?:details|summary)\s*>$/i.test(tag)?tag:'');
   parser.renderer.rules.link_open=(tokens,i,options,env)=>{
     const token=tokens[i],href=token.attrGet('href')||'';
-    if(local(href))return '<a href="#" '+reference(token,env)+'>';
+    if(local(href))return '<a href="#" data-result-key="'+escape(href)+'" '+reference(token,env)+'>';
     if(/^https?:\/\//i.test(href)){try{const url=new URL(href);if(!url.username&&!url.password)return '<a href="'+escape(url.href)+'" target="_blank" rel="noopener noreferrer">';}catch{}}
-    return '<a>';
+    // Page anchors, mail, telephone and every other scheme stay as plain words. A path that may be a
+    // file (relative, /home/..., file://...) keeps its address for reading-ui.js's note lookup, but
+    // has no href: an old computer keeps showing it as plain text, as it always did.
+    if(!href||href.startsWith('#')||href.startsWith('//')||/^(?:mailto|tel|sms):/i.test(href)||
+       (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)&&!/^file:/i.test(href)))return '<a>';
+    return '<a data-file-href="'+escape(href)+'">';
   };
   parser.renderer.rules.image=(tokens,i,options,env)=>{
     const token=tokens[i],src=token.attrGet('src')||'',alt=escape(token.content);
@@ -55,7 +62,8 @@
   parser.renderer.rules.table_close=()=>'</table></div>';
   window.renderMarkdown=(text,copyable=false)=>DOMPurify.sanitize(parser.render(String(text),{referenceIndex:0,codeIndex:0,copyable}),{
     ALLOWED_TAGS:['p','br','h1','h2','h3','h4','h5','h6','ul','ol','li','blockquote','strong','em','s','hr','pre','code','table','thead','tbody','tr','th','td','a','img','details','summary','div','span','button'],
-    ALLOWED_ATTR:['href','src','alt','title','target','rel','loading','referrerpolicy','class','type','start','tabindex','aria-label','aria-pressed','data-panel-key','data-result-index','data-result-key','data-copy-fragment'],ALLOW_DATA_ATTR:false
+    ALLOWED_ATTR:['href','src','alt','title','target','rel','loading','referrerpolicy','class','type','start','tabindex','aria-label','aria-pressed','data-panel-key','data-result-index','data-result-key','data-file-href','data-copy-fragment'],
+    ADD_URI_SAFE_ATTR:['data-result-key','data-file-href'],ALLOW_DATA_ATTR:false
   });
   window.updateMarkdown=(node,text,copyable=true)=>{
     const details=[...node.querySelectorAll('details')].map(n=>({label:n.querySelector('summary')?.textContent,open:n.open}));

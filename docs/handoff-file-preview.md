@@ -518,7 +518,28 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 ### 线二、网页
 
-（待填）
+#### 第一段（消息里的图、文件条、原因）
+
+已做：只改网页，`static/markdown-ui.js` 和 `static/reading-ui.js`；新增 `tests/test_answer_files_web.py`。没有改 `remote.html`、没有改电脑端 Python。
+
+- **新电脑的判定。** 回答的 `files` 是数组（空列表也算）就走新路；没有这个字段就完全保留现在的做法：链接按 `data-result-index` 拉 `/api/chat/files`、按序号找，图片由原来的观察器懒加载原图。新电脑不再按序号找文件，也不再为链接先拉整个对话的文件列表。
+- **链接。** 地址先按 `local` 的同一规则（%-解码后有盘符）认出来，再和 `files[].path` 比：反斜杠统一成正斜杠、不分大小写；地址里带的 `:12`、`:12:5`、`#L12` 这类行号先去掉再比。对上就按这一项的 `id` 打开文件页（`kind === 'download'` 且不是 Office 转 PDF 的仍走下载，和现在一样）。对不上再按 `file_notes[].href` 找原因：两边都 %-解码后相等。链接文字照常显示，后面加灰色短说明；点链接或短说明弹出 §6.4 的完整原话。`files` 为空的新电脑也不会退回按序号找。
+- **不是文件的链接。** `#…`、`mailto:`、`tel:`、`sms:`、`//…` 和别的协议只渲染成没有 `href` 的文字；`file:` 保留地址只为查 `file_notes`，本身没有真实地址，在有 `files` 的新电脑上才补 `href="#"` 接住点击（老电脑仍是纯文字）。`localhost`、`127.0.0.1`、`[::1]` 的 http(s) 链接后面加「（电脑本机网址，手机打不开）」。
+- **消息里的图。** `![…](…)` 对上 `files` 里 `view` 为 `image` 的项，就在原处画：`<figure>` 宽度 100%，`max-height: 360px`，`object-fit: contain`（整张可见，不裁），先按 `w`/`h` 设 `aspect-ratio`，没有就 `4 / 3`；加载中灰底显示文件名；失败显示一行「图片读取失败」和「重试」按钮；点图按这一项的 `id` 打开文件页。`thumb` 为真取 `/api/file/thumb?app&id&file&w&v`（按视口像素宽度挑 640 或 1280）；为假且大小不超过 16 MB 取原图 `/api/file?…&v=…`，更大的显示文件卡。`view` 为 `svg` 的显示文件卡（B 段再画）。图片都只放进 `<img>`。
+- **文件条。** 每条回答下面一排卡：`via` 里有 `link`、`citation`、`presented`、`tool` 的文件，去掉已经画在原处的，按 `id` 去重，最多 8 个；多了显示「还有 N 个」，点开这条消息的完整文件列表。图片卡用 320 缩略图（`thumb` 为假时用原图），其他卡用类型图标、名字、大小；`updated`、`missing` 有文字标记，`missing` 的名字加删除线。点卡按这一项的 `id` 打开文件页。
+- **`code`、`path` 来的文件。** 行内代码的文字等于 `texts` 里某一项时，把 `<code>` 包进惰性链接；正文里按 `texts` 找到那段字再包。已经在 `<a>` 里的文字、代码块里的文字、文件卡里的文字都不再处理。这两种文件不加文件条。
+- **安全。** 没有引入 blob 地址或新标签页；图片只进 `<img>`；不把 HTML、SVG 直接放进页面；下载路径照旧走 `artifact-preview.js` 的 `download` 属性。DOMPurify 的 `ALLOWED_ATTR` 只加了真正需要的 `data-file-href`。另外发现 DOMPurify 会把属性值当网址检查，`data-result-key="D:/…"` 会被整条剥掉（以前本地图片的 `data-result-key` 其实也一直没留下，旧网页只靠序号所以没暴露）；因此把 `data-result-key`、`data-file-href` 加进 `ADD_URI_SAFE_ATTR`，它们只用于匹配，从不作为地址使用。
+- **测试。** `tests/test_answer_files_web.py`：一条编造的「文件预览示例」对话（名字、路径全部编造），覆盖原处的图（有 `w`/`h`、没有 `w`/`h`、`thumb` 为真）、超过 16 MB 的图和 SVG 的文件卡、文件条（链接来的 pdf、R 源码、xlsx，`presented` 来的两张图，`updated`/`missing` 标记，超过 8 个的「还有 N 个」）、行内代码路径、正文路径、`not_found` 和 `not_local` 两种原因（`not_found` 的地址带空格，验证 %-解码后相等）、`#`、`mailto:`、三种本机网址、一条没有 `files` 的老电脑消息（占位图、按序号找文件、没有文件条），以及一条 `files` 是空列表的新电脑消息（点链接仍不按序号找）。检查了画出来的尺寸/比例/裁切方式、文件条内容和点击后请求的文件编号，并断言新电脑点链接时不请求 `/api/chat/files`。
+- 本段测试：新测试 1 个通过；`tests/test_web_agents.py`、`tests/test_web_antigravity.py`、`tests/test_artifact_files.py`、`tests/test_relative_links.py`、`tests/test_answer_files_history.py`、`tests/test_file_api.py`、`tests/test_page_parts.py` 共 45 个通过。完整 pytest（工作区 `full-pytest-final.log`）：**1545 passed，7 skipped，3 failed**；3 条都是已知的环境失败（`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时），没有本段代码的失败。
+- 没做：B 段的看图页、SVG 画图、表格、代码高亮；C 段的音视频、zip、附属资源。HTML 里的 `<img>` / `<a>` 仍按现在的安全规则整段去掉，只做了 Markdown 图片和链接。`/api/file/thumb` 还没有，所以 `thumb` 为真的地址只用编造数据测过，真接口等电脑线第四段。工具行在还没有回答时携带的 `files`（SendUserFile 先挂在工具行）这一轮不显示：`renderMsgs` 的工具行没有走 `decorateMessage`，要改 `remote.html`，本段按约定没有碰。没有改版本号、没有推送。
+
+要审：
+
+- 「新电脑」只看 `Array.isArray(m.files)`：空列表也会关掉按序号找；老电脑没有这个字段，行为不变。
+- 文件条只给最终回答（`phase === 'commentary'` 的进度消息只处理图片/链接/文字路径，不加文件条），免得进度消息下面挂一长排。
+- 原因弹层是新加的原生 `<dialog>`（`answer-dialog`），不经过 `remote.html` 的 sheet；短文和完整原因都按 §6.4 写。
+- 匹配文件时除了「斜杠统一、不分大小写」还去掉了行号，因为电脑改写后的链接会保留 `:12`；这比 §5.1 的原文多做一步，请确认。
+
 
 ### 线三、安卓 1.0.11
 
