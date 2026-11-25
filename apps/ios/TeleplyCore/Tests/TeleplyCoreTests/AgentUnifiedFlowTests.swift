@@ -45,6 +45,9 @@ struct AgentUnifiedFlowTests {
         await enterA(model)
         try await open(model, "test-waiting")
         #expect(model.conversation.control.questions)
+        // 0.9.0 keeps 用量 away from a new assistant even while its state offers it (`usage` is on here): its usage
+        // section comes with the next version (dev.54 opens Antigravity's), so the row would open an empty page.
+        #expect(!model.showsUsage("testing"))
         #expect(pendingCards(app: "testing", raw: model.conversation.control.raw, catalog: model.catalog).first?.summary == "测试助手想运行命令")
         #expect(genericCards(model.conversation.control.raw).count == 1)
         let paths = await watched.log.items.map(\.url.path)
@@ -289,6 +292,8 @@ struct AgentUnifiedFlowTests {
         #expect(!model.offersSend("testing"))
         #expect(!model.offersAttachments("testing"))
         #expect(!model.offersOpenOnComputer("testing"))
+        // 用量 is the one that does not follow the state: 0.9.0 shows it for no new assistant, whatever it offers
+        // (pre-release change: dev.54 opens `usage`, the section comes next version).
         #expect(!model.showsUsage("testing"))
         #expect(!model.allowsCommands("testing"))
         #expect(!model.allowsSkills("testing"))

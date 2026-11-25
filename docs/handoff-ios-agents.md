@@ -406,3 +406,11 @@
 - 15 条失败全部归到上面两类，没有第三类；`AgentHandshakeTests` 第 176 行的断言没改，流补上后读到的仍是原来那个状态。
 - 结构检查：6 个改动文件括号/引号 0 问题、原始字符串 0 问题；`DemoTransport.swift` 追加的一段已统一回 LF。
 
+#### 发版前小改（2026-11-25，dev.54 的 `usage`）
+
+- 背景：电脑端下一版 dev.54 会打开 Antigravity 的 `usage`（读它的额度）。0.9.0 还没有新助手的用量区块，照能力位显示的话，Antigravity 对话的 ⋯ 菜单会多一个「用量」，点进去只有 Codex 和 Claude。
+- 改法：`AppModel.showsUsage` 对新助手（`isGeneric`）一律返回 `false`，注释写明原因（用量区块下一版再加）；三家照旧是 `app != "deepseek"`。只动了这一个函数，没有碰 `UsageView` 和三家的判断。
+- 测试：`AgentUnifiedFlowTests.aNewAssistantsButtonsFollowItsState` 的「用量」一行注明它不跟能力位走；`itsStateAndItsCardComeFromItsOwnAddress` 补一条断言——`testing` 的状态里 `usage` 是开的，但 `showsUsage("testing")` 仍是 false（这条就是 dev.54 的情形）。三家那两条（Codex true、DeepSeek false）不变。
+- README：「用量」那条改成「新助手不显示（dev.54 开了也不显示）」，真机验清单加第 6 条「Antigravity 对话的 ⋯ 菜单里没有用量」。
+- 结构检查：2 个 Swift 改动文件括号/引号 0 问题、原始字符串 0 问题。
+

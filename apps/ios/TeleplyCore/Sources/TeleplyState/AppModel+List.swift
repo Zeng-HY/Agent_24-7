@@ -368,10 +368,13 @@ extension AppModel {
         return isGeneric(id) ? can("open", app: id) : true
     }
 
-    /// The ⋯ menu's 用量: the three had it but DeepSeek's (11-17: it has no plan limits); a new one needs `usage`.
+    /// The ⋯ menu's 用量: the three had it but DeepSeek's (11-17: it has no plan limits). A new assistant shows none in
+    /// 0.9.0 even when its computer offers `usage` (dev.54 opens Antigravity's): its usage section comes with the next
+    /// version, so the row would open a page listing only Codex's and Claude's.
     public func showsUsage(_ app: String? = nil) -> Bool {
         let id = app ?? self.app
-        return isGeneric(id) ? can("usage", app: id) : id != "deepseek"
+        if isGeneric(id) { return false }
+        return id != "deepseek"
     }
 
     /// The composer's `/` list: the three always offered it; a new one needs `slash_commands`.
