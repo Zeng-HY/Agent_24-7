@@ -59,7 +59,7 @@ struct AnswerFilesTests {
         #expect(older.files == nil)
         #expect(older.fileNotes.isEmpty)
         let empty = try parseMessage(JSONValue.parse(Data(#"{"id":"m2","role":"assistant","text":"hi","files":[]}"#.utf8)))
-        #expect(empty.files == [])
+        #expect(empty.files?.isEmpty == true)
         let full = try parseMessage(JSONValue.parse(Data("""
             {"id":"m3","role":"assistant","text":"x",
              "files":[{"id":"3f0c","name":"chart.png","path":"D:\\\\work\\\\out\\\\chart.png","kind":"image","view":"image",

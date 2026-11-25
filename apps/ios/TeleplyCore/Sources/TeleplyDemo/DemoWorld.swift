@@ -438,7 +438,7 @@ public final class DemoWorld: Sendable {
     /// state answering changed saying so (Android FixtureWorld.firstPage).
     func firstPage() -> [JSONValue] {
         state.withLock { state in
-            let listed = (site?.rows ?? DemoData.firstPage).map { row in
+            let listed: [JSONValue] = (site?.rows ?? DemoData.firstPage).map { row in
                 var fields = row.object
                 switch row["id"].string() {
                 case "demo":
