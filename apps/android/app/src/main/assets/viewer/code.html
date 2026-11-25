@@ -21,13 +21,23 @@
          background: rgba(255,193,7,.18); color: inherit; }
   #banner.show { display: block; }
 
-  /* One row per line: the gutter number and that line's code share the row, so they stay aligned when wrapping. */
-  #code { margin: 0; padding: 8px 0 40px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .line { display: flex; align-items: flex-start; min-height: 18px; }
-  .line .ln { flex: 0 0 44px; padding-right: 8px; text-align: right; color: #8b949e; white-space: pre; user-select: none; }
+  /* One row per line: the gutter number and that line's code share the row, so they stay aligned when wrapping.
+     Without wrapping, a long line scrolls sideways inside the code area only: the bar never slides away and the line
+     numbers stay at the left edge (opaque, so the code passes under them). */
+  #code { margin: 0; padding: 8px 0 40px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          overflow-x: auto; }
+  .line { display: flex; align-items: flex-start; min-height: 18px; width: max-content; min-width: 100%; }
+  body.wrap .line { width: auto; }
+  .line .ln { flex: 0 0 44px; padding-right: 8px; text-align: right; color: #8b949e; white-space: pre; user-select: none;
+          position: sticky; left: 0; z-index: 1; background: #ffffff; }
+  body.dark .line .ln { background: #0d1117; }
   .line .lc { flex: 1 1 auto; min-width: 0; padding-right: 12px; white-space: pre; tab-size: 4; }
   body.wrap .line .lc { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+  /* The marked line shows across the whole row: the theme's .hljs background must not cover it. */
+  .line .lc, .line .lc.hljs { background: transparent; }
   .line.target { background: rgba(255,214,10,.28); }
+  .line.target .ln { background: #fff5c2; }
+  body.dark .line.target .ln { background: #514813; }
 
   /* highlight.js' own block padding/scroll box must not shift the text against the gutter. */
   #code pre, #code code, #code code.hljs, #code pre code.hljs, .line .lc code {

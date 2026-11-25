@@ -486,6 +486,8 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 核对：在工作区写了 Playwright（Chrome `channel='chrome'`）脚本，按 `CodeViewer.kt` 的同一份 `/code.html`、`/text`、js/css 起本地服务：正常视口、自动换行开/关、视口先 1 像素再变正常、跳到第 3 行，截图在 `shots/`；脚本检查了代码可见、第一行在工具栏下面、行号与代码顶线一致（换行开/关都是 0 条错位）、第 3 行在视野内并标出，全部通过。单元测试 345 条全过，`assembleDebug` 通过；未加 Gradle 依赖，版本号未动。
 
+**审后补两处（主会话，11-25）**：不换行时，长行只在代码区里横着滑（`#code` 横向滚动、每行 `width: max-content`），工具栏不会被一起带走，行号栏 `position: sticky; left: 0` 留在左边；标出的那一行整行变黄（主题样式 `.hljs` 的白底不再盖住代码部分）。README 里 `code.html` 的摘要已更新。用 Chrome 照同样的服务核对：不换行时代码区能横滑（内容宽 1761、可见 412），页面本身不横滑，横滑 300 后行号仍在最左；换行时没有横向溢出、0 条错位；深色、先 1 像素再正常都对。
+
 
 ### 线四、iOS 0.9.1
 
