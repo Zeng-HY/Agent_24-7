@@ -498,6 +498,12 @@ public struct RelayClient: Sendable {
     public static let tooLargeToDownload = "文件超过500MB，请在电脑上打开"
     /// A picture, a PDF or another file a file's page shows itself is shown up to 20 MB (web artifact-preview).
     public static let previewLimit: Int64 = 20 * 1024 * 1024
+    /// §5.8: a picture's original may be this large in the viewer (past it the 2048 thumb is shown).
+    public static let picturePreviewLimit: Int64 = 30 * 1024 * 1024
+    /// §5.8: a PDF may be this large and still open on its page, kept on disk rather than in memory.
+    public static let pdfPreviewLimit: Int64 = 100 * 1024 * 1024
+    /// §5.8: a Word or Excel file may be this large to be drawn by the phone's own pages.
+    public static let officePreviewLimit: Int64 = 30 * 1024 * 1024
     /// A thumbnail is a small WebP (§5.3); this only keeps a wrong answer from filling the phone.
     public static let thumbLimit: Int64 = 16 * 1024 * 1024
 
@@ -547,19 +553,19 @@ public struct RelayClient: Sendable {
         return saved
     }
 
-    /// A file's thumbnail for an answer or its file strip (GET /api/file/thumb, file-preview design §5.3): `app`, the
-    /// conversation's id, the file's id, one of the widths the computer accepts (320, 640, 1280) and its `v`, so an
-    /// address never changes content. To a file on this phone; the caller owns it.
-    public func thumb(device: String, app: String, chat: String, file: String, width: Int, version: String) async throws -> URL {
-        guard let files = transport as? any RelayFileTransport else { throw ReadFailure("当前服务不支持下载文件") }
+    /// A file's thumbnail for an answer, its file strip or the viewer (GET /api/file/thumb, file-preview design §5.3):
+    /// `app`, the conversation's id, the file's id, a width the computer accepts (320, 640, 1280, 2048, 4096) and its
+    /// `v`, so an address never changes content. Its bytes; nothing is written here.
+    public func thumb(device: String, app: String, chat: String, file: String, width: Int, version: String) async throws -> Data {
         var request = try get(Self.devicePath(device, "/api/file/thumb"),
                               query: [("app", app), ("id", chat), ("file", file), ("w", "\(width)"),
                                       ("v", version.isEmpty ? nil : version)], deadline: 60)
         request.headers["Accept"] = "*/*"
-        let answer = try await files.download(request, limit: Self.thumbLimit, progress: nil)
-        if answer.status == 401 { try? vault?.write(origin.key, nil) }
-        guard (200..<300).contains(answer.status), let saved = answer.file else { throw ServiceFailure(status: answer.status, body: answer.body) }
-        return saved
+        let response = try await transport.send(request)
+        if response.status == 401 { try? vault?.write(origin.key, nil) }
+        guard (200..<300).contains(response.status) else { throw ServiceFailure(status: response.status, body: response.body) }
+        guard response.body.count <= Self.thumbLimit else { throw ReadFailure("缩略图太大") }
+        return response.body
     }
 
     /// The computer's voice service (web voice-ui.js): raw audio up, recognised text back. A whole recording, or the

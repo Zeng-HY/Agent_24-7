@@ -59,6 +59,12 @@ public final class WorkspaceModel {
     /// itself (showsInPage), up to 20 MB.
     public internal(set) var fileText = ""
     public internal(set) var preview: URL?
+    /// A kept original on this phone (§7): it stays in the cache after the page goes, unlike [preview], which is a
+    /// temporary copy deleted with the page.
+    public internal(set) var previewFile: URL?
+    /// The pictures the viewer is showing, in their order, and the one it opened at (§6.2); while the pane is "picture".
+    public internal(set) var pictureFiles: [FileRef] = []
+    public internal(set) var pictureIndex = 0
     /// Why a file page shows less than it could (its preview did not load); the file can still be saved.
     public internal(set) var fileNote = ""
     /// A copy for 保存到文件, 分享 or 快速查看 being downloaded, and how far it got (正在下载 37%).
@@ -155,6 +161,8 @@ public final class WorkspaceModel {
         data = [:]
         folderListing = [:]
         dropFile()
+        pictureFiles = []
+        pictureIndex = 0
         listing = nil
         newData = next.flatMap { lists[$0] } ?? [:]
         let g = generation

@@ -101,35 +101,121 @@ extension WorkspaceModel {
         self.file(file.pageJSON)
     }
 
-    /// Where answer thumbnails are kept on this phone: a folder of its own in the caches, a subfolder per computer
-    /// (file-preview design §7).
-    nonisolated public static let answerThumbFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent(ThumbCache.folderName)
+    /// Where answer thumbnails and kept originals live on this phone: folders of their own in the caches, a subfolder
+    /// per computer (file-preview design §7).
+    nonisolated public static let cachesRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    nonisolated public static let answerThumbFolder = WorkspaceModel.cachesRoot.appendingPathComponent(ThumbCache.folderName)
+    nonisolated public static let answerFileFolder = WorkspaceModel.cachesRoot.appendingPathComponent(answerFileFolderName)
 
-    nonisolated static let answerThumbs = ThumbCache(folder: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent(ThumbCache.folderName))
+    nonisolated static let answerThumbs = ThumbCache(folder: WorkspaceModel.answerThumbFolder)
+    nonisolated static let answerFiles = FileCache(root: WorkspaceModel.answerFileFolder)
 
     /// A picture in an answer (§6.1): the computer's thumb at about [width] pixels (320 in a strip, 640 or 1280 in the
-    /// text), kept on this phone by (computer, file id, `v`, width) (§7). Nil when it cannot be had; the page offers
-    /// 重试.
-    public func answerThumb(_ file: FileRef, width: Int) async -> URL? {
+    /// text, 2048 or 4096 in the viewer), kept on this phone by (computer, file id, version, width) (§7). Without a
+    /// version nothing is kept (an older computer): the same address could be a newer picture, so it is asked every time.
+    public func answerThumb(_ file: FileRef, width: Int) async -> Data? {
         guard let key, let client, !file.id.isEmpty else { return nil }
         let bucket = answerThumbWidth(width)
+        let version = file.stableVersion
         let cache = Self.answerThumbs
-        let kept = cache.entry(computer: key.device, file: file.id, version: file.version, width: bucket)
-        if FileManager.default.fileExists(atPath: kept.path) {
-            cache.touch(computer: key.device, file: file.id, version: file.version, width: bucket)
+        if let version, let kept = cache.read(computer: key.device, file: file.id, version: version, width: bucket) {
             return kept
         }
         do {
             let fetched = try await client.thumb(device: key.device, app: key.app, chat: key.chat,
-                                                 file: file.id, width: bucket, version: file.version)
-            return cache.keep(fileAt: fetched, computer: key.device, file: file.id, version: file.version, width: bucket)
+                                                 file: file.id, width: bucket, version: version ?? "")
+            if let version { cache.keep(fetched, computer: key.device, file: file.id, version: version, width: bucket) }
+            return fetched
         } catch is CancellationError {
             return nil
         } catch {
             return nil
         }
+    }
+
+    /// The original of a file the answer listed, kept under `answer-files` per computer (§7): the same file is not
+    /// downloaded twice for its page, the viewer, saving or sharing. Nil when the version is unknown (an older computer
+    /// without size and time: nothing may be kept, or a newer file would be served from the old copy) or the fetch fails.
+    public func cachedAnswerFile(_ file: FileRef) async -> URL? {
+        guard let key, let client, !file.id.isEmpty, let version = file.stableVersion else { return nil }
+        let cache = Self.answerFiles
+        let ext = FileCache.safeExt(file.name)
+        if let kept = cache.read(computer: key.device, file: file.id, version: version, ext: ext) { return kept }
+        do {
+            let fetched = try await client.download(device: key.device, app: key.app, chat: key.chat, file: file.id)
+            return cache.keep(fileAt: fetched, computer: key.device, file: file.id, version: version, ext: ext)
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
+    /// A copy of one file for saving or sharing from the viewer, where no file page is open: the kept original when
+    /// there is one, else a download; under the file's own name for the system's sheets.
+    public func copyForViewer(_ file: FileRef) async throws -> URL {
+        guard let key, let client, !file.id.isEmpty else { throw ReadFailure("没有活动会话") }
+        guard copyTask == nil else { throw ReadFailure("文件还在下载，请稍候") }
+        let name = safeFileName(file.name.isEmpty ? "文件" : file.name)
+        let kept = await cachedAnswerFile(file)
+        let size = file.size
+        guard kept != nil || size <= RelayClient.downloadLimit else { throw ReadFailure(RelayClient.tooLargeToDownload) }
+        let g = paneGeneration
+        transferring = true
+        transfer = kept == nil ? "正在下载…" : ""
+        let report: @Sendable (Int64, Int64) -> Void = { got, total in
+            Task { @MainActor in self.downloaded(got, of: total > 0 ? total : size, generation: g) }
+        }
+        let task = Task<URL, any Error> {
+            let source: URL
+            if let kept {
+                source = kept
+            } else {
+                source = try await client.download(device: key.device, app: key.app, chat: key.chat, file: file.id, progress: report)
+            }
+            return try Self.namedCopy(source: source, name: name, deleteSource: kept == nil)
+        }
+        copyTask = task
+        defer {
+            if copyTask == task {
+                copyTask = nil
+                transferring = false
+                transfer = ""
+            }
+        }
+        do {
+            return try await task.value
+        } catch {
+            if task.isCancelled { throw CancellationError() }
+            throw error
+        }
+    }
+
+    /// The pictures of one answer, in the order it shows them, in the viewer (§6.2): a full-screen page of its own.
+    public func openPictures(_ files: [FileRef], index: Int) {
+        guard key != nil, client != nil else { return }
+        let pictures = files.filter { $0.picture }
+        guard !pictures.isEmpty else { return }
+        paneRead?.cancel()
+        paneGeneration += 1
+        dropFile()
+        pane = "picture"
+        data = [:]
+        paneBusy = false
+        paneError = nil
+        error = nil
+        pictureFiles = pictures
+        pictureIndex = min(max(index, 0), pictures.count - 1)
+    }
+
+    /// A copy under the file's own name in a temporary folder; the caller's copy, to move or delete.
+    static func namedCopy(source: URL, name: String, deleteSource: Bool) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-share-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let named = folder.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: source, to: named)
+        if deleteSource { try? FileManager.default.removeItem(at: source) }
+        return named
     }
 
     /// Where pictures sent with messages are kept once fetched: a folder per picture, the small copy and the whole one
@@ -217,8 +303,9 @@ extension WorkspaceModel {
         closePicker()
     }
 
-    /// Reads a file page: its facts first, then its text, or a copy of what the page shows itself. A preview that does
-    /// not load leaves the file to be saved all the same (Android 1.0.2), with a line saying so.
+    /// Reads a file page: its facts first, then its text, or a copy of what the page shows itself. A picture, PDF or
+    /// Office file of a versioned file is kept on disk (§7) and reused by saving and sharing; an older computer's file
+    /// with no version is a temporary copy, as before. A preview that does not load leaves the file to be saved.
     func load(_ file: JSONValue) {
         guard let key, let client else { return }
         paneRead?.cancel()
@@ -236,14 +323,27 @@ extension WorkspaceModel {
                 let meta = try await client.detail(device: key.device, route: "file/meta", query: ids)
                 let kind = meta["kind"].string()
                 let name = file["name"].string().isEmpty ? meta["name"].string() : file["name"].string()
+                let size = meta["size"].int64() > 0 ? meta["size"].int64() : file["size"].int64()
+                let version = file["v"].string().isEmpty ? meta["v"].string() : file["v"].string()
+                let modified = file["modified"].int64() > 0 ? file["modified"].int64() : meta["modified"].int64()
                 let shown = ["image", "pdf"].contains(kind) || (kind == "download" && Self.showsInPage(name))
+                let limit = Self.pagePreviewLimit(kind: kind, name: name)
                 var text = ""
-                var copy: URL?
+                var kept: URL?
+                var temp: URL?
                 var note = ""
                 do {
                     if kind == "text" { text = try await client.detail(device: key.device, route: "file/text", query: ids)["text"].string() }
-                    if shown && meta["size"].int64() <= RelayClient.previewLimit {
-                        copy = renamed(try await client.download(device: key.device, app: key.app, chat: key.chat, file: id), to: name)
+                    // Pictures, PDFs, Word and Excel stay on disk (§7), not whole in memory; a file too big for the page
+                    // is only saved or shared.
+                    if shown && (size <= 0 || size <= limit) {
+                        if fileVersion(version: version, size: size, modified: modified) != nil {
+                            let ref = FileRef(id: id, name: name, size: size, modified: modified, version: version)
+                            if let self { kept = await self.cachedAnswerFile(ref) }
+                        }
+                        if kept == nil {
+                            temp = renamed(try await client.download(device: key.device, app: key.app, chat: key.chat, file: id), to: name)
+                        }
                     }
                 } catch is CancellationError {
                     throw CancellationError()
@@ -251,16 +351,19 @@ extension WorkspaceModel {
                     note = "预览未能加载，仍可尝试保存原文件。"
                 }
                 guard let self, g == self.paneGeneration else {
-                    if let copy { try? FileManager.default.removeItem(at: copy) }
+                    if let temp { try? FileManager.default.removeItem(at: temp) }
                     return
                 }
                 var fields = file.object
                 fields["meta"] = meta
                 fields["kind"] = .string(kind)
                 if fields["name"]?.string().isEmpty ?? true { fields["name"] = meta["name"] }
+                if !version.isEmpty { fields["v"] = .string(version) }
+                if modified > 0 { fields["modified"] = .number(Double(modified)) }
                 self.data = .object(fields)
                 self.fileText = text
-                self.preview = copy
+                self.preview = temp
+                self.previewFile = kept
                 self.fileNote = note
                 self.paneBusy = false
             } catch is CancellationError {
@@ -270,6 +373,14 @@ extension WorkspaceModel {
                 self.paneBusy = false
             }
         }
+    }
+
+    /// §5.8's per-type limit for what a file page shows itself: a picture 30 MB, a PDF 100 MB, Office and the rest of
+    /// what the page draws 30 MB.
+    nonisolated public static func pagePreviewLimit(kind: String, name: String) -> Int64 {
+        if kind == "image" { return RelayClient.picturePreviewLimit }
+        if kind == "pdf" { return RelayClient.pdfPreviewLimit }
+        return RelayClient.officePreviewLimit
     }
 
     /// What a file's page shows by itself besides text, pictures and PDFs, from a copy on this phone (user 10-28:
@@ -309,39 +420,36 @@ extension WorkspaceModel {
         }
     }
 
-    /// A copy of the open file on this phone to save, share or look at (保存到文件, 分享, 用快速查看打开): the preview
-    /// when there is one, otherwise downloaded now, with how far it got in [transfer]. One at a time; 取消 or leaving
-    /// the page stops it. The caller may move or delete the copy it gets.
+    /// A copy of the open file on this phone to save, share or look at (保存到文件, 分享, 用快速查看打开): the kept
+    /// original when there is one, then the page's temporary copy, otherwise downloaded now, with how far it got in
+    /// [transfer]. One at a time; 取消 or leaving the page stops it. The caller may move or delete the copy it gets.
     public func fileCopy() async throws -> URL {
         guard let key, let client, pane == "file" || picker == "file" else { throw ReadFailure("文件页已关闭") }
         guard copyTask == nil else { throw ReadFailure("文件还在下载，请稍候") }
         let file = data
         let name = safeFileName(file["name"].string())
-        let size = file["meta"]["size"].int64()
-        let preview = preview
+        let size = file["meta"]["size"].int64() > 0 ? file["meta"]["size"].int64() : file["size"].int64()
+        let cached = previewFile ?? cachedFileFor(file)
+        let temp = preview
         // 11-15: a file the page already knows is too big is refused here; it used to come all the way down first
-        guard preview != nil || size <= RelayClient.downloadLimit else { throw ReadFailure(RelayClient.tooLargeToDownload) }
+        guard cached != nil || temp != nil || size <= RelayClient.downloadLimit else { throw ReadFailure(RelayClient.tooLargeToDownload) }
         let g = paneGeneration
         transferring = true
-        transfer = preview == nil ? "正在下载…" : ""
+        transfer = cached == nil && temp == nil ? "正在下载…" : ""
         // Held only while the download runs.
         let report: @Sendable (Int64, Int64) -> Void = { got, total in
             Task { @MainActor in self.downloaded(got, of: total > 0 ? total : size, generation: g) }
         }
         let task = Task<URL, any Error> {
             let source: URL
-            if let preview {
-                source = preview
+            if let cached {
+                source = cached
+            } else if let temp {
+                source = temp
             } else {
                 source = try await client.download(device: key.device, app: key.app, chat: key.chat, file: file["id"].string(), progress: report)
             }
-            // Under the file's own name, so the system's sheets and the saved file carry it.
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("teleply-share-" + UUID().uuidString)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let named = folder.appendingPathComponent(name)
-            try FileManager.default.copyItem(at: source, to: named)
-            if source != preview { try? FileManager.default.removeItem(at: source) }
-            return named
+            return try Self.namedCopy(source: source, name: name, deleteSource: cached == nil && temp == nil)
         }
         copyTask = task
         defer {
@@ -359,6 +467,19 @@ extension WorkspaceModel {
         }
     }
 
+    /// The kept original of a page's file, when there is one already: saving and sharing then copy it, no second fetch.
+    /// Nil for a file without a version (an older computer), which is never kept.
+    func cachedFileFor(_ file: JSONValue) -> URL? {
+        guard let key, !file["id"].string().isEmpty else { return nil }
+        let meta = file["meta"]
+        let size = file["size"].int64() > 0 ? file["size"].int64() : meta["size"].int64()
+        let modified = file["modified"].int64() > 0 ? file["modified"].int64() : meta["modified"].int64()
+        let version = fileVersion(version: file["v"].string(), size: size, modified: modified)
+        guard let version else { return nil }
+        return Self.answerFiles.read(computer: key.device, file: file["id"].string(), version: version,
+                                     ext: FileCache.safeExt(file["name"].string()))
+    }
+
     /// How far a download for 保存到文件 or 分享 got: a share of the file's size, or megabytes when it is not known.
     func downloaded(_ got: Int64, of total: Int64, generation g: Int) {
         guard transferring, g == paneGeneration else { return }
@@ -373,11 +494,13 @@ extension WorkspaceModel {
         transfer = ""
     }
 
-    /// A file page's own things go with it: its text, its preview's copy, a copy under way.
+    /// A file page's own things go with it: its text, its temporary copy, a copy under way. A kept original stays in
+    /// the cache (§7), so the next page, save or share finds it there.
     func dropFile() {
         cancelCopy()
         fileText = ""
         fileNote = ""
+        previewFile = nil
         dropPreview()
     }
 
@@ -401,7 +524,7 @@ extension WorkspaceModel {
         return try? Data(contentsOf: copy)
     }
 
-    /// The preview's copy goes when the page does.
+    /// The temporary copy goes when the page does; a kept original in the cache stays.
     func dropPreview() {
         if let preview { try? FileManager.default.removeItem(at: preview) }
         preview = nil

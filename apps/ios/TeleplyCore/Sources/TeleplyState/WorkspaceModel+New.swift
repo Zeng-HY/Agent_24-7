@@ -33,6 +33,8 @@ extension WorkspaceModel {
         data = [:]
         paneBusy = false
         paneError = nil
+        pictureFiles = []
+        pictureIndex = 0
         dropFile()
     }
 

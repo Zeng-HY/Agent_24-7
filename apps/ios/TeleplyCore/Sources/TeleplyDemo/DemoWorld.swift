@@ -869,6 +869,12 @@ enum DemoData {
                 size: 1_200, state: "current", version: "v1", lang: "r", via: ["link"]),
         FileRef(id: "fp-budget", name: "预算表.xlsx", path: "D:\\fixture\\file-preview\\budget.xlsx", kind: "download", view: "table",
                 size: 2_293, state: "current", version: "v1", via: ["link"], preview: "pdf"),
+        FileRef(id: "fp-pages", name: "多页说明.pdf", path: "D:\\fixture\\file-preview\\pages.pdf", kind: "pdf", view: "pdf",
+                size: 2_687, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-huge", name: "超长图.png", path: "D:\\fixture\\file-preview\\huge.png", kind: "image", view: "image",
+                size: 41_943_040, state: "current", version: "v1", width: 6000, height: 4000, thumb: true, via: ["image"]),
+        FileRef(id: "fp-gif", name: "动图.gif", path: "D:\\fixture\\file-preview\\anim.gif", kind: "download", view: "image",
+                size: 5_391, state: "current", version: "v1", width: 320, height: 200, thumb: true, via: ["image"]),
         FileRef(id: "fp-shot-1", name: "截图一.png", path: "D:\\fixture\\file-preview\\shot-1.png", kind: "image", view: "image",
                 size: 462, state: "current", version: "v1", width: 1080, height: 720, thumb: true, via: ["presented"]),
         FileRef(id: "fp-shot-2", name: "截图二.png", path: "D:\\fixture\\file-preview\\shot-2.png", kind: "image", view: "image",
@@ -888,7 +894,13 @@ enum DemoData {
 
     ![标志](D:/fixture/file-preview/logo.svg)
 
+    ![超长图](D:/fixture/file-preview/huge.png)
+
+    ![动图](D:/fixture/file-preview/anim.gif)
+
     [合同.pdf](D:/fixture/file-preview/contract.pdf) 和 [分析.R](D:/fixture/file-preview/analysis.R) 也放好了。
+
+    [多页说明.pdf](D:/fixture/file-preview/pages.pdf) 有三页。
 
     生成的脚本是 `D:\fixture\file-preview\run.R`，说明写在 D:/fixture/file-preview/report.txt。
 

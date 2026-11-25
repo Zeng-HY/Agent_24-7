@@ -95,6 +95,16 @@ public struct ThumbCache: Sendable {
     /// What the whole folder takes, for the tests and 存储.
     public func totalBytes() -> Int64 { files().reduce(Int64(0)) { $0 + $1.size } }
 
+    /// 移除一台电脑: its thumbs go, the others stay.
+    public func clear(computer: String) {
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent(Self.computerFolder(computer), isDirectory: true))
+    }
+
+    /// 退出登录: all thumbs go.
+    public func clearAll() {
+        try? FileManager.default.removeItem(at: folder)
+    }
+
     private func files() -> [(url: URL, size: Int64, modified: Date)] {
         guard let walk = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]) else {
             return []

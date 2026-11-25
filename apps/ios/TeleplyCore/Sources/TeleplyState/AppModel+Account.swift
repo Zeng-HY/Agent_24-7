@@ -139,6 +139,8 @@ extension AppModel {
         pushForget()
         let gone = scope
         cancelWork()
+        // The account is gone: nothing kept of its answers stays on this phone (§7).
+        AnswerCaches.clearAll(caches: WorkspaceModel.cachesRoot)
         clearAll()
         scope = ""
         screen = .login

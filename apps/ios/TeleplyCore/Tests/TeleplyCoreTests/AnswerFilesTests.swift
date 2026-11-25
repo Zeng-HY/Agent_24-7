@@ -63,7 +63,7 @@ struct AnswerFilesTests {
         let full = try parseMessage(JSONValue.parse(Data("""
             {"id":"m3","role":"assistant","text":"x",
              "files":[{"id":"3f0c","name":"chart.png","path":"D:\\\\work\\\\out\\\\chart.png","kind":"image","view":"image",
-                       "size":183422,"state":"current","v":"9f2c41d0","w":2400,"h":1500,"thumb":true,"via":["image","link"]}],
+                       "size":183422,"modified":1764031000000,"state":"current","v":"9f2c41d0","w":2400,"h":1500,"thumb":true,"via":["image","link"]}],
              "file_notes":[{"href":"out/old.png","reason":"not_found","text":"电脑上没找到这个文件"}]}
             """.utf8)))
         #expect(full.files?.count == 1)
@@ -71,6 +71,8 @@ struct AnswerFilesTests {
         #expect(file.name == "chart.png")
         #expect(file.path == "D:\\work\\out\\chart.png")
         #expect(file.width == 2400 && file.height == 1500)
+        #expect(file.modified == 1_764_031_000_000)
+        #expect(file.stableVersion == "9f2c41d0")
         #expect(file.picture)
         #expect(file.via == ["image", "link"])
         #expect(full.fileNotes == [FileNote("out/old.png", "not_found", "电脑上没找到这个文件")])
@@ -148,6 +150,8 @@ struct AnswerFilesTests {
         #expect(answerThumbWidth(320) == 320)
         #expect(answerThumbWidth(640) == 640)
         #expect(answerThumbWidth(1200) == 1280)
+        #expect(answerThumbWidth(2048) == 2048)
+        #expect(answerThumbWidth(4096) == 4096)
     }
 
     // MARK: §6.1: links, reasons and the older computer
@@ -266,14 +270,17 @@ struct AnswerFilesTests {
         #expect(rows.count == 3)
         let answer = try parseMessage(rows[1])
         #expect(answer.files?.count == DemoData.previewFiles.count)
-        #expect(answer.files?.filter { $0.picture }.count == 4)
-        #expect(drawnPictureIDs(answer) == Set(["fp-chart", "fp-logo"]))
+        #expect(answer.files?.filter { $0.picture }.count == 6)
+        #expect(drawnPictureIDs(answer) == Set(["fp-chart", "fp-logo", "fp-huge", "fp-gif"]))
         let strip = fileStripFiles(answer, drawn: drawnPictureIDs(answer))
-        #expect(strip.map(\.id) == ["fp-contract", "fp-analysis", "fp-budget", "fp-shot-1", "fp-shot-2"])
+        #expect(strip.map(\.id) == ["fp-contract", "fp-analysis", "fp-budget", "fp-pages", "fp-shot-1", "fp-shot-2"])
         #expect(answer.fileNotes.map(\.reason) == ["not_found", "not_local"])
         // The older computer's answer has no files at all.
         let older = try parseMessage(rows[2])
         #expect(older.files == nil)
+        // The viewer's pages: the pictures in the words first, then the picture cards below, each once.
+        #expect(messagePictures(answer).map(\.id) == ["fp-chart", "fp-logo", "fp-huge", "fp-gif", "fp-shot-1", "fp-shot-2"])
+        #expect(messagePictures(older).isEmpty)
     }
 
     // MARK: §7: the thumb cache

@@ -161,8 +161,10 @@ struct MessageActions {
     var thread: (String) -> Void = { _ in }
     /// A picture sent with a message: its small copy, or the whole one (true), as a file on this phone.
     var picture: (SentPicture, Bool) async -> URL? = { _, _ in nil }
-    /// A picture in an answer's words (§6.1): the computer's thumb at about this width, as a file on this phone.
-    var thumb: ((FileRef, Int) async -> URL?)? = nil
+    /// A picture in an answer's words (§6.1): the computer's thumb at about this width, as bytes.
+    var thumb: ((FileRef, Int) async -> Data?)? = nil
+    /// The answer's pictures in their order (§6.2), and the one a tap opened: the full-screen viewer.
+    var pictures: (_ pictures: [FileRef], _ index: Int) -> Void = { _, _ in }
     /// A message's whole words, read from the computer first when the page cut it short (复制 · 选择文字 · 分享).
     var whole: (Message, @escaping (Message) -> Void) -> Void = { message, use in use(message) }
     /// 分享 of words read just now: the system share sheet.
@@ -503,7 +505,15 @@ private struct AnswerBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             OriginLabel(message: message)
-            MarkdownView(source: message.text, files: message.files, notes: message.fileNotes, thumb: actions.thumb)
+            // The answer's pictures, in its order, for the viewer a tap opens (§6.2).
+            let pictures = messagePictures(message)
+            let openPicture: (FileRef) -> Bool = { file in
+                guard let index = pictures.firstIndex(where: { $0.id == file.id }) else { return false }
+                actions.pictures(pictures, index)
+                return true
+            }
+            MarkdownView(source: message.text, files: message.files, notes: message.fileNotes,
+                         thumb: actions.thumb, openPicture: openPicture)
                 .contentShape(Rectangle())
                 .contextMenu {
                     // Copied and shared as shown, without Codex's own notes.
@@ -518,7 +528,7 @@ private struct AnswerBlock: View {
                         .background(Palette.page)
                 }
             // The files this answer names that are not drawn where it put them (§6.1): a card each, at most 8.
-            AnswerFileStrip(message: message, thumb: actions.thumb) { actions.files($0) }
+            AnswerFileStrip(message: message, thumb: actions.thumb, openPicture: openPicture) { actions.files($0) }
             // A conversation the reply made (web remote.html renderAssistantText): a button each under the text.
             ForEach(Array(MarkdownReader.createdThreads(message.text).enumerated()), id: \.offset) { _, thread in
                 if thread.ready {

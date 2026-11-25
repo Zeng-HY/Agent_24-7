@@ -465,3 +465,14 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **编译修正三（11-25，构建 `6b06881ce56bd84021a46665`）**：测试里 `ref("pic", view: "image", thumb: true, via: ["image"])` 的 `via` 应在 `thumb` 前；并用脚本把 `FileRef`、`FileNote`、`InlineRun`、`ThumbCache`、`DemoWorld`、`AnswerPicture`、`AnswerFileStrip`、`FileStripCard`、`MarkdownView`、`MarkdownBlockView`、`MessageActions` 的声明参数顺序和所有调用点逐个比对，测试里再没有顺序不对的调用。
 - **没做（留给 B/C 段）**：看图页、SVG/PDF 原文件、原文件缓存、代码高亮、表格、音视频、zip、附属资源。
 - **没验到的**：这台电脑没有 Swift，iOS 代码没有编译或跑过测试；缩略图接口（`/api/file/thumb`）没和真电脑联调过。要等推送后 Codemagic 编译和测试。
+
+#### 第二段（B）
+
+- **看图页**：`PictureViewer.swift`，UIKit 横向翻页（每页一个可缩放的 `UIScrollView`），双指 1–8×、双击 1× 与 2.5× 之间、放大时左右拖只移图不翻页（当前页放大时外层翻页关掉）、顶上「2/5」、左上关闭、向下轻扫关闭。先显示 1280 缩略图（大图/GIF 2048），≤30 MB 再换原图；解码一律 ImageIO、长边不超过 4096；GIF 逐帧播放（最多 60 帧、每帧最长边 1600），解不出就第一帧。⋯ 保存、分享、快速查看/用其他应用打开、在文件页打开。
+- **SVG**：看图页先取 `w=2048`，放大超过 2 倍再取一次 `w=4096`；保存和分享用原 SVG（原文件缓存）。
+- **PDF**：`PDFPreview` 用 PDFKit，缩放下限适合宽度、上限 3 倍；右下角「3 / 12」，翻页时跟着变。
+- **原文件缓存**：`FileCache.swift`，Caches 下 `answer-files`，按电脑分子文件夹，(文件编号, 版本) 摘要加原后缀；先下载到临时位置再改名；全部电脑合计 500 MB，按最久没用清理。版本优先用 `v`，老电脑没有 `v` 时用大小和修改时间（`fileVersion`），两样都没有就不缓存（用完删）。文件页的图片/PDF/Office 不再整张读进内存，图片用 ImageIO；保存、分享有缓存就直接复制缓存。上限照 §5.8：图片 30 MB、PDF 100 MB、Office 30 MB，超过只给保存/分享。
+- **清缓存**：`AnswerCaches`，退出登录和删除账号清空两台缓存，`AppModel.removeDevice` 只清这台电脑的两份缓存；两个缓存的上限都按全部电脑合计。
+- **演示**：文件预览示例加了 6000×4000 的 PNG（`size` 写成 41 MB，用来看 2048 退回）、四帧 GIF 和三页 PDF；名字、路径全编造，仍只在 `-TeleplyDemoFiles` 下出现。
+- **测试**：`ViewerRulesTests`（缩放上下限、双击目标、放大时不翻页、选原图还是 2048、SVG 换 4096、解码边长）；`FileCacheTests`（命名有 `v`、无 `v` 用大小和修改时间、两样都没有不缓存、500 MB 最久没用清理、清一台电脑只动它、两个缓存上限是全电脑合计）；`AnswerFilesTests` 补了 `modified`、缩略图 2048/4096 宽度和看图页图片顺序。
+- **没验到的**：本机没有 Swift，第二段的 App/测试都还没编译过；看图页手势、PDF 页码和 GIF 只在演示数据上准备，等 Codemagic 编译后再看截图/真机。

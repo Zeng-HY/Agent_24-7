@@ -70,14 +70,17 @@ struct MarkdownView: View {
     /// The answer's files and the reasons for those it cannot give (§5.1, §6.4); nil is an older computer.
     var files: [FileRef]? = nil
     var notes: [FileNote] = []
-    /// How a picture in the text is fetched: its entry and a width, as a file on this phone (§6.1).
-    var thumb: ((FileRef, Int) async -> URL?)? = nil
+    /// How a picture in the text is fetched: its entry and a width, as thumb bytes (§6.1).
+    var thumb: ((FileRef, Int) async -> Data?)? = nil
+    /// A tap on a picture opens the answer's pictures at that one (§6.2); nil keeps the file page's own link.
+    var openPicture: ((FileRef) -> Bool)? = nil
 
     var body: some View {
         let blocks = MarkdownCache.blocks(source, files: files, notes: notes)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                MarkdownBlockView(block: block, first: index == 0, look: look, files: files, notes: notes, thumb: thumb)
+                MarkdownBlockView(block: block, first: index == 0, look: look, files: files, notes: notes,
+                                  thumb: thumb, openPicture: openPicture)
             }
         }
         .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
@@ -114,7 +117,8 @@ private struct MarkdownBlockView: View {
     let look: MarkdownLook
     let files: [FileRef]?
     let notes: [FileNote]
-    let thumb: ((FileRef, Int) async -> URL?)?
+    let thumb: ((FileRef, Int) async -> Data?)?
+    let openPicture: ((FileRef) -> Bool)?
 
     var body: some View {
         switch block {
@@ -144,7 +148,7 @@ private struct MarkdownBlockView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     case .picture(let file):
-                        AnswerPicture(file: file, thumb: thumb)
+                        AnswerPicture(file: file, thumb: thumb, openPicture: openPicture)
                     }
                 }
             }
@@ -156,7 +160,7 @@ private struct MarkdownBlockView: View {
                 Rectangle().fill(Palette.line).frame(width: 3)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(children.enumerated()), id: \.offset) { _, child in
-                        MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb)
+                        MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb, openPicture: openPicture)
                     }
                 }
             }
@@ -170,7 +174,7 @@ private struct MarkdownBlockView: View {
                             .frame(minWidth: 20, alignment: .leading)
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(item.enumerated()), id: \.offset) { _, child in
-                                MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb)
+                                MarkdownBlockView(block: child, first: false, look: look, files: files, notes: notes, thumb: thumb, openPicture: openPicture)
                             }
                         }
                     }

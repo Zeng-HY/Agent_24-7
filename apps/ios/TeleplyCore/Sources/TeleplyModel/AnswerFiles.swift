@@ -11,6 +11,9 @@ public struct FileRef: Sendable, Equatable, Identifiable {
     public var kind: String
     public var view: String
     public var size: Int64
+    /// The computer's modification time in milliseconds, when it gave one; with [size] it makes a version for an older
+    /// computer that sends no `v` (§7).
+    public var modified: Int64
     public var state: String
     public var version: String
     public var width: Int
@@ -23,15 +26,16 @@ public struct FileRef: Sendable, Equatable, Identifiable {
     public var preview: String
 
     public init(id: String, name: String = "", path: String = "", kind: String = "", view: String = "",
-                size: Int64 = 0, state: String = "", version: String = "", width: Int = 0, height: Int = 0,
-                thumb: Bool = false, line: Int = 0, lang: String = "", texts: [String] = [], via: [String] = [],
-                preview: String = "") {
+                size: Int64 = 0, modified: Int64 = 0, state: String = "", version: String = "", width: Int = 0,
+                height: Int = 0, thumb: Bool = false, line: Int = 0, lang: String = "", texts: [String] = [],
+                via: [String] = [], preview: String = "") {
         self.id = id
         self.name = name
         self.path = path
         self.kind = kind
         self.view = view
         self.size = size
+        self.modified = modified
         self.state = state
         self.version = version
         self.width = width
@@ -47,6 +51,9 @@ public struct FileRef: Sendable, Equatable, Identifiable {
     /// A picture that can be drawn where the answer put it (§6.1): an image or SVG the computer can make a thumb of.
     public var picture: Bool { thumb && (view == "image" || view == "svg") }
 
+    /// The version a kept copy is filed under (§7): `v`, else size and modification time, else nothing.
+    public var stableVersion: String? { fileVersion(version: version, size: size, modified: modified) }
+
     /// The entry a file page reads: the same keys the conversation's file list gives, plus what the answer side needs
     /// (`texts`, `via`), which the page leaves alone.
     public var pageJSON: JSONValue {
@@ -54,6 +61,7 @@ public struct FileRef: Sendable, Equatable, Identifiable {
             "id": .string(id), "name": .string(name), "path": .string(path), "kind": .string(kind),
             "view": .string(view), "size": .number(Double(size)), "state": .string(state), "v": .string(version),
         ]
+        if modified > 0 { fields["modified"] = .number(Double(modified)) }
         if width > 0 { fields["w"] = .number(Double(width)) }
         if height > 0 { fields["h"] = .number(Double(height)) }
         if thumb { fields["thumb"] = true }
@@ -88,8 +96,8 @@ public struct FileNote: Sendable, Equatable, Identifiable {
 public func parseFileRef(_ json: JSONValue) -> FileRef {
     FileRef(id: json["id"].string(), name: json["name"].string(), path: json["path"].string(),
             kind: json["kind"].string(), view: json["view"].string(), size: json["size"].int64(),
-            state: json["state"].string(), version: json["v"].string(), width: json["w"].int(),
-            height: json["h"].int(), thumb: json["thumb"].bool(), line: json["line"].int(),
+            modified: json["modified"].int64(), state: json["state"].string(), version: json["v"].string(),
+            width: json["w"].int(), height: json["h"].int(), thumb: json["thumb"].bool(), line: json["line"].int(),
             lang: json["lang"].string(), texts: json["texts"].array.map { $0.string() },
             via: json["via"].array.map { $0.string() }, preview: json["preview"].string())
 }
@@ -229,11 +237,14 @@ public func fileLikeLink(_ destination: String) -> Bool {
 /// points: a 411 pt phone at 3× draws a bubble over 1,000 px wide, where 640 would be soft.
 public func pictureWidth(_ pixels: Double) -> Int { pixels <= 640 ? 640 : 1280 }
 
-/// What a thumbnail is actually asked for: the strip's 320, or the text's 640 / 1280 (§5.3 accepts these widths).
+/// What a thumbnail is actually asked for: the strip's 320, the text's 640 / 1280, or the viewer's 1280 / 2048 / 4096
+/// (§5.3 accepts these widths).
 public func answerThumbWidth(_ pixels: Int) -> Int {
     if pixels <= 320 { return 320 }
     if pixels <= 640 { return 640 }
-    return 1280
+    if pixels <= 1280 { return 1280 }
+    if pixels <= 2048 { return 2048 }
+    return 4096
 }
 
 /// The ways a file reaches the strip: linked, cited or sent by an agent, not a path written in code (§6.1).
@@ -264,6 +275,37 @@ public func drawnPictureIDs(_ message: Message) -> Set<String> {
     var ids = Set<String>()
     collectPictures(MarkdownReader.answerBlocks(message.text, files: message.files, notes: message.fileNotes), into: &ids)
     return ids
+}
+
+/// The pictures of one answer in the order it shows them (§6.2): those drawn in its words first, then the picture
+/// cards under it, by `id` once. The viewer pages through them with 2/5 at the top.
+public func messagePictures(_ message: Message) -> [FileRef] {
+    guard let files = message.files, !files.isEmpty else { return [] }
+    var out: [FileRef] = []
+    var seen = Set<String>()
+    func add(_ file: FileRef) {
+        guard !file.id.isEmpty, seen.insert(file.id).inserted else { return }
+        out.append(file)
+    }
+    func walk(_ blocks: [MarkdownBlock]) {
+        for block in blocks {
+            switch block {
+            case .pictureParagraph(let pieces):
+                for piece in pieces {
+                    if case .picture(let file) = piece { add(file) }
+                }
+            case .quote(let children):
+                walk(children)
+            case .list(_, _, let items):
+                for item in items { walk(item) }
+            default:
+                break
+            }
+        }
+    }
+    walk(MarkdownReader.answerBlocks(message.text, files: files, notes: message.fileNotes))
+    for file in fileStripFiles(message, drawn: drawnPictureIDs(message)) where file.picture { add(file) }
+    return out
 }
 
 private func collectPictures(_ blocks: [MarkdownBlock], into ids: inout Set<String>) {

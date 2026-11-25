@@ -607,6 +607,8 @@ public final class AppModel {
             guard let self else { return }
             await self.pushSignOut()
             try? await self.client.logout()
+            // 退出登录 leaves nothing of the answer caches on this phone (§7).
+            AnswerCaches.clearAll(caches: WorkspaceModel.cachesRoot)
             await self.persistSelection(scope: self.scope, device: "")
             guard self.current(g) else { return }
             self.agentCatalog.forget()
@@ -686,6 +688,8 @@ public final class AppModel {
         operation { [weak self] g in
             guard let self else { return }
             try await self.client.revokeDevice(computer.id)
+            // 移除 leaves nothing kept of this computer's answers on the phone (§7).
+            AnswerCaches.clearComputer(caches: WorkspaceModel.cachesRoot, computer: computer.id)
             let account = try await self.client.account()
             guard self.current(g) else { return }
             self.account = account

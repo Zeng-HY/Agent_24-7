@@ -140,9 +140,11 @@ struct FilePage: View {
         let lower = name.lowercased()
         let html = lower.hasSuffix(".html") || lower.hasSuffix(".htm")
         let text = workspace.fileText
-        let picture = kind == "image" ? workspace.preview.flatMap { UIImage(contentsOfFile: $0.path) } : nil
+        // A kept original (§7) stays in the cache; a temporary copy for an older computer goes with the page.
+        let shownURL = workspace.previewFile ?? workspace.preview
+        let picture = kind == "image" ? shownURL.flatMap { decodeThumbnail($0, maxPixel: pictureDecodeEdge) } : nil
         Group {
-            if let shown = workspace.preview, kind == "pdf" || kind == "download" {
+            if let shown = shownURL, kind == "pdf" || kind == "download" {
                 Group {
                     if kind == "pdf" {
                         PDFPreview(url: shown)
@@ -152,7 +154,7 @@ struct FilePage: View {
                     }
                 }
                 .ignoresSafeArea(edges: .bottom)
-            } else if let preview = workspace.preview, let picture {
+            } else if let preview = shownURL, let picture {
                 Button { quickLook = preview } label: {
                     Image(uiImage: picture)
                         .resizable()
@@ -281,7 +283,14 @@ struct FilePage: View {
     @ViewBuilder
     private func unshown(_ name: String, size: Int64) -> some View {
         let looks = Self.quickLooks(name.lowercased())
-        let why = size > RelayClient.previewLimit ? "超过 20MB，不直接显示" : looks ? "这里不直接显示" : "手机上看不了这类文件"
+        let kind = model.workspace.data["kind"].string()
+        let limit = WorkspaceModel.pagePreviewLimit(kind: kind, name: name)
+        let why: String
+        if size > limit {
+            why = kind == "image" ? "这张图超过 30MB，不直接显示" : kind == "pdf" ? "这个 PDF 超过 100MB，不直接显示" : "超过 30MB，不直接显示"
+        } else {
+            why = looks ? "这里不直接显示" : "手机上看不了这类文件"
+        }
         VStack(spacing: 12) {
             Image(systemName: "doc")
                 .font(.system(size: 44))

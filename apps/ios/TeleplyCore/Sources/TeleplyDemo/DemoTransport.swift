@@ -64,6 +64,9 @@ public struct DemoTransport: RelayFileTransport {
         // workbook, and the R script and the note read here.
         case "fp-chart", "fp-logo", "fp-shot-1", "fp-shot-2": Data(base64Encoded: DemoData.png) ?? Data()
         case "fp-contract": Data(base64Encoded: DemoData.pdf, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-pages": Data(base64Encoded: DemoMedia.pagesPDF, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-huge": Data(base64Encoded: DemoMedia.hugePNG, options: .ignoreUnknownCharacters) ?? Data()
+        case "fp-gif": Data(base64Encoded: DemoMedia.animationGIF, options: .ignoreUnknownCharacters) ?? Data()
         case "fp-budget": Data(base64Encoded: DemoData.xlsx, options: .ignoreUnknownCharacters) ?? Data()
         case "fp-run", "fp-analysis": Data(DemoData.previewSource.utf8)
         case "fp-report": Data(DemoData.previewReport.utf8)
