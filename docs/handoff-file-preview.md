@@ -474,13 +474,13 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - `/api/chat/files` 用同一套结果；老字段都在，新字段照 §5.1；`message=` 时同一个文件的每个 `index` 各一行（各自的 `id`），整个对话按路径去重。`History.file()` 仍每次重新走 `list_files()` 的策略复查。
 - `message_files.references`、`absolute_links` 改成 `answer_files` 的薄包装。
 
-审后修（11-25）：`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余照旧不给；盘符列表缓存 30 秒，`file_policy.inspect` 的路径结果缓存 5 秒（时钟可注入，`History.file()` 用 `fresh=True` 绕过读缓存、仍每次重新检查）；`updated` 恢复成一旦发现就一直保持；同样文字的消息共用一次 `answer_files.scan`（`History` 里最多 256 条），所以一万条编造对话第一次列文件从 **4.8 秒降到约 0.10 秒**。
+审后修（11-25）：`~/.gemini` 只放开 `antigravity/brain` 和 `antigravity-cli/brain`，其余照旧不给；盘符列表缓存 30 秒，`file_policy.inspect` 的路径结果缓存 5 秒（时钟可注入，`History.file()` 用 `fresh=True` 绕过读缓存、仍每次重新检查；`/api/chat/files` 用缓存）；`updated` 恢复成一旦发现就一直保持；同样文字的消息共用一次 `answer_files.scan`（`History` 里最多 256 条）。
 
 测试：`tests/test_file_policy.py` 52 个通过、1 个符号链接用例跳过（Windows 不许建链接）；`tests/test_answer_files_history.py` 13 个通过（三个出口、空 `files`、`file_notes`、SendUserFile 两种位置、DeepSeek 成果、缓存、同文共用、刷新后仍能称重、updated 保持）；`tests/test_answer_files.py` 80 个、第一段两个旧文件测试也通过。
 
 完整 pytest（第二段当时，工作区 `full-pytest-final.log`）：**1523 passed，7 skipped，3 failed**；审后修和第三段之后的最终结果见第三段。
 
-速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接的对话，只有两个不同文件）：修前第一次出一页 **0.085 秒**、第一次列整个对话文件 **4.78 秒**；修后 **0.026 秒**和 **0.105 秒**，缓存后再列 0.09 秒、再出页 0.018 秒。脚本在 DeepSeek 工作区，没有提交。
+速度（本机，编造 10,000 条各约 2 KB、5,000 条带链接、只有两个不同文件）：**同一段文字重复**时第一次列文件从 4.78 秒降到约 0.105 秒，第一次出页 0.026 秒；**每条文字都不同**时第一次出页 0.066 秒、第一次列整个对话 **5.53 秒**，缓存后再列 0.072 秒、再出页 0.018 秒。同文共用只对重复文字有效；真实对话由主会话另行用真实数据量过（最大几个 0.7 秒内）。脚本在 DeepSeek 工作区，没有提交。
 
 旧测试的有意改动：
 
@@ -508,13 +508,34 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - `/api/file`：`Content-Type` 用固定表；`html`、`htm`、`xhtml`、`svg`、`xml`、`js`、`mjs` 一律 `application/octet-stream` + `attachment`；图片、PDF、音频、视频、文本用 `inline`；地址带 `v=` 且和当前文件对不上回 409「文件已变化」；`Range` 照旧，`If-Range` 没有另改。
 - 测试：`tests/test_file_text.py` 10 个（UTF-8、BOM、UTF-16、GB18030 的 R/CSV、NUL、空文件、2 MB 行尾截断、缓存、语言表）；`tests/test_file_api.py` 6 个（kind/view 按内容、大文本仍 code、文本接口各编码和截断、meta 新字段、会执行类型一律下载、`v` 409）。
 
-完整 pytest（工作区 `full-pytest-c.log`）：**1544 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。运行时设了 `PLAYWRIGHT_BROWSERS_PATH=D:/Personal/agent_remote_lanes/ms-playwright`。没做：第四段的缩略图、`w`/`h`、附件资源、zip；也没有改中转。
+完整 pytest（工作区 `full-pytest-c.log`）：**1544 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。运行时设了 `PLAYWRIGHT_BROWSERS_PATH=D:/Personal/agent_remote_lanes/ms-playwright`。第四段见下；没有改中转。
 
 要审：
 
 - 文本截断按字节读 2 MB，再在最后一个换行处切；如果 2 MB 内一个换行都没有，就保留这 2 MB。
 - `kind` 对老 20 种后缀不读内容（例如 `.txt` 里有 NUL 仍算 text）；这是为了不改老 App 对已知后缀的看法。内容判断只用于列表里认不出的后缀。
 - `/api/file` 的文本、Markdown、表格也用了 `inline`；会执行的六类后缀除外。
+
+#### 第四段（缩略图、SVG、图片尺寸）
+
+已做：
+
+- 新增 `file_renders.py`：`/api/file/thumb` 的 `w` 只收 320、640、1280、2048，SVG 另收 4096；`v` 对不上回 409；只给 `view` 是 `image`、`svg` 的文件。输出 WebP（质量 82，保留透明），长边不超过 `w`，JPEG 按 EXIF 摆正，GIF 取第一帧，HEIC 用 `pillow_heif`。
+- 源图 ≤100 MB、≤1 亿像素；SVG ≤10 MB；一次最多 15 秒、同时最多 2 张、同一张图同时只做一次；坏图、超限、超时都有中文原因。
+- 缓存放在 `DATA\cache\thumbs\`，文件名是（路径、大小、修改时间、宽度、算法版本）的摘要；总量超过 300 MB 删最久没用的。这个缓存只由电脑自己读写，不经过答案文件的 `file_policy`。
+- SVG 用 `resvg_py` 转 PNG：**resvg_py 0.5.0**（wheel `resvg_py-0.5.0-cp310-abi3-win_amd64.whl`，内含 resvg 0.48.1，MIT 许可），已装进 `D:\Personal\agent_remote\.venv`，并写进 `requirements.txt`（`resvg_py==0.5.0`）。来源：`https://files.pythonhosted.org/packages/fe/53/aa8f92ce6eb2f97095d8b6359a1613c5a5ee0aa9b1a33434df9294362979/resvg_py-0.5.0-cp310-abi3-win_amd64.whl`，SHA-256 `1F6B8956C4143DBFE107BCD35799D0DFD778A40A8CD537893C0BF489898A6C3C`。SVG 里外部的 `href`/`xlink:href`、脚本、外部 CSS `url()` 和 `@import` 在交给 resvg 前删掉，只保留 `#片段` 和 `data:` 图片；转不了时 `thumb` 为 false。
+- `w`、`h`：图片用 Pillow 只读文件头（EXIF 方向按摆正后的尺寸），SVG 读根元素的 `width`/`height`/`viewBox`；结果和文件信息一起缓存。读不到就不给。`thumb`：`view` 是 `image` 且图片能打开、或 `view` 是 `svg` 且 resvg 能转时为 true。
+- 测试：`tests/test_file_renders.py` 10 个（png/jpg/gif/heic/webp、EXIF 方向、坏图、注入像素上限、SVG/外部引用/坏 SVG/大 SVG、4096、缓存命中、300 MB 清理、宽度、`v` 409、`w`/`h`/`thumb` 字段）。
+
+审后修（11-25）：所有 `Image.open` 都传 `formats=`，只允许 PNG、JPEG、WebP、GIF、BMP、TIFF 和已注册的 HEIF/AVIF；内容是 EPS 等别的格式时按坏图处理，不会让 Pillow 去调 Ghostscript。
+
+完整 pytest（工作区 `full-pytest-d.log`）：**1555 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。没做：第五段（附件资源、zip）；`If-Range` 仍照第三段没有另改；打包脚本没改。
+
+要审：
+
+- `resvg_py` 是 cp310-abi3 的 Windows wheel，Python 3.11 可用；打包时 PyInstaller 需要把它的 `.pyd`（和 DLL）一起带上，这一步没改打包脚本，留给你决定。
+- SVG 带外部引用时不是整张拒绝，而是把外部引用删掉后照常画剩下的内容（避免一张报告里的一个外链图让整页没有缩略图）。
+- 缩略图缓存不检查 `file_policy`，只由 `/api/file/thumb` 对已经授权的文件调用；缓存目录本身仍然不会作为答案文件发给手机。
 
 ### 线二、网页
 

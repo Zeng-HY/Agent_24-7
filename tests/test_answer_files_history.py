@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import chat_history
+import file_policy
 import live_events
 from agents import registry
 
@@ -218,6 +219,7 @@ def test_updated_stays_updated_until_the_process_forgets_it(tmp_path, monkeypatc
     monkeypatch.setattr(registry, "get", lambda app: agent)
     assert history.list_files("codex", "chat-1")["items"][0]["state"] == "current"
     image.write_text("a much longer file", encoding="utf-8")
+    file_policy.clear_cache()
     assert history.list_files("codex", "chat-1")["items"][0]["state"] == "updated"
     assert history.list_files("codex", "chat-1")["items"][0]["state"] == "updated"
 

@@ -71,6 +71,18 @@ def test_large_text_is_cut_at_a_line_end(tmp_path):
     assert 0 < made["lines"]
 
 
+def test_gb18030_after_an_english_opening(tmp_path):
+    # The head is pure ASCII, so UTF-8 looks valid; the Chinese line further down is GBK.
+    lines = ["# English comment line " + str(index) for index in range(500)]
+    lines.append("# 中文注释：这是 GBK 编码")
+    path = write(tmp_path, "english_then_chinese.R", ("\n".join(lines) + "\n").encode("gb18030"))
+    assert file_text.probe(path) == "utf-8"
+    made = file_text.read(path)
+    assert made is not None and made["encoding"] == "gb18030"
+    assert "中文注释" in made["text"]
+    assert file_text.probe(path) == "gb18030"  # remembered after the full read
+
+
 def test_probe_is_cached_for_five_seconds(tmp_path):
     path = write(tmp_path, "cache.txt", b"hello")
     before = path.stat()

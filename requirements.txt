@@ -19,3 +19,4 @@ pystray==0.19.5
 
 markdown-it-py==4.0.0
 mdurl==0.1.2
+resvg_py==0.5.0

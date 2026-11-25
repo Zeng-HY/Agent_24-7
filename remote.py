@@ -45,6 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from app_paths import DATA
 from urllib.parse import parse_qs, quote, unquote, urlsplit
+import file_renders
 
 HERE = Path(__file__).resolve().parent
 CONFIG_FILE = DATA / "remote_config.json"
@@ -634,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
             try:self._json(self.server.new_chats.options(app))
             except chats.ChatError as exc:self._json({'error':str(exc)},400)
             return
-        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta", "/api/file/pdf"):
+        if path in ("/api/events", "/api/chat/search", "/api/chat/message", "/api/chat/files", "/api/chat/diff", "/api/file", "/api/file/text", "/api/file/meta", "/api/file/pdf", "/api/file/thumb"):
             self._reading_get(path)
             return
         if path.startswith("/api/chat") and chats is None:
@@ -938,7 +939,13 @@ class Handler(BaseHTTPRequestHandler):
                 import office_preview
                 if path=='/api/file' and q.get('v') and q['v']!=meta.get('v'):
                     raise chat_history.HistoryError('文件已变化',409)
-                if path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime'),'v':meta.get('v'),'view':meta.get('view'),'mime':meta.get('mime'),'lang':meta.get('lang')}
+                if path=='/api/file/thumb':
+                    if q.get('v') and q['v']!=meta.get('v'):raise chat_history.HistoryError('文件已变化',409)
+                    try:width=int(q.get('w',''))
+                    except (TypeError,ValueError):raise file_renders.RenderError('缩略图宽度不支持')
+                    self._send(200,file_renders.thumbnail(meta['path'],meta.get('view'),width),'image/webp',
+                               {'X-Content-Type-Options':'nosniff'})
+                elif path=='/api/file/meta':self._json({'name':meta['path'].name,'size':meta['size'],'kind':meta['kind'],'state':'updated' if meta.get('updated') else 'current','updated':meta.get('updated',False),'modified':meta.get('mtime'),'v':meta.get('v'),'view':meta.get('view'),'mime':meta.get('mime'),'lang':meta.get('lang')}
                                                      |({'preview':'pdf'} if meta['kind']=='download' and office_preview.offers(meta['path']) else {}))
                 elif path=='/api/file/pdf':
                     # Word, Excel and PowerPoint as PDF, made by this computer's Office (10-27); the original stays at /api/file
@@ -955,7 +962,7 @@ class Handler(BaseHTTPRequestHandler):
                                 'truncated':made['truncated'],'total_size':made['total_size'],
                                 'lines':made['lines'],'lang':meta.get('lang'),'line':meta.get('line')})
                 else:self._serve_result_file(meta,q.get('download')=='1')
-        except (chat_history.HistoryError,pc_files.FileError,chats.ChatError,OSError,ValueError,TypeError) as exc:
+        except (chat_history.HistoryError,pc_files.FileError,chats.ChatError,file_renders.RenderError,OSError,ValueError,TypeError) as exc:
             self._json({'error':str(exc)},getattr(exc,'status',400))
 
     def _serve_result_file(self,meta,download=False):

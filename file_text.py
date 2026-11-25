@@ -75,6 +75,13 @@ def _detect(head: bytes) -> str | None:
     return None
 
 
+def _cache_set(key, encoding: str | None, expiry: float) -> None:
+    with _cache_lock:
+        if len(_cache) >= _CACHE_LIMIT:
+            _cache.pop(next(iter(_cache)))
+        _cache[key] = (expiry, encoding)
+
+
 def probe(path, st=None, clock=time.monotonic) -> str | None:
     """The encoding of the file's first 8 KB, or None when it is not text."""
     st = st or _stat(path)
@@ -92,10 +99,7 @@ def probe(path, st=None, clock=time.monotonic) -> str | None:
     except (OSError, ValueError):
         return None
     encoding = _detect(head)
-    with _cache_lock:
-        if len(_cache) >= _CACHE_LIMIT:
-            _cache.pop(next(iter(_cache)))
-        _cache[key] = (now + TTL, encoding)
+    _cache_set(key, encoding, now + TTL)
     return encoding
 
 
@@ -130,6 +134,15 @@ def read(path, st=None, clock=time.monotonic):
     except (OSError, ValueError):
         return None
     text = _decode(data, encoding, truncated)
+    if text is None and encoding != "utf-16":
+        # An English opening (valid UTF-8) can hide GBK Chinese later in the file: this is
+        # the Chinese-Windows R script case.  Try GB18030 on the whole read and remember it.
+        body = data[3:] if encoding == "utf-8-sig" and data.startswith(b"\xef\xbb\xbf") else data
+        text = _decode(body, "gb18030", truncated)
+        if text is not None:
+            encoding = "gb18030"
+            key = (ntpath.normcase(str(path)), st.st_size, st.st_mtime_ns)
+            _cache_set(key, encoding, clock() + TTL)
     if text is None:
         return None
     if truncated:

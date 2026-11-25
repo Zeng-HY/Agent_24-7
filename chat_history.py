@@ -10,6 +10,7 @@ import chats
 import activity_records
 import answer_files
 import file_policy
+import file_renders
 import file_text
 
 class HistoryError(Exception):
@@ -482,6 +483,7 @@ class History:
         if st is not None and suffix not in _CONTENT_SKIP and file_text.probe(path,st):
             if size<=2<<20:kind='text'
             if view=='none':view='code' if file_text.lang_for(suffix) else 'text'
+        pic_w,pic_h,thumb=file_renders.size(path,view,st)
         fid=self._file_id(app,tid,m.get('id'),index,path)
         old=self.files.get((app,tid,fid))
         updated=bool(old and old.get('mtime') is not None and st
@@ -493,7 +495,8 @@ class History:
              'modified':int(st.st_mtime*1000) if st else None,'state':state,
              'v':_file_version(st) if st else '','line':f.get('line'),
              'lang':file_text.lang_for(suffix) if view in ('code','text') else None,
-             'via':list(f.get('via') or []),'thumb':False,'message_id':m.get('id')}
+             'via':list(f.get('via') or []),'thumb':thumb,'message_id':m.get('id')}
+        if pic_w and pic_h:row.update(w=pic_w,h=pic_h)
         if f.get('texts'):row['texts']=list(f['texts'])
         if kind=='download' and st and office_preview.offers(path):row['preview']='pdf'
         try:resolved=path.resolve()
@@ -683,7 +686,7 @@ class History:
                 hits.append({'id':m['id'],'role':m['role'],'origin':m.get('origin'),'time':m.get('time'),'snippet':m['text'][max(0,at-60):at+len(query)+100]})
             more=offset+limit<len(hits)
             return {'items':hits[offset:offset+limit],'has_more':more,'next_cursor':encode(offset+limit) if more else None,'total':len(hits)}
-    def list_files(self,app,tid,message_id=None,fresh=True):
+    def list_files(self,app,tid,message_id=None,fresh=False):
         from agents import registry
         item,entry=self.transcript(app,tid)
         agent=getattr(entry,'agent',None) or registry.get(app)
