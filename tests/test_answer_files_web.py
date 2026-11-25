@@ -222,6 +222,15 @@ class AnswerFilesWeb(unittest.TestCase):
         if path == "/api/file/thumb":
             self.thumb_calls.append(q)
             return route.fulfill(status=200, content_type="image/png", body=PNG)
+        if path == "/api/file/text":
+            fid = q.get("file", [""])[0]
+            data = BODY.get(fid)
+            if data is None:
+                return js({"error": "这个文件不提供文本预览"}, 400)
+            text = data.decode("utf-8")
+            return js({"text": text, "name": META.get(fid, {}).get("name", fid), "encoding": "utf-8",
+                       "truncated": False, "total_size": len(data), "lines": len(text.splitlines()),
+                       "lang": None, "line": None})
         if path == "/api/file":
             fid = q.get("file", [""])[0]
             self.file_calls.append(fid)
@@ -266,6 +275,8 @@ class AnswerFilesWeb(unittest.TestCase):
     def close_artifact(self, page):
         page.get_by_role("button", name="返回聊天").click()
         page.locator(".artifact-panel").wait_for(state="detached")
+        if page.evaluate("history.state?.filePreview") == "file":
+            page.wait_for_function("history.state?.filePreview!=='file'")
 
     def close_answer_dialog(self, page):
         page.locator(".answer-dialog-close").click()
@@ -313,13 +324,15 @@ class AnswerFilesWeb(unittest.TestCase):
             page.locator("#cvMsgs").evaluate("e=>e.scrollTop=0")
             page.screenshot(path=str(Path(shots) / "answer-files-message.png"))
 
-        # Tapping a picture opens that exact file, not the message menu and not the whole-conversation list.
+        # Tapping a picture opens the full-screen viewer, not the message menu or the whole-conversation list.
         before = len(self.chat_files_calls)
         page.locator(".msg-image").first.click()
-        page.locator(".artifact-panel").wait_for(state="visible")
-        self.assertEqual(self.meta_calls[-1], "f-chart")
+        page.locator(".image-viewer").wait_for(state="visible")
+        self.assertEqual(page.locator(".viewer-count").inner_text(), "1/7")
         self.assertEqual(len(self.chat_files_calls), before)
-        self.close_artifact(page)
+        page.keyboard.press("Escape")
+        page.locator(".image-viewer").wait_for(state="detached")
+        page.wait_for_function("history.state?.filePreview!=='image'")
 
         # The strip: the nine files not drawn in place, eight cards and the rest behind one button.
         self.assertEqual(page.locator(".answer-files .answer-file").count(), 8)

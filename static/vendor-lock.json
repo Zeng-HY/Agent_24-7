@@ -14,5 +14,61 @@
     "integrity": "sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==",
     "file": "purify.min.js",
     "sha256": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/highlight.min.js",
+    "sha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/highlight.r.min.js",
+    "sha256": "5c18509419ee7f8166a3530534640b318e7b6cbeea3822663c7670e866518565"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/highlight.powershell.min.js",
+    "sha256": "fc298b3e0db362e531e6d58988b7a78f83da19df6b5d74db75bc961b2bfbfd3d"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/highlight.latex.min.js",
+    "sha256": "12c8743607535b327bcebd954b0228cf39b7844704123319a7fb594a7db94ce7"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/highlight.dockerfile.min.js",
+    "sha256": "d96f73b077d654d776795097cf49afae5dce3ce453106af022eae013ad2ec8b1"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/code-light.css",
+    "sha256": "3a9a5def8b9c311e5ae43abde85c63133185eed4f0d9f67fea4b00a8308cf066"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight/code-dark.css",
+    "sha256": "9f208d022102b1d0c7aebfecd8e42ca7997d5de636649d2b31ea63093d809019"
+  },
+  {
+    "package": "@highlightjs/cdn-assets",
+    "version": "11.12.0",
+    "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+    "file": "highlight.js.LICENSE",
+    "sha256": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490"
   }
 ]

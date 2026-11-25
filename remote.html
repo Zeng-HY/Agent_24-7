@@ -821,7 +821,7 @@ function renderMsgs(list, note) {
         summary.textContent = row.items.some(m=>m.tool_status) ? '工具活动 '+row.items.length+' 项'+(runningTools?' · '+runningTools+' 项进行中':'') : '已执行 ' + row.items.length + ' 步操作';
         const toolNodes = new Map([...n.querySelectorAll('.tool')].map(t => [t.dataset.id,t]));
         const ids = new Set();
-        for (const m of row.items) { const id = m.id || m.time + m.text; ids.add(id); let t = toolNodes.get(id) || el('div','tool'); t.dataset.id = id; t.textContent = m.text; n.appendChild(t); }
+        for (const m of row.items) { const id = m.id || m.time + m.text; ids.add(id); let t = toolNodes.get(id) || el('div','tool'); t.dataset.id = id; t.textContent = m.text; if (Array.isArray(m.files)) window.readingUI?.decorateFilesOnly?.(t,m); n.appendChild(t); }
         toolNodes.forEach((t,id) => { if (!ids.has(id)) t.remove(); });
       } else if (row.message.role === 'subagent') {
         renderSubagent(n,row.message);
@@ -1200,7 +1200,7 @@ function pushUIState() { if (!applyingHistory) history.pushState({remoteUI:uiSta
 function replaceUIState() { if (!applyingHistory) history.replaceState({remoteUI:uiState()},''); }
 function syncInert() {
   const top = overlays.at(-1)?.id;
-  [...document.body.children].forEach(n => { if (n.tagName !== 'SCRIPT') n.inert = top ? n.id !== top : !!cur && !['convView','backGestureEdge','toast','newJobDock'].includes(n.id); });
+  [...document.body.children].forEach(n => { if (n.tagName === 'SCRIPT' || n.tagName === 'DIALOG' || n.classList.contains('image-viewer')) return; n.inert = top ? n.id !== top : !!cur && !['convView','backGestureEdge','toast','newJobDock'].includes(n.id); });
   document.body.style.overflow = top || cur ? 'hidden' : '';
   window.navigationUI?.sync();
   window.newChatUI?.sync();

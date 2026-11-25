@@ -581,6 +581,50 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - 匹配文件时除了「斜杠统一、不分大小写」还去掉了行号，因为电脑改写后的链接会保留 `:12`；这比 §5.1 的原文多做一步，请确认。
 
 
+#### 第二段（看图页、SVG、表格、代码高亮）
+
+已做：网页第二段。改了 `static/artifact-preview.js`、`static/artifact-preview.css`、`static/reading-ui.js`、`static/interaction-ui.js`、`remote.html`、`static/vendor-lock.json`，新增 `static/highlight/` 和 `tests/test_answer_files_preview.py`；`remote.py` 只加了 7 条 `STATIC_FILES`（用户同意）。
+
+- **看图页。** 消息里的图和文件条里的图片卡都打开全屏看图（`artifact-preview.js` 的 `imageViewer`）：顶上返回、`2/5` 计数、下载（`download` 属性）、在文件页打开；Esc 或返回关闭。两指或 Ctrl+滚轮缩放到 8 倍，双击/双点在 1 倍和 2.5 倍之间切换，放大后可拖动；左右滑或方向键看同一消息的其他图片（原处的图和文件条里的图，按消息里的文件顺序）；放大时方向键/拖动只移图，不翻页。`thumb` 为真先显示 1280 缩略图，再换原图：原图 ≤30 MB 直接给 `<img src="/api/file?…&v=…">`，更大的用 2048 缩略图；GIF 用原图。图片顺序从这条消息的 `files` 里取，所以藏在「还有 N 个」后面的图也能左右滑到。
+- **SVG。** 消息里和文件条里都用 `/api/file/thumb`（消息按视口挑 640/1280，文件条 320；`thumb` 为假时仍是文件卡）。看图页里从 `/api/file?…&download=1` 取 ≤10 MB 字节，做成 `type="image/svg+xml"` 的 Blob，只放进 `<img>`；没有新标签页、没有 blob 链接、没有页面跳转，关闭或换图时 `revokeObjectURL`。
+- **表格。** CSV/TSV 走 `/api/file/text`（编码已在电脑解好），按 RFC 4180 解析引号、引号里的逗号和换行；首行当表头并 `position:sticky` 固定在顶上，表格能横滑；只画前 5000 行，多了顶上说明「只显示了前 5000 行（共 N 行）」；`truncated` 时说明「只显示了开头 X MB」；有「查看原文」切换。
+- **代码页。** 文件页原来的「文本」视图换成代码页：文字从 `/api/file/text` 来，行号、自动换行开关、按 `line` 跳到那一行并标出、页内查找（查找框 + 上一个/下一个 + 命中计数）、复制全部、跟随浅色/深色。`lang` 有就用，没有按后缀猜；超过 200 KB 不高亮，只给行号；`truncated` 时顶上说明。Markdown、HTML 的阅读视图没有改。
+- **高亮组件。** 从安卓线 `fp-android` 原样拷了 highlight.js 11.12.0 的 5 个 js（common + R、PowerShell、LaTeX、Dockerfile）、`code-light.css`、`code-dark.css` 到 `static/highlight/`；许可证放 `static/highlight.js.LICENSE`。`static/vendor-lock.json` 按现有写法逐文件登记了 npm 包名、版本、来源和 SHA-256（含许可证，共 8 条）；测试逐条核对文件摘要。高亮脚本按需加载，失败时退回纯文本代码页。
+- **工具行的文件。** `interaction-ui.js` 画活动项时，如果工具项带 `files`，就在工具详情下面画一排文件卡；`remote.html` 的旧工具行分支也接了一次。这样还没有回答时 SendUserFile 挂在工具行上的文件也能看到、能点。
+- **测试。** 新增 `tests/test_answer_files_preview.py`：临时目录里的编造文件，缩略图由真的 `file_renders.thumbnail` 生成（测试里断言返回的是 WebP、宽度 320/640/1280，不是固定假图），文字由真的 `file_text.read` 解出来；另有一个用例直接走 `Handler._reading_get` 的 `/api/file/thumb` 和 `/api/file/text`，验证 409、宽度错误、GB18030/R 的行号和编码。覆盖看图页打开/顺序/计数/放大不翻页/双击还原/Esc 关闭/blob 撤销/文件页/下载；消息里和文件条的缩略图；SVG 只进 `<img>`、没有新标签页或 blob 链接；表格的引号、引号里的逗号与换行、GB18030、5000 行上限、查看原文；代码页高亮、跳行、换行、查找、复制、深色主题、超过 200 KB 不高亮、截断说明；工具行文件条；vendor-lock 摘要。第一段测试也改成点图打开新看图页。
+- 本段测试：新测试 3 个通过；第一段测试 1 个通过。完整 pytest（工作区 `full-pytest-b-final.log`）：**1559 passed，7 skipped，3 failed**；3 条都是已知的环境失败（`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时），没有本段代码的失败。
+
+要审：
+
+- `remote.py` 只加了 7 条 `/highlight/*` 的 `STATIC_FILES`（用户同意）；其它电脑端 Python 没动。许可证也登记进了 vendor-lock，所以是 8 条，比 5+2 多了许可证一条。
+- 看图页的「返回」是左上角返回按钮和 Esc；第二段时没有往浏览器历史里压状态，第三段已经补上（见下）。
+- 代码页的页内查找是「跳到命中所在行并标出整行」，不是把每个命中字包成 `<mark>`；手机上没有 Ctrl+F，按行跳更稳。
+- 看图页里小图按原始像素显示（只限制不超过屏幕），不强行放大到满屏；大图按 contain 缩到屏幕内。
+- 表格超过 5000 行时，`lines` 和行数按解析结果算；带引号换行的单元格会让「共 N 行」和物理行数不同。
+- 没做：C 段的音视频、zip、附属资源；GIF 动图和 >30 MB 原图分支没有专门的测试用例（代码已按 §6.2 写）；没有改版本号、没有推送。
+
+
+#### 第三段（音视频、zip、附属资源，补返回手势）
+
+已做：网页第三段。改了 `static/artifact-preview.js`、`static/artifact-preview.css`、`static/reading-ui.js`、`remote.html`，测试新增 `tests/test_answer_files_resources.py`。没有改电脑端 Python。
+
+- **音频、视频。** 文件页 `view` 是 `audio`、`video` 时直接用 `<audio controls>` / `<video controls playsinline>`，`preload="metadata"`，`src` 是带 `v` 的 `/api/file?…`（不带 `download=1`）；不 fetch、不做 Blob。视频宽度不超过屏幕、高度按比例。`canPlayType(mime)` 为空或媒体 `error` 事件时换成文件卡，写「这个格式浏览器放不了，请下载后用其他应用打开」，下载按钮照旧。关闭文件页或换文件时先 `pause()`，再 `removeAttribute('src')` 和 `load()`。消息里和文件条里的音视频仍只是文件卡，不自动播放。
+- **zip。** `view` 是 `archive` 且后缀是 `.zip` 时取 `/api/file/zip?app&id&file&v`：按路径排、文件夹在前并有文件夹图标；每行名字、人能读的大小、本地修改时间；顶上「共 N 项，解压后 X MB」；`truncated` 时「只列了前 2000 项」。名字全部 `textContent`；只列不解压，行不能点。7z、rar 显示「这种压缩包只能下载」的文件卡；坏 zip 显示接口给的原因；下载照旧。
+- **附属资源。** `adapter().resource` 从「去 `/api/chat/files` 按路径找」换成直接调 `/api/file/resource?app&id&file=<页面编号>&path=<相对路径>`；保留 `relative()` 检查和 4 MB 总上限，个数上限从 16 改成 64。403、404、409、类型不对都只算「部分资源未提供」，页面照常显示。Markdown 图片、HTML 图片和 `<link>` CSS 走它；`style` 属性和 `<style>` 块里的 `url()` 也取回来做成 `data:` 再放进沙盒页面（字体、CSS 图片都走这条路）。HTML 照旧沙盒、不跑脚本、CSP 收紧到 `font-src data:`。网页不再用 `/api/chat/files` 找附属资源。
+- **返回手势。** 看图页打开时 `history.pushState` 压一条 `filePreview:'image'`；文件页压 `filePreview:'file'`。`popstate` 先关当前看图页/文件页，不离开遥应页面；用左上角返回或 Esc 关闭时，如果顶上那条是自己压的，就 `history.back()`。从看图页点「文件页打开」用 `replaceState` 换掉那条，不叠两层。
+- **补漏。** `remote.html` 的 `syncInert()` 不再把打开的原生 `<dialog>`（附件页、原因弹层）和 `.image-viewer` 标成 `inert`，否则历史回退触发一次 `syncInert` 后，打开着的弹层点不动。
+- **测试。** `tests/test_answer_files_resources.py` 用编造文件，并起一个真的本地 HTTP 服（媒体请求不经过 Playwright route）：音频用 Python `wave` 现做 1 秒 WAV，读得到 `duration`，`src` 是带 `v` 的 `/api/file`，关闭后 `src` 清掉；视频用占位 mp4 并临时停掉 `load` 来验 `<video src>`，不支持的格式出文件卡。zip 用真 `Handler._reading_get` 走 `/api/file/zip`（UTF-8/GBK、目录、2001 项截断、v 409、7z/坏 zip 原因），浏览器里再看排序、图标、大小、本地时间、截断说明。附属资源用真 `Handler` 和浏览器里的真页面：Markdown 同文件夹/子文件夹图片能显示，`../`、密钥、不存在文件显示「部分资源未提供」；HTML 的 CSS 生效、`style` 里的 `url()` 图片变 `data:`、脚本不执行；页面打开期间没有 `/api/chat/files`。看图页/文件页测了 `history.back()` 关闭、关闭按钮后 `history.state` 回到打开前、地址不变。
+- 本段测试：新测试 3 个（`tests/test_answer_files_resources.py`）通过；第二段 3 个、第一段 1 个也通过。完整 pytest（工作区 `full-pytest-c-web2.log`）：**1570 passed，7 skipped，3 failed**；3 条都是已知的环境失败（`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时），没有本段代码的失败。
+
+要审：
+
+- `history.length` 在 `history.back()` 后不会减少（浏览器 History API 不提供删除条目的办法），会留一条 forward 记录；关闭后 `history.state` 和地址回到打开前，下一次 `pushState` 会复用那条。测试按 state/地址验，没有硬测 `length`。
+- 视频的 `<video src>` 是用占位 mp4 加的「不加载」桩测的（没有真实短视频素材）；音频是真的 WAV 读 duration。真实 mp4 的播放未测。
+- 链接里的 CSS 文件如果自己用 `url()` 引字体，电脑的 `/api/file/resource` 只认页面文字里出现过的相对引用（§5.6），会按「部分资源未提供」处理；页面自己的 `style` 属性和 `<style>` 块里的字体/CSS 图片可以内联。
+- zip 的「解压后 X MB」是列出来的条目大小之和；超过 2000 项截断后这个数只算前 2000 项。
+- `syncInert` 现在跳过所有 `<dialog>`，包括附件页；附件页本来是 top layer，不会被别的浮层盖住点击。
+- 没做：B 段已审的看图/表格/代码页没有重做；GIF 动图和 >30 MB 原图仍没有专门测试；没有改版本号、没有推送。
+
 ### 线三、安卓 1.0.11
 
 （待填）

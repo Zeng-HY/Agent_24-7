@@ -71,6 +71,7 @@
         title.append(el('span','activity-mark',mark),el('span','activity-title',item.thinking?'思考摘要':item.role==='assistant'?'进度说明':toolTitle(item)));
         if(item.tool_status==='failed')title.append(el('span','activity-error','执行失败'));
         detail.append(title,codePanels.create(item.detail||item.text,'命令','command'));if(item.result)detail.append(codePanels.create(item.result,'结果','result'));
+        if(Array.isArray(item.files))window.readingUI?.decorateFilesOnly?.(detail,item);
         body.append(detail);
         if(item.change_notice)body.append(el('div','hint',item.change_notice));
         if(item.current_file&&item.tool_status==='completed'){const link=el('a','tp-button','查看当前文件');link.href='#';link.dataset.resultIndex='0';link.dataset.messageId=item.id||item.source_id||'';body.append(link);}
