@@ -439,7 +439,25 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 ### 线一、电脑
 
-（待填）
+#### 第一段（认文件和改写）
+
+已做：新增 `answer_files.py`，入口是纯函数 `scan(text, bases, *, presented=(), stat=os.stat) -> Scan`；新增 `tests/test_answer_files.py`。这一段没有改 `chat_history.py`、`remote.py`、`message_files.py`，也没有接进消息的出口。
+
+认哪些：§3.1 的 `image`、`link`（含 `[x][r]` 和定义行）、HTML `<img src>` / `<a href>`、`code`、`path`、`presented`；另外直接认 `:codex-file-citation{...}`，记 `via: citation`、文字不改（线上 `chats.codex_answer` 已经先把它转成链接）。`texts` 只给 `code`、`path` 来的文件。
+
+怎么改写：§3.3 全部照做。地址从原文取（反斜杠一律当分隔符，`D:\a\.claude\f.md` 不会丢反斜杠）；%-解码失败就保留原样（`100%.txt`、`%FF`）；NFC；`:12`、`:12:5`、`:12-20` 去掉，`#L12`、`#L12C5`、`#L12-L20` 只在整串找不到文件时去掉；HTML 标签只认不改；引用式链接改定义行；代码块、行内代码一字不动；`scan(scan(t).text)` 文字不变。
+
+`index`：按改写后的文字、markdown-it 的顺序，给所有本地 Markdown 链接和图片从 0 编号（文件夹、文件不在也占号）；HTML、`code`、`path`、`presented`、`citation` 从 1000。每个文件另有 `indexes`（旧网页的每个号），`index` 是其中最小的一个。同一个文件被链接两次时两个号都在；B 段做 `/api/chat/files` 时按 `indexes` 拆成多行，旧网页第二个链接才找得到。
+
+几个自己定的做法，请审：
+
+- 改写后的地址把 `%` 写成 `%25`（`100%.txt` → `100%25.txt`），否则旧网页的 `decodeURIComponent` 遇到 `100%` 会抛错；三端规则解码后仍是原路径。
+- 相对路径找不到只给 `file_notes`（`not_found`），并且只认「像文件」的相对路径（有 `/`、有扩展名或有行号）；`#…`、`mailto:`、`vscode:`、网页、`localhost` 都不记 note。
+- 网络位置和别的系统的绝对路径在查文件之前就判 `not_local`，不会调用 `stat`（测试里用会抛错的 `stat` 验证过）。
+
+测试：`tests/test_answer_files.py` 71 个（表驱动，§3.2 每种写法、三端 `localPath` 契约、幂等、代码不动、重复 index、50 个上限、网络不 stat），加 `tests/test_relative_links.py`、`tests/test_artifact_files.py` 共 81 个通过。速度：本机 10,000 条编造消息（各约 2 KB，5,000 条带链接），总 8.3–8.7 秒，约 0.86 ms/条；带链接的约 1.7 ms/条。量速脚本在 DeepSeek 工作区，没有提交。
+
+没做：B 段的 `file_policy.py`、消息里的 `files` / `file_notes`、`/api/chat/files`；没有改版本号、没有推送。
 
 ### 线二、网页
 
