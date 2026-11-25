@@ -14,7 +14,7 @@ import re
 import threading
 import unicodedata
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -82,7 +82,8 @@ def _zip_name(info: zipfile.ZipInfo) -> str:
 
 def _zip_time(info: zipfile.ZipInfo) -> int:
     try:
-        return int(datetime(*info.date_time, tzinfo=timezone.utc).timestamp() * 1000)
+        # zip stores the packing computer's local wall time without a zone; interpret it here.
+        return int(datetime(*info.date_time).timestamp() * 1000)
     except (ValueError, TypeError, OverflowError):
         return 0
 

@@ -3,6 +3,7 @@ import io
 import sys
 import threading
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -100,6 +101,15 @@ def test_zip_lists_utf8_gbk_dirs_and_truncates(tmp_path):
             archive.writestr(f"f{index}.txt", b"")
     listing = file_resources.zip_entries(many)
     assert listing["total"] == 2001 and len(listing["entries"]) == 2000 and listing["truncated"] is True
+
+
+def test_zip_modified_time_is_the_local_wall_clock(tmp_path):
+    path = tmp_path / "time.zip"
+    stamp = (2024, 1, 2, 3, 4, 6)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(zipfile.ZipInfo("a.txt", stamp), b"hello")
+    listing = file_resources.zip_entries(path)
+    assert listing["entries"][0]["modified"] == int(datetime(*stamp).timestamp() * 1000)
 
 
 def test_bad_zip_and_7z_routes(tmp_path):

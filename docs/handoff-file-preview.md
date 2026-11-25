@@ -548,6 +548,8 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 
 完整 pytest（工作区 `full-pytest-e.log`）：**1562 passed，7 skipped，3 failed**。3 条都是已知环境问题：`test_mobile_polish` 的 webkit/chromium 各一条点击超时、`test_relay_mobile_layout` 一条 Playwright 点击超时；没有本段代码的失败。没做：打包、安装、发布、推送、改版本号；也没改中转。
 
+审后修（11-25）：zip 条目的修改时间按打包电脑的本地钟解释（zip 里不带时区），不再当 UTC；测试用固定时间按本地时区算毫秒数，不写死 +8。
+
 要审：
 
 - zip 只读中央目录，不检查压缩包里的内容是否可解压；坏 zip 靠 `zipfile` 的中央目录校验发现。
