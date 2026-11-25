@@ -647,8 +647,12 @@ class Handler(BaseHTTPRequestHandler):
             q = self._query()
             limit = max(5, min(100, int(q.get("limit", "40") or 40)))
             try:
-                result=self.history.conversations(q.get("app", "all"),limit,q.get("cursor", ""),q.get("query", ""),q.get('sort','updated'),q.get('status','all'),self.server.tasks.apply_status)
-                apps=self._visible_apps()  # an app this computer lacks, or an old phone cannot read, lists nothing
+                apps = self._visible_apps()  # an app this computer lacks, or an old phone cannot read, lists nothing
+                # An old phone's page leaves those out before the page, its cursor and its total are counted, so a
+                # page is not shortened by rows it can never see. Protocol 2 has always seen every row here and
+                # keeps asking for all of them; the filter below still trims what it may not read.
+                result=self.history.conversations(q.get("app", "all"),limit,q.get("cursor", ""),q.get("query", ""),q.get('sort','updated'),q.get('status','all'),self.server.tasks.apply_status,
+                                                  apps=apps if self._client_protocol() < 2 else None)
                 result['items']=[v for v in self.server.tasks.apply_status(result['items']) if v.get('app') in apps]
                 self._json(result)
             except (chat_history.HistoryError,ValueError,TypeError) as exc:self._json({"error":str(exc)},getattr(exc,"status",400))

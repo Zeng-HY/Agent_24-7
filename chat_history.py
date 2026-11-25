@@ -285,9 +285,15 @@ class History:
     def child_row(c):
         return {k:c.get(k) for k in ('app','id','title','folder','cwd','updated','status','kind','parent')}|(
             {'parent_title':c['parent_title']} if c.get('parent_title') else {})
-    def conversations(self,app='all',limit=40,cursor='',query='',sort='updated',status='all',status_resolver=None):
+    def conversations(self,app='all',limit=40,cursor='',query='',sort='updated',status='all',status_resolver=None,apps=None):
+        """One page of conversations. `apps` (when given) is the assistants this client can read: they are left
+        out before the page and its total are counted, so an old phone's page is not shortened by ones it cannot see."""
         limit=max(5,min(100,limit));query=query.strip().casefold()[:200]
         found,stray=self._load()
+        if apps is not None:
+            allowed={str(app) for app in apps}
+            found=[v for v in found if v.get('app') in allowed]
+            stray=[v for v in stray if v.get('app') in allowed]
         items=[v for v in found if app=='all' or v['app']==app]
         if query:
             # a search looks through children and the Ungrouped bucket too; a hit is a row of its own
