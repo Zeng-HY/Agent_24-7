@@ -1,5 +1,27 @@
 # 遥应 Teleply iOS 版（原生 SwiftUI；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
+## 0.9.0 草稿：iOS 按说明书显示助手（11-25，还没上传；版本号只在这份草稿里，`project.yml` 没改）
+
+- **为什么**：安卓 1.0.10 起，电脑通过 `/api/agents` 发说明书（名字、颜色、图标、能力位、超时、图片上限），助手随电脑端升级出现，不必再给手机发版。iOS 0.8.0 只认写死的三家。这一版照说明书显示和操作任意助手，第一台要用的新助手是 Antigravity。
+- **协议 2**：每个请求带 `X-Teleply-Protocol: 2` / `X-Teleply-Client: ios/<版本>`（上传、下载、图片、实时流都带）；推送登记带 `protocol`。老电脑没有 `/api/agents` 时退回内置三家，不报错。
+- **说明书**：新 `AgentCatalog` 按电脑缓存 `/api/agents`；名字、颜色（含深色）、图标、顺序、能力位、`params` 都从它来。三家的名字/颜色/图标/`legacy` 仍用 App 自己的，只采纳电脑给的顺序和能力位。一台设备取不到说明书时用三家兜底，一项坏了只丢那一项。
+- **显示**：名单、筛选、侧栏、归档页、新建面板、问题条都由 catalog 来；不认识的助手用通用样式显示，不整页报错。
+- **动作**：`legacy=false` 的助手走统一地址——控制态 `GET /api/agents/<id>/state`（按 `params.refresh_ms` 轮询、`params.state_timeout_s` 超时）、`POST …/send`（`intent` 按 `send_modes`，在跑也照发、由电脑排队）、`stop`、`queue`、`answer`、`GET …/receipt`（「已排队 / 已送达」）、`open`、`GET …/options` + `POST …/create` + `GET …/create/state`、`POST …/upload`（张数/大小按 `params`）。控制态的 `capabilities_now` 说了算，逐键收窄（false 不能变 true、列表取交集、没写的键等于说明书）。通用卡片（`generic.v1`）：标题、等宽 detail（超过 12 行折叠）、单选/多选、自由填写、密码框、批准卡点选项即提交；按 `approve`/`answer` 此刻能力灰掉并显示电脑给的原因，`expires_at` 为 0 就一直等。
+- **三家不变**：Codex / Claude / DeepSeek 的路由、请求体、控制态、卡片、按钮、颜色、图标、顺序、轮询间隔（5 秒 / 2.5 秒）都没动；按钮是否显示只在 `legacy=false` 时才读能力位。
+- **通知和岛**：推送 `teleply` 里可选的 `n`/`k`/`m`（助手名字、颜色、图标 key）读出来；`IslandAttributes`/`IslandIdentity`/`IslandPeer` 加可选字段，`IslandWords`/`IslandPalette`/`IslandMark` 先用它、没有就通用。App 自己在手机上开岛时（新建对话、发送之后），新助手的名字和颜色从说明书填进去；点新助手的通知能打开它的对话。三家的岛一点不变。
+- **用量**：这次不动（现在没有新助手 `usage` 为真），`UsageView` 三家原样。
+- **演示和测试**：演示里加了假助手 `testing`（显示名「测试助手」，通用外观），只在启动参数带 `-TeleplyDemoAgents` 时出现；它的统一地址全都有（状态+一张通用批准卡、发送回执、停止、回答、新建三步、上传）。`TeleplyCore` 334 项测试（42 个套件）全过。
+- **验证**：Codemagic `ios-native-check` compile：第一段 `6b062b97cc7083caf3b8dd25`（312 项）通过；第二段 `6b06349dee9118a63e524d54`（334 项，`Build Succeeded`，App 本体第一次编译成功）；第三段等主会话推送后跑。之前几轮修过的编译错：原始字符串里的 `"#`（`6b062a17`）、测试里 `inlineCards` 的作用域和可选链（`6b0630d3`）、DeepSeek 断言和「发送被全局说明书拦住」（`6b06328` / `6b06349d`）。
+- **截图**：`ScreenshotTour` 原有各组没改，仍和 0.8.0 逐张对比；新加一组假助手的页面，只在 `-TeleplyDemoAgents` 下跑：列表里的测试助手、它的对话（带通用卡片）、新建面板选中测试助手。只跑这一组：`codemagic.ps1 -Mode shots -Only "testAgentsLight testAgentsDark"`。
+
+### 留给你在真机上验（0.9.0 草稿）
+
+1. 三家照常：Codex / Claude / DeepSeek 的名单、对话、卡片、发送、停止、模型/权限菜单、用量、归档、新建都和 0.8.0 一样（截图逐张对比）。
+2. 连 Antigravity（电脑端装到带统一地址的版本）：名单里出现 Antigravity，名字/颜色/图标对；能读对话、发消息（在跑也发，显示已排队/已送达）、停止、批准或回答通用卡片、新建（必须选项目）、发图。
+3. 通知和锁屏卡片：Antigravity 的通知能打开它的对话；岛上的名字和颜色正确；三家的岛和现在一样。
+4. 老电脑（没有 `/api/agents`）：只显示三家，不报错，功能照旧。
+5. 把 Antigravity 的电脑端应用关掉：发送键变灰并显示原因；打开后恢复。
+
 ## 0.8.0：iPad 适配（11-22，构建 33 已传 TestFlight）
 
 - 构建 33（Codemagic `6b0306651efb7278279ac24f`，18 分钟，`UPLOAD SUCCEEDED`），从 `ipad-adapt` 分支（`f1544f2`）打；版本 0.8.0，Delivery UUID `f8e173eb-475b-4e16-aca3-662b22968421`。只进内部测试，没有提交审核。包里的应用和小组件扩展 `UIDeviceFamily` 都是 `[1, 2]`，iPad 四个方向都在，最低 iOS 26.0。

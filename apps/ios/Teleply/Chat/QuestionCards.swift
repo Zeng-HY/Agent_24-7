@@ -35,8 +35,8 @@ enum InlineCard: Identifiable {
 
 /// The cards of a source's state: Codex's pending ones and answered ones it lets you change; Claude's desktop
 /// question, or else its plan options; DeepSeek's approvals, then its questions; a new assistant's own cards.
-func inlineCards(app: String, raw: JSONValue) -> [InlineCard] {
-    guard AgentCatalogSnapshot.current.isLegacy(app) else { return genericCards(raw).map(InlineCard.generic) }
+func inlineCards(app: String, raw: JSONValue, catalog: AgentCatalogSnapshot) -> [InlineCard] {
+    guard !catalog.isLegacy(app) else { return genericCards(raw).map(InlineCard.generic) }
     switch app {
     case "claude":
         if claudeAsks(raw) { return [.claudePrompt(raw["prompt"])] }
@@ -572,7 +572,7 @@ struct AskBar: View {
 
     var body: some View {
         let app = model.conversation.key?.app ?? model.app
-        let cards = pendingCards(app: app, raw: model.conversation.control.raw)
+        let cards = pendingCards(app: app, raw: model.conversation.control.raw, catalog: model.catalog)
         if let first = cards.first {
             let codexSent = app == "codex" && pendingAction(model.workspace.saved, "codex/answer")?["status"].string() == "done"
             let line: (summary: String, go: String) = codexSent ? ("答案已提交，等 Codex 接着做", "刷新 ›")

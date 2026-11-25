@@ -75,6 +75,20 @@ struct PushRequestTests {
         #expect(PushTarget(device: device, app: "claude", chat: "") == nil)
     }
 
+    @Test func aNoticeOfANewAssistantKeepsItsNameColourAndMark() throws {
+        // relay_push.py's teleply payload adds optional n/k/m (name, colour, icon key) for a new assistant's notice.
+        let part: [String: Any] = ["d": device, "a": "testing", "c": "test-waiting", "n": " 测试助手 ",
+                                   "k": "#A78BFA", "m": "generic"]
+        let target = try #require(PushTarget(userInfo: ["teleply": part]))
+        #expect(target.sourceName == "测试助手" && target.tint == "#A78BFA" && target.markKey == "generic")
+        // Without them the notice is exactly what it was (the three's carry none).
+        let plain = try #require(PushTarget(userInfo: ["teleply": ["d": device, "a": "codex", "c": "demo"]]))
+        #expect(plain.sourceName == nil && plain.tint == nil && plain.markKey == nil)
+        // An empty one is no name at all, as the relay leaves it out.
+        let empty = try #require(PushTarget(userInfo: ["teleply": ["d": device, "a": "testing", "c": "x", "n": "  "]]))
+        #expect(empty.sourceName == nil)
+    }
+
     @Test func theForegroundSummaryIsReadAsAnIslandState() async throws {
         let device = String(repeating: "a", count: 32)
         let transport = RecordingTransport { request in
@@ -225,6 +239,22 @@ struct PushFlowTests {
         model.openNotification(elsewhere)  // another computer of the account: it is used now
         await model.settle()
         #expect(model.device?.id == DemoData.computerB && model.app == "claude" && model.chat?.id == "demo")
+    }
+
+    @Test func aTappedNotificationOfANewAssistantOpensItsConversation() async throws {
+        let world = DemoWorld(testingAgent: true)
+        let model = await signedIn(world, push: FakePush())
+        #expect(model.screen == .devices)
+        let target = try #require(PushTarget(device: DemoData.computerA, app: "testing", chat: "test-waiting",
+                                             sourceName: "测试助手", tint: "#A78BFA", markKey: "generic"))
+        model.openNotification(target)
+        await model.settle()
+        #expect(model.screen == .reading && model.device?.id == DemoData.computerA && model.app == "testing")
+        #expect(model.chat?.id == "test-waiting" && model.error == nil)
+        #expect(model.isShowing(target))
+        // Its notice's words were kept for the island this phone may start before it reads the catalog.
+        #expect(model.push.meta["testing"]?.sourceName == "测试助手")
+        #expect(model.push.meta["testing"]?.tint == "#A78BFA")
     }
 
     @Test func oneTappedWhileTheAppOpensWaitsForTheLaunch() async throws {

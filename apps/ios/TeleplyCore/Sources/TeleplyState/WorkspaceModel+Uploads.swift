@@ -21,7 +21,7 @@ extension WorkspaceModel {
         }
         // A new assistant takes pictures only, at most `params.max_images`, each up to `params.max_image_bytes`
         // (handoff 3.4); its new conversation has no pictures yet.
-        let catalog = AgentCatalogSnapshot.current
+        let catalog = self.catalog
         let generic = !catalog.isLegacy(key.app)
         let params = catalog.info(key.app).params
         if generic {
@@ -64,7 +64,7 @@ extension WorkspaceModel {
                 guard let self else { return }
                 let target = key.chat == "@new" ? try await self.ensureNewID(key, client) : key.chat
                 let meta = try await client.upload(device: key.device, app: key.app, chat: target, draft: key.chat == "@new", name: name,
-                                                   file: file, size: size, image: image)
+                                                   file: file, size: size, image: image, catalog: self.catalog)
                 self.timed(label, ContinuousClock.now - started, speedOutcome(meta))
                 self.updateUpload(key, local) { row in
                     row["status"] = "ready"

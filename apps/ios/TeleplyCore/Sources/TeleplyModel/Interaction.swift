@@ -19,14 +19,15 @@ public struct PendingCard: Equatable, Sendable {
 
 /// What waits for an answer in a source's state (Android pendingCards): Codex's pending question cards; Claude's
 /// desktop prompt, or else its plan options; DeepSeek's approvals first, then its questions; a new assistant's own
-/// cards (docs §五, handoff 3.4).
-public func pendingCards(app: String, raw: JSONValue) -> [PendingCard] {
-    guard AgentCatalogSnapshot.current.isLegacy(app) else {
+/// cards (docs §五, handoff 3.4). [catalog] is the caller's copy of the computer's assistants (handoff 第三段).
+public func pendingCards(app: String, raw: JSONValue, catalog: AgentCatalogSnapshot) -> [PendingCard] {
+    guard !catalog.isLegacy(app) else {
         let cards = genericCards(raw)
         guard let first = cards.first else { return [] }
-        let names = AgentCatalogSnapshot.current.name(app)
+        let names = catalog.name(app)
         let approval = first["kind"].string() == "approval"
-        return [PendingCard(kind: approval ? "approval" : "question", summary: genericCardTitle(first, app: app, assistant: names),
+        return [PendingCard(kind: approval ? "approval" : "question",
+                            summary: genericCardTitle(first, app: app, assistant: names, catalog: catalog),
                             count: cards.count)]
     }
     switch app {
@@ -72,12 +73,13 @@ public func genericCards(_ raw: JSONValue) -> [JSONValue] {
 
 /// A generic card's heading: its own `title`, else the first question's `header`, else "<assistant> 等你批准 /
 /// 有问题要问你" (docs §五; the web's generic-ui.js titleOf).
-public func genericCardTitle(_ card: JSONValue, app: String, assistant: String = "") -> String {
+public func genericCardTitle(_ card: JSONValue, app: String, assistant: String = "",
+                             catalog: AgentCatalogSnapshot) -> String {
     let title = card["title"].string()
     if !title.isEmpty { return title }
     let header = card["questions"].array.first?["header"].string() ?? ""
     if !header.isEmpty { return header }
-    let named = assistant.isEmpty ? AgentCatalogSnapshot.current.name(app) : assistant
+    let named = assistant.isEmpty ? catalog.name(app) : assistant
     return card["kind"].string() == "approval" ? named + " 等你批准" : named + " 有问题要问你"
 }
 

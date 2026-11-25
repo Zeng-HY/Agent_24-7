@@ -82,7 +82,7 @@ struct PendingChoiceTests {
         #expect(model.workspace.result == "电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。")
         #expect(model.workspace.error == nil)
         // The question is still on the page, to be chosen again with the computer's fresh tokens.
-        #expect(pendingCards(app: "claude", raw: model.conversation.control.raw).first?.kind == "choice")
+        #expect(pendingCards(app: "claude", raw: model.conversation.control.raw, catalog: model.catalog).first?.kind == "choice")
     }
 
     @Test func theCheckSaysSoWhenClaudeNoLongerWaits() async {
@@ -97,7 +97,7 @@ struct PendingChoiceTests {
         await until(model)
         #expect(model.workspace.saved["pending_action"]["status"].string() == "done")
         #expect(model.workspace.result == "电脑上已经没有在等的选项，上次的选择已处理。")
-        #expect(pendingCards(app: "claude", raw: model.conversation.control.raw).isEmpty)
+        #expect(pendingCards(app: "claude", raw: model.conversation.control.raw, catalog: model.catalog).isEmpty)
     }
 
     @Test func aStateReadAfterTwoMinutesSettlesItWithNoTap() async {

@@ -64,6 +64,9 @@ public final class PushModel {
     public internal(set) var token: String?
     /// A tapped notification waiting for the launch or a sign-in to be done.
     public internal(set) var waiting: PushTarget?
+    /// What the last notices said a new assistant is called and looks like (`n`/`k`/`m`, by its id; handoff 3.5):
+    /// the island this phone starts for it can use them before the catalog was read.
+    @ObservationIgnored var meta: [String: PushTarget] = [:]
     /// Why iOS gave no token this time (no network, push not allowed for this build).
     @ObservationIgnored var tokenFailure: String?
 

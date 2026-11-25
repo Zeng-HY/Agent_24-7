@@ -9,8 +9,8 @@ func actionIdentity(_ route: String, _ body: JSONValue) -> String {
 }
 
 /// What 核对上次操作 says of a Claude desktop option whose reply was lost, from what Claude shows now.
-func claudeChoiceCheck(_ raw: JSONValue) -> String {
-    pendingCards(app: "claude", raw: raw).isEmpty
+func claudeChoiceCheck(_ raw: JSONValue, catalog: AgentCatalogSnapshot) -> String {
+    pendingCards(app: "claude", raw: raw, catalog: catalog).isEmpty
         ? "电脑上已经没有在等的选项，上次的选择已处理。"
         : "电脑上的 Claude 还在等你选；上次那一下可能没送到，请再选一次。"
 }
@@ -101,6 +101,9 @@ public final class WorkspaceModel {
     @ObservationIgnored let newID: @Sendable () -> String
     @ObservationIgnored var client: RelayClient?
     @ObservationIgnored var clientGeneration = -1
+    /// The assistants of the computer in use, as AppModel last read them: this model's own copy (handoff 第三段), so
+    /// its menus, actions, uploads and new-conversation fields never read the process-wide snapshot.
+    @ObservationIgnored var catalog: AgentCatalogSnapshot = .builtin
     @ObservationIgnored var synthetic = false
     @ObservationIgnored var generation = 0
     @ObservationIgnored var read: Task<Void, Never>?
@@ -399,7 +402,7 @@ public final class WorkspaceModel {
     /// from the list it keeps. [fresh] (刷新电脑上的列表) has it open Claude's menus on the desktop again. Codex
     /// needs none: its catalog comes with the conversation state. A new assistant has no such menus here (3.4).
     public func loadChoices(fresh: Bool = false, model: String = "") {
-        guard let key, let client, key.app != "codex", AgentCatalogSnapshot.current.isLegacy(key.app) else { return }
+        guard let key, let client, key.app != "codex", catalog.isLegacy(key.app) else { return }
         choiceRead?.cancel()
         var shown = remembered(key, model: model)
         if fresh { shown["refreshing"] = true }
@@ -486,6 +489,7 @@ public final class WorkspaceModel {
         busy = true
         error = nil
         result = ""
+        let catalog = catalog
         work = Task { [weak self] in
             guard let self else { return }
             var posted = false
@@ -508,13 +512,14 @@ public final class WorkspaceModel {
                 await self.persist(key, .object(next))
                 posted = true
                 let reply: JSONValue
-                if !AgentCatalogSnapshot.current.isLegacy(key.app) {
+                if !catalog.isLegacy(key.app) {
                     // A new assistant's answers go to its own address (handoff 3.4): the route names the action, the
                     // body carries the card and this request's id.
                     reply = try await client.agentAnswer(device: key.device, agent: key.app, body: .object(payload))
                 } else {
                     reply = route == "codex/answer"
-                        ? try await client.command(device: key.device, app: key.app, route: "answer", body: .object(payload))
+                        ? try await client.command(device: key.device, app: key.app, route: "answer", body: .object(payload),
+                                                   catalog: catalog)
                         : try await client.detail(device: key.device, route: route, body: .object(payload))
                 }
                 var done = self.current(key).object
@@ -571,6 +576,7 @@ public final class WorkspaceModel {
         let pending = current(key)["pending_action"]
         guard pending.isObject else { return }
         error = nil
+        let catalog = catalog
         work = Task { [weak self] in
             do {
                 let route = pending["route"].string()
@@ -578,11 +584,13 @@ public final class WorkspaceModel {
                 var confirmed = false
                 var line: String
                 if route == "codex/answer" {
-                    let receipt = try await client.receipt(device: key.device, app: key.app, chat: key.chat, request: body["request_id"].string())
+                    let receipt = try await client.receipt(device: key.device, app: key.app, chat: key.chat,
+                                                           request: body["request_id"].string(), catalog: catalog)
                     confirmed = ["accepted", "rejected"].contains(receipt["state"].string())
                     line = "回答回执：" + receipt["state"].string()
                 } else {
-                    let actual = try await client.control(device: key.device, app: key.app, chat: key.chat).raw
+                    let actual = try await client.control(device: key.device, app: key.app, chat: key.chat,
+                                                          catalog: catalog).raw
                     switch route {
                     case "deepseek/permission":
                         confirmed = actual["permission"].string() == body["preset"].string()
@@ -599,7 +607,7 @@ public final class WorkspaceModel {
                     default:
                         confirmed = false
                     }
-                    line = route == "claude/choose" ? claudeChoiceCheck(actual)
+                    line = route == "claude/choose" ? claudeChoiceCheck(actual, catalog: catalog)
                         : route == "generic/answer"
                         ? (confirmed ? "电脑上已经没有在等这张卡片，上次的回答已处理。" : "电脑上还在等这张卡片；上次那一下可能没送到，请再答一次。")
                         : confirmed ? "已读回所选设置" : "此来源没有独立动作回执，请核对刷新后的实际状态；不会自动重试。"
@@ -648,11 +656,12 @@ public final class WorkspaceModel {
         busy = true
         error = nil
         result = ""
+        let catalog = catalog
         work = Task { [weak self] in
             do {
                 let reply: JSONValue
-                if !AgentCatalogSnapshot.current.isLegacy(key.app) {
-                    reply = try await client.agentOpen(device: key.device, agent: key.app, chat: key.chat)
+                if !catalog.isLegacy(key.app) {
+                    reply = try await client.agentOpen(device: key.device, agent: key.app, chat: key.chat, catalog: catalog)
                 } else {
                     reply = try await client.detail(device: key.device, route: "chat/open", body: ["app": .string(key.app), "id": .string(key.chat)])
                 }

@@ -25,7 +25,7 @@ struct GenericQuestionCard: View {
         let direct = !approval && questions.count == 1
             && !questions[0]["isMultiple"].bool() && !questions[0]["isOther"].bool() && !questions[0]["isSecret"].bool()
         QuestionCard {
-            CardTitle(text: genericCardTitle(card, app: app), tag: approval ? "批准" : "")
+            CardTitle(text: genericCardTitle(card, app: app, catalog: model.catalog), tag: approval ? "批准" : "")
             detail
             if approval {
                 approvalChoices(questions.first ?? [:], answers: answers, identity: identity, blocked: blocked, busy: busy)

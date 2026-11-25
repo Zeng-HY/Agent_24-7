@@ -81,8 +81,10 @@ extension AppModel {
         let now = islandNow()
         let identity = IslandIdentity(device: record.device, app: "", chat: "", computer: computerLabel(record.device),
                                       title: "")
+        let source = islandSource(record.app)
         let peer = IslandPeer(app: record.app, chat: record.chat, title: chatTitle(record.chat), state: "working",
-                              since: now, turn: now)
+                              since: now, turn: now, sourceName: source.sourceName, tint: source.tint,
+                              markKey: source.markKey)
         islandStart(identity, peer)
     }
 
@@ -95,9 +97,28 @@ extension AppModel {
         let words = oneLine(job.text, limit: 40)
         let now = islandNow()
         let identity = IslandIdentity(device: device.id, app: "", chat: "", computer: device.label, title: "")
-        let peer = IslandPeer(app: made.isEmpty ? job.app : made, chat: job.createdID,
-                              title: title.isEmpty ? words : title, state: "working", since: now, turn: now)
+        let createdApp = made.isEmpty ? job.app : made
+        let source = islandSource(createdApp)
+        let peer = IslandPeer(app: createdApp, chat: job.createdID,
+                              title: title.isEmpty ? words : title, state: "working", since: now, turn: now,
+                              sourceName: source.sourceName, tint: source.tint, markKey: source.markKey)
         islandStart(identity, peer)
+    }
+
+    /// A new assistant's own name, colour and mark for the island this phone starts (handoff 3.5): the catalog's when
+    /// it knows the assistant, else the last notice's `n`/`k`/`m`. The three keep nil, so their islands never change.
+    func islandSource(_ app: String) -> (sourceName: String?, tint: String?, markKey: String?) {
+        guard !catalog.isLegacy(app) else { return (nil, nil, nil) }
+        if catalog.contains(app) {
+            let info = catalog.info(app)
+            let name = info.displayName(IslandWords.language)
+            let tint = info.colorDark.isEmpty ? info.color : info.colorDark
+            return (name.isEmpty ? nil : name, tint.isEmpty ? nil : tint, info.icon.key.isEmpty ? nil : info.icon.key)
+        }
+        if let meta = push.meta[app] {
+            return (meta.sourceName, meta.tint, meta.markKey)
+        }
+        return (nil, nil, nil)
     }
 
     /// Starts this computer's island, or updates the one it already has: the new conversation joins its list and

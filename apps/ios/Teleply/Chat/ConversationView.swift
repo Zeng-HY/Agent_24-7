@@ -41,7 +41,8 @@ struct ConversationView: View {
         // The roles, the pictures sent with messages as the computer kept them (state `images`; web
         // message-projection.js) and the waiting cards, worked out again only when they change.
         let timeline = memo.update(messages: model.messages, app: model.app, cardsApp: model.conversation.key?.app ?? model.app,
-                                   raw: control.raw, running: control.running, asking: control.questions)
+                                   raw: control.raw, running: control.running, asking: control.questions,
+                                   catalog: model.catalog)
         let busy = model.busy
         let actions = MessageActions(select: { message in model.whole(message) { selecting = $0 } }, expand: { model.expand($0) },
                                      diff: { model.workspace.diff($0) }, files: { model.workspace.filesOf(message: $0) },

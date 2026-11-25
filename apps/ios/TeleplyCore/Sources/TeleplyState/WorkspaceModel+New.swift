@@ -41,7 +41,7 @@ extension WorkspaceModel {
     /// Models and DeepSeek's permissions are read when their menu opens. Nothing here shows a progress bar.
     func openNew() {
         guard let key, let client, key.chat == "@new" else { return }
-        if AgentCatalogSnapshot.current.isLegacy(key.app) {
+        if catalog.isLegacy(key.app) {
             loadNewFolders()
         } else {
             loadAgentOptions()
@@ -67,14 +67,14 @@ extension WorkspaceModel {
     /// Whether the new-conversation sheet is for an assistant with its own addresses (handoff 3.4).
     func isGenericNew() -> Bool {
         guard let key, key.chat == "@new" else { return false }
-        return !AgentCatalogSnapshot.current.isLegacy(key.app)
+        return !catalog.isLegacy(key.app)
     }
 
     /// A new assistant's 新建对话 lists, read once and filling both the project row and the model row: its own
     /// `/options` names the projects (each folder shown under its project's name) and says what the model is.
     public func loadAgentOptions() {
         guard let key, let client, key.chat == "@new", newReads["options"] == nil,
-              !AgentCatalogSnapshot.current.isLegacy(key.app) else { return }
+              !catalog.isLegacy(key.app) else { return }
         let synthetic = synthetic
         newReads["options"] = Task { [weak self] in
             do {
@@ -181,7 +181,7 @@ extension WorkspaceModel {
                 guard !text.isEmpty || !images.isEmpty || !references.array.isEmpty else { throw ReadFailure("请输入首条消息") }
                 // The fields follow the manifest (handoff 3.4): 无项目 only when it allows one (Antigravity must pick
                 // a project), 权限 only when it has one, settings only when it offers models.
-                let catalog = AgentCatalogSnapshot.current
+                let catalog = self.catalog
                 let caps = catalog.caps(key.app)
                 let generic = !catalog.isLegacy(key.app)
                 let folder = saved["folder"].string()

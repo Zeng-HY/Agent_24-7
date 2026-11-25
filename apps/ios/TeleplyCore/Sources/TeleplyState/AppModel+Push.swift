@@ -133,8 +133,13 @@ extension AppModel {
 
     // MARK: A tapped notification
 
-    /// A notification of 遥应's own was tapped: its conversation opens once the launch or a sign-in is done.
+    /// A notification of 遥应's own was tapped: its conversation opens once the launch or a sign-in is done. A notice
+    /// of a new assistant also brings its name and colour (`n`/`k`/`m`), kept for the island this phone may start
+    /// before it has read the catalog (handoff 3.5).
     public func openNotification(_ target: PushTarget) {
+        if target.sourceName != nil || target.tint != nil || target.markKey != nil {
+            push.meta[target.app] = target
+        }
         push.waiting = target
         resumeNotification()
     }

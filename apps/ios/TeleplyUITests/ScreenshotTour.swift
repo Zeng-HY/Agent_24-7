@@ -37,9 +37,58 @@ final class ScreenshotTour: XCTestCase {
     @MainActor func testSiteIslandEnglishLight() throws { try islandPreview(variant: "site-en-light", appearance: "light", language: "en", site: true) }
     @MainActor func testSiteIslandEnglishDark() throws { try islandPreview(variant: "site-en-dark", appearance: "dark", language: "en", site: true) }
 
+    /// 0.9.0 (handoff 第三段): the fake testing helper alone, on the demo opened with -TeleplyDemoAgents — the list
+    /// with its rows, its conversation with the generic card, and 新建对话 with it picked. Run them alone:
+    /// `codemagic.ps1 -Mode shots -Only "testAgentsLight testAgentsDark"`.
+    @MainActor func testAgentsLight() throws { try agentsShots(variant: "light", appearance: "light") }
+    @MainActor func testAgentsDark() throws { try agentsShots(variant: "dark", appearance: "dark") }
+
     /// A button by part of its label: rows, computers and option cards read their whole text as their label.
     @MainActor private func row(_ app: XCUIApplication, _ text: String) -> XCUIElement {
         app.buttons.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    /// 0.9.0: the test helper on the demo with -TeleplyDemoAgents (handoff 3.7). Nothing of the other pages changes:
+    /// this group is only run with -Only.
+    @MainActor private func agentsShots(variant: String, appearance: String) throws {
+        continueAfterFailure = true
+        let app = launch(appearance: appearance, extra: ["-TeleplyDemo", "-TeleplyDemoAgents"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        XCTAssertTrue(connect.waitForExistence(timeout: 5), "测试电脑 A had no 连接")
+        connect.tap()
+
+        // The list: the fake helper's conversations are among the demo's rows.
+        let waiting = row(app, "测试对话 B")
+        XCTAssertTrue(waiting.waitForExistence(timeout: 10), "the list never showed 测试对话 B")
+        snap(app, page: "agents-list", variant: variant)
+
+        // Its conversation: the generic approval card from its own state.
+        waiting.tap()
+        let card = app.staticTexts["测试助手想运行命令"].firstMatch
+        if card.waitForExistence(timeout: 10) {
+            for _ in 0..<3 where !card.isHittable { app.swipeUp() }
+            snap(app, page: "agents-conversation", variant: variant)
+        }
+        back(app)
+
+        // 新建对话 with the fake helper picked: its project row comes from its own /options.
+        let pencil = app.buttons["新建对话"].firstMatch
+        if pencil.waitForExistence(timeout: 5) {
+            pencil.tap()
+            let segment = app.segmentedControls.buttons["测试助手"]
+            let source = segment.exists ? segment : app.buttons["测试助手"].firstMatch
+            if source.waitForExistence(timeout: 10) {
+                source.tap()
+                let project = row(app, "测试项目")
+                _ = project.waitForExistence(timeout: 10)
+                sleep(1)
+                snap(app, page: "agents-new-chat", variant: variant)
+            }
+        }
     }
 
     /// The simulator's own notice ("Ready for Apple Intelligence", 11-04) covers the top of the page for some seconds.

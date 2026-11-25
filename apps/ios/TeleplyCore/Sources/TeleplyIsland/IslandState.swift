@@ -88,9 +88,15 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
     /// 0.6.4: what it is doing (edit | run | search | read), and when the turn ended for a finished one.
     public var step: String?
     public var ended: Int?
+    /// A new assistant's own name, colour and mark as this phone knew them when it added the row (handoff 3.5): the
+    /// relay's rows carry none, so the three and every relay-sent row keep their usual look.
+    public var sourceName: String?
+    public var tint: String?
+    public var markKey: String?
 
     public init(app: String, chat: String, title: String, state: String, since: Int, turn: Int,
-                step: String? = nil, ended: Int? = nil) {
+                step: String? = nil, ended: Int? = nil, sourceName: String? = nil, tint: String? = nil,
+                markKey: String? = nil) {
         self.app = app
         self.chat = chat
         self.title = title
@@ -99,6 +105,9 @@ public nonisolated struct IslandPeer: Codable, Hashable, Sendable {
         self.turn = turn
         self.step = step
         self.ended = ended
+        self.sourceName = sourceName
+        self.tint = tint
+        self.markKey = markKey
     }
 
     public var status: IslandStatus? { IslandStatus(rawValue: state) }
@@ -127,13 +136,22 @@ public nonisolated struct IslandIdentity: Codable, Hashable, Sendable {
     public var computer: String
     /// The conversation's title; the phone writes it, never the relay.
     public var title: String
+    /// A new assistant's own name, colour and mark (handoff 3.5): the phone fills them from its catalog when it starts
+    /// an island itself; nil for the three and for an island the relay started (its attributes carry none).
+    public var sourceName: String?
+    public var tint: String?
+    public var markKey: String?
 
-    public init(device: String, app: String, chat: String, computer: String, title: String) {
+    public init(device: String, app: String, chat: String, computer: String, title: String,
+                sourceName: String? = nil, tint: String? = nil, markKey: String? = nil) {
         self.device = device
         self.app = app
         self.chat = chat
         self.computer = computer
         self.title = title
+        self.sourceName = sourceName
+        self.tint = tint
+        self.markKey = markKey
     }
 }
 

@@ -22,13 +22,15 @@ public enum IslandWords {
     nonisolated(unsafe) public static var language = "zh-Hans"
     static var english: Bool { language.hasPrefix("en") }
 
-    public static func appName(_ app: String) -> String {
+    /// The assistant's name. A new assistant's own name (from its catalog or the push's `n`) comes first (handoff
+    /// 3.5); the three keep reading their own, whatever a push says.
+    public static func appName(_ app: String, name: String? = nil) -> String {
+        if let name, !name.isEmpty { return name }
         switch app {
         case "codex": return "Codex"
         case "claude": return "Claude"
         case "deepseek": return "DeepSeek"
-        // A new assistant: its id, until the push or the catalog names it (the island is a separate target and
-        // cannot read the catalog; the third step brings the name in the push itself).
+        // A new assistant: its id when neither the push nor the catalog named it (the island is a separate target).
         default: return app
         }
     }
@@ -205,31 +207,33 @@ public enum IslandWords {
             : String(format: "%d:%02d", total / 60, total % 60)
     }
 
-    /// One sentence for VoiceOver, e.g. "Claude 在干活，已经 4 分 31 秒".
-    public static func accessibility(app: String, state: IslandState, now: Int, computer: String = "") -> String {
+    /// One sentence for VoiceOver, e.g. "Claude 在干活，已经 4 分 31 秒". [name] is a new assistant's own name when the
+    /// phone has one (handoff 3.5).
+    public static func accessibility(app: String, state: IslandState, now: Int, computer: String = "",
+                                     name: String? = nil) -> String {
         if english {
             if let line = aggregate(state) { return "Teleply, " + line }
             if let peer = finished(state) { return "Teleply, \(title(peer, computer: computer)), \(detail(state, now: now))" }
-            let name = appName(app), word = self.state(state.status ?? .working)
+            let shown = appName(app, name: name), word = self.state(state.status ?? .working)
             switch state.status ?? .working {
-            case .waiting: return "\(name) \(word), " + (ask(state) ?? "")
-            case .done: return "\(name) done, took " + duration((state.ended ?? now) - state.turn)
-            case .limited: return "\(name) limit reached, " + countdown((state.resets ?? now) - now) + " until reset"
-            default: return "\(name) \(word) for \(duration(now - state.since))"
+            case .waiting: return "\(shown) \(word), " + (ask(state) ?? "")
+            case .done: return "\(shown) done, took " + duration((state.ended ?? now) - state.turn)
+            case .limited: return "\(shown) limit reached, " + countdown((state.resets ?? now) - now) + " until reset"
+            default: return "\(shown) \(word) for \(duration(now - state.since))"
             }
         }
         if let line = aggregate(state) { return "遥应，" + line }
         if let peer = finished(state) { return "遥应，\(title(peer, computer: computer))" }
-        let name = appName(app), word = self.state(state.status ?? .working), elapsed = duration(now - state.since)
+        let shown = appName(app, name: name), word = self.state(state.status ?? .working), elapsed = duration(now - state.since)
         switch state.status ?? .working {
         case .working, .offline, .failed:
-            return "\(name)\(word)，已经 \(elapsed)"
+            return "\(shown)\(word)，已经 \(elapsed)"
         case .waiting:
-            return "\(name)\(word)，" + (ask(state) ?? "")
+            return "\(shown)\(word)，" + (ask(state) ?? "")
         case .done:
-            return "\(name)好了，用了 " + duration((state.ended ?? now) - state.turn)
+            return "\(shown)好了，用了 " + duration((state.ended ?? now) - state.turn)
         case .limited:
-            return "\(name)额度用完，" + countdown((state.resets ?? now) - now) + " 后恢复"
+            return "\(shown)额度用完，" + countdown((state.resets ?? now) - now) + " 后恢复"
         }
     }
 
@@ -286,6 +290,6 @@ public enum IslandWords {
 
     /// A conversation's title on the island: its own, or 模型 · 电脑 when it has none.
     public static func title(_ peer: IslandPeer, computer: String) -> String {
-        peer.title.isEmpty ? "\(appName(peer.app)) · \(computer)" : peer.title
+        peer.title.isEmpty ? "\(appName(peer.app, name: peer.sourceName)) · \(computer)" : peer.title
     }
 }

@@ -205,7 +205,7 @@ struct AgentUnifiedTests {
 
     @Test func aNewAssistantsCardsBecomeTheQuestionBarAndTheTimeline() throws {
         let state: JSONValue = ["questions": [DemoData.testingApprovalCard]]
-        let pending = pendingCards(app: "testing", raw: state)
+        let pending = pendingCards(app: "testing", raw: state, catalog: AgentCatalogSnapshot.builtin)
         #expect(pending.map(\.kind) == ["approval"])
         #expect(pending.first?.summary == "测试助手想运行命令" && pending.first?.count == 1)
         let cards = genericCards(state)
@@ -215,18 +215,18 @@ struct AgentUnifiedTests {
         let header = JSONValue.object(["id": "c", "status": "pending", "kind": "question",
                                        "questions": .array([.object(["id": "q", "header": "选一个方案", "question": "用哪个？",
                                                                      "options": .array([])])])])
-        #expect(genericCardTitle(header, app: "testing") == "选一个方案")
+        #expect(genericCardTitle(header, app: "testing", catalog: AgentCatalogSnapshot.builtin) == "选一个方案")
         let bare = JSONValue.object(["id": "c", "status": "pending", "kind": "question",
                                      "questions": .array([.object(["id": "q", "question": "用哪个？", "options": .array([])])])])
-        #expect(genericCardTitle(bare, app: "testing", assistant: "测试助手") == "测试助手 有问题要问你")
+        #expect(genericCardTitle(bare, app: "testing", assistant: "测试助手", catalog: AgentCatalogSnapshot.builtin) == "测试助手 有问题要问你")
         let approval = JSONValue.object(["id": "c", "status": "pending", "kind": "approval",
                                          "questions": .array([.object(["id": "q", "question": "允许吗？", "options": .array([])])])])
-        #expect(genericCardTitle(approval, app: "testing", assistant: "测试助手") == "测试助手 等你批准")
+        #expect(genericCardTitle(approval, app: "testing", assistant: "测试助手", catalog: AgentCatalogSnapshot.builtin) == "测试助手 等你批准")
         // Only pending cards with questions count.
         let nothing = JSONValue.object(["questions": .array([.object(["id": "c", "status": "answered", "kind": "question",
                                                                      "questions": .array([.object(["id": "q", "question": "x",
                                                                                                    "options": .array([])])])])])])
-        #expect(genericCards(nothing).isEmpty && pendingCards(app: "testing", raw: nothing).isEmpty)
+        #expect(genericCards(nothing).isEmpty && pendingCards(app: "testing", raw: nothing, catalog: AgentCatalogSnapshot.builtin).isEmpty)
     }
 
     @Test func anAssistantsIdIsCheckedBeforeItsAddressIsBuilt() {

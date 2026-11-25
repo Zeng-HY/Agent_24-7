@@ -230,7 +230,16 @@ extension AppModel {
         agentsTask = nil
         catalog = id.isEmpty ? .builtin : agentCatalog.snapshot(for: id)
         AgentCatalogSnapshot.current = catalog
+        shareCatalog()
         if !id.isEmpty { refreshAgents(device: id, force: false) }
+    }
+
+    /// The models that draw or act for the computer in use keep their own copy of its catalog (handoff 第三段): the
+    /// process-wide snapshot stays for the view helpers and the older defaults only.
+    func shareCatalog() {
+        conversation.catalog = catalog
+        workspace.catalog = catalog
+        jobs.catalog = catalog
     }
 
     /// Asks the computer for its assistant list (GET /api/agents): on entering it, another computer, 重试, and when its
@@ -275,6 +284,7 @@ extension AppModel {
         guard device?.id == id else { return }
         catalog = snapshot
         AgentCatalogSnapshot.current = snapshot
+        shareCatalog()
         if sources.device == id, !tree.object.isEmpty {
             let apps = treeApps(tree, catalog: snapshot)
             if sources.apps != apps { sources.apps = apps }

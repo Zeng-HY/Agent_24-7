@@ -45,7 +45,7 @@ struct AgentUnifiedFlowTests {
         await enterA(model)
         try await open(model, "test-waiting")
         #expect(model.conversation.control.questions)
-        #expect(pendingCards(app: "testing", raw: model.conversation.control.raw).first?.summary == "测试助手想运行命令")
+        #expect(pendingCards(app: "testing", raw: model.conversation.control.raw, catalog: model.catalog).first?.summary == "测试助手想运行命令")
         #expect(genericCards(model.conversation.control.raw).count == 1)
         let paths = await watched.log.items.map(\.url.path)
         #expect(paths.contains("/d/\(a)/api/agents/testing/state"))
@@ -172,6 +172,62 @@ struct AgentUnifiedFlowTests {
         #expect(queryValue(request, "id") == "test-waiting" && queryValue(request, "name") == "picture.png")
     }
 
+    @Test func twoModelsKeepTheirOwnCatalogsAndFlows() async throws {
+        // Two AppModels at once, each on its own demo world: the first has the fake helper, the second does not.
+        // Each model keeps its own catalog now (handoff 第三段), so whatever the other syncs, its own send, new
+        // conversation and upload keep going to its own assistant's addresses.
+        let (one, watchedOne) = makeModel(DemoWorld(testingAgent: true))
+        let (two, watchedTwo) = makeModel(DemoWorld())
+        await enterA(one)
+        await enterA(two)
+        #expect(one.catalog.contains("testing"))
+        #expect(!two.catalog.contains("testing"))
+        #expect(!two.offersSend("testing"))
+        // The first model: a send, a picture and a new conversation for the fake helper.
+        try await open(one, "test-waiting")
+        #expect(one.conversation.catalog.contains("testing"))
+        one.conversation.edit("跑一下测试")
+        one.conversation.send()
+        await one.conversation.settleSends()
+        let oneSends = await watchedOne.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/send") }
+        #expect(oneSends.count == 1)
+        let folder = temporaryFolder()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("picture.png")
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: file)
+        one.workspace.importFile(file, name: "picture.png", image: true)
+        await until {
+            let rows = one.workspace.saved["uploads"].array
+            return !rows.isEmpty && rows.allSatisfy { $0["status"].string() == "ready" }
+        }
+        let oneUploads = await watchedOne.log.items.filter { $0.url.path.hasSuffix("/api/agents/testing/upload") }
+        #expect(oneUploads.count == 1)
+        one.startNew(app: "testing")
+        await one.applying?.value
+        await one.workspace.settle()
+        await until { !one.workspace.newData["folders"]["items"].array.isEmpty }
+        one.workspace.chooseFolder("D:/fixture/测试项目", projectless: false)
+        one.workspace.edit("first_message", "写一个测试")
+        one.workspace.create()
+        await one.workspace.settle()
+        await one.jobs.settle()
+        await one.settle()
+        let oneItems = await watchedOne.log.items
+        #expect(oneItems.contains { $0.url.path.hasSuffix("/api/agents/testing/create") })
+        // The second model is untouched: its own Codex conversation sends through the old address, and its list has
+        // no fake helper at all.
+        let row = try #require(two.chats.first { $0.app == "codex" && $0.id == "demo" })
+        two.open(row)
+        await two.settle()
+        await until { two.conversation.control.available && two.conversation.ready && two.workspace.ready }
+        two.conversation.edit("你好")
+        two.conversation.send()
+        await two.conversation.settleSends()
+        let twoSends = await watchedTwo.log.items.filter { $0.url.path.hasSuffix("/api/codex/send") }
+        #expect(twoSends.count == 1)
+        #expect(!two.chats.contains { $0.app == "testing" })
+    }
+
     @Test func withoutTheHelperItsAddressesAreNotThere() async throws {
         let plain = RelayClient(origin: .default, transport: DemoTransport(world: DemoWorld()), vault: MemoryCookieVault())
         let catalog = AgentCatalogSnapshot.fromServer(AgentCatalogTests.agents(#"{"id":"testing","name":{"zh":"测试助手"}}"#))
@@ -188,10 +244,10 @@ struct AgentUnifiedFlowTests {
 
     @Test func aSendModeComesFromTheConversationState() {
         let state = parseControl(["available": true, "capabilities_now": ["send_modes": ["send", "steer"]]])
-        #expect(ChatModel.sendModes(of: state, app: "some-new-assistant") == ["send", "steer"])
+        #expect(ChatModel.sendModes(of: state, app: "some-new-assistant", catalog: .builtin) == ["send", "steer"])
         // The state wins even when it offers nothing: that is the computer's word now.
         let closed = parseControl(["available": true, "capabilities_now": ["send_modes": []]])
-        #expect(ChatModel.sendModes(of: closed, app: "some-new-assistant").isEmpty)
+        #expect(ChatModel.sendModes(of: closed, app: "some-new-assistant", catalog: .builtin).isEmpty)
     }
 
     @Test func theThreeKeepEveryButtonWhateverTheStateSays() async throws {

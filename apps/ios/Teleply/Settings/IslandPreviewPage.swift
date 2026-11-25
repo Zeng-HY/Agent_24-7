@@ -199,7 +199,7 @@ private struct ExpandedPreview: View {
                 ForEach(Array((state.peers ?? []).prefix(3)), id: \.chat) { peer in
                     HStack(spacing: 8) {
                         SourceMark(app: peer.app, size: 13)
-                        Text(peer.title.isEmpty ? IslandWords.appName(peer.app) : peer.title)
+                        Text(peer.title.isEmpty ? IslandWords.appName(peer.app, name: peer.sourceName) : peer.title)
                             .font(.system(size: 12)).lineLimit(1)
                         Spacer(minLength: 8)
                         if peer.status == .working, let name = IslandWords.stepName(peer.step) {
@@ -270,7 +270,7 @@ private struct LockCardPreview: View {
                 ForEach(Array((state.peers ?? []).prefix(3)), id: \.chat) { peer in
                     HStack(spacing: 7) {
                         SourceMark(app: peer.app, size: 15)
-                        Text(peer.title.isEmpty ? IslandWords.appName(peer.app) : peer.title)
+                        Text(peer.title.isEmpty ? IslandWords.appName(peer.app, name: peer.sourceName) : peer.title)
                             .font(.system(size: 13)).foregroundStyle(Palette.ink).lineLimit(1)
                         Spacer(minLength: 6)
                         if peer.status == .working, let name = IslandWords.stepName(peer.step) {

@@ -8,24 +8,36 @@ public struct PushTarget: Sendable, Equatable {
     public let device: String
     public let app: String
     public let chat: String
+    /// What the relay said this assistant is called and looks like (the notice's optional `n`, `k`, `m`; handoff 3.5):
+    /// a new assistant's name, colour and mark for an island this phone starts before it has read the catalog. nil
+    /// when the relay sent none — the three's notices never need them.
+    public let sourceName: String?
+    public let tint: String?
+    public let markKey: String?
 
     /// Nil unless the computer is a 32-hex id, the app a legal assistant id and the conversation a short id. Any
     /// legal id is taken, not only ones this catalog already knows: a tap can open the app before `/api/agents` was
     /// read, and the relay only sends ids a computer has reported (handoff 3.5).
-    public init?(device: String, app: String, chat: String) {
+    public init?(device: String, app: String, chat: String, sourceName: String? = nil, tint: String? = nil,
+                 markKey: String? = nil) {
         guard (try? RelayClient.devicePath(device, "")) != nil, isValidAgentId(app), !chat.isEmpty, chat.count <= 200 else {
             return nil
         }
         self.device = device
         self.app = app
         self.chat = chat
+        self.sourceName = sourceName.flatMap { Self.cleanMeta($0, 60) }
+        self.tint = tint.flatMap { Self.cleanMeta($0, 32) }
+        self.markKey = markKey.flatMap { Self.cleanMeta($0, 120) }
     }
 
-    /// From a notification's userInfo ("teleply": {"d", "a", "c"}); nil for anything else, such as a 试推.
+    /// From a notification's userInfo ("teleply": {"d", "a", "c"} and, for a new assistant, "n", "k", "m"); nil for
+    /// anything else, such as a 试推.
     public init?(userInfo: [AnyHashable: Any]) {
         guard let part = userInfo["teleply"] as? [String: Any], let device = part["d"] as? String, let app = part["a"] as? String,
               let chat = part["c"] as? String else { return nil }
-        self.init(device: device, app: app, chat: chat)
+        self.init(device: device, app: app, chat: chat, sourceName: part["n"] as? String, tint: part["k"] as? String,
+                  markKey: part["m"] as? String)
     }
 
     /// From teleply://open?d=…&a=…&c=… (the island's tap, handoff 5.3). Any other address is ignored: a web page can
@@ -36,6 +48,13 @@ public struct PushTarget: Sendable, Equatable {
         func value(_ name: String) -> String? { query.first(where: { $0.name == name })?.value }
         guard let device = value("d"), let app = value("a"), let chat = value("c") else { return nil }
         self.init(device: device, app: app, chat: chat)
+    }
+
+    /// The relay's own trim and limit for these words (`_clean_meta` in relay_push.py): "" becomes nil.
+    private static func cleanMeta(_ value: String, _ limit: Int) -> String? {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return String(text.prefix(limit))
     }
 }
 

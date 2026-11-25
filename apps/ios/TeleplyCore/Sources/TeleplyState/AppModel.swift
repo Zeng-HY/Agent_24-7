@@ -407,6 +407,7 @@ public final class AppModel {
         agentsFor = ""
         catalog = AgentCatalogSnapshot.builtin
         AgentCatalogSnapshot.current = catalog
+        shareCatalog()
         treeMore = [:]
         treeAt = nil
         pendingNew = nil

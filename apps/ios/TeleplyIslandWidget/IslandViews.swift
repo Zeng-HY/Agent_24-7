@@ -21,19 +21,33 @@ enum IslandPalette {
     /// On the Dynamic Island itself, always white: the island is black whatever the phone's appearance (0.6.3).
     static let islandInk = Color.white
 
-    static func source(_ app: String) -> Color {
+    /// A new assistant's own colour from its catalog (a "#RRGGBB" or "#AARRGGBB" hex), else the three's own, else the
+    /// neutral grey — the same order as the app's marks (handoff 3.5). The island is black, so the dark value is what
+    /// the phone puts in the attributes.
+    static func source(_ app: String, tint: String? = nil) -> Color {
+        if let tint, let own = color(hex: tint) { return own }
         switch app {
         case "codex": return codex
         case "claude": return claude
         case "deepseek": return deepseek
-        // A new assistant gets the neutral grey for now; its own colour comes with the push in the third step.
+        // A new assistant without a colour of its own: the neutral grey (as before).
         default: return muted
         }
     }
 
-    static func color(_ role: IslandColorRole, app: String) -> Color {
+    /// "#RRGGBB" / "#AARRGGBB" (the catalog's spelling, Android's agentColorValue); nil when it is not one.
+    static func color(hex: String) -> Color? {
+        var text = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("#") { text.removeFirst() }
+        guard text.count == 6 || text.count == 8, let value = UInt32(text, radix: 16) else { return nil }
+        let rgb = text.count == 8 ? value & 0xFFFFFF : value
+        return Color(red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255,
+                     blue: Double(rgb & 0xFF) / 255)
+    }
+
+    static func color(_ role: IslandColorRole, app: String, tint: String? = nil) -> Color {
         switch role {
-        case .source: return source(app)
+        case .source: return source(app, tint: tint)
         case .ask: return ask
         case .success: return success
         case .danger: return danger
@@ -45,6 +59,9 @@ enum IslandPalette {
 /// The source's mark, as in the app (Design/Marks.swift), from the extension's own copy of the assets.
 struct IslandMark: View {
     let app: String
+    /// A new assistant's colour and mark key, when the phone put them in the attributes or the peer row (handoff 3.5).
+    var tint: String? = nil
+    var markKey: String? = nil
     var size: CGFloat = 18
     /// 在等你: the small orange dot at its corner (the minimal island has no room for words).
     var dot = false
@@ -65,7 +82,7 @@ struct IslandMark: View {
             }
         }
         .frame(width: size, height: size)
-        .foregroundStyle(IslandPalette.source(app))
+        .foregroundStyle(IslandPalette.source(app, tint: tint))
         .overlay(alignment: .bottomTrailing) {
             if dot {
                 Circle()
@@ -77,8 +94,15 @@ struct IslandMark: View {
         .accessibilityHidden(true)
     }
 
+    /// The extension's own assets, by the catalog's icon key; a key with no asset here (a remote icon) keeps the
+    /// generic mark.
     private var asset: String? {
-        switch app {
+        Self.asset(for: markKey) ?? Self.asset(for: app)
+    }
+
+    private static func asset(for key: String?) -> String? {
+        guard let key else { return nil }
+        switch key {
         case "codex": return "CodexMark"
         case "claude": return "ClaudeMark"
         case "deepseek": return "DeepSeekMark"
@@ -166,8 +190,7 @@ private struct PeerRow: View {
     var ink = IslandPalette.islandInk
 
     private var title: String {
-        if peer.title.isEmpty { return IslandWords.appName(peer.app) + " · " + computer }
-        return peer.title
+        IslandWords.title(peer, computer: computer)
     }
 
     var body: some View {
@@ -183,7 +206,7 @@ private struct PeerRow: View {
             if peer.app.isEmpty {
                 BrandMark(size: 15)
             } else {
-                IslandMark(app: peer.app, size: 15)
+                IslandMark(app: peer.app, tint: peer.tint, markKey: peer.markKey, size: 15)
             }
             Text(title)
                 .font(.system(size: 14))
@@ -297,7 +320,8 @@ struct LockScreenCard: View {
                     Image(systemName: symbol)
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
-                                                             app: peer?.app ?? attributes.app))
+                                                             app: peer?.app ?? attributes.app,
+                                                             tint: peer?.tint ?? attributes.tint))
                 }
             }
             HStack(spacing: 7) {
@@ -352,7 +376,8 @@ struct LockScreenCard: View {
 
     @ViewBuilder private var mark: some View {
         if let app = peer?.app ?? (attributes.app.isEmpty ? nil : attributes.app) {
-            IslandMark(app: app, size: 24, dot: waiting)
+            IslandMark(app: app, tint: peer?.tint ?? attributes.tint, markKey: peer?.markKey ?? attributes.markKey,
+                       size: 24, dot: waiting)
         } else {
             BrandMark(size: 24, dot: waiting)
         }
@@ -362,11 +387,12 @@ struct LockScreenCard: View {
         if let peer { return IslandWords.title(peer, computer: attributes.computer) }
         if !attributes.title.isEmpty { return attributes.title }
         if attributes.app.isEmpty { return "遥应 · \(attributes.computer)" }
-        return "\(IslandWords.appName(attributes.app)) · \(attributes.computer)"
+        return "\(IslandWords.appName(attributes.app, name: attributes.sourceName)) · \(attributes.computer)"
     }
 
     private var detailColor: Color {
-        IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: peer?.app ?? attributes.app)
+        IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: peer?.app ?? attributes.app,
+                            tint: peer?.tint ?? attributes.tint)
     }
 }
 
@@ -385,7 +411,7 @@ struct SmallCard: View {
         if let peer = IslandWords.cardPeer(state) ?? peers.first { return IslandWords.title(peer, computer: attributes.computer) }
         if !attributes.title.isEmpty { return attributes.title }
         return attributes.app.isEmpty ? "遥应 · \(attributes.computer)"
-            : "\(IslandWords.appName(attributes.app)) · \(attributes.computer)"
+            : "\(IslandWords.appName(attributes.app, name: attributes.sourceName)) · \(attributes.computer)"
     }
 
     var body: some View {
@@ -410,7 +436,8 @@ struct SmallCard: View {
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     if let app = peers.first?.app ?? (attributes.app.isEmpty ? nil : attributes.app) {
-                        IslandMark(app: app, size: 18, dot: waiting)
+                        IslandMark(app: app, tint: peers.first?.tint ?? attributes.tint,
+                                   markKey: peers.first?.markKey ?? attributes.markKey, size: 18, dot: waiting)
                     } else {
                         BrandMark(size: 18, dot: waiting)
                     }
@@ -426,7 +453,8 @@ struct SmallCard: View {
                     Image(systemName: symbol)
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working),
-                                                             app: peers.first?.app ?? attributes.app))
+                                                             app: peers.first?.app ?? attributes.app,
+                                                             tint: peers.first?.tint ?? attributes.tint))
                 }
             }
         }
@@ -553,6 +581,8 @@ struct Trailing: View {
 struct Minimal: View {
     let app: String
     let state: IslandState
+    /// A new assistant's own colour, when the phone put it in the attributes (handoff 3.5).
+    var tint: String? = nil
 
     private var total: Int { IslandWords.counts(state)?.total ?? 0 }
 
@@ -568,7 +598,7 @@ struct Minimal: View {
             } else if let symbol = IslandWords.symbol(state.status ?? .working) {
                 Image(systemName: symbol)
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: app))
+                    .foregroundStyle(IslandPalette.color(IslandWords.colorRole(state.status ?? .working), app: app, tint: tint))
             }
         }
     }

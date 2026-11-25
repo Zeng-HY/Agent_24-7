@@ -46,7 +46,7 @@ struct AttachButton: View {
         // attachments, and its new conversation takes none (handoff 3.4).
         let generic = model.isGeneric(app)
         let onNew = workspace.key?.chat == "@new"
-        let mostImages = AgentCatalogSnapshot.current.info(app).params.maxImages
+        let mostImages = model.catalog.info(app).params.maxImages
         Group {
             if generic && onNew {
                 // Nothing to add before the conversation exists.

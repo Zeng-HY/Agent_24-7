@@ -26,7 +26,8 @@ struct IslandLiveActivity: Widget {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(IslandWords.accessibility(app: context.attributes.app, state: context.state,
                                                               now: Int(Date().timeIntervalSince1970),
-                                                              computer: context.attributes.computer))
+                                                              computer: context.attributes.computer,
+                                                              name: context.attributes.sourceName))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -57,11 +58,12 @@ struct IslandLiveActivity: Widget {
             } compactTrailing: {
                 Trailing(app: context.attributes.app, state: context.state, size: 13, compact: true)
             } minimal: {
-                Minimal(app: context.attributes.app, state: context.state)
+                Minimal(app: context.attributes.app, state: context.state, tint: context.attributes.tint)
             }
             .widgetURL(openURL(context))
             .keylineTint(IslandPalette.color(IslandWords.colorRole(context.state.status ?? .working),
-                                             app: context.state.peers?.first?.app ?? context.attributes.app))
+                                             app: context.state.peers?.first?.app ?? context.attributes.app,
+                                             tint: context.state.peers?.first?.tint ?? context.attributes.tint))
         }
         // StandBy, Apple Watch's Smart Stack and CarPlay draw the .small size (handoff 方案五).
         .supplementalActivityFamilies([.small])

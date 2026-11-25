@@ -190,12 +190,41 @@ struct IslandFlowTests {
         #expect(island.starts.first?.0.chat == "" && island.starts.first?.0.app == "")
         #expect(island.starts.first?.0.device == DemoData.computerA)
         #expect(island.starts.first?.1.peers?.first?.chat == "demo")
+        // The three never carry the optional name/colour/mark (handoff 3.5): their islands are exactly as before.
+        #expect(island.starts.first?.1.peers?.first?.sourceName == nil)
+        #expect(island.starts.first?.1.peers?.first?.tint == nil)
+        #expect(island.starts.first?.1.peers?.first?.markKey == nil)
         for _ in 0..<150 where !model.island.live.values.contains(where: { $0.registered }) {
             try? await Task.sleep(for: .milliseconds(20))
         }
         #expect(model.island.live.values.contains { $0.registered })
         let paths = await watched.log.items.map(\.url.path)
         #expect(paths.contains("/account/push/activity"))
+    }
+
+    @Test func aNewAssistantsIslandRowCarriesItsOwnNameColourAndMark() async {
+        let world = DemoWorld(testingAgent: true), watched = WatchedTransport(world: world), island = FakeIsland()
+        let model = await signedIn(world, island: island, transport: watched)
+        let key = ChatKey(scope: model.scope, device: DemoData.computerA, app: "testing", chat: "test-waiting")
+        let record = Submission(request: "r9", key: key, text: "跑一下测试", action: "send", turn: "", body: "{}",
+                                created: Int64(Date().timeIntervalSince1970 * 1000))
+        model.islandSendStarted(record)
+        for _ in 0..<100 where island.starts.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
+        let peer = island.starts.first?.1.peers?.first
+        #expect(peer?.app == "testing" && peer?.chat == "test-waiting")
+        // The demo manifest's own name, dark colour and icon key, from the app's catalog (handoff 3.5).
+        #expect(peer?.sourceName == "测试助手")
+        #expect(peer?.tint == "#A78BFA")
+        #expect(peer?.markKey == "generic")
+        // A conversation without a title says its assistant's own name, not its id.
+        let untitled = IslandPeer(app: "testing", chat: "x", title: "", state: "working", since: 0, turn: 0,
+                                  sourceName: "测试助手")
+        #expect(IslandWords.title(untitled, computer: "我的电脑") == "测试助手 · 我的电脑")
+        // Without the optional name the island words stay what they were.
+        let bare = IslandPeer(app: "testing", chat: "x", title: "", state: "working", since: 0, turn: 0)
+        #expect(IslandWords.title(bare, computer: "我的电脑") == "testing · 我的电脑")
+        #expect(IslandWords.appName("mail", name: "邮差") == "邮差")
+        #expect(IslandWords.appName("codex") == "Codex")
     }
 
     @Test func aConversationStartedFromThePhonesNewChatSheetGetsItsIslandToo() async {

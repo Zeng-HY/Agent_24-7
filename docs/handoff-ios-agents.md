@@ -323,3 +323,59 @@
 **这轮最可能编不过的地方**：`ChatModel.swift` 的 `static func sendModes(of:app:)` 与 `submit` 里 `modes` 的三处使用；`AgentUnifiedFlowTests.swift` 新增的 `aSendModeComesFromTheConversationState`；`AgentUnifiedTests.swift` 改过的 DeepSeek 断言（`deepseek["app"].isNull`）。
 
 ### 第三段
+
+**结论**：3.5 做完了（推送 `n/k/m`、岛上可选的名字/颜色/图标、App 自己开岛时填进去、点新助手的通知能打开）；3.6 按用户意见**不做**（现在没有新助手 `usage` 为真，`UsageView` 三家原样）。另外做了三件用户点名的事：`TeleplyState` 不再读进程共用的 `AgentCatalogSnapshot.current`（`ChatModel` / `WorkspaceModel` / `NewChatJobs` 各持一份，`AppModel` 同步）；假助手的截图组（只跑它时用 `-Only "testAgentsLight testAgentsDark"`）；`apps/ios/README.md` 最前面加「0.9.0 草稿」。三家的岛和按钮没变。本机没有 Swift，**没编译、没跑测试**，等 Codemagic。
+
+**改了的文件**（都在 `apps/ios/` 下；31 改 0 新）
+
+- **catalog 归属（第一件事）**
+  - `TeleplyModel/Interaction.swift`：`pendingCards(app:raw:catalog:)`、`genericCardTitle(_:app:assistant:catalog:)` 改成必须传 catalog（不再有默认值）。
+  - `TeleplyState/ChatModel.swift`：新增 `catalog`（`@ObservationIgnored`，由 AppModel 同步）；控制态/回执/轮询间隔/`command`/`receipt`/`sendModes` 全用自己的；`refreshControl` 里的 Task 先把 catalog 取成本地值。
+  - `TeleplyState/WorkspaceModel.swift`、`+New`、`+Uploads`：新增 `catalog`；`claudeChoiceCheck`、选项/回答/打开/上传/新建字段/`loadAgentOptions`/`isGenericNew` 都用它；`client.command`/`receipt`/`control`/`upload`/`agentOpen` 都显式传 catalog。
+  - `TeleplyState/NewChatJobs.swift`：新增 `catalog`；`send`/`check`/`retry` 用它（check/retry 在 Task 前取成本地值），`agentCreate` 传 catalog。
+  - `TeleplyState/AppModel.swift`、`AppModel+List.swift`：`syncCatalog` / `applyCatalog` / `clearAll` 里调新的 `shareCatalog()`，把 catalog 推给 conversation / workspace / jobs。`.current` 仍在这里赋值（App 的 Labels / Palette / Marks 默认参数要用），`TeleplyState` 里不再有读取。
+  - `Teleply/Chat/QuestionCards.swift`、`Timeline.swift`、`GenericCards.swift`、`Chat/ConversationView.swift`、`Composer/Attachments.swift`：调 `pendingCards`/`inlineCards`/`genericCardTitle` 和 `params.max_images` 时传 `model.catalog`；`Timeline` 的卡片缓存也把 catalog 算进去（catalog 到了会重画）。
+- **3.5 通知和岛**
+  - `TeleplyModel/Push.swift`：`PushTarget` 加可选 `sourceName` / `tint` / `markKey`，从通知 `teleply` 的 `n` / `k` / `m` 读；trim、限制 60 / 32 / 120、空字符串当没有（和 relay_push.py 的 `_clean_meta` 一致）；url 形式不带；老字段与相等判断不变。
+  - `TeleplyState/PushModel.swift`：`push.meta`（按助手 id 记住最近一条通知的 n/k/m）；`AppModel+Push.openNotification` 写入。
+  - `TeleplyIsland/IslandState.swift`：`IslandPeer`、`IslandIdentity` 加可选 `sourceName` / `tint` / `markKey`（Codable，缺省 nil，老数据/老推送照常解码）。
+  - `Shared/IslandAttributes.swift`：加可选 `sourceName` / `tint` / `markKey`，`init` 和 `identity` 双向带着；老字段一个没动。
+  - `TeleplyIsland/IslandWords.swift`：`appName(_:name:)`、`title(peer:)` 用 `peer.sourceName`、`accessibility(name:)`。
+  - `TeleplyIslandWidget/IslandViews.swift`：`IslandPalette.source(_:tint:)`（`#RRGGBB` / `#AARRGGBB` 解析）、`IslandMark(app:tint:markKey:)`；PeerRow / LockScreenCard / SmallCard / Minimal 都带上。`IslandWidgets.swift`：VoiceOver 和 keyline 带名字/颜色。
+  - `TeleplyState/AppModel+Island.swift`：`islandSendStarted` / `islandNewChatStarted` 给新助手那一行填 catalog 的名字、深色和图标 key；新 `islandSource` 先看 catalog，没有再退回 `push.meta`；三家返回 nil，岛一点不变。
+  - `Teleply/Settings/IslandPreviewPage.swift`：预览行的空标题也用 `peer.sourceName`。
+- **截图**：`TeleplyUITests/ScreenshotTour.swift` 加 `testAgentsLight` / `testAgentsDark`（只在带 `-TeleplyDemoAgents` 启动时跑）：列表里的测试助手、它的对话（带通用卡片）、新建面板选中测试助手。原有各组一行没改。
+- **测试**：`AgentUnifiedFlowTests`（两个 AppModel 同时进示例电脑，各自的发送/新建/上传不受对方 catalog 影响）；`PushTests`（`n/k/m` 读法与空值、点新助手的通知打开它的对话、meta 被记住）；`IslandFlowTests`（新助手的岛行有名字/颜色/图标，Codex 的没有；标题用名字；没名字时照旧）；`InteractionTests` / `PendingChoiceTests` / `AgentUnifiedTests`（调用处补 catalog 参数，期望值没改）。
+- **README**：`apps/ios/README.md` 最前面加「0.9.0 草稿：iOS 按说明书显示助手」（改了什么、Codemagic 构建号和结果、「留给你在真机上验」清单）。`project.yml` 没动。
+
+**自己怎么核对的**
+
+1. 对着 `git show 0b3f8d7:relay_push.py`：`teleply_payload` 的 `n/k/m` 只在非空时带、limit 60/32/120、`_clean_meta` 的 trim；岛的 start attributes 只有 `device/app/chat/computer/title`（所以新字段在远端启动时是 nil，老推送照样解码）；`aggregate()` 的 peer 只有 app/chat/title/state/since/turn/ended/step（没有名字/颜色）。
+2. 设计 3.5、3.7 和本文第 5 节：可选字段、三家不变、新助手从说明书填、点通知能打开。
+3. `.current` 审计：`grep AgentCatalogSnapshot.current TeleplyCore/Sources/TeleplyState` 只剩 3 处赋值；`TeleplyState` 里所有 `client.control/command/receipt/upload/agentCreate/agentOpen` 都显式传 catalog；`pendingCards`/`genericCardTitle` 已无默认参数，调用处全补齐。
+4. 三家不变：`islandSource` 对 `legacy` 返回 nil，`IslandWords`/`IslandPalette`/`IslandMark` 在 nil 时与改动前同一条分支；新增测试里也断言了 Codex 的岛行三个字段都是 nil。
+5. 结构检查：30 个 Swift 文件括号/引号配对 0 问题，原始字符串扫描 0 问题，22 个原始字符串 JSON 字面量都能解析；四个被脚本改过的测试文件已统一回 LF。
+
+**最可能编不过的地方**
+
+- `TeleplyCore/Sources/TeleplyState/ChatModel.swift:112`（catalog 属性）、`:325`（`refreshControl` 里先取本地 catalog）、`:222/304/327/613/659/755/767`（调用参数）、`:574`（`sendModes(of:app:catalog:)`）。
+- `TeleplyState/WorkspaceModel.swift:104`（catalog 属性）、`:13`（`claudeChoiceCheck` 签名）、`:489/510/585/590/664` 附近（action / checkAction / openOnComputer 的本地捕获与参数）。
+- `TeleplyState/NewChatJobs.swift:34`（catalog 属性）、`:116`（`agentCreate` 参数）、`:157/235`（Task 前取本地 catalog）。
+- `TeleplyState/AppModel+List.swift:225-295`（`shareCatalog` 与三处调用）、`AppModel.swift:409`。
+- `TeleplyModel/Interaction.swift:23/76`（新签名）与 App 的 `QuestionCards.swift:38/575`、`Timeline.swift:130/145/152`、`GenericCards.swift:28`。
+- `TeleplyModel/Push.swift:11-70`（可选字段、`init?` 里调 `Self.cleanMeta`）。
+- `TeleplyIsland/IslandState.swift`（IslandPeer / IslandIdentity 的新字段和 init）、`Shared/IslandAttributes.swift`（init / identity）。
+- `TeleplyIsland/IslandWords.swift:25`（appName）、`:213`（accessibility 的 `shown`）、`:291`（title）。
+- `TeleplyIslandWidget/IslandViews.swift:24`（source）、`:39`（hex 解析）、`:60`（IslandMark 的新参数）、`:99`（`asset(for:)` 的 `guard let`）、`:189/205/319/375/386/410/435/452/580/597`；`IslandWidgets.swift:27/58/63`。
+- `TeleplyState/AppModel+Island.swift:84/100/108`（peer 的可选字段、`islandSource` 的元组）。
+- `TeleplyUITests/ScreenshotTour.swift` 的新方法/`agentsShots`（`segmentedControls` 的写法）。
+- 测试：`AgentUnifiedFlowTests.twoModelsKeepTheirOwnCatalogsAndFlows`（两个 model 的时序）、`PushTests`（`PushTarget` 的新参数）、`IslandFlowTests`（`IslandPeer` 的新参数、`#A78BFA`）。
+
+**没做的 / 要用户看的**
+
+- **3.6 用量没做**（用户说这次不做）：没有新助手 `usage` 为真，`UsageView` 三家原样。
+- 中转推来的岛行不带名字/颜色：`relay_push.py` 的 `content-state.peers` 没有这些字段，所以新助手的名字/颜色只在这个电话号码自己开的岛、自己加的行上出现；中转下一次推送把列表换成它自己的行后，那一行又会回到 id 和通用灰。要让它一直带着，得电脑端把 `app_name`/`app_color`/`app_icon` 放进岛的内容里（这次没动中转和电脑端）。点通知打开对话不受影响。
+- `-TeleplyDemoAgents` 打开演示时，`ScreenshotTour` 的原有各组不会多出假助手（它们不带这个参数）；新组用 `codemagic.ps1 -Mode shots -Only "testAgentsLight testAgentsDark"` 单独跑。
+- README 的 0.9.0 草稿排在最前面；合并时语音修复那一节也在最前面，冲突由用户合。
+- 没推送、没跑 Codemagic、没碰 TestFlight/后台/中转/密钥；版本号没动（`project.yml` 仍是 0.8.0）。
+

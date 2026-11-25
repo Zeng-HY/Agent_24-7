@@ -123,11 +123,13 @@ final class TimelineMemo {
 
     private var rolesFor: (messages: [Message], app: String, plan: JSONValue, running: Bool, asking: Bool)?
     private var picturesFor: (messages: [Message], records: JSONValue)?
-    private var cardsFor: (app: String, raw: JSONValue)?
+    private var cardsFor: (app: String, raw: JSONValue, catalog: AgentCatalogSnapshot)?
     private var result = Result()
 
-    /// [app] is the source in use (roles read its plan), [cardsApp] the conversation's own (its cards).
-    func update(messages: [Message], app: String, cardsApp: String, raw: JSONValue, running: Bool, asking: Bool) -> Result {
+    /// [app] is the source in use (roles read its plan), [cardsApp] the conversation's own (its cards); [catalog] is
+    /// the AppModel's copy of the computer's assistants (a card's kind depends on whether it is a new one).
+    func update(messages: [Message], app: String, cardsApp: String, raw: JSONValue, running: Bool, asking: Bool,
+                catalog: AgentCatalogSnapshot) -> Result {
         // The roles read only Codex's plan from the state.
         let plan = app == "codex" ? raw["plan"] : .null
         if !(rolesFor.map { $0.messages == messages && $0.app == app && $0.plan == plan && $0.running == running && $0.asking == asking } ?? false) {
@@ -139,9 +141,9 @@ final class TimelineMemo {
             result.pictures = sentPictures(messages: messages, records: records.array)
             picturesFor = (messages, records)
         }
-        if !(cardsFor.map { $0.app == cardsApp && $0.raw == raw } ?? false) {
-            result.cards = inlineCards(app: cardsApp, raw: raw)
-            cardsFor = (cardsApp, raw)
+        if !(cardsFor.map { $0.app == cardsApp && $0.raw == raw && $0.catalog == catalog } ?? false) {
+            result.cards = inlineCards(app: cardsApp, raw: raw, catalog: catalog)
+            cardsFor = (cardsApp, raw, catalog)
         }
         return result
     }

@@ -8,14 +8,14 @@ import TeleplyModel
 struct PendingCardTests {
     @Test func codexListsItsPendingCardsOnly() {
         let raw = DemoData.parse(#"{"questions":[{"id":"a","status":"pending","questions":[{"id":"q","question":"选哪个？"}]},{"id":"b","status":"answered","questions":[]}]}"#)
-        #expect(pendingCards(app: "codex", raw: raw) == [PendingCard(kind: "question", summary: "选哪个？")])
+        #expect(pendingCards(app: "codex", raw: raw, catalog: AgentCatalogSnapshot.builtin) == [PendingCard(kind: "question", summary: "选哪个？")])
     }
 
     /// 11-16: Codex's approval request arrives as a card of its own (`kind: approval`) with the two choices; one this
     /// round cannot answer asks for the computer instead.
     @Test func codexApprovalsAreTheirOwnPendingCard() {
         let raw = DemoData.parse(#"{"questions":[{"id":"approval:t1:r1","kind":"approval","status":"pending","approval_type":"command","answerable":true,"questions":[{"id":"decision","question":"装依赖？"}]},{"id":"approval:t1:r2","kind":"approval","status":"pending","approval_type":"file","answerable":true},{"id":"approval:t1:r3","kind":"approval","status":"pending","approval_type":"other","answerable":false}]}"#)
-        #expect(pendingCards(app: "codex", raw: raw) == [PendingCard(kind: "approval", summary: "Codex 想运行命令"),
+        #expect(pendingCards(app: "codex", raw: raw, catalog: AgentCatalogSnapshot.builtin) == [PendingCard(kind: "approval", summary: "Codex 想运行命令"),
                                                          PendingCard(kind: "approval", summary: "Codex 想改文件"),
                                                          PendingCard(kind: "approval", summary: "Codex 在电脑上等你处理")])
     }
@@ -24,12 +24,12 @@ struct PendingCardTests {
     /// Windows dev.23 the PC sent both, and both apps drew a second card of raw button names.
     @Test func claudeHasItsPromptWithProgressOrElseItsPlanOptions() {
         let both = DemoData.parse(#"{"prompt":{"title":"格式？","progress":"1/2","choices":[{"label":"要点","pressed":true}]},"actions":[{"name":"要点 1","token":"t"}]}"#)
-        #expect(pendingCards(app: "claude", raw: both) == [PendingCard(kind: "choice", summary: "格式？", progress: "1/2")])
+        #expect(pendingCards(app: "claude", raw: both, catalog: AgentCatalogSnapshot.builtin) == [PendingCard(kind: "choice", summary: "格式？", progress: "1/2")])
         let bare = DemoData.parse(#"{"prompt":{},"actions":[{"label":"执行","token":"t"}]}"#)
         #expect(!claudeAsks(bare))
-        #expect(pendingCards(app: "claude", raw: bare) == [PendingCard(kind: "actions", summary: "计划与执行选项")])
-        #expect(pendingCards(app: "claude", raw: DemoData.parse(#"{"prompt":{"nav":[{"name":"Submit"}]}}"#)).map(\.kind) == ["choice"])
-        #expect(pendingCards(app: "claude", raw: [:]).isEmpty)
+        #expect(pendingCards(app: "claude", raw: bare, catalog: AgentCatalogSnapshot.builtin) == [PendingCard(kind: "actions", summary: "计划与执行选项")])
+        #expect(pendingCards(app: "claude", raw: DemoData.parse(#"{"prompt":{"nav":[{"name":"Submit"}]}}"#), catalog: AgentCatalogSnapshot.builtin).map(\.kind) == ["choice"])
+        #expect(pendingCards(app: "claude", raw: [:], catalog: AgentCatalogSnapshot.builtin).isEmpty)
     }
 
     /// Windows dev.24 writes "✓ " before a ticked option of a question that takes several, for apps that do not show
@@ -46,10 +46,10 @@ struct PendingCardTests {
 
     @Test func deepseekPutsApprovalsFirstAndCountsEveryItemOnce() {
         let raw = DemoData.parse(#"{"interactions":[{"event":"approval/request","eventId":"e1","request":{"toolName":"shell"}},{"event":"user-questions/request","eventId":"e2","request":{"callId":"c1","questions":[{"id":"q","question":"哪个目录？"}]}}],"questions":[{"callId":"c1","questions":[]}]}"#)
-        #expect(pendingCards(app: "deepseek", raw: raw) == [PendingCard(kind: "approval", summary: "批准这一步吗？ · shell", count: 2)])
+        #expect(pendingCards(app: "deepseek", raw: raw, catalog: AgentCatalogSnapshot.builtin) == [PendingCard(kind: "approval", summary: "批准这一步吗？ · shell", count: 2)])
         #expect(deepseekQuestionCards(raw).count == 1)
         #expect(deepseekQuestionEvent(raw, callId: "c1") == "e2")
-        #expect(pendingCards(app: "deepseek", raw: [:]).isEmpty)
+        #expect(pendingCards(app: "deepseek", raw: [:], catalog: AgentCatalogSnapshot.builtin).isEmpty)
     }
 
     /// The trap behind the 0.5.0 crash (10-27): in `c ? value : nil` the nil is JSONValue.null, a value `if let`
@@ -92,7 +92,7 @@ struct AnsweringTests {
         let model = await demoConversation("只读问题记录")
         let workspace = model.workspace
         let card = model.conversation.control.raw["questions"].array[0]
-        #expect(pendingCards(app: "codex", raw: model.conversation.control.raw).count == 1)
+        #expect(pendingCards(app: "codex", raw: model.conversation.control.raw, catalog: model.catalog).count == 1)
         let field = "answers:" + card["id"].string() + ":" + card["answer_revision"].string()
         workspace.edit(field, ["q1": ["方案A"]])
         await workspace.settle()
@@ -102,7 +102,7 @@ struct AnsweringTests {
         #expect(workspace.saved["pending_action"]["status"].string() == "done")
         #expect(workspace.saved["pending_action"]["route"].string() == "codex/answer")
         #expect(model.conversation.control.raw["questions"].array.first?["editable"].bool() == true)
-        #expect(pendingCards(app: "codex", raw: model.conversation.control.raw).isEmpty)
+        #expect(pendingCards(app: "codex", raw: model.conversation.control.raw, catalog: model.catalog).isEmpty)
     }
 
     @Test func claudeChoicesAreTappedOnTheComputerAndMoveTheQuestionOn() async {
@@ -113,7 +113,7 @@ struct AnsweringTests {
         #expect(model.conversation.control.raw["prompt"]["nav"].array.first?["label"].string() == "提交")
         model.workspace.action("claude/choose", ["token": "t-nav-submit"])
         await until(model)
-        #expect(pendingCards(app: "claude", raw: model.conversation.control.raw).isEmpty)
+        #expect(pendingCards(app: "claude", raw: model.conversation.control.raw, catalog: model.catalog).isEmpty)
     }
 
     /// 打开新建对话 under a Codex reply (user 10-27): the conversation it made is read, then opened.
@@ -143,7 +143,7 @@ struct AnsweringTests {
 
     @Test func aDeepSeekApprovalIsDecidedAndTheCardGoes() async {
         let model = await demoConversation("DeepSeek 批准示例")
-        #expect(pendingCards(app: "deepseek", raw: model.conversation.control.raw).first?.kind == "approval")
+        #expect(pendingCards(app: "deepseek", raw: model.conversation.control.raw, catalog: model.catalog).first?.kind == "approval")
         model.workspace.action("deepseek/approval", ["event_id": "e-approval-1", "choice": "allowed-once"])
         await until(model)
         #expect(deepseekApprovals(model.conversation.control.raw).isEmpty)

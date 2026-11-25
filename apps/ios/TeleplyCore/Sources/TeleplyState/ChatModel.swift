@@ -107,6 +107,9 @@ public final class ChatModel {
     @ObservationIgnored let now: @Sendable () -> Int64
     @ObservationIgnored var client: RelayClient?
     @ObservationIgnored var clientGeneration = -1
+    /// The assistants of the computer in use, as AppModel last read them (`/api/agents`): this model's own copy, so a
+    /// send never depends on whichever model synced the process-wide snapshot last (handoff 第二段 / 第三段).
+    @ObservationIgnored var catalog: AgentCatalogSnapshot = .builtin
     @ObservationIgnored var foreground = false
     @ObservationIgnored var synthetic = false
     @ObservationIgnored var task: Task<Void, Never>?
@@ -216,7 +219,7 @@ public final class ChatModel {
                 connection = "正在核对实时状态"
                 control.available = false
                 // A new assistant reads its state at its own address (handoff 3.4); the three keep theirs.
-                let state = try await client.control(device: key.device, app: key.app, chat: key.chat)
+                let state = try await client.control(device: key.device, app: key.app, chat: key.chat, catalog: catalog)
                 guard t == token else { return }
                 take(state, key)
                 // Recovery reads receipts only; nothing is sent again.
@@ -234,9 +237,9 @@ public final class ChatModel {
                     if key.app != "codex" {
                         // The three keep their own constants (Claude 5 s, DeepSeek 2.5 s); a new assistant uses the
                         // interval its manifest asks for (`params.refresh_ms`, handoff 3.4).
-                        let every = AgentCatalogSnapshot.current.isLegacy(key.app)
+                        let every = catalog.isLegacy(key.app)
                             ? (key.app == "claude" ? Duration.seconds(5) : Duration.milliseconds(2_500))
-                            : Duration.milliseconds(Int64(AgentCatalogSnapshot.current.info(key.app).params.refreshMs))
+                            : Duration.milliseconds(Int64(catalog.info(key.app).params.refreshMs))
                         group.addTask { [weak self] in try await self?.poll(key, client, t, every) }
                     }
                     group.addTask { [weak self] in try await self?.listen(key, client, t) }
@@ -298,7 +301,7 @@ public final class ChatModel {
         while !Task.isCancelled {
             try await pacer.wait(every)
             if pollPaused() { continue }
-            let state = try await client.control(device: key.device, app: key.app, chat: key.chat, fresh: false)
+            let state = try await client.control(device: key.device, app: key.app, chat: key.chat, fresh: false, catalog: catalog)
             if t == token { take(state, key) }
             // Claude keeps no receipts: its queued and unconfirmed sends are looked for in its record (web pollReceipts).
             if key.app == "claude" {
@@ -319,8 +322,9 @@ public final class ChatModel {
     public func refreshControl() {
         guard let key, let client else { return }
         let t = token
+        let catalog = catalog
         refreshing = Task { [weak self] in
-            guard let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat), let self, t == self.token else { return }
+            guard let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat, catalog: catalog), let self, t == self.token else { return }
             self.take(fresh, key)
         }
     }
@@ -460,8 +464,8 @@ public final class ChatModel {
         // A new assistant's send modes come from this conversation's own state (`capabilities_now` is the whole set,
         // docs §八); only a computer that does not send it falls back to the manifest. Reading the process-wide
         // catalog here made a send depend on whichever model last synced one (handoff 3.4).
-        let generic = !AgentCatalogSnapshot.current.isLegacy(key.app)
-        let modes: [String] = generic ? Self.sendModes(of: control, app: key.app) : []
+        let generic = !catalog.isLegacy(key.app)
+        let modes: [String] = generic ? Self.sendModes(of: control, app: key.app, catalog: catalog) : []
         let words = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if action == "send", !planned, submissions.contains(where: { $0.action == "send" && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ["提交中", "送达状态待确认"].contains($0.label) }) {
             error = "相同内容的原提交尚待确认，请先核对状态，不能重复发送。"
@@ -567,9 +571,9 @@ public final class ChatModel {
 
     /// The send modes a new assistant's conversation may use now: its state's `capabilities_now` (the whole set,
     /// docs §八), or its manifest's for a computer that does not send one.
-    static func sendModes(of control: Control, app: String) -> [String] {
+    static func sendModes(of control: Control, app: String, catalog: AgentCatalogSnapshot) -> [String] {
         let now = control.capabilitiesNow
-        guard now.isObject, now.has("send_modes") else { return AgentCatalogSnapshot.current.caps(app).sendModes }
+        guard now.isObject, now.has("send_modes") else { return catalog.caps(app).sendModes }
         return now["send_modes"].array.map { $0.string() }
     }
 
@@ -606,7 +610,7 @@ public final class ChatModel {
             let started = ContinuousClock.now
             let result: JSONValue
             do {
-                result = try await client.command(device: key.device, app: key.app, route: action, body: body)
+                result = try await client.command(device: key.device, app: key.app, route: action, body: body, catalog: catalog)
             } catch {
                 if action == "send" { timed("消息提交", ContinuousClock.now - started, (error as? ServiceFailure).map { "HTTP \($0.status)" } ?? "网络失败") }
                 throw error
@@ -636,7 +640,7 @@ public final class ChatModel {
                     let state = result["delivery_state"].string()
                     // A new assistant's action replies say `ok` (and `accepted` when it took it); the three keep
                     // their own reading of `accepted` (handoff 3.4).
-                    let generic = !AgentCatalogSnapshot.current.isLegacy(key.app)
+                    let generic = !catalog.isLegacy(key.app)
                     let took = result["accepted"].bool() || (generic && result["ok"].bool(or: true))
                     done.label = receiptLabel(state: state.isEmpty ? (took ? "accepted" : "unknown") : state, result: result, action: action)
                     if action == "send", !result["command"].string().isEmpty {
@@ -652,7 +656,7 @@ public final class ChatModel {
                 if changed { done.body = jsonText(.object(notes)) }
                 await save(done, synthetic)
             }
-            if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat), binding == token, foreground, self.key == key {
+            if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat, catalog: catalog), binding == token, foreground, self.key == key {
                 take(fresh, key)
             }
         } catch {
@@ -748,18 +752,19 @@ public final class ChatModel {
             }
             return
         }
-        let response = try await client.receipt(device: record.device, app: record.app, chat: record.chat, request: record.request)
+        let response = try await client.receipt(device: record.device, app: record.app, chat: record.chat, request: record.request,
+                                                catalog: catalog)
         let echoed = response["request_id"].string()
         guard echoed == record.request || echoed.isEmpty && response["state"].string() == "unknown" else { throw ReadFailure("回执身份不匹配") }
         // Codex and DeepSeek keep what they found under `result`; a new assistant's own receipt puts `delivered`,
         // `queued` and `stage` at the top (handoff 3.4).
         let detail = response["result"].isObject ? response["result"] : response
         let state = response["state"].string()
-        var label = AgentCatalogSnapshot.current.isLegacy(record.app)
+        var label = catalog.isLegacy(record.app)
             ? receiptLabel(state: state, result: response["result"], action: record.action)
             : agentReceiptLabel(state: state, result: detail, action: record.action)
         if record.action == "stop" {
-            let state = try await client.control(device: record.device, app: record.app, chat: record.chat)
+            let state = try await client.control(device: record.device, app: record.app, chat: record.chat, catalog: catalog)
             switch state.turns[record.turn] {
             case "interrupted": label = "已停止"
             case "completed": label = "该轮已完成"

@@ -31,6 +31,8 @@ public final class NewChatJobs {
     @ObservationIgnored let now: @Sendable () -> Int64
     @ObservationIgnored var owner: ChatKey?
     @ObservationIgnored var client: RelayClient?
+    /// The assistants of the computer in use, as AppModel last read them: this model's own copy (handoff 第三段).
+    @ObservationIgnored var catalog: AgentCatalogSnapshot = .builtin
     @ObservationIgnored var synthetic = false
     @ObservationIgnored var foreground = false
     @ObservationIgnored var loading: Task<Void, Never>?
@@ -110,10 +112,10 @@ public final class NewChatJobs {
 
     /// The first message's request: a new assistant at its own create address (handoff 3.4), the three at chat/new.
     func send(_ job: NewJob, owner: ChatKey, _ client: RelayClient) async throws -> JSONValue {
-        guard !AgentCatalogSnapshot.current.isLegacy(job.app) else {
+        guard !catalog.isLegacy(job.app) else {
             return try await client.detail(device: owner.device, route: "chat/new", body: job.body)
         }
-        return try await client.agentCreate(device: owner.device, agent: job.app, body: job.body)
+        return try await client.agentCreate(device: owner.device, agent: job.app, body: job.body, catalog: catalog)
     }
 
     /// Sends a first message once and follows it (web send).
@@ -152,11 +154,12 @@ public final class NewChatJobs {
         timers[rid]?.cancel()
         timers[rid] = nil
         checking.insert(rid)
+        let catalog = catalog
         working[rid] = Task { [weak self] in
             var again: Duration = .milliseconds(500)
             var done = false
             do {
-                let reply = AgentCatalogSnapshot.current.isLegacy(job.app)
+                let reply = catalog.isLegacy(job.app)
                     ? try await client.detail(device: owner.device, route: "chat/new/state", query: [("request_id", rid)])
                     : try await client.agentCreateState(device: owner.device, agent: job.app, request: rid)
                 guard let self, self.owner == owner, var now = self.current(rid) else {
@@ -229,6 +232,7 @@ public final class NewChatJobs {
         going.pending = .object(fields)
         going.note = ""
         put(going)
+        let catalog = catalog
         working[rid] = Task { [weak self] in
             let pending: JSONValue
             let started = ContinuousClock.now
@@ -236,7 +240,7 @@ public final class NewChatJobs {
             do {
                 // A new assistant's create is idempotent per request id (docs §四.3), so the same request is simply
                 // posted again; the three keep their own retry.
-                pending = !AgentCatalogSnapshot.current.isLegacy(job.app) || previous["can_submit"].bool()
+                pending = !catalog.isLegacy(job.app) || previous["can_submit"].bool()
                     ? try await self?.send(job, owner: owner, client) ?? [:]
                     : try await client.detail(device: owner.device, route: "chat/new/retry", body: ["request_id": .string(rid)])
                 self?.timed(label, ContinuousClock.now - started, speedOutcome(pending))
