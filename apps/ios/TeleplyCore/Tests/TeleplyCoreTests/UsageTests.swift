@@ -91,6 +91,54 @@ struct UsageTests {
         #expect(usage.claude.minimized)
     }
 
+    // MARK: Other assistants (protocol 2 `agents`)
+
+    @Test func newAssistantsCarryTheirOwnWindowsAndLabelFallback() throws {
+        let json = try JSONValue.parse(Data(#"""
+        {"codex":{"available":false},"claude":{"available":false},"now":1794882122354,
+         "agents":{
+           "gemini":{"available":true,"source":"live","as_of":1794882122000,
+             "windows":[
+               {"kind":"5h","label":"Gemini 模型 · 5 小时","used_percent":150,"resets_at":1795006481},
+               {"kind":"weekly","label":"Gemini 模型 · 每周","used_percent":-4,"resets_at":null,"resets_text":"周五 10:00"}
+             ]},
+           "Bad Id":{"available":true,"windows":[{"kind":"5h","name":"不该出现"}]},
+           "not usage":{"available":true}
+         }}
+        """#.utf8))
+        let usage = UsageReport.parse(json)
+        #expect(usage.agents["Bad Id"] == nil)
+        #expect(usage.agents["not usage"] == nil)
+        let gemini = try #require(usage.agents["gemini"])
+        #expect(gemini.id == "gemini")
+        #expect(gemini.available && gemini.source == "live" && gemini.asOf == 1_794_882_122_000)
+        #expect(gemini.windows.map(\.name) == ["Gemini 模型 · 5 小时", "Gemini 模型 · 每周"])
+        #expect(gemini.windows.map(\.usedPercent) == [100, 0])
+        #expect(gemini.windows[0].resetsAt == 1_795_006_481)
+        #expect(gemini.windows[1].resetsAt == nil)
+        #expect(gemini.windows[1].resetsText == "周五 10:00")
+    }
+
+    @Test func newAssistantsComeInTheCatalogsOrderAndSayWhyTheyCannotBeRead() {
+        let catalog = AgentCatalogSnapshot.fromServer([
+            AgentInfo(id: "zeta", order: 20, legacy: false, caps: AgentCapabilities(usage: true)),
+            AgentInfo(id: "alpha", order: 10, legacy: false, caps: AgentCapabilities(usage: true)),
+            AgentInfo(id: "old", order: 15, legacy: true, caps: AgentCapabilities(usage: true)),
+            AgentInfo(id: "quiet", order: 30, legacy: false, caps: AgentCapabilities(usage: false)),
+        ])
+        var report = UsageReport(now: now)
+        report.agents = ["zeta": AgentUsage(id: "zeta", available: true, windows: [weekly(nil)])]
+        #expect(agentUsageOrder(report, catalog: catalog) == ["alpha", "zeta"])
+        #expect(agentUsageLine(AgentUsage(id: "gamma"), name: "Antigravity") == "读不到 Antigravity 的用量")
+        #expect(agentUsageLine(AgentUsage(id: "gamma", reason: "Antigravity 没装"), name: "Antigravity") == "Antigravity 没装")
+        #expect(agentWindowLine(weekly(nil), source: "live", nowMs: now, zone: zone) == "")
+        var withText = weekly(nil)
+        withText.resetsText = "周五 10:00"
+        #expect(agentWindowLine(withText, source: "live", nowMs: now, zone: zone) == "周五 10:00 重置")
+        #expect(agentWindowLine(weekly(seconds(11, 17, 13, 34)), source: "live", nowMs: now, zone: zone)
+                == "今天 13:34 重置（还有 3 小时 12 分）")
+    }
+
     // MARK: When it resets
 
     @Test func todayTomorrowAnotherDayOrAlreadyGone() {

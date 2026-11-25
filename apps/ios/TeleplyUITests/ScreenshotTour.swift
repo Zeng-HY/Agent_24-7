@@ -73,6 +73,18 @@ final class ScreenshotTour: XCTestCase {
             for _ in 0..<3 where !card.isHittable { app.swipeUp() }
             snap(app, page: "agents-conversation", variant: variant)
         }
+        // 0.9.1: a new assistant's 用量, from its own `agents.testing` section in /api/usage.
+        let menu = app.buttons["对话菜单"].firstMatch
+        if menu.waitForExistence(timeout: 5) {
+            menu.tap()
+            let usage = app.buttons["用量"].firstMatch
+            if usage.waitForExistence(timeout: 5) {
+                usage.tap()
+                sleep(1)
+                snap(app, page: "agents-usage", variant: variant)
+                app.swipeDown()
+            }
+        }
         back(app)
 
         // 新建对话 with the fake helper picked: its project row comes from its own /options.

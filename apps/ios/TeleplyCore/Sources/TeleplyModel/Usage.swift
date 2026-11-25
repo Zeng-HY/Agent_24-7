@@ -85,25 +85,66 @@ public struct ClaudeUsage: Sendable, Equatable {
     }
 }
 
+/// Usage of any assistant reported under protocol 2 `agents.<id>` (§3.3): [windows] are the limits it gave, [text] is
+/// its own words when it has no windows to read.
+public struct AgentUsage: Sendable, Equatable {
+    public var id: String
+    public var available: Bool
+    public var reason: String
+    public var source: String
+    public var asOf: Int64
+    public var text: String
+    public var windows: [UsageWindow]
+
+    public init(id: String, available: Bool = false, reason: String = "", source: String = "", asOf: Int64 = 0,
+                text: String = "", windows: [UsageWindow] = []) {
+        self.id = id
+        self.available = available
+        self.reason = reason
+        self.source = source
+        self.asOf = asOf
+        self.text = text
+        self.windows = windows
+    }
+}
+
 /// GET /api/usage whole; [now] is the computer's clock, so "a minute ago" does not depend on the phone's.
 public struct UsageReport: Sendable, Equatable {
     public var codex: CodexUsage
     public var claude: ClaudeUsage
     public var now: Int64
+    /// Protocol 2 `agents.<id>`, by id, in whatever order the computer sent them; the page orders them by its catalog.
+    public var agents: [String: AgentUsage]
 
-    public init(codex: CodexUsage = CodexUsage(), claude: ClaudeUsage = ClaudeUsage(), now: Int64 = 0) {
+    public init(codex: CodexUsage = CodexUsage(), claude: ClaudeUsage = ClaudeUsage(), now: Int64 = 0,
+                agents: [String: AgentUsage] = [:]) {
         self.codex = codex
         self.claude = claude
         self.now = now
+        self.agents = agents
     }
 }
 
 // MARK: - Reading what the computer sent
 
 public extension UsageReport {
-    /// The answer of GET /api/usage (Android parseUsage): a missing part reads as an empty one.
+    /// The answer of GET /api/usage (Android parseUsage): a missing part reads as an empty one. An `agents` key whose id
+    /// is not a legal assistant id is dropped, as Android does.
     static func parse(_ json: JSONValue) -> UsageReport {
-        UsageReport(codex: CodexUsage(json["codex"]), claude: ClaudeUsage(json["claude"]), now: json["now"].int64())
+        var agents: [String: AgentUsage] = [:]
+        for (id, value) in json["agents"].object where isValidAgentId(id) && value.isObject {
+            agents[id] = AgentUsage(id: id, json: value)
+        }
+        return UsageReport(codex: CodexUsage(json["codex"]), claude: ClaudeUsage(json["claude"]),
+                           now: json["now"].int64(), agents: agents)
+    }
+}
+
+public extension AgentUsage {
+    init(id: String, json: JSONValue) {
+        self.init(id: id, available: json["available"].bool(), reason: json["reason"].string(),
+                  source: json["source"].string(), asOf: json["as_of"].int64(), text: json["text"].string(),
+                  windows: usageWindows(json["windows"]))
     }
 }
 
@@ -142,9 +183,10 @@ public extension ClaudeUsage {
 private func usageWindows(_ value: JSONValue) -> [UsageWindow] {
     value.array.compactMap { item in
         guard item.isObject else { return nil }
+        let name = item["name"].string()
         return UsageWindow(
             kind: item["kind"].string(),
-            name: item["name"].string(),
+            name: name.isEmpty ? item["label"].string() : name,
             usedPercent: min(100, max(0, item["used_percent"].int())),
             resetsAt: item.has("resets_at") ? item["resets_at"].int64() : nil,
             resetsText: item["resets_text"].string()
@@ -161,6 +203,28 @@ private func usageCredits(_ value: JSONValue) -> [ResetCredit] {
             expiresAt: item.has("expires_at") ? item["expires_at"].int64() : nil
         )
     }
+}
+
+// MARK: - A new assistant's section
+
+/// The new assistants to show, in the catalog's order: the ones that are not the old three and whose manifest offers
+/// `usage` (§3.3). The three keep their own sections above.
+public func agentUsageOrder(_ report: UsageReport, catalog: AgentCatalogSnapshot) -> [String] {
+    catalog.order.filter { id in
+        !catalog.isLegacy(id) && catalog.can(id) { caps in caps.usage }
+    }
+}
+
+/// What a new assistant's section says when it cannot be read: the computer's own reason, else a sentence with its name.
+public func agentUsageLine(_ agent: AgentUsage, name: String) -> String {
+    if agent.available { return "" }
+    return agent.reason.isEmpty ? "读不到 \(name) 的用量" : agent.reason
+}
+
+/// One window of a new assistant: the reset line from `resets_at` when it has one, else the computer's `resets_text`.
+public func agentWindowLine(_ window: UsageWindow, source: String, nowMs: Int64, zone: TimeZone) -> String {
+    if window.resetsAt != nil { return resetLine(window, source: source, nowMs: nowMs, zone: zone) }
+    return window.resetsText.isEmpty ? "" : window.resetsText + " 重置"
 }
 
 // MARK: - When it resets

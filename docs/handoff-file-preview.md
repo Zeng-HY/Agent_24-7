@@ -489,3 +489,11 @@ DeepSeek 工作区 `F:\Android-Dev\work\20261101-island-duplicates`，每条线�
 - **演示**：文件预览示例加了带 `line` 的 R、300 KB 日志、带引号内换行的 CSV、2.4 KB MP3、2.3 KB MP4、zip 目录、带同目录图片的 Markdown、带 CSS 的 HTML；`DemoTransport` 补了 `file/text`、`file/zip`、`file/resource` 和这些文件的下载，仍只在 `-TeleplyDemoFiles` 下出现。
 - **测试**：新增 `TextViewerRulesTests`（CSV 引号/引号内换行/5000 行、代码页地址、协议处理器的清单与 `..`、zip 排序/上限、播放器地址和 Cookie、老电脑/新电脑资源路线）；`AttachmentTests` 补了资源接口新路线、老页面和 404 退回；`AnswerFilesTests` 更新了演示文件条的期望。
 - **没验到的**：本机没有 Swift，第三段 App/测试都还没编译过；代码页的 WKWebView 私有协议、播放器 Cookie、zip/资源接口只在本地示例上准备，等 Codemagic 编译和真机/截图。
+
+#### 第四段（D）：新助手的用量
+
+- **解析**：`Usage.swift` 加 `AgentUsage`（id、available、reason、source、`as_of`、text、windows）；`UsageReport.agents` 读 `/api/usage` 的 `agents.<id>`，不合法 id 丢掉；窗口的 `name` 没有就读 `label`，`used_percent` 夹在 0–100，`resets_at` 为 `null` 就是 nil，`resets_text` 保留。Codex、Claude 的解析没改，原有 `UsageTests` 期望原样通过。
+- **设置页**：`UsageView` 在 Codex、Claude 后按说明书顺序给每个 `legacy=false` 且开了 `usage` 的助手加一节，标题是说明书里的名字；读不到显示电脑给的原因，没有原因写「读不到 X 的用量」；窗口用现有那一行，重置时间按 `report.now` 算，没有 `resets_at` 用 `resets_text`。
+- **入口**：`AppModel.showsUsage` 对新助手改回按 `can("usage")`；三家仍是 `app != "deepseek"`。设置页只有三家时照旧写「Codex 和 Claude 的用量」，有别的助手报用量时改「用量」。
+- **演示和测试**：`-TeleplyDemoAgents` 的 `/api/usage` 带 `agents.testing` 两个窗口；截图组加一张 `agents-usage`；`UsageTests` 加了解析、排序、读不到原因、重置行；`AgentUnifiedFlowTests` 的两条 `showsUsage` 期望改成按能力位（正常状态 true，全关状态 false）。
+- **README**：最上面加 0.9.1 一节（文件预览和用量、真机验收清单，构建号和 Codemagic 编号留空）；0.9.0 的用量那条改成有「用量」、能看到 Gemini/Claude 和 GPT 两组。

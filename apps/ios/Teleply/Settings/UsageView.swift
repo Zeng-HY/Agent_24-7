@@ -27,6 +27,9 @@ struct UsageView: View {
             statusRows
             codexSection(report.codex, now: report.now)
             claudeSection(report.claude)
+            ForEach(agentUsageOrder(report, catalog: model.catalog), id: \.self) { id in
+                agentSection(id: id, agent: report.agents[id] ?? AgentUsage(id: id), now: report.now)
+            }
         }
         .scrollContentBackground(.hidden)
         .background(Palette.page)
@@ -175,6 +178,28 @@ struct UsageView: View {
                     .captionFont()
                     .foregroundStyle(Palette.muted)
             }
+        }
+        .listRowBackground(Palette.controlFill)
+    }
+
+    /// A new assistant's limits (§3.3): its catalog name, the windows the computer gave, and its own reason when it
+    /// could not be read. The old three keep the sections above exactly as before.
+    @ViewBuilder private func agentSection(id: String, agent: AgentUsage, now: Int64) -> some View {
+        let name = model.catalog.name(id)
+        Section {
+            if !agent.available {
+                Text(agentUsageLine(agent, name: name))
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+            } else if agent.windows.isEmpty {
+                if !agent.text.isEmpty { Text(agent.text) }
+            } else {
+                ForEach(Array(agent.windows.enumerated()), id: \.offset) { _, window in
+                    windowRow(window, line: agentWindowLine(window, source: agent.source, nowMs: now, zone: zone))
+                }
+            }
+        } header: {
+            Text(name)
         }
         .listRowBackground(Palette.controlFill)
     }

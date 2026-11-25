@@ -1,5 +1,31 @@
 # 遥应 Teleply iOS 版（原生 SwiftUI；0.9.0 构建 34 已传 TestFlight；0.8.0 构建 33 已传 TestFlight；0.7.6 构建 32 已传 TestFlight；0.7.5 构建 31 已传 TestFlight；0.7.4 构建 30 滚动诊断测试版已传 TestFlight；0.7.4 构建 29 已传 TestFlight；0.7.3 构建 28 已传 TestFlight；0.7.2 构建 27 已传 TestFlight；0.7.1 构建 26 已传 TestFlight；0.7.0 构建 25 已传 TestFlight；0.6.6 构建 24 已传 TestFlight；0.6.5 构建 23 已传 TestFlight；0.6.0 灵动岛）
 
+## 0.9.1：答案里的文件预览，新助手的用量（11-25，构建号与 Codemagic 编号待填）
+
+- **这一版是什么**：0.9.0（34）之后两条线合在一起——答案里的文件预览（设计 `docs/handoff-file-preview.md`，iOS 分三段做完），和新助手的用量显示。版本号由发布前改；这里先留构建号和 Codemagic 编号。
+- **消息里的文件**：回答带 `files` 时，消息里的图直接画出来；文件条按 `id` 去重、最多 8 个、多了「还有 N 个」；链接对不上时跟灰色短说明，点开是完整原因；`code`/`path` 文件的字也能点开。老电脑（没有 `files`）照 0.9.0。
+- **看图页**：点消息里的图或文件条的图片卡进入，全屏、左右滑看同一条回答的图、顶上「2/5」；双指 1–8×、双击 1×/2.5×，放大时左右拖只移图。先 1280 缩略图（大图/GIF 2048），≤30 MB 换原图；GIF 会动；SVG 放大超过 2 倍换 4096；PDF 从适合宽度到 3 倍、右下角页码；⋯ 可保存、分享、用其他应用打开、在文件页打开。
+- **代码页**：`code`/`text` 文件用和安卓逐字节相同的 highlight.js 11.12.0 页面（行号、查找、复制、跳行、深浅色、200 KB 不搞高亮、截断说明）；只读 App 内文件和这一份文字，不联网、无桥。
+- **表格和压缩包**：`table` 文件按 RFC 4180 画表，首行固定、横向滚动、最多 5000 行，可「查看原文」；`.zip` 列出目录（最多 2000 项、不解压），7z/rar 显示文件卡。
+- **音视频**：系统播放器边下边播，带登录 Cookie 和协议 2；放不了换文件卡。
+- **附属资源**：HTML 和 Markdown 里同目录的图片/样式走 `/api/file/resource`，老电脑或 404 退回原来的文件列表；Markdown 有阅读视图/源码切换。
+- **缓存**：缩略图 200 MB、原文件 500 MB，都按全部电脑合计、最久没用先删；退出登录和移除电脑时清掉。
+- **用量**：协议 2 `/api/usage` 的 `agents.<id>` 读出来了；`legacy=false` 且说明书开 `usage` 的助手，在设置「用量」页和它的对话 ⋯ 菜单里都能看。Antigravity 会显示 Gemini（5 小时/每周）和 Claude 与 GPT（5 小时/每周）两组额度。Codex、Claude 和 DeepSeek 照旧。
+- **测试**：新增/补了文件预览与用量的纯规则测试、缓存测试、资源路线测试；当前测试数与 Codemagic 结果待填。
+- **没验到的**：这台电脑没有 Swift，代码未在本机编译；真机上的看图手势、GIF、PDF 页码、代码页、播放器和 Cookie 需要按下面的清单验。
+
+### 留给你在真机上验（0.9.1）
+
+1. 新电脑的一条回答：图直接画在消息里，文件条卡片能点开文件页；点图进入看图页，左右滑、缩放、双击、放大时拖图不翻页；GIF 会动。
+2. 看图页的 SVG 放大到 2 倍以上变清楚；PDF 能缩放到 3 倍，右下角页码跟着翻；⋯ 的保存/分享/用其他应用打开/在文件页打开。
+3. 代码文件：行号、查找、复制、跳行、深浅色；超过 200 KB 的日志不搞高亮且说明截断；不联网。
+4. 表格：表头固定、横向滚动、引号里换行的格子正确、5000 行截断说明；「查看原文」能打开。
+5. 音频、视频：能播放、暂停、拖进度；放不了时出现文件卡和「用其他应用打开」。
+6. zip：文件夹在前、按路径排、显示大小和本地时间；7z/rar 显示文件卡。
+7. HTML 和 Markdown：同目录的图片/样式能显示；老电脑照 0.9.0。
+8. 连 Antigravity（电脑端 dev.54 或以后）：设置「用量」和对话 ⋯ 菜单里都有「用量」，能看到 Gemini、Claude 和 GPT 两组额度；读不到时显示电脑给的原因。
+9. 退出登录、移除一台电脑后，再打开文件不会用到旧缓存。
+
 ## 0.9.0：iOS 按说明书显示助手，另带语音停顿修复（11-25，构建 34 已传 TestFlight）
 
 - 构建 34（Codemagic `6b064dd925fe59234ec05ce9`，6 分钟，`UPLOAD SUCCEEDED`），从 `ipad-adapt` 分支（`d0adcfc`）打；版本 0.9.0，Delivery UUID `aaef3a2b-0db4-4f05-83fa-300e37397886`。打包前 `TeleplyCore` 344 项测试（43 个套件）全过。只进内部测试，没有提交审核。
@@ -13,7 +39,7 @@
 - **动作**：`legacy=false` 的助手走统一地址——控制态 `GET /api/agents/<id>/state`（按 `params.refresh_ms` 轮询、`params.state_timeout_s` 超时）、`POST …/send`（`intent` 按 `send_modes`，在跑也照发、由电脑排队）、`stop`、`queue`、`answer`、`GET …/receipt`（「已排队 / 已送达」）、`open`、`GET …/options` + `POST …/create` + `GET …/create/state`、`POST …/upload`（张数/大小按 `params`）。控制态的 `capabilities_now` 说了算，逐键收窄（false 不能变 true、列表取交集、没写的键等于说明书）。通用卡片（`generic.v1`）：标题、等宽 detail（超过 12 行折叠）、单选/多选、自由填写、密码框、批准卡点选项即提交；按 `approve`/`answer` 此刻能力灰掉并显示电脑给的原因，`expires_at` 为 0 就一直等。
 - **三家不变**：Codex / Claude / DeepSeek 的路由、请求体、控制态、卡片、按钮、颜色、图标、顺序、轮询间隔（5 秒 / 2.5 秒）都没动；按钮是否显示只在 `legacy=false` 时才读能力位。
 - **通知和岛**：推送 `teleply` 里可选的 `n`/`k`/`m`（助手名字、颜色、图标 key）读出来；`IslandAttributes`/`IslandIdentity`/`IslandPeer` 加可选字段，`IslandWords`/`IslandPalette`/`IslandMark` 先用它、没有就通用。App 自己在手机上开岛时（新建对话、发送之后），新助手的名字和颜色从说明书填进去；点新助手的通知能打开它的对话。三家的岛一点不变。
-- **用量**：0.9.0 里新助手的对话菜单**不显示「用量」**（电脑端 dev.54 即使把 Antigravity 的 `usage` 打开也不显示：它的用量区块下一版再加，现在点进去只有 Codex 和 Claude）；`UsageView` 三家原样。
+- **用量**：新助手的对话菜单**有「用量」**，能看到 Gemini、Claude 和 GPT 两组额度（0.9.1 起；电脑端 dev.54 起在 `/api/usage` 的 `agents` 里给）；`UsageView` 三家原样。
 - **演示和测试**：演示里加了假助手 `testing`（显示名「测试助手」，通用外观），只在启动参数带 `-TeleplyDemoAgents` 时出现；它的统一地址全都有（状态+一张通用批准卡、发送回执、停止、回答、新建三步、上传）。`TeleplyCore` 338 项测试（42 个套件）全过。
 - **验证**：Codemagic `ios-native-check` compile：第一段 `6b062b97cc7083caf3b8dd25`（312 项）通过；第二段 `6b06349dee9118a63e524d54`（334 项，`Build Succeeded`，App 本体第一次编译成功）；第三段 `6b063ade6f7fca874990e8d2`（338 项，`Build Succeeded`）。截图 `6b0643ca0bfd02bcb68fbca7`（iPhone 17 Pro Max + iPad mini，iOS 26.5）：338 项测试全过，iPhone 巡览 22 组全过；iPad 的 `testIPadTour` 停在「处理过程 could not be reached」，0.8.0 的代码（`2aafa0e`，`6b06385acce02d72bcad2ca9`）也一样，不是这次的改动。和 0.8.0 的 157 张同名截图逐像素比：86 张完全一样，71 张的差别都是滚动位置、运行计时和按当天时间算的日期，三家的名字、颜色、图标、卡片没有变化；多出 6 张假助手的截图。之前几轮修过的编译错：原始字符串里的 `"#`（`6b062a17`）、测试里 `inlineCards` 的作用域和可选链（`6b0630d3`）、DeepSeek 断言和「发送被全局说明书拦住」（`6b06328` / `6b06349d`）。
 - **截图**：`ScreenshotTour` 原有各组没改，仍和 0.8.0 逐张对比；新加一组假助手的页面，只在 `-TeleplyDemoAgents` 下跑：列表里的测试助手、它的对话（带通用卡片）、新建面板选中测试助手。只跑这一组：`codemagic.ps1 -Mode shots -Only "testAgentsLight testAgentsDark"`。
@@ -25,7 +51,7 @@
 3. 通知和锁屏卡片：Antigravity 的通知能打开它的对话；岛上的名字和颜色正确；三家的岛和现在一样。
 4. 老电脑（没有 `/api/agents`）：只显示三家，不报错，功能照旧。
 5. 把 Antigravity 的电脑端应用关掉：发送键变灰并显示原因；打开后恢复。
-6. Antigravity 对话的 ⋯ 菜单里没有「用量」（电脑端 dev.54 即使开了 `usage` 也不显示；新助手的用量区块下一版再加）。
+6. Antigravity 对话的 ⋯ 菜单里有「用量」，能看到 Gemini、Claude 和 GPT 两组额度（0.9.1 起；读不到时显示电脑给的原因）。
 7. 语音输入（手机识别）：说一段，停两三秒再接着说，前面的字还在，按 ✓ 后输入框里是全文。
 
 ## 语音输入停顿后，前面的字不再消失（11-24，`voice-keep-text` 分支，从 `ipad-adapt` 开；0.9.0 起带上）

@@ -16,6 +16,13 @@ struct SettingsView: View {
     /// Teleply's privacy policy, on its website (also linked under the web account page).
     static let privacyPolicy = URL(string: "https://pocketagentdesk.com/privacy")!
 
+    /// 用量's row: the old three alone keep the old words; another assistant that offers `usage` means the page also
+    /// has its section, so the row just says 用量.
+    private var usageTitle: String {
+        let others = model.catalog.agents.contains { !$0.legacy && $0.caps.usage }
+        return others ? "用量" : "Codex 和 Claude 的用量"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -26,7 +33,7 @@ struct SettingsView: View {
                     .listRowBackground(Palette.controlFill)
                     // 11-17: Codex's and Claude's limits and when each resets, and one Codex reset from the phone.
                     Section("用量") {
-                        NavigationLink("Codex 和 Claude 的用量") { UsageView(model: model) }
+                        NavigationLink(usageTitle) { UsageView(model: model) }
                     }
                     .listRowBackground(Palette.controlFill)
                 }

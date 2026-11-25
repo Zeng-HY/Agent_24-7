@@ -562,10 +562,11 @@ public final class DemoWorld: Sendable {
 
     // MARK: 用量 (11-17; Android FixtureWorld.usage)
 
-    /// Codex read live with one reset credit, and Claude's one limit from its window.
+    /// Codex read live with one reset credit, Claude's one limit from its window, and — only when the fake helper is
+    /// offered — its two windows under protocol 2 `agents.testing`.
     func usage() -> JSONValue {
         let used = state.withLock { $0.codexResetUsed }
-        return [
+        var report: [String: JSONValue] = [
             "codex": codexUsage(used: used),
             "claude": [
                 "available": true, "source": "window", "as_of": .number(Double(DemoData.now)),
@@ -578,6 +579,18 @@ public final class DemoWorld: Sendable {
             ],
             "now": .number(Double(DemoData.now)),
         ]
+        if testingAgent {
+            report["agents"] = .object(["testing": .object([
+                "available": true, "source": "live", "as_of": .number(Double(DemoData.now)),
+                "windows": .array([
+                    .object(["kind": "5h", "name": "测试助手 · 5 小时", "used_percent": .number(35),
+                             "resets_at": .number(Double(DemoData.now / 1000 + 3_600)), "resets_text": ""]),
+                    .object(["kind": "weekly", "name": "测试助手 · 每周", "used_percent": .number(70),
+                             "resets_at": .null, "resets_text": "周五 10:00"]),
+                ]),
+            ])])
+        }
+        return .object(report)
     }
 
     private func codexUsage(used: Bool) -> JSONValue {
