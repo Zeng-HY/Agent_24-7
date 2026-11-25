@@ -90,7 +90,7 @@ struct TextViewerRulesTests {
                                  now: Date(timeIntervalSince1970: 1_000_000_000))
         #expect(cookie?.name == "__Host-ar_account")
         #expect(cookie?.value == "abc")
-        #expect(cookie?.domain?.hasSuffix("app.pocketagentdesk.com") == true)
+        #expect(cookie?.domain.hasSuffix("app.pocketagentdesk.com") == true)
         #expect(cookie?.path == "/")
         #expect(cookie?.isSecure == true)
         #expect(mediaCookie(origin: .default, cookie: SessionCookie(value: "abc", expires: Date(timeIntervalSince1970: 1_000)),
