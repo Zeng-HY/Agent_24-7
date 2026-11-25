@@ -457,10 +457,11 @@ public final class ChatModel {
     func submit(_ action: String, queue: Bool = false, message: String = "", promote: Bool = false, plan: String? = nil) {
         guard let key, let client else { return }
         let planned = plan != nil
-        // A new assistant's capabilities as this conversation's state narrows them (handoff 3.4): an app that is not
-        // open offers no send mode, so nothing goes out.
+        // A new assistant's send modes come from this conversation's own state (`capabilities_now` is the whole set,
+        // docs §八); only a computer that does not send it falls back to the manifest. Reading the process-wide
+        // catalog here made a send depend on whichever model last synced one (handoff 3.4).
         let generic = !AgentCatalogSnapshot.current.isLegacy(key.app)
-        let caps = generic ? AgentCatalogSnapshot.current.caps(key.app).narrowed(by: control.capabilitiesNow) : AgentCapabilities()
+        let modes: [String] = generic ? Self.sendModes(of: control, app: key.app) : []
         let words = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if action == "send", !planned, submissions.contains(where: { $0.action == "send" && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ["提交中", "送达状态待确认"].contains($0.label) }) {
             error = "相同内容的原提交尚待确认，请先核对状态，不能重复发送。"
@@ -477,12 +478,12 @@ public final class ChatModel {
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
         let reachable = control.available || action == "send" && !planned && !promote && sendsWhileAway(key.app)
         guard foreground, ready, reachable, !inFlight.contains(key) else { return }
-        if generic && action == "send" && !planned && caps.sendModes.isEmpty {
+        if generic && action == "send" && !planned && modes.isEmpty {
             let note = control.note("send")
             error = note.isEmpty ? "这个对话现在不能从手机发消息，请在电脑上处理" : note
             return
         }
-        if action == "send" && !planned && (words.isEmpty && !hasExtras || words.count > 20_000 || queue && !(generic ? caps.sendModes.contains("queue") : control.queueAvailable))
+        if action == "send" && !planned && (words.isEmpty && !hasExtras || words.count > 20_000 || queue && !(generic ? modes.contains("queue") : control.queueAvailable))
             || action == "stop" && !control.running || promote && !control.running || planned && (key.app != "codex" || control.running) {
             return
         }
@@ -512,7 +513,6 @@ public final class ChatModel {
                 if generic {
                     // `intent` follows the send modes this conversation may use now (Antigravity offers "send" only):
                     // a running turn takes a message queued, and a send while it runs is still just "send".
-                    let modes = caps.sendModes
                     let intent = queue && modes.contains("queue") ? "queue"
                         : control.running && modes.contains("steer") ? "steer" : "send"
                     body["intent"] = .string(intent)
@@ -563,6 +563,14 @@ public final class ChatModel {
             self?.sends[rid] = nil
             give()
         }
+    }
+
+    /// The send modes a new assistant's conversation may use now: its state's `capabilities_now` (the whole set,
+    /// docs §八), or its manifest's for a computer that does not send one.
+    static func sendModes(of control: Control, app: String) -> [String] {
+        let now = control.capabilitiesNow
+        guard now.isObject, now.has("send_modes") else { return AgentCatalogSnapshot.current.caps(app).sendModes }
+        return now["send_modes"].array.map { $0.string() }
     }
 
     /// Keeps the copy first, then posts once; never posts again by itself (B03, B04). Cut off (no background time

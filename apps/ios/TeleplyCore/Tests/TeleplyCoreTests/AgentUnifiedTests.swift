@@ -87,7 +87,10 @@ struct AgentUnifiedTests {
         let sent = await transport.log.items
         #expect(sent.map(\.url.path) == ["/d/\(device)/api/codex/send", "/d/\(device)/api/deepseek/send", "/d/\(device)/api/chat/send"])
         let deepseek = try JSONValue.parse(try #require(sent[1].body))
-        #expect(deepseek["app"].string() == "deepseek" && deepseek["intent"].string() == "auto")  // DeepSeek's own fields
+        // DeepSeek's own fields as its branch sends them: the same body, `intent` mapped (auto → steer), no `app`.
+        #expect(deepseek["id"].string() == "c1")
+        #expect(deepseek["intent"].string() == "steer")
+        #expect(deepseek["app"].isNull)
     }
 
     @Test func aReceiptAtItsOwnAddressIsReadAsDelivered() async throws {

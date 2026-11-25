@@ -69,6 +69,10 @@ struct AgentUnifiedFlowTests {
         let (model, watched) = makeModel(DemoWorld(testingAgent: true))
         await enterA(model)
         try await open(model, "test-waiting")
+        // The conversation's own state says a send is possible now — that is what the send path reads (not the
+        // process-wide catalog).
+        #expect(model.conversation.control.capabilitiesNow["send_modes"].array.contains { $0.string() == "send" })
+        #expect(model.offersSend("testing"))
         model.conversation.edit("跑一下测试")
         model.conversation.send()
         await model.conversation.settleSends()
@@ -181,6 +185,14 @@ struct AgentUnifiedFlowTests {
     }
 
     // MARK: The three's buttons do not follow capabilities_now (handoff 3.4, second review)
+
+    @Test func aSendModeComesFromTheConversationState() {
+        let state = parseControl(["available": true, "capabilities_now": ["send_modes": ["send", "steer"]]])
+        #expect(ChatModel.sendModes(of: state, app: "some-new-assistant") == ["send", "steer"])
+        // The state wins even when it offers nothing: that is the computer's word now.
+        let closed = parseControl(["available": true, "capabilities_now": ["send_modes": []]])
+        #expect(ChatModel.sendModes(of: closed, app: "some-new-assistant").isEmpty)
+    }
 
     @Test func theThreeKeepEveryButtonWhateverTheStateSays() async throws {
         let model = makeAgentModel(AllOffTransport(world: DemoWorld(), paths: ["/api/codex/state"]))

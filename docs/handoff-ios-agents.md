@@ -308,4 +308,18 @@
 
 **审后最可能编不过的地方**：`AppModel+List.swift` 里的八个小函数（`offers*`/`showsUsage`/`allows*`，都带默认 `app: String? = nil`）；`Attachments.swift` 的 `Group { if … EmptyView() else Menu … }`；`AgentUnifiedFlowTests.swift` 末尾的 `AllOffTransport`（`guard var fields = …?.object`、空的 `send_modes: []`）和 `makeAgentModel` 全局函数。
 
+### 审后修改二（第四次编译 6b063285983623fb72d1854d）
+
+这次编译测试模块编过了，333 项里 2 项没过（3 处断言）；测试没全过所以 App 本体（`GenericCards.swift`、`ComposerView` 等）还没进过编译。
+
+**1. `AgentUnifiedTests.theThreeKeepTheirOwnActionAddressesAndBodies`（第 90 行）：测试的期望写错了，改测试。** DeepSeek 那一支（`command()`，0.8.0 以来只多了函数签名和那行 `guard`）不会加 `app` 字段，`intent` 会把 `auto` 映射成 `steer`（`auto` 是 Codex 的说法，DeepSeek 用 `steer`）。断言改成实际发出的 body：`id == "c1"`、`intent == "steer"`、没有 `app`。`command()` 一个字没动。
+
+**2. `AgentUnifiedFlowTests.aSendGoesToItsOwnAddressAndItsReceiptIsRead`（第 76、77 行，`sends.count == 0`）：是代码把正当的发送拦住了，不是测试没准备好。**
+- 测试这边是准备好的：`open` 等到 `control.available`、`ready`、`workspace.ready` 才返回，`edit("跑一下测试")` 有草稿，`offersSend("testing")` 为真；同一个 `submit` 的停止路径在同一个构建里是通的（`stopGoesToItsOwnAddress` 通过），说明 `foreground`/`reachable`/`inFlight` 都没问题。
+- 拦在 `ChatModel.submit` 里「新助手此刻没有发送模式就不发」那一段：它读的是进程全局的 `AgentCatalogSnapshot.current` 的说明书再收窄。Swift Testing 并行跑测试，别的用例的 AppModel（演示里没开假助手，说明书只有三家）会把 `.current` 换成没有 `testing` 的快照；`caps("testing")` 于是落到「未知助手的默认能力」（`send_modes` 为空），`submit` 设一句「这个对话现在不能从手机发消息」就返回了，请求一条都没发。App 里通常只有一个 AppModel，所以用户不容易碰上，但按 3.4「`capabilities_now` 说了算」，发送就不该看那个全局。
+- 改法（代码）：`ChatModel.submit` 的发送模式改为读**这个对话自己的状态**——`capabilities_now.send_modes`（电脑给的是完整的一套，docs §八）；电脑没发 `capabilities_now`（老电脑）才回退到说明书。新增 `ChatModel.sendModes(of:app:)`，`submit` 的「不能发」「queue 是否可用」「intent 选哪个」三处都用它，不再读 `caps`。说明书只在回退时读。
+- 测试这边补了两条：发送用例在 `send()` 前先断言 `control.capabilitiesNow["send_modes"]` 里有 `send`（把「状态说能发」写进断言）；新增 `aSendModeComesFromTheConversationState`（`capabilities_now` 说 `["send","steer"]` 就是这两个，说空就是空，与说明书无关）。
+
+**这轮最可能编不过的地方**：`ChatModel.swift` 的 `static func sendModes(of:app:)` 与 `submit` 里 `modes` 的三处使用；`AgentUnifiedFlowTests.swift` 新增的 `aSendModeComesFromTheConversationState`；`AgentUnifiedTests.swift` 改过的 DeepSeek 断言（`deepseek["app"].isNull`）。
+
 ### 第三段
