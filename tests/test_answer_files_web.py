@@ -275,6 +275,8 @@ class AnswerFilesWeb(unittest.TestCase):
     def close_artifact(self, page):
         page.get_by_role("button", name="返回聊天").click()
         page.locator(".artifact-panel").wait_for(state="detached")
+        if page.evaluate("history.state?.filePreview") == "file":
+            page.wait_for_function("history.state?.filePreview!=='file'")
 
     def close_answer_dialog(self, page):
         page.locator(".answer-dialog-close").click()
@@ -330,6 +332,7 @@ class AnswerFilesWeb(unittest.TestCase):
         self.assertEqual(len(self.chat_files_calls), before)
         page.keyboard.press("Escape")
         page.locator(".image-viewer").wait_for(state="detached")
+        page.wait_for_function("history.state?.filePreview!=='image'")
 
         # The strip: the nine files not drawn in place, eight cards and the rest behind one button.
         self.assertEqual(page.locator(".answer-files .answer-file").count(), 8)

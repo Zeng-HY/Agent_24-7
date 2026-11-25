@@ -4,7 +4,7 @@
   const LIMIT = Object.freeze({text: 1<<20, binary: 16<<20, download: 64<<20, resources: 4<<20, pixels: 16000000, side:8192, nodes:20000});
   const TAGS='html head body title style p br div span main section article header footer nav aside h1 h2 h3 h4 h5 h6 ul ol li dl dt dd blockquote strong em b i u s small sub sup hr pre code table caption colgroup col thead tbody tfoot tr th td a img figure figcaption details summary'.split(' ');
   const ATTRS='class id style title alt src href rel width height colspan rowspan start open lang dir'.split(' ');
-  const CSP="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
+  const CSP="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
   const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
   const fail=status=>new Error(({401:'登录已失效，请重新登录',403:'附件引用无效或不属于当前会话',404:'文件已移动或删除',409:'文件在读取时发生变化，请重试'})[status]||'文件读取失败（'+status+'）');
   function decode(bytes){
@@ -30,22 +30,40 @@
     if(!w||!h||w>LIMIT.side||h>LIMIT.side||w*h>LIMIT.pixels)throw Error('图片损坏、格式不支持或尺寸超过预览上限，请下载原文件');
     return {w,h,mime};
   }
-  const css=s=> /[\\<]|url\s*\(|@import|@font-face|expression\s*\(|-moz-binding/i.test(s)?'':s;
+  const css=s=> /[\\<]|@import|expression\s*\(|-moz-binding/i.test(s)?'':s.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi,(m,a,b,c)=>/^(?:data:|#)/i.test((a??b??c??'').trim())?m:'none');
   const relative=s=>!!s&&!/^[\\/]|:|[?#\x00-\x1f]/.test(s);
   const dataImage=bytes=>{const a=new Uint8Array(bytes),d=dimensions(a);let s='';for(let i=0;i<a.length;i+=8192)s+=String.fromCharCode(...a.subarray(i,i+8192));return 'data:'+d.mime+';base64,'+btoa(s);};
+  const RES_MIME={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',bmp:'image/bmp',
+    tif:'image/tiff',tiff:'image/tiff',heic:'image/heic',heif:'image/heic',avif:'image/avif',svg:'image/svg+xml',
+    woff:'font/woff',woff2:'font/woff2',ttf:'font/ttf',otf:'font/otf',eot:'application/vnd.ms-fontobject'};
+  const b64=bytes=>{const a=new Uint8Array(bytes);let s='';for(let i=0;i<a.length;i+=8192)s+=String.fromCharCode(...a.subarray(i,i+8192));return btoa(s);};
   async function cleanHTML(source,resource,signal){
     if(!window.DOMPurify)throw Error('预览组件未加载，请重试或下载原文件');
     // DOMPurify's inert template document is never inserted in the parent page.
     const doc=DOMPurify.sanitize(source,{ALLOWED_TAGS:[...TAGS,'link'],ALLOWED_ATTR:ATTRS,ALLOW_DATA_ATTR:false,ALLOW_ARIA_ATTR:false,WHOLE_DOCUMENT:true,RETURN_DOM:true});
     if(doc.querySelectorAll('*').length>LIMIT.nodes)throw Error('页面过于复杂，请下载查看');
     let missing=false,budget=LIMIT.resources,count=0;
-    async function load(path){if(!relative(path)||!resource||++count>16)throw Error('unprovided');const b=await resource(path,signal,Math.min(budget,LIMIT.text));budget-=b.byteLength;if(budget<0)throw Error('limit');return b;}
+    async function load(path){if(!relative(path)||!resource||++count>64)throw Error('unprovided');const b=await resource(path,signal,Math.min(budget,LIMIT.text));budget-=b.byteLength;if(budget<0)throw Error('limit');return b;}
+    async function inlineCSS(raw){
+      const jobs=[];
+      let text=String(raw).replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi,(match,a,b,c)=>{
+        const ref=(a??b??c??'').trim(),token='__teleply_resource_'+jobs.length+'__';
+        if(/^(?:data:|#)/i.test(ref))return match;
+        jobs.push({token,ref});return token;
+      });
+      for(const job of jobs){
+        try{const bytes=await load(job.ref);const ext=(job.ref.split(/[?#]/)[0].split('.').pop()||'').toLowerCase();
+          text=text.replace(job.token,'url("data:'+(RES_MIME[ext]||'application/octet-stream')+';base64,'+b64(bytes)+'")');}
+        catch(error){if(signal?.aborted)throw error;missing=true;text=text.replace(job.token,'none');}
+      }
+      return css(text);
+    }
     for(const node of doc.querySelectorAll('*')){
       if(signal?.aborted)throw new DOMException('Aborted','AbortError');
-      if(node.hasAttribute('style')){const raw=node.getAttribute('style'),safe=css(raw);node.setAttribute('style',safe);if(raw&&!safe)missing=true;}
-      if(node.tagName==='STYLE'){const raw=node.textContent;node.textContent=css(raw);if(raw&&!node.textContent)missing=true;}
+      if(node.hasAttribute('style')){const raw=node.getAttribute('style'),safe=await inlineCSS(raw);node.setAttribute('style',safe);if(raw&&!safe)missing=true;}
+      if(node.tagName==='STYLE'){const raw=node.textContent;node.textContent=await inlineCSS(raw);if(raw&&!node.textContent)missing=true;}
       if(node.tagName==='LINK'){
-        try{if(node.getAttribute('rel')!=='stylesheet')throw Error('link');const raw=decode(await load(node.getAttribute('href'))),safe=css(raw);if(raw&&!safe)throw Error('css');node.replaceWith(el('style','',safe));}catch(e){if(signal?.aborted)throw e;missing=true;node.remove();}continue;
+        try{if(node.getAttribute('rel')!=='stylesheet')throw Error('link');const raw=decode(await load(node.getAttribute('href'))),safe=await inlineCSS(raw);if(raw&&!safe)throw Error('css');node.replaceWith(el('style','',safe));}catch(e){if(signal?.aborted)throw e;missing=true;node.remove();}continue;
       }
       if(node.tagName==='IMG'){
         const src=node.getAttribute('src')||'';node.removeAttribute('src');
@@ -81,15 +99,10 @@
     return {meta:s=>request('/api/file/meta?'+q,s,65536,true),bytes:(s,l)=>request(url,s,l),url,
       text:s=>request('/api/file/text?'+q,s,8<<20,true),
       pdf:(s,l)=>request('/api/file/pdf?'+q,s,l,false,120000,true),  // Office starts first: up to a minute
+      zip:s=>request('/api/file/zip?'+q+(file.v?'&v='+encodeURIComponent(file.v):''),s,4<<20,true,60000,true),
       resource:async(path,signal,limit)=>{
         if(!relative(path)||!file.path)throw Error('unprovided');
-        // Match only server-listed exact files. Normalization grants no directory authority.
-        const norm=p=>{const parts=[];for(const bit of p.replace(/\\/g,'/').split('/')){if(bit==='..')parts.pop();else if(bit&&bit!=='.')parts.push(bit);}return parts.join('/').toLowerCase();};
-        const listing=await request('/api/chat/files?'+new URLSearchParams({app:target.app,id:target.id}),signal,1<<20,true);
-        const base=file.path.replace(/\\/g,'/').replace(/[^/]+$/,'');
-        const match=listing.items.find(x=>x.id&&x.path&&norm(x.path)===norm(base+decodeURIComponent(path)));
-        if(!match)throw Error('unprovided');
-        return request('/api/file?'+new URLSearchParams({app:target.app,id:target.id,file:match.id,download:'1'}),signal,limit);
+        return request('/api/file/resource?'+new URLSearchParams({app:target.app,id:target.id,file:file.id,path}),signal,limit);
       }};
   }
   // ---- code and table pages (docs/handoff-file-preview.md §6.2)
@@ -251,6 +264,51 @@
       wrap.hidden=on;source.hidden=!on;raw.textContent=on?'查看表格':'查看原文';};
   }
 
+  function downloadCard(body,name,reason){
+    const card=el('p','artifact-file');
+    card.innerHTML='<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 3H5v18h14V8zM14 3v5h5"/></svg>';
+    card.append(document.createTextNode(' '+name));body.append(card);
+    body.append(el('p','',reason||'此文件可下载后使用相应应用打开。'));
+  }
+  const humanSize=n=>{const v=Number(n)||0;if(v>=1<<30)return (v/(1<<30)).toFixed(v>=10<<30?0:1)+' GB';
+    if(v>=1<<20)return (v/(1<<20)).toFixed(v>=10<<20?0:1)+' MB';if(v>=1024)return Math.ceil(v/1024)+' KB';return v+' B';};
+  const zipTime=ms=>{if(!ms)return '';const d=new Date(Number(ms));if(Number.isNaN(d.getTime()))return '';
+    const pad=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());};
+  const ZIP_FOLDER='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7V5h6l2 2h10v13H3z"/></svg>';
+  const ZIP_FILE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M14 3H5v18h14V8zM14 3v5h5"/></svg>';
+  function buildZipPage(body,data){
+    const entries=[...(data.entries||[])].sort((a,b)=>a.dir===b.dir?a.name.localeCompare(b.name,'zh-CN',{numeric:true}):a.dir?-1:1);
+    const total=Number(data.total)||entries.length;
+    const unpacked=entries.reduce((sum,entry)=>sum+(entry.dir?0:Number(entry.size)||0),0);
+    body.replaceChildren(el('p','zip-summary','共 '+total+' 项，解压后 '+humanSize(unpacked)));
+    if(data.truncated)body.append(el('p','code-notes','只列了前 2000 项'));
+    const list=el('div','zip-list');
+    for(const entry of entries){
+      const row=el('div','zip-row'+(entry.dir?' dir':''));
+      const mark=el('span','zip-icon');mark.innerHTML=entry.dir?ZIP_FOLDER:ZIP_FILE;
+      row.append(mark,el('span','zip-name',entry.name),el('span','zip-size',entry.dir?'—':humanSize(entry.size)),
+        el('span','zip-time',zipTime(entry.modified)));
+      list.append(row);
+    }
+    body.append(list);
+  }
+  function mediaSource(target,file){const q=new URLSearchParams({app:target.app,id:target.id,file:file.id});if(file.v)q.set('v',file.v);return '/api/file?'+q.toString();}
+  function stopMedia(s){if(!s?.media)return;try{s.media.pause();}catch{}s.media.removeAttribute('src');try{s.media.load();}catch{}s.media=null;}
+
+  function previewState(kind){
+    const base=history.state||{};
+    const current=(typeof cur!=='undefined'&&cur)?{app:cur.app,id:cur.id,title:cur.title,folder:cur.folder,status:cur.status}:null;
+    return {...base,remoteUI:base.remoteUI||{mode:'chat',conv:current,overlays:[],parent:!!current},filePreview:kind};
+  }
+  function rememberPreview(kind,replace){
+    if(replace||history.state?.filePreview===kind)history.replaceState(previewState(kind),'');
+    else history.pushState(previewState(kind),'');
+  }
+  addEventListener('popstate',()=>{
+    if(imageViewerOpen&&history.state?.filePreview!=='image')closeImage(false);
+    if(active&&history.state?.filePreview!=='file')close(false);
+  });
+
   // ---- the full-screen picture viewer (§6.2 image/svg, §8)
   let imageViewerOpen=null;
   const VIEW_MAX=30<<20,SVG_MAX=10<<20;
@@ -258,13 +316,14 @@
   function imageOriginal(target,file){const q=imageQuery(target,file);if(file.v)q.set('v',file.v);return '/api/file?'+q.toString();}
   function imageThumb(target,file,width){const q=imageQuery(target,file);q.set('w',String(width));if(file.v)q.set('v',file.v);return '/api/file/thumb?'+q.toString();}
   function imageDownload(target,file){return imageOriginal(target,file)+'&download=1';}
-  function closeImage(){if(!imageViewerOpen)return;const s=imageViewerOpen;imageViewerOpen=null;s.aborted=true;s.controller.abort();
+  function closeImage(user=false){if(!imageViewerOpen)return;const s=imageViewerOpen;imageViewerOpen=null;s.aborted=true;s.controller.abort();
     for(const url of s.urls)URL.revokeObjectURL(url);s.urls.clear();s.host.remove();removeEventListener('keydown',s.key,true);
-    document.body.style.overflow=s.bodyOverflow;s.focus?.focus?.({preventScroll:true});}
+    document.body.style.overflow=s.bodyOverflow;s.focus?.focus?.({preventScroll:true});
+    if(user&&history.state?.filePreview==='image')history.back();}
 
   function openImage(target,files,index=0){
     const items=(files||[]).filter(f=>f&&f.id&&(f.view==='image'||f.view==='svg')&&f.state!=='missing');if(!items.length)return;
-    closeImage();
+    closeImage(false);rememberPreview('image');
     const s=imageViewerOpen={target,items,index:Math.max(0,Math.min(Number(index)||0,items.length-1)),scale:1,tx:0,ty:0,
       pointers:new Map(),drag:null,pinch:null,lastTap:0,lastX:0,lastY:0,urls:new Set(),controller:new AbortController(),
       focus:document.activeElement,aborted:false,bodyOverflow:document.body.style.overflow,load:0};
@@ -330,15 +389,15 @@
     };
     const go=delta=>{const next=s.index+delta;if(next<0||next>=s.items.length)return;s.index=next;load();};
     const key=event=>{
-      if(event.key==='Escape'){event.preventDefault();closeImage();return;}
+      if(event.key==='Escape'){event.preventDefault();closeImage(true);return;}
       if(event.key==='ArrowLeft'||event.key==='ArrowRight'){
         event.preventDefault();const delta=event.key==='ArrowRight'?1:-1;
         if(s.scale>1){s.tx+=delta*80;clamp();apply();}else go(delta);
       }
     };
     s.key=key;addEventListener('keydown',key,true);
-    shut.onclick=()=>closeImage();host.addEventListener('click',event=>{if(event.target===host)closeImage();});
-    filePage.onclick=()=>{const current=file();closeImage();open(target,current,{});};
+    shut.onclick=()=>closeImage(true);host.addEventListener('click',event=>{if(event.target===host)closeImage(true);});
+    filePage.onclick=()=>{const current=file();closeImage(false);open(target,current,{replaceHistory:true});};
     stage.addEventListener('wheel',event=>{if(!event.ctrlKey)return;event.preventDefault();zoomAt(event.clientX,event.clientY,Math.exp(-event.deltaY*.002));},{passive:false});
     stage.addEventListener('pointerdown',event=>{
       if(event.pointerType==='mouse'&&event.button!==0)return;
@@ -375,19 +434,21 @@
   window.imageViewer={open:openImage,close:closeImage};
 
   let active=null;
-  function close(){if(!active)return;const s=active;active=null;s.controller.abort();clearTimeout(s.timer);for(const u of s.urls)URL.revokeObjectURL(u);s.dialog.close();s.dialog.remove();s.focus?.focus({preventScroll:true});}
+  function close(user=false){if(!active)return;const s=active;active=null;s.controller.abort();clearTimeout(s.timer);stopMedia(s);for(const u of s.urls)URL.revokeObjectURL(u);s.dialog.close();s.dialog.remove();s.focus?.focus({preventScroll:true});
+    if(user&&history.state?.filePreview==='file')history.back();}
   async function open(target,file,options={}){
-    close();const s={controller:new AbortController(),urls:new Set(),focus:document.activeElement};active=s;
+    close(false);const s={controller:new AbortController(),urls:new Set(),focus:document.activeElement};active=s;
     const valid=()=>active===s&&!s.controller.signal.aborted;
     const dialog=el('dialog','artifact-panel');s.dialog=dialog;dialog.setAttribute('aria-label','附件详情');
     const header=el('header','artifact-header'),back=el('button','tp-icon-button');back.type='button';back.setAttribute('aria-label','返回聊天');
-    back.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m14 6-6 6 6 6"/></svg>';back.onclick=close;
+    back.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m14 6-6 6 6 6"/></svg>';back.onclick=()=>close(true);
     const heading=el('div','tp-header-title');heading.append(el('strong','',file.name||'附件'));
     const tools=el('div','tp-toolbar'),save=el('button','tp-button','下载');tools.append(save);header.append(back,heading,tools);
     const info=el('div','artifact-info'),full=el('details'),summary=el('summary','','文件详情');full.append(summary,el('div','artifact-name',file.name||'附件'));info.append(full);
     const status=el('p','artifact-status','正在读取…');status.setAttribute('role','status');
     const tabs=el('div','theme-choices artifact-tabs');tabs.hidden=true;const body=el('div','artifact-body');
-    dialog.append(header,info,status,tabs,body);document.body.append(dialog);dialog.showModal();back.focus();dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
+    dialog.append(header,info,status,tabs,body);document.body.append(dialog);dialog.showModal();back.focus();dialog.addEventListener('cancel',e=>{e.preventDefault();close(true);});
+    rememberPreview('file',!!options.replaceHistory);
     const a=options.adapter||adapter(target,file),signal=s.controller.signal;
     const object=blob=>{const u=URL.createObjectURL(blob);s.urls.add(u);return u;};
     const error=e=>{if(valid())status.textContent=e.message;};
@@ -415,8 +476,24 @@
       const table=!office&&(m.view==='table'||['csv','tsv'].includes(ext));
       const code=!office&&!table&&(m.view==='code'||m.view==='text'||
         (m.kind==='text'&&!['html','htm','md','markdown'].includes(ext)));
-      const kind=office?'pdf':table?'table':code?'code':['html','htm'].includes(ext)?'html':['md','markdown'].includes(ext)?'markdown':['png','jpg','jpeg','webp'].includes(ext)?'image':ext==='pdf'?'pdf':'download';
-      if(kind==='download'||options.downloadOnly){const card=el('p','artifact-file');card.innerHTML='<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 3H5v18h14V8zM14 3v5h5"/></svg>';card.append(document.createTextNode(' '+name));body.append(card,el('p','','此文件可下载后使用相应应用打开。'));return;}
+      const audio=!office&&(m.view==='audio'||['mp3','m4a','aac','wav','flac','ogg'].includes(ext));
+      const video=!office&&(m.view==='video'||['mp4','m4v','mov','webm','mkv'].includes(ext));
+      const archive=m.view==='archive';
+      const kind=office?'pdf':archive?'archive':audio?'audio':video?'video':table?'table':code?'code':['html','htm'].includes(ext)?'html':['md','markdown'].includes(ext)?'markdown':['png','jpg','jpeg','webp'].includes(ext)?'image':ext==='pdf'?'pdf':'download';
+      if(kind==='download'||options.downloadOnly){downloadCard(body,name);return;}
+      if(kind==='archive'){
+        if(ext!=='zip'){downloadCard(body,name,'这种压缩包只能下载');return;}
+        if(!a.zip){downloadCard(body,name,'这个压缩包只能下载');return;}
+        try{const listing=await a.zip(signal);if(!valid())return;buildZipPage(body,listing);}catch(e){if(!valid())return;downloadCard(body,name,e.message);}
+        return;
+      }
+      if(kind==='audio'||kind==='video'){
+        const media=el(kind==='video'?'video':'audio');media.controls=true;media.preload='metadata';
+        if(kind==='video'){media.playsInline=true;media.setAttribute('playsinline','');}
+        const unsupported=()=>{media.remove();stopMedia(s);downloadCard(body,name,'这个格式浏览器放不了，请下载后用其他应用打开');};
+        if(!media.canPlayType(m.mime||'')){unsupported();return;}
+        media.onerror=unsupported;media.src=mediaSource(target,file);s.media=media;body.append(media);media.load();return;
+      }
       if(kind==='code'||kind==='table'){
         let made=null;
         if(a.text){try{made=await a.text(signal);}catch(error){if(!a.bytes)throw error;}}
@@ -457,7 +534,7 @@
     }catch(e){if(valid()){status.textContent=e.message;const retry=el('button','tp-button','重试');retry.onclick=()=>open(target,file,options);body.append(retry);}}
     finally{clearTimeout(s.timer);}
   }
-  addEventListener('pagehide',close);
-  addEventListener('pagehide',closeImage);
+  addEventListener('pagehide',()=>close(false));
+  addEventListener('pagehide',()=>closeImage(false));
   window.artifactPreview={open,close,adapter,limits:LIMIT,decode,dimensions,cleanHTML};
 })();

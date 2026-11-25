@@ -173,7 +173,7 @@
   function openAnswerFile(file){if(!cur||!file||!file.id)return;const target={...cur};
     if(file.state==='missing'){openAnswerReason({reason:'missing',text:'文件已移动或删除'});return;}
     const view=file.view||'';
-    const showPage=['image','svg','pdf','table','markdown','html','code','text'].includes(view)
+    const showPage=['image','svg','pdf','table','markdown','html','code','text','audio','video','archive'].includes(view)
       ||file.kind!=='download'||file.preview==='pdf';
     if(showPage)preview(target,file);else download(target,file);}
   function answerCard(file,{thumb=false,owner=null}={}){
