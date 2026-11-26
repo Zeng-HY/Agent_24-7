@@ -9,16 +9,17 @@ struct FilePreviewRulesTests {
     // MARK: P3: the converter's own error page (design 4.1.1)
 
     @Test func theSystemsOwnErrorPageIsAFailure() {
-        // What the phone writes for a Word file its converter cannot read (the user's report, 11-26).
+        // What the phone writes for a Word file its converter cannot read (the user's report, 11-26): the error's
+        // domain, and the empty reason on a line of its own.
         #expect(systemPreviewFailed("未能完成操作。（OfficeImportErrorDomain 错误 912。）\n(null)"))
         #expect(systemPreviewFailed("OfficeImportErrorDomain 错误 912"))
         #expect(systemPreviewFailed("The operation couldn’t be completed. (OfficeImportErrorDomain error 912.)"))
         // The domain name alone, in a short page.
         #expect(systemPreviewFailed("OfficeImportErrorDomain"))
-        // A number after 错误 / error, in either case, as long as it has two digits.
-        #expect(systemPreviewFailed("错误 12"))
-        #expect(systemPreviewFailed("ERROR 1024"))
-        #expect(systemPreviewFailed("error\t7" + "1"))
+        // A line of nothing but (null), whatever stands above it.
+        #expect(systemPreviewFailed("文件已损坏。\n(null)"))
+        #expect(systemPreviewFailed("(null)"))
+        #expect(systemPreviewFailed("  文件已损坏。  \n  (null)  \n"))
     }
 
     @Test func aDocumentIsNotAnErrorPage() {
@@ -29,10 +30,16 @@ struct FilePreviewRulesTests {
         #expect(!systemPreviewFailed(String(repeating: "正常的一页文字。", count: 100)))
         // A short page without trouble in it is a document too.
         #expect(!systemPreviewFailed("这是一份很短的说明。"))
-        // 错误 or error without a number is not the system's page.
-        #expect(!systemPreviewFailed("错误"))
-        #expect(!systemPreviewFailed("error"))
+        // 错误 / error and a number are a document's own words just as often as the system's.
+        #expect(!systemPreviewFailed("错误 12"))
+        #expect(!systemPreviewFailed("ERROR 1024"))
+        #expect(!systemPreviewFailed("Error 404 处理说明"))
+        #expect(!systemPreviewFailed("共发现错误 12 处"))
         #expect(!systemPreviewFailed("error 9"))
+        // (null) inside a sentence is a document's word, not the system's empty reason.
+        #expect(!systemPreviewFailed("正文里提到 (null) 这个词，整行不是。"))
+        #expect(!systemPreviewFailed("输出：(null) 表示空值。"))
+        #expect(!systemPreviewFailed("文件已损坏。(null)"))
     }
 
     // MARK: P3: the answer's PDF of the same name (design 4.1.3)

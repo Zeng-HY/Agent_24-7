@@ -10,12 +10,20 @@ import Foundation
 ///
 /// [body] is those words, up to the first 400 characters. A page that is not short is a document rather than an error
 /// page; an empty page says nothing either way. Both are not failures.
+///
+/// A short page is the system's own only when it says what no short document does: it names the system's error domain
+/// (`OfficeImportErrorDomain`, …ErrorDomain in either language), or it has a line that is just `(null)`, which is how
+/// the system writes a reason it has none of. Words like「错误 12」or「Error 404」are a document's own words as often as
+/// the system's, so a number after 错误 / error proves nothing on its own (11-27).
 public func systemPreviewFailed(_ body: String) -> Bool {
     guard !body.isEmpty, body.count < 400 else { return false }
     // The system's domain name, in English on every phone.
     if body.contains("ErrorDomain") { return true }
-    // … 错误 912 … / … error 912 …, in either language and any case.
-    return body.range(of: #"(错误|error)\s*[0-9]{2,}"#, options: [.regularExpression, .caseInsensitive]) != nil
+    // A whole line of nothing but `(null)`, as the system writes an empty reason; the words inside a sentence are a
+    // document's own.
+    return body.split(whereSeparator: { $0.isNewline }).contains {
+        String($0).trimmingCharacters(in: .whitespaces) == "(null)"
+    }
 }
 
 // MARK: P3: the same document as a PDF (design 4.1.3)
