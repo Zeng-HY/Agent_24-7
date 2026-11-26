@@ -465,15 +465,18 @@ final class ScreenshotTour: XCTestCase {
         }
         let fold = app.buttons["收起对话列表"].firstMatch
         XCTAssertTrue(fold.waitForExistence(timeout: 5), "the wide window's conversation has no 收起对话列表")
-        XCTAssertTrue(app.buttons["打开导航"].firstMatch.isHittable, "the list column is not beside the conversation")
+        let nav = app.buttons["打开导航"].firstMatch
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "the list column is not beside the conversation")
+        XCTAssertTrue(nav.isHittable, "the list column is not beside the conversation")
         screenSnap(app, page: "55-ipad-list-open", variant: "ipad-portrait")
         let buttonBefore = fold.frame.minX
 
         fold.tap()
         let unfold = app.buttons["展开对话列表"].firstMatch
         XCTAssertTrue(unfold.waitForExistence(timeout: 5), "the button did not turn into 展开对话列表")
-        XCTAssertFalse(app.buttons["打开导航"].firstMatch.isHittable,
-                       "the list column stayed beside the folded conversation")
+        // Folded, the list is accessibilityHidden: its ☰ is not in the accessibility tree at all, and reading
+        // isHittable of a missing element is a failure of its own. Look for it first.
+        XCTAssertFalse(nav.exists && nav.isHittable, "the list column stayed beside the folded conversation")
         screenSnap(app, page: "56-ipad-list-folded", variant: "ipad-portrait")
         // The conversation's title bar starts at the window's left edge now, where the list column used to be.
         XCTAssertLessThan(unfold.frame.minX, buttonBefore - 100, "the conversation did not take the window")
@@ -482,7 +485,8 @@ final class ScreenshotTour: XCTestCase {
         unfold.tap()
         XCTAssertTrue(app.buttons["收起对话列表"].firstMatch.waitForExistence(timeout: 5), "the list did not come back")
         screenSnap(app, page: "57-ipad-list-open-again", variant: "ipad-portrait")
-        XCTAssertTrue(app.buttons["打开导航"].firstMatch.isHittable, "the unfolded list is not beside the conversation")
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "the unfolded list is not beside the conversation")
+        XCTAssertTrue(nav.isHittable, "the unfolded list is not beside the conversation")
         app.terminate()
     }
 

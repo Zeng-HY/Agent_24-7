@@ -421,6 +421,7 @@ SVG 的规则同第 4.2 节第 4 条。
 - `ListColumnTests`（TeleplyCoreTests，4 项）：20 种组合（够宽/不够宽 × 开关 × `launch`/`login`/`devices`/`chats`/`reading`）逐条对 `listShown`/`buttonShown`/`collapsed`；宽窗口没有对话时列表总在且没有按钮；存着的收起在列表页不生效、再开对话又收起、展开后还在；窄窗口和 iPhone 一律不收起。
 - `testIPadListCollapse`（iPad 才跑，iPhone 跳过）：演示数据 → 进示例 → 连 测试电脑 A → 开「原生阅读示例」→ 如果上一次留下收起就先点「展开对话列表」→ 截图 `55-ipad-list-open` → 点「收起对话列表」→ 断言按钮变成「展开对话列表」、列表的「打开导航」不可点 → 截图 `56-ipad-list-folded` → 点「展开对话列表」→ 断言列表回来 → 截图 `57-ipad-list-open-again`。开头不依赖上一个测试留下的状态（看按钮自己的文字反过来展开），结尾是展开的。
   - 没有用 `-TeleplyListCollapsed NO` 清状态：启动参数落在 `NSArgumentDomain`，读 `UserDefaults` 时优先级高于 `@AppStorage` 自己写进去的值，按钮会看起来怎么点都不变。用按钮反过来展开更稳。
+  - 收起后列表是 `accessibilityHidden`，`打开导航` 在无障碍树里根本不存在；对不存在的元素读 `isHittable` 会被 XCUITest 记成一条失败，所以那处先看 `exists`（`XCTAssertFalse(nav.exists && nav.isHittable)`），展开后的两处先 `waitForExistence` 再读 `isHittable`（11-27 审后改）。
   - `ci-check.sh` 默认那张 iPad 四个用例的列表没动（不在第 11.2 节的可改文件里），所以它要按第 11.3 节的 `-Only "testIPadListCollapse"` 单独跑。
 
 **怎么核对的**
