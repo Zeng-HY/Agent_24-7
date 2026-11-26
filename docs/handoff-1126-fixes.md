@@ -278,4 +278,44 @@ SVG 的规则同第 4.2 节第 4 条。
 
 ### 10.5 线五 电脑
 
-（待填）
+结论：第 7.1 节 1-7 条和第 7.2 节都做完了，相关测试 297 个全过；全量 pytest 除「这台机器没装 Playwright 浏览器」造成的失败外没有别的失败。
+
+**做了什么**
+
+P6（第 7.1 节）：
+1. 改成按卡片数：`chats.Desktop._claude_attachment_cards` 给每个「Remove …」按钮找最近的、同时包含这张卡片预览的祖先，按 RuntimeId 归并；找不到时按屏幕位置归并（中点横竖都相差不超过 24 px 算同一张，`CLAUDE_CARD_NEAR`）。一张卡片两个按钮算 1 张；两张卡片即使预览同名（剪贴板图都叫 `image.png`）也算 2 张。原来的规矩保留：看得见的 Remove image/attachment/file 算，看不见但预览在同一块里的也算。
+2. 贴一张后最多等 20 秒（`CLAUDE_ATTACH_WAIT`），数到想要的张数后再保持 0.6 秒（`CLAUDE_ATTACH_SETTLE`）不变才算成功；等的过程只按过一次 Ctrl+V。等的时候输入框或附件区正好在重画，这一轮不计数，继续等。
+3. 数到比第 N 张多就立刻停下不发送，报「电脑上 Claude 输入框里出现了 X 张图，比要发的多，尚未发送」。
+4. 失败后收回（`_claude_take_back`）：每张卡片按一次「Remove」，`SetValue('')` 清空字，等 3 秒（`CLAUDE_ATTACH_RECALL_WAIT`）再数一次，晚到的卡片也删掉；日志 `Claude attachment recall removed=… late=… cleared=…` 只有数字。发送路径在第一次贴图之后失败（`InputNotSubmitted` / `SendNotSubmitted` / 界面异常）都会调用它；贴图之前的拒绝（比如框里本来就有别人的附件）不动框里的东西。
+5. `Claude attachment probe` 那行加了每个 Remove 按钮的类别（image / attachment / file / other）、父控件类型、取整后的屏幕位置；仍然不写文件名、不写草稿。
+6. 送达记录：`agents/claude.py` 的图片发送在这条路上以「没提交」失败时，把记录改成 `rejected` 并写原因；同一个请求编号再来时 `_begin` 直接返回这条 rejected，不再答「这次请求已提交过，结果尚未确认」。插话（排队）那条路在贴图准备失败时照此处理。
+7. 没有对真实运行的 Claude 桌面做任何操作（不贴图、不打字、不读界面树）；测试全部用假界面树、假剪贴板、假时钟。
+
+P1（第 7.2、8.1 节）：
+- `codex_control.record_missing(path, rid)`：用只读连接查送达记录文件里有没有这个请求编号（任何对话都算）。文件不存在、打不开、没有 deliveries 表都返回 None（照旧只回答 `unknown`）。读表放在 `_db()` 建表之前，所以被清空成空文件的情况不会被当成「没有记录」。
+- `codex_control.receipt`、`codex_apptools.receipt`：记录文件在、能读、里面没有这个编号时多给 `missing: true`，`state` 仍是 `unknown`；其余照旧。
+- `deepseek_control.receipt`：DeepSeek 的记录表在服务启动时就建好，没有行就回 `{"state": "unknown", "missing": true}`。
+- `agents/claude.py` 的 `http_receipt` 把 `missing` 一起带给手机；`agents/codex.py`、`agents/deepseek.py` 原样转发，自动带上。
+- `agents/base.py` 的 `http_receipt`（Antigravity 走这条）没有送达记录文件可查（它按对话记录判断），属于「记录文件不存在」，保持只回 `{"state": "unknown"}`，没有改。
+- 内部用 `receipt(...)["state"] != "unknown"` 判断的地方（`new_conversations.py`、`agents/deepseek.py` 等）行为不变。
+
+**改了哪些文件**：`chats.py`、`codex_control.py`、`codex_apptools.py`、`deepseek_control.py`、`agents/claude.py`、`tests/test_claude_send.py`、`tests/test_codex_delivery.py`、`tests/test_codex_apptools.py`、`tests/test_deepseek_control.py`、`tests/test_unified_routes.py`、`tests/test_no_hardcoded_agents.py`。
+
+超出第 7.3 节清单的三处，改动都很小：
+- `deepseek_control.py`：DeepSeek 的回执在这里，不在 `agents/` 里，改的是一个返回值。
+- `agents/claude.py`：除了回执，还在图片发送失败处改送达记录，这是第 7.1 节第 6 条要求的（Claude 的送达记录只在这条路上写）。
+- `tests/test_no_hardcoded_agents.py`：chats.py 的 `_claude_*` 属性计数 63 → 73（新加的贴图核对/收回方法也是 `_claude_*`；这个测试就是靠固定数字发现新写法的）。
+
+**测试**：
+- 相关测试（`test_claude_send`、`test_claude_side_chat`、`test_claude_hooks`、`test_claude_new_folder_layout`、`test_claude_new_environment`、`test_codex_delivery`、`test_codex_apptools`、`test_deepseek_control`、`test_unified_routes`、`test_no_hardcoded_agents`、`test_data_folder_wipe`、`test_locked_send`）：297 通过，0 失败。
+- 全量 `pytest`：1567 通过，41 失败，7 跳过。41 个失败是 31 个测试项加 10 个 webkit/子项，全是这台机器没装 Playwright 浏览器（`...\ms-playwright\webkit-2359\Playwright.exe` 不存在，`BrowserType.launch` 一开始就失败），和这次改动无关；分布：`test_answer_files_preview` 3、`test_answer_files_resources` 3、`test_answer_files_web` 1、`test_dev6_navigation_links` 1 个加 1 个 webkit 子项、`test_home_startup` 3 个子项、`test_list_status_filter` 7、`test_page_parts` 2 个加 4 个 webkit 子项、`test_web_agents` 7、`test_web_antigravity` 5。已知的 3 个老失败（`test_mobile_polish` 的 snippet webkit 和 chromium、`test_relay_mobile_layout` 的 account home）也在其中。装了浏览器的机器上，全量应该只剩这 3 个。
+- 另有一次 `test_claude_hooks` 的地址测试在负载重时失败（本地端口），单独重跑通过。
+- 新增的测试：一张卡片两个 Remove 按钮算 1 张、两张卡片（预览同名）算 2 张、看不见的 Remove 按预览配对算、没有可读卡片时按位置归并；卡片 8 秒后才出现也能成功且只按一次 Ctrl+V；期望 1 张来了 2 张立刻停并带那句话；一直不出现时只报数字、日志里没有文件名；收回时每张卡片按一次 Remove、清空文字、3 秒后晚到的也删、日志只有数字；一条已经贴了一张之后失败的发送会被收回且不按发送；贴图之前就拒绝的发送不动框；图片发送以「没提交」失败后记录是 `rejected`、同一请求编号再来拿到的是 rejected 而不是「已提交过」；回执三种情况（有记录、没记录、记录文件不存在）在 `codex_control` 和 `codex_apptools` 各测一遍，DeepSeek 的没记录/有记录也测了，Claude 的 `http_receipt` 会把 `missing` 带出去。
+
+**要我看的地方**
+1. Claude 的纯文字发送历来不写送达记录（只有带图、Codex 通道、DeepSeek、新建对话写）。按第 7.2 节的规则，这类请求核对时会被回答 `missing: true`（手机显示「电脑没收到」），即使它其实送到了。要消掉这个误报，得给 Claude 纯文字发送也写送达记录；这次没做，第 7.3 节也没给这个位置。
+2. 位置归并的 24 px 是估的。真实界面里 RuntimeId 都读得到，那条路只是兜底。
+3. 每张图最多等 20 秒；一次发 5 张又都卡住时，整次发送可能超过接口的 60 秒上限（原来 6 秒时不会）。超时没改。
+4. 收回会清空输入框的字，前提是开始前框里没有别人的字和附件（已有检查）。贴图前就发现框里已有附件的那种拒绝，不清空、不删附件。
+5. 真机核对按第 7.1 节第 7 条留给审核的人在用户同意后做；这次没碰正在运行的 Claude，也没改版本号和更新说明。
+

@@ -90,6 +90,27 @@ def untaken(exc, codes=UNTAKEN):
 STUCK_AFTER = 600  # seconds: no send is still on its way to Codex this long after it began (relay and pipe give up first)
 
 
+def record_missing(path, request_id, table="deliveries"):
+    """11-26 P1/8.1: whether this assistant's delivery record file proves the phone's message was never received.
+
+    True only when the file is there, can be read, and holds no row for this request id in any conversation. None when
+    the file is not there or cannot be read - a wiped file that has no such table counts as unreadable - because then
+    the receipt says plain "unknown" as it always did, and the phone keeps 送达状态待确认."""
+    try:
+        path = Path(path)
+        if not path.is_file():
+            return None
+        con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+    except (OSError, sqlite3.Error, ValueError):
+        return None
+    try:
+        return con.execute(f"SELECT 1 FROM {table} WHERE id=? LIMIT 1", (request_id,)).fetchone() is None
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
 def file_has(path, needle):
     """Whether the bytes appear anywhere in the file, looked for through a map rather than read into memory."""
     with open(path, "rb") as f:
@@ -1227,12 +1248,17 @@ class Bridge:
             return None
 
     def receipt(self, tid, rid):
-        if not (self.data_root / "delivery.sqlite").exists():
+        path = self.data_root / "delivery.sqlite"
+        if not path.exists():
             return {"state": "unknown"}
+        # 11-26 P1: read before _db() makes the table, so a file with no deliveries table stays plain "unknown" (no
+        # missing) instead of reading as an empty record that holds nothing.
+        missing = record_missing(path, rid)
         with self._db() as con:
             row = con.execute("SELECT state,result,data,created FROM deliveries WHERE id=? AND thread=?", (rid,tid)).fetchone()
         if not row:
-            return {"state": "unknown"}
+            # 8.1: the file reads and holds no row for this request id in ANY conversation: the message never arrived.
+            return {"state": "unknown", "missing": True} if missing else {"state": "unknown"}
         body = json.loads(row[2])
         result = json.loads(row[1])
         status = row[0]

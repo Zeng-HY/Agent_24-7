@@ -726,5 +726,199 @@ class LineStateTests(unittest.TestCase):
         self.assertEqual((running['step'],running['running']),('run',True))
 
 
+class FakeControl:
+    """One piece of Claude's page for the attachment tests: names, parents and rectangles, never a real window."""
+    def __init__(self,name='',kind='GroupControl',parent=None,rect=None,runtime=None,offscreen=False):
+        self.Name=name;self.ControlTypeName=kind;self.IsOffscreen=offscreen;self.IsEnabled=True
+        self.children=[];self.invoked=0;self.written=[];self.HasKeyboardFocus=False
+        self._parent=parent;self._rect=rect;self._runtime=runtime
+        if parent is not None:parent.children.append(self)
+    def GetParentControl(self):return self._parent
+    def GetRuntimeId(self):
+        if self._runtime is None:raise RuntimeError('no runtime id')
+        return self._runtime
+    @property
+    def BoundingRectangle(self):
+        if self._rect is None:raise RuntimeError('no rectangle')
+        left,top,right,bottom=self._rect
+        return SimpleNamespace(left=left,top=top,right=right,bottom=bottom)
+    def SetFocus(self):self.HasKeyboardFocus=True
+    def GetInvokePattern(self):return SimpleNamespace(Invoke=self._invoke)
+    def _invoke(self):self.invoked+=1;return True
+    def GetValuePattern(self):return SimpleNamespace(IsReadOnly=False,SetValue=self._write)
+    def _write(self,text):self.written.append(text);return True
+
+
+def find_in(scope,kind,name=None):
+    """The subtree search `_find` does through Windows, over FakeControl children."""
+    out=[];stack=list(scope.children)
+    while stack:
+        node=stack.pop()
+        if node.ControlTypeName==kind and (name is None or node.Name==name):out.append(node)
+        stack.extend(node.children)
+    return out
+
+
+class FakeImage:
+    """Stands in for PIL's Image in the paste tests: a bitmap needs no real file."""
+    def __enter__(self):return self
+    def __exit__(self,*args):return False
+    def convert(self,mode):return self
+    def save(self,buffer,format):buffer.write(b'\0'*30)
+
+
+class AttachmentCardTests(unittest.TestCase):
+    """11-26 P6: pictures are counted by card, not by "Remove" button."""
+    def tree(self):
+        document=FakeControl('s - Claude Code','DocumentControl')
+        composer=FakeControl('',parent=document)
+        inner=FakeControl('',parent=composer)  # holds Add; the tray of current Claude sits one level above it
+        edit=FakeControl('Prompt','EditControl',parent=inner)
+        FakeControl('Add','ButtonControl',parent=inner)
+        return composer,edit
+
+    def card(self,composer,runtime,removes=1):
+        card=FakeControl('',parent=composer,runtime=runtime)
+        FakeControl('image.png','ButtonControl',parent=card)  # every clipboard image gets the same preview name
+        for _ in range(removes):FakeControl('Remove image.png','ButtonControl',parent=card)
+        return card
+
+    def test_one_card_with_two_remove_buttons_counts_once(self):
+        composer,edit=self.tree();self.card(composer,(1,2),removes=2)
+        d=object.__new__(chats.Desktop);d._find=find_in
+        self.assertEqual(d._claude_image_count(edit),1)
+        self.card(composer,(3,4))
+        self.assertEqual(d._claude_image_count(edit),2)  # two cards, told apart by their RuntimeId
+
+    def test_a_hover_only_remove_still_counts_the_card_its_preview_pairs_with(self):
+        composer,edit=self.tree()
+        card=FakeControl('',parent=composer,runtime=(5,6))
+        FakeControl('image.png','ButtonControl',parent=card,offscreen=True)
+        FakeControl('Remove image.png','ButtonControl',parent=card,offscreen=True)
+        d=object.__new__(chats.Desktop);d._find=find_in
+        self.assertEqual(d._claude_image_count(edit),1)
+
+    def test_buttons_without_a_readable_card_are_grouped_by_where_they_sit(self):
+        composer,edit=self.tree()
+        flat=[FakeControl('Add','ButtonControl'),FakeControl('Remove image.png','ButtonControl',rect=(100,100,164,164)),
+              FakeControl('Remove image.png','ButtonControl',rect=(104,100,168,164))]
+        d=object.__new__(chats.Desktop);d._claude_attachment_scope=Mock(return_value='scope');d._find=Mock(return_value=flat)
+        self.assertEqual(d._claude_image_count(edit),1)  # the two sit on one card, their middles 4 px apart
+        flat.append(FakeControl('Remove image.png','ButtonControl',rect=(300,100,364,164)))
+        self.assertEqual(d._claude_image_count(edit),2)  # another card 200 px away
+
+
+class AttachmentPasteTests(unittest.TestCase):
+    """11-26 P6: the wait is longer, the count has to hold still, and more cards than wanted stops at once."""
+    def desktop(self,count):
+        d=object.__new__(chats.Desktop);edit=FakeControl('Prompt','EditControl')
+        d._claude_verified_prompt=Mock(return_value=('doc',edit));d._claude_image_count=count;d.log=Mock()
+        return d,edit
+
+    def paste(self):
+        clipboard=SimpleNamespace(EnumClipboardFormats=lambda fmt:0,EmptyClipboard=lambda:None,SetClipboardData=lambda fmt,data:None,
+                                  GetClipboardSequenceNumber=lambda:1,CloseClipboard=lambda:None,GetClipboardData=lambda fmt:b'')
+        return patch.dict(sys.modules,{'win32clipboard':clipboard,
+                                       'PIL':SimpleNamespace(Image=SimpleNamespace(open=lambda path:FakeImage()))})
+
+    def test_a_card_that_shows_up_after_eight_seconds_is_accepted_and_the_paste_is_pressed_once(self):
+        clock={'now':0.0}
+        d,edit=self.desktop(lambda box:0 if clock['now']<8 else 1)
+        with self.paste(),patch('chats._clip_open'),patch('chats.winctl.focus'),patch('chats.winctl.press') as press,\
+             patch('chats.time.monotonic',side_effect=lambda:clock['now']),\
+             patch('chats.time.sleep',side_effect=lambda seconds:clock.__setitem__('now',clock['now']+seconds)):
+            d._paste_claude_image(7,'root',{'id':'s'},edit,'one.png',1)
+        self.assertEqual(press.call_args_list,[call(7,'Control+v')])  # waiting never pastes again
+        self.assertTrue(8.5<=clock['now']<=9.0,clock['now'])  # the card's 0.6 s of holding still, no more
+
+    def test_more_cards_than_wanted_stop_at_once_and_say_so(self):
+        d,edit=self.desktop(Mock(return_value=2))
+        with self.paste(),patch('chats._clip_open'),patch('chats.winctl.focus'),patch('chats.winctl.press') as press:
+            with self.assertRaises(chats.InputNotSubmitted) as refused:
+                d._paste_claude_image(7,'root',{'id':'s'},edit,'one.png',1)
+        self.assertEqual(str(refused.exception),'电脑上 Claude 输入框里出现了 2 张图，比要发的多，尚未发送')
+        self.assertEqual(press.call_count,1)
+
+    def test_a_card_that_never_shows_up_reports_numbers_only(self):
+        clock={'now':0.0}
+        d,edit=self.desktop(Mock(return_value=0))
+        with self.paste(),patch('chats._clip_open'),patch('chats.winctl.focus'),patch('chats.winctl.press'),\
+             patch('chats.time.monotonic',side_effect=lambda:clock['now']),\
+             patch('chats.time.sleep',side_effect=lambda seconds:clock.__setitem__('now',clock['now']+seconds)):
+            with self.assertRaises(chats.InputNotSubmitted) as refused:
+                d._paste_claude_image(7,'root',{'id':'s'},edit,'secret-name.png',1)
+        self.assertIn('第 1 张图片核验未通过（输入区识别到 0 张）',str(refused.exception))
+        self.assertGreaterEqual(clock['now'],chats.CLAUDE_ATTACH_WAIT)
+        line=d.log.call_args[0][0]
+        self.assertIn('Claude attachment probe expected=1 observed=0',line)
+        self.assertIn('removes(kind,parent,at)',line)
+        self.assertNotIn('secret-name.png',line)  # a file name never reaches the log
+
+    def test_taking_back_presses_one_remove_per_card_and_clears_the_words(self):
+        d,edit=self.desktop(Mock(return_value=0))
+        first,second,late=(FakeControl('Remove image.png','ButtonControl') for _ in range(3))
+        d._claude_attachment_cards=Mock(side_effect=[[{'removes':[{'button':first}]},{'removes':[{'button':second}]}],[{'removes':[{'button':late}]}]])
+        with patch('chats.time.sleep') as sleep:d._claude_take_back('root',{'id':'s'})
+        self.assertEqual((first.invoked,second.invoked,late.invoked),(1,1,1))
+        self.assertEqual(edit.written,[''])  # the words this send wrote go too
+        self.assertEqual(sleep.call_args_list,[call(chats.CLAUDE_ATTACH_RECALL_WAIT)])
+        self.assertIn('removed=3 late=1 cleared=1',d.log.call_args[0][0])
+
+    def test_an_over_counted_send_takes_the_pictures_back_and_presses_nothing(self):
+        edit=Edit();d=object.__new__(chats.Desktop);d.input_lock=threading.Lock();d.log=Mock();d.sent_last={}
+        d._claude_open=Mock(return_value=(1,'root'));d._claude_verified_prompt=Mock(return_value=('doc',edit))
+        d._claude_show=Mock();d._keyboard_owner=Mock(return_value=None);d._claude_wait_prompt=Mock()
+        d._find=Mock(return_value=[SimpleNamespace(ControlTypeName='ButtonControl',Name='Send',IsOffscreen=False,IsEnabled=True,
+                                                  GetParentControl=lambda:None,
+                                                  GetInvokePattern=lambda:SimpleNamespace(Invoke=Mock(return_value=True)))])
+        submit=Mock();d._claude_send_button=Mock(return_value=SimpleNamespace(GetInvokePattern=lambda:SimpleNamespace(Invoke=submit)))
+        d._claude_image_count=Mock(return_value=0)
+        d._paste_claude_image=Mock(side_effect=chats.InputNotSubmitted('电脑上 Claude 输入框里出现了 2 张图，比要发的多，尚未发送'))
+        d._claude_take_back=Mock()
+        with patch('chats.require_send_desktop'),patch('chats.conversation_title',return_value='test'):
+            with self.assertRaises(chats.InputNotSubmitted) as refused:
+                d._send_claude({'id':'s','title':'test'},'test',[{'path':'one.png'}])
+        self.assertIn('比要发的多',str(refused.exception))
+        submit.assert_not_called()
+        d._claude_take_back.assert_called_once_with('root',{'id':'s','title':'test'})
+
+    def test_a_refused_image_send_is_not_submitted_and_still_clears_nothing_else(self):
+        # the pre-paste check that the box is empty refuses before anything of this send is pasted: nothing is taken back
+        edit=Edit();d=object.__new__(chats.Desktop);d.input_lock=threading.Lock();d.log=Mock();d.sent_last={}
+        d._claude_open=Mock(return_value=(1,'root'));d._claude_verified_prompt=Mock(return_value=('doc',edit))
+        d._claude_show=Mock();d._keyboard_owner=Mock(return_value=None);d._claude_wait_prompt=Mock()
+        d._claude_image_count=Mock(return_value=1);d._paste_claude_image=Mock();d._claude_take_back=Mock()
+        with patch('chats.require_send_desktop'),patch('chats.conversation_title',return_value='test'):
+            with self.assertRaises(chats.InputNotSubmitted):
+                d._send_claude({'id':'s','title':'test'},'test',[{'path':'one.png'}])
+        d._paste_claude_image.assert_not_called();d._claude_take_back.assert_not_called()
+
+
+class AttachmentDeliveryTests(unittest.TestCase):
+    """11-26 P6: an image send the desktop turned away before submitting is 未接收 in the record, not 待确认 for good."""
+    def setUp(self):
+        import codex_control
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.bridge=codex_control.Bridge();self.bridge.data_root=Path(self.tmp.name)
+        self.bridge.attachment=Mock(return_value={'id':'c'*32,'path':str(Path(self.tmp.name)/'one.png'),'app':'claude',
+                                                  'original_size':10,'width':1,'height':1})
+        self.bridge._write_meta=Mock()
+        self.body={'id':'local_s','text':'看图','attachments':['c'*32],'request_id':'img-refusal-0001'}
+    def handler(self,send):
+        return SimpleNamespace(server=SimpleNamespace(codex=self.bridge,claude=SimpleNamespace(hooks=None)),
+                               desktop=SimpleNamespace(send=send))
+    def test_a_refused_image_send_reads_back_as_rejected_and_never_as_still_pending(self):
+        from agents.claude import ClaudeAgent
+        send=Mock(side_effect=chats.InputNotSubmitted('Claude 桌面已有附件，尚未发送；请先处理桌面草稿'))
+        with self.assertRaises(chats.InputNotSubmitted):
+            ClaudeAgent().chat_send_with_references(self.handler(send),self.body)
+        rec=self.bridge.receipt('local_s','img-refusal-0001')
+        self.assertEqual(rec['state'],'rejected')
+        self.assertIn('尚未发送',rec['result']['text'])
+        again=ClaudeAgent().chat_send_with_references(self.handler(send),self.body)  # the same request number again
+        self.assertEqual(again['delivery_state'],'rejected')  # the record's answer, not “这次请求已提交过”
+        self.assertEqual(send.call_count,1)
+
+
 if __name__=='__main__':unittest.main()
 

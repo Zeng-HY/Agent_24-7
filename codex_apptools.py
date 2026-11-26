@@ -1779,14 +1779,18 @@ class AppToolsBridge:
         return out
 
     def receipt(self, tid: str, rid: str) -> dict:
-        if not (self.legacy.data_root / "delivery.sqlite").exists():
+        path = self.legacy.data_root / "delivery.sqlite"
+        if not path.exists():
             return {"state": "unknown"}
+        # 11-26 P1: read before _db() makes the table (see codex_control.record_missing), and in any conversation.
+        missing = codex_control.record_missing(path, rid)
         with self.legacy._db() as con:
             row = con.execute(
                 "SELECT state,result,data,created FROM deliveries WHERE id=? AND thread=?", (rid, tid)
             ).fetchone()
         if not row:
-            return {"state": "unknown"}
+            # 8.1: the record file reads and holds no row for this request id: the message never arrived.
+            return {"state": "unknown", "missing": True} if missing else {"state": "unknown"}
         status, raw_result, raw_data, _ = row
         result = json.loads(raw_result or "{}")
         body = json.loads(raw_data or "{}")

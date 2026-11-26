@@ -556,7 +556,10 @@ class Bridge:
         return raw,mime
     def receipt(self,rid):
         with self._db() as db:row=db.execute('SELECT session,state,result FROM requests WHERE id=?',(rid,)).fetchone()
-        if not row:return {'state':'unknown'}
+        if not row:
+            # 11-26 P1/8.1: the request record reads and holds no row for this id, so the message never arrived. The file
+            # itself is made when the service starts (_db), so "no file" cannot be told from "no record" here.
+            return {'state':'unknown','missing':True}
         if row[1]=='unconfirmed':
             # Confirm the exact host-stamped request identity, never matching text.
             try:

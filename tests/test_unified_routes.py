@@ -202,6 +202,12 @@ class UnifiedRouteTests(unittest.TestCase):
             code, body = call_api(self.server, "GET", "/api/agents/claude/receipt?id=cl1&request_id=r1")
             self.assertEqual((code, body["state"]), (200, "unknown"))
 
+            # 11-26 P1/8.1: "missing": true travels to the phone with the same state; the phone then says 电脑没收到
+            self.codex.receipt.return_value = {"state": "unknown", "missing": True}
+            code, body = call_api(self.server, "GET", "/api/agents/claude/receipt?id=cl1&request_id=r1")
+            self.assertEqual((code, body["state"], body["missing"], body["id"], body["request_id"]),
+                             (200, "unknown", True, "cl1", "r1"))
+
             code, body = call_api(self.server, "GET", "/api/agents/claude/options")
             self.assertEqual((code, body["models"][0]["id"]), (200, "Sonnet"))
 

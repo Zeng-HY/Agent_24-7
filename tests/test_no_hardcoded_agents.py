@@ -103,7 +103,7 @@ FROZEN_PRIVATE_IMPORTS: dict[str, tuple[int, str]] = {
 # Frozen per-file counts for attribute accesses matching `<id>`, `<id>_*`, or `_<id>*` (case-insensitive).
 FROZEN_AGENT_ATTRS: dict[str, tuple[int, str]] = {
     "remote.py": (29, "启动与老兼容层装配及访问三家底层对象与常量（钩子服务与提示已交给 agents/*）"),
-    "chats.py": (63, "Desktop 类中遗留的 Claude 桌面自动化内部方法"),
+    "chats.py": (73, "Desktop 类中遗留的 Claude 桌面自动化内部方法（11-26 P6 的贴图核对与收回也是 _claude_* 方法）"),
     "live_events.py": (2, "Codex 实时消息文本清洗调用 chats.codex_answer"),
     "notify.py": (1, "通知器读取 DeepSeek 底层状态属性"),
     "new_conversations.py": (11, "新建对话访问三家底层辅助属性与常量"),

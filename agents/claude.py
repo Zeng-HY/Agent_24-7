@@ -691,6 +691,7 @@ class ClaudeAgent(Agent):
             try:
                 lines = self._queue_images(handler, tid, images)
             except (OSError, KeyError, ValueError) as exc:
+                self._reject_delivery(handler, request_id, exc)  # 11-26 P6: recorded, then refused before any submit
                 raise chats.InputNotSubmitted("图片已移除或不存在，尚未发送") from exc
             text = f"{base}\n\n" + "\n".join(lines) if base else "\n".join(lines)
         try:
@@ -758,6 +759,20 @@ class ClaudeAgent(Agent):
                 handler.log.write(traceback.format_exc())
         handler._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
 
+    @staticmethod
+    def _reject_delivery(handler, request_id: str, exc: Exception) -> None:
+        """11-26 P6: this send never left the desktop, so its delivery record says 未接收 (rejected) with the reason,
+        instead of staying 'dispatching' for good. The same request number sent again then gets that answer back, never
+        "这次请求已提交过，结果尚未确认". Never raises: the refusal itself is what the phone has to see."""
+        if not request_id:
+            return
+        try:
+            handler.server.codex._finish(str(request_id), {
+                "ok": False, "delivery_state": "rejected", "request_id": str(request_id), "text": str(exc)[:350],
+            })
+        except Exception:
+            pass
+
     def chat_send_with_references(self, handler, body: dict) -> dict:
         import time
         tid = str(body.get("id", ""))
@@ -790,10 +805,15 @@ class ClaudeAgent(Agent):
                 image["used"] = True
                 handler.server.codex._write_meta(image)
         replace = {"replace": body["replace_draft"][:2000]} if isinstance(body.get("replace_draft"), str) else {}
-        result = (
-            handler.desktop.send(self.id, tid, text, images, **replace)
-            if images else handler.desktop.send(self.id, tid, text, **replace)
-        )
+        try:
+            result = (
+                handler.desktop.send(self.id, tid, text, images, **replace)
+                if images else handler.desktop.send(self.id, tid, text, **replace)
+            )
+        except chats.SendNotSubmitted as exc:  # a draft in the box, the wrong window, no Send: nothing was submitted
+            if images:
+                self._reject_delivery(handler, str(body.get("request_id", "")), exc)
+            raise
         result["accepted_at"] = int(time.time() * 1000)
         for image in images:
             image["used"] = True
@@ -852,8 +872,13 @@ class ClaudeAgent(Agent):
         if bridge is not None and rid:
             try:
                 rec = bridge.receipt(tid, rid)
+                # 11-26 P1/8.1: "missing": true means the computer's record reads and holds no such request (the phone
+                # then says 电脑没收到). It travels with state "unknown", which the old condition already let through.
                 if isinstance(rec, dict) and rec.get("state") and rec.get("state") != "unknown":
                     handler._json(rec)
+                    return
+                if isinstance(rec, dict) and rec.get("missing"):
+                    handler._json({**rec, "id": tid, "request_id": rid})
                     return
             except Exception:
                 pass

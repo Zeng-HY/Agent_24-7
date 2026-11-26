@@ -178,4 +178,43 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(self.pipe.call.call_count, 2)
 
 
+class ReceiptMissingTests(unittest.TestCase):
+    """11-26 P1/8.1: "missing": true only when the delivery record reads and holds no such request in any conversation."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bridge = cc.Bridge()
+        self.bridge.data_root = Path(self.tmp.name)
+        self.bridge.delivery_evidence = Mock(return_value={})  # never look at this PC's own conversations
+
+    def record(self, rid, tid="test-thread"):
+        self.bridge._begin(rid, tid, {"id": tid, "text": "test"})
+
+    def test_a_record_that_reads_but_holds_no_such_request_says_missing(self):
+        self.record("recorded-request-0001")
+        self.assertEqual(self.bridge.receipt("test-thread", "unknown-request-0001"),
+                         {"state": "unknown", "missing": True})
+
+    def test_a_request_it_holds_is_not_called_missing(self):
+        self.record("recorded-request-0001")
+        self.assertEqual(self.bridge.receipt("test-thread", "recorded-request-0001")["state"], "dispatching")
+        self.assertNotIn("missing", self.bridge.receipt("test-thread", "recorded-request-0001"))
+
+    def test_a_request_recorded_in_another_conversation_is_not_missing(self):
+        self.record("recorded-request-0001", "thread-a")
+        rec = self.bridge.receipt("thread-b", "recorded-request-0001")
+        self.assertEqual(rec["state"], "unknown")  # not this conversation's; but the computer did receive it
+        self.assertNotIn("missing", rec)
+
+    def test_without_a_record_file_the_answer_is_plain_unknown(self):
+        self.assertFalse((Path(self.tmp.name) / "delivery.sqlite").exists())
+        self.assertEqual(self.bridge.receipt("test-thread", "any-request-000001"), {"state": "unknown"})
+
+    def test_a_wiped_file_with_no_table_is_not_taken_as_missing(self):
+        self.bridge.data_root.mkdir(parents=True, exist_ok=True)
+        (self.bridge.data_root / "delivery.sqlite").write_bytes(b"")
+        self.assertEqual(self.bridge.receipt("test-thread", "any-request-000001"), {"state": "unknown"})
+
+
 if __name__ == "__main__": unittest.main()

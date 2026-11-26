@@ -101,6 +101,48 @@ CLAUDE_ANSWER_OPTION = "epitaxy-answer-option"
 # A side chat (Claude 5.11492.5.0, 11-17) opens as a column right of the session, in the same page: its region and its
 # composer's group are both named "Side chat", and it has a "Prompt" box and a "Send" of its own (uia-side-chat-open.txt).
 CLAUDE_SIDE_CHAT = "Side chat"
+# 11-26 P6: a picture pasted into Claude's box can take a while to show as a card on a loaded PC (the box read 0 cards for
+# 8 s), and one card can carry two "Remove" buttons, so the check counts cards and wants the count to hold still.
+CLAUDE_ATTACH_WAIT = 20          # seconds after one paste until its card has to be there
+CLAUDE_ATTACH_SETTLE = 0.6       # the count has to stay this long at the number wanted, then it is taken
+CLAUDE_ATTACH_RECALL_WAIT = 3    # after taking the pictures back, wait this long and count again for cards that came late
+CLAUDE_CARD_NEAR = 24            # pixels: the Remove buttons of one card sit within this of each other
+
+
+def claude_remove_kind(name: str) -> str:
+    """What a Claude "Remove …" button takes away as a category: image / attachment / file / other. Only the category is
+    ever logged, never the file name (11-26 P6)."""
+    match = re.match(r"^Remove\s+(image|attachment|file)\b", name or "", re.I)
+    return match.group(1).casefold() if match else "other"
+
+
+def claude_control_key(control):
+    """The identity of one element of Claude's page: its RuntimeId (Windows gives the same one to the same element even
+    when it hands out a new wrapper object), or else this object. Used to tell one attachment card from another."""
+    try:
+        runtime = control.GetRuntimeId()
+        if runtime:
+            return ("runtime", tuple(int(v) for v in runtime))
+    except Exception:
+        pass
+    return ("element", id(control))
+
+
+def claude_control_point(control):
+    """Where a control sits, rounded to whole pixels: (x, y) of its middle, or None when that cannot be read."""
+    try:
+        rect = control.BoundingRectangle
+        return (round((rect.left + rect.right) / 2), round((rect.top + rect.bottom) / 2))
+    except Exception:
+        return None
+
+
+def claude_parent_type(control) -> str:
+    """The control type of a control's parent, for the attachment probe; "?" when it cannot be read."""
+    try:
+        return str(getattr(control.GetParentControl(), "ControlTypeName", "") or "")[:40] or "?"
+    except Exception:
+        return "?"
 
 
 def in_notice(kinds: list[str]) -> bool:
@@ -2591,39 +2633,105 @@ class Desktop:
             require_send_desktop()
             winctl.press(hwnd, "Enter")
 
-    def _claude_image_count(self,edit):
-        """Pictures waiting in the message box: its Remove image/attachment/file buttons, counted in the nearest
-        surrounding part that holds the box's Add button."""
+    def _claude_attachment_scope(self,edit):
+        """The bounded part of Claude's page that holds this message box and its attachment cards: the nearest ancestor
+        holding the box's Add button, and one level above it when that is a unique composer.
+
+        Current Claude places the attachment tray just OUTSIDE the first ancestor holding Add (live probe: depth 4 has
+        zero removers, depth 5 has the pasted card). The one step up stays: it is bounded by the same unique composer and
+        never goes as far as the page or the window, where other sessions' cards could be counted."""
         node=edit
         for _ in range(9):
             node=node.GetParentControl()
             if any(not c.IsOffscreen for c in self._find(node,'ButtonControl','Add')):
-                # Current Claude places the attachment tray just OUTSIDE the
-                # first ancestor holding Add (live probe: depth 4 has zero
-                # removers, depth 5 has the pasted card). Expand once, bounded
-                # by the same unique composer, never to the document/window.
                 parent=node.GetParentControl() if hasattr(node,'GetParentControl') else None
                 if parent is not None and parent.ControlTypeName not in ('DocumentControl','WindowControl'):
                     prompts=self._find(parent,'EditControl','Prompt')
                     adds=self._find(parent,'ButtonControl','Add')
                     if len(prompts)==1 and len(adds)==1:node=parent
-                buttons=self._find(node,'ButtonControl')
-                previews={c.Name for c in buttons if not (c.Name or '').startswith('Remove ')}
-                count=0
-                for c in buttons:
-                    name=c.Name or ''
-                    # Current attachment cards pair image.png with Remove image.png.
-                    # UIA may report the preview/remover as offscreen while the
-                    # composer is active. Their paired presence in this bounded
-                    # composer proves the card exists. Count each
-                    # card, not distinct filenames (all clipboard images share one).
-                    paired=name.startswith('Remove ') and name[7:] in previews
-                    if paired or not c.IsOffscreen and re.match(r'^Remove (?:image|attachment|file)',name,re.I):count+=1
-                return count
+                return node
         raise InputNotSubmitted('无法核对 Claude 图片附件，尚未发送')
 
+    def _claude_attachment_cards(self,edit):
+        """The pictures waiting in Claude's message box, one entry per card (11-26 P6).
+
+        Counting buttons overcounted: one card can carry two "Remove" buttons, and the log showed 2 for one picture.
+        A "Remove" button is put with the card that holds it: the nearest ancestor that also holds that card's preview,
+        told apart by RuntimeId; when no such ancestor can be read, by where the buttons sit on the screen (one card's
+        buttons are within CLAUDE_CARD_NEAR of each other). Two pictures pasted from the same clipboard image share one
+        file name, so a name alone never tells two cards apart.
+
+        The old rule for which buttons count stays: a visible Remove image/attachment/file, and an offscreen one when its
+        preview sits in the same part (Claude hides these until the card is hovered). Each entry is
+        {'key':…, 'removes':[{'button','name','kind','parent','at'}, …]}."""
+        scope=self._claude_attachment_scope(edit)
+        scope_key=claude_control_key(scope)
+        buttons=self._find(scope,'ButtonControl')
+        named=[(c,c.Name or '') for c in buttons]
+        previews=[(c,n) for c,n in named if not n.startswith('Remove ')]
+        preview_names={n for _,n in previews}
+        removes=[]
+        for c,n in named:
+            if not n.startswith('Remove '):continue
+            paired=n[7:] in preview_names
+            if not paired and (getattr(c,'IsOffscreen',False) or claude_remove_kind(n)=='other'):continue
+            removes.append((c,n))
+        if not removes:return []
+        chains={}
+        def chain(ctrl):
+            """The ancestors of a control up to (not including) the attachment scope, and no further than the page."""
+            key=id(ctrl)
+            if key not in chains:
+                nodes=[];node=ctrl
+                for _ in range(6):
+                    try:node=node.GetParentControl()
+                    except Exception:node=None
+                    if node is None:break
+                    if claude_control_key(node)==scope_key:break
+                    nodes.append(node)
+                    if getattr(node,'ControlTypeName','') in ('DocumentControl','WindowControl'):break
+                chains[key]=nodes
+            return chains[key]
+        preview_ancestors={id(c):{claude_control_key(v) for v in chain(c)} for c,_ in previews}
+        points={}
+        def point(ctrl):
+            key=id(ctrl)
+            if key not in points:points[key]=claude_control_point(ctrl)
+            return points[key]
+        groups=[];by_key={}
+        for c,n in removes:
+            suffix=n[7:]
+            card=None
+            if suffix:
+                for node in chain(c):
+                    node_key=claude_control_key(node)
+                    if any(pn==suffix and node_key in preview_ancestors[id(p)] for p,pn in previews if pn==suffix):
+                        card=node_key;break
+            if card is not None:
+                group=by_key.get(card)
+                if group is None:
+                    group={'key':card,'removes':[]};by_key[card]=group;groups.append(group)
+            else:
+                at=point(c);group=None
+                if at is not None:
+                    group=next((g for g in groups if g.get('card') is None and g.get('at') is not None
+                                and abs(g['at'][0]-at[0])<=CLAUDE_CARD_NEAR and abs(g['at'][1]-at[1])<=CLAUDE_CARD_NEAR),None)
+                if group is None:
+                    group={'key':('element',id(c)),'card':None,'at':at,'removes':[]};groups.append(group)
+            group['removes'].append({'button':c,'name':n,'kind':claude_remove_kind(n),
+                                     'parent':claude_parent_type(c),'at':point(c)})
+        return groups
+
+    def _claude_image_count(self,edit):
+        """Pictures waiting in the message box, counted one per card."""
+        return len(self._claude_attachment_cards(edit))
+
     def _paste_claude_image(self,hwnd,root,item,edit,path,expected_count):
-        """Paste bitmap data, never text shortcuts. Submit only after the attachment appears."""
+        """Paste bitmap data, never text shortcuts. Submit only after the card is there and the count holds still.
+
+        11-26 P6: the wait was 6 s and a loaded Claude took 8 s to draw the card; the count is of cards, and the paste
+        is pressed once, never again while waiting. More cards than were pasted stops at once: the phone is told, and
+        the send does not go (what was put in is taken back by _send_claude_now)."""
         import io,win32clipboard,win32con
         from PIL import Image
         with Image.open(path) as source:
@@ -2644,28 +2752,46 @@ class Desktop:
         try:
             winctl.focus(hwnd);_,edit=self._claude_verified_prompt(root,item['id']);edit.SetFocus()
             if not edit.HasKeyboardFocus:raise InputNotSubmitted('Claude 图片粘贴焦点未确认，尚未发送')
-            winctl.press(hwnd,'Control+v')
-            deadline=time.monotonic()+6
-            observed=0
-            while time.monotonic()<deadline:
-                _,edit=self._claude_verified_prompt(root,item['id'])
-                observed=self._claude_image_count(edit)
-                if observed==expected_count:return
+            winctl.press(hwnd,'Control+v')  # once: waiting never pastes again
+            deadline=time.monotonic()+CLAUDE_ATTACH_WAIT
+            observed=None;last=0;steady=None;trouble=''
+            while True:
+                try:
+                    _,edit=self._claude_verified_prompt(root,item['id'])
+                    observed=self._claude_image_count(edit)
+                    last=observed
+                except InputNotSubmitted as exc:  # the box or its tray is being drawn again: count again in a moment
+                    observed=None;trouble=trouble or str(exc)
+                except Exception as exc:
+                    observed=None;trouble=trouble or f'{type(exc).__name__}: {str(exc)[:120]}'
+                if observed is not None and observed>expected_count:
+                    raise InputNotSubmitted(f'电脑上 Claude 输入框里出现了 {observed} 张图，比要发的多，尚未发送')
+                if observed==expected_count:
+                    if steady is None:steady=time.monotonic()
+                    elif time.monotonic()-steady>=CLAUDE_ATTACH_SETTLE:return
+                else:steady=None
+                if time.monotonic()>=deadline:break
                 time.sleep(.15)
-            # Counts only: enough to diagnose a future layout change without
-            # putting draft text or filenames in the service log.
+            # Categories, control types and rounded positions only: enough to diagnose a future layout change without
+            # putting draft text or file names in the service log.
+            removes=[]
+            try:removes=[(v['kind'],v['parent'],v['at']) for g in self._claude_attachment_cards(edit) for v in g['removes']]
+            except Exception:pass
             try:
                 node=edit;probe=[]
                 for depth in range(1,10):
                     node=node.GetParentControl()
                     if node is None:break
                     buttons=self._find(node,'ButtonControl')
-                    removes=[c for c in buttons if (c.Name or '').startswith('Remove ')]
-                    probe.append((depth,sum(c.Name=='Add' for c in buttons),len(removes),sum(not c.IsOffscreen for c in removes)))
+                    rms=[c for c in buttons if (c.Name or '').startswith('Remove ')]
+                    probe.append((depth,sum(c.Name=='Add' for c in buttons),len(rms),sum(not c.IsOffscreen for c in rms)))
                     if node.ControlTypeName=='DocumentControl':break
-                self.log(f'Claude attachment probe expected={expected_count} observed={observed} scopes(depth,add,remove,visible_remove)={probe}')
-            except Exception:pass
-            raise InputNotSubmitted(f'第 {expected_count} 张图片核验未通过（输入区识别到 {observed} 张），尚未发送；后续图片未继续粘贴，请检查桌面草稿')
+            except Exception:probe=[]
+            self.log(f'Claude attachment probe expected={expected_count} observed={last} '
+                     f'removes(kind,parent,at)={removes} scopes(depth,add,remove,visible_remove)={probe}')
+            raise InputNotSubmitted(
+                f'第 {expected_count} 张图片核验未通过（输入区识别到 {last} 张），尚未发送；后续图片未继续粘贴，请检查桌面草稿',
+                (f'read failed: {trouble}' if trouble else ''))
         finally:
             _clip_open()
             try:
@@ -2675,6 +2801,40 @@ class Desktop:
                         try:win32clipboard.SetClipboardData(fmt,value)
                         except Exception:pass
             finally:win32clipboard.CloseClipboard()
+
+    def _claude_take_back(self,root,item):
+        """Take back what this send put into Claude's box (11-26 P6).
+
+        The send only pastes after it has seen that the box holds no one else's words and no attachments, so every card
+        in it now and the words in it are this send's: the Remove button of each card is pressed, the words are cleared,
+        and the tray is read once more after CLAUDE_ATTACH_RECALL_WAIT, because a card can come late. What is still there
+        then is taken out too, so the phone's 恢复草稿 → 再发 starts from a clean box. Only numbers are logged, and this
+        never raises: the send's own refusal is what the phone has to see."""
+        removed=late=cleared=0
+        try:
+            _,edit=self._claude_verified_prompt(root,item['id'])
+            for card in self._claude_attachment_cards(edit):
+                try:
+                    pattern=card['removes'][0]['button'].GetInvokePattern()
+                    if pattern is not None and pattern.Invoke() is not False:removed+=1
+                except Exception:pass
+            try:
+                _,edit=self._claude_verified_prompt(root,item['id'])
+                value=edit.GetValuePattern()
+                cleared=int(value is not None and not value.IsReadOnly and value.SetValue('') is not False)
+            except Exception:pass
+            time.sleep(CLAUDE_ATTACH_RECALL_WAIT)
+            _,edit=self._claude_verified_prompt(root,item['id'])
+            cards=self._claude_attachment_cards(edit)
+            late=len(cards)
+            for card in cards:
+                try:
+                    pattern=card['removes'][0]['button'].GetInvokePattern()
+                    if pattern is not None and pattern.Invoke() is not False:removed+=1
+                except Exception:pass
+        except Exception:pass
+        try:self.log(f'Claude attachment recall removed={removed} late={late} cleared={cleared}')
+        except Exception:pass
 
     @staticmethod
     def _keyboard_owner():
@@ -2711,11 +2871,13 @@ class Desktop:
         self._claude_wait_prompt(root, item['id'])
         with self.input_lock:
             require_send_desktop()
+            placed=0  # how many of this send's pictures have been pasted: from then on the box's cards are this send's
             try:
                 doc,edit=self._fill_claude_prompt(item,root,text,replace)
                 if images:
                     if self._claude_image_count(edit):raise InputNotSubmitted('Claude 桌面已有附件，尚未发送；请先处理桌面草稿')
                     for index,image in enumerate(images,1):
+                        placed=index  # before the paste: one that fails half-way has to be taken back too
                         self._paste_claude_image(hwnd,root,item,edit,image['path'],index)
                     doc,edit=self._claude_verified_prompt(root,item['id'])
                     if self._claude_image_count(edit)!=len(images):raise InputNotSubmitted('Claude 附件数量已变化，尚未发送')
@@ -2723,8 +2885,11 @@ class Desktop:
                 require_send_desktop()
                 _,edit=self._claude_verified_prompt(root,item['id'])
                 if not self._same_input(self._value(edit),text):raise InputNotSubmitted('提交前输入内容已变化，尚未发送')
-            except ChatError:raise
+            except ChatError:
+                if placed:self._claude_take_back(root,item)  # 11-26 P6: the phone's 恢复草稿 → 再发 starts clean
+                raise
             except Exception as exc:  # the window changed under UI Automation before Send was pressed
+                if placed:self._claude_take_back(root,item)
                 raise InputNotSubmitted('Claude 界面正在变化，尚未发送；手机副本已保留') from exc
             try:
                 pattern=button.GetInvokePattern()

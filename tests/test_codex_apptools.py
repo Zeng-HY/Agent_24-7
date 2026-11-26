@@ -1282,5 +1282,32 @@ class ImageCompressionAndPairingTests(AppToolsBridgeTests):
         self.assertEqual(by_src["hp-hook-img-2"]["text"], "")
 
 
+class AppToolsReceiptMissingTests(unittest.TestCase):
+    """11-26 P1/8.1: the app-tools route answers "missing": true from the same delivery record as the old one."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.legacy = codex_control.Bridge()
+        self.legacy.data_root = Path(self.tmp.name) / "attachments"
+        self.bridge = object.__new__(ca.AppToolsBridge)
+        self.bridge.legacy = self.legacy
+
+    def test_a_record_that_reads_but_holds_no_such_request_says_missing(self) -> None:
+        self.legacy._begin("recorded-request-0001", TID, {"id": TID, "text": "test"})
+        self.assertEqual(self.bridge.receipt(TID, "unknown-request-0001"), {"state": "unknown", "missing": True})
+
+    def test_a_request_it_holds_is_not_called_missing(self) -> None:
+        self.legacy._begin("recorded-request-0001", TID, {"id": TID, "text": "test"})
+        self.legacy._finish("recorded-request-0001", {"ok": False, "delivery_state": "rejected",
+                                                      "request_id": "recorded-request-0001", "text": "未接收"})
+        rec = self.bridge.receipt(TID, "recorded-request-0001")
+        self.assertEqual(rec["state"], "rejected")
+        self.assertNotIn("missing", rec)
+
+    def test_without_a_record_file_the_answer_is_plain_unknown(self) -> None:
+        self.assertEqual(self.bridge.receipt(TID, "any-request-000001"), {"state": "unknown"})
+
+
 if __name__ == "__main__":
     unittest.main()

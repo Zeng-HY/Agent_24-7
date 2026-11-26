@@ -66,6 +66,12 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(self.bridge.receipt(rid)['state'],'unconfirmed')
             page['records'][0]['event']['data']['source']['rpcId']=rid
             self.assertEqual(self.bridge.receipt(rid)['state'],'accepted')
+    def test_a_request_the_request_record_never_held_is_missing(self):
+        # 11-26 P1/8.1: the record reads and holds no such request number, so the message never arrived
+        self.assertEqual(self.bridge.receipt('f'*32),{'state':'unknown','missing':True})
+    def test_a_recorded_request_is_not_called_missing(self):
+        rid='e'*32;self.bridge.once(rid,SID,{'text':'a'},Mock(return_value={'accepted':True}))
+        rec=self.bridge.receipt(rid);self.assertEqual(rec['state'],'accepted');self.assertNotIn('missing',rec)
     def test_approval_is_bound_to_session_event_and_connection(self):
         events=self.bridge.events;events.frame({'type':'ready','clientId':'client'})
         events.frame({'type':'waterfall','eventId':'event','agentId':SID,'event':'approval/request','request':{'toolName':'pwsh'}})
