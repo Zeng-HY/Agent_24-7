@@ -910,6 +910,12 @@ enum DemoData {
                 size: 1_500, state: "current", version: "v1", via: ["link"]),
         FileRef(id: "fp-html", name: "页面.html", path: "D:\\fixture\\file-preview\\page.html", kind: "text", view: "html",
                 size: 1_200, state: "current", version: "v1", via: ["link"]),
+        // 11-26 P3: a Word file the phone's own converter cannot show, and the answer's PDF of the same name, so the
+        // failure page and 看 PDF 版 can be looked at without a real computer. Its bytes are not a Word file at all.
+        FileRef(id: "fp-heavy-docx", name: "季度报告.docx", path: "D:\\fixture\\file-preview\\quarter.docx", kind: "download",
+                view: "download", size: 420, state: "current", version: "v1", via: ["link"]),
+        FileRef(id: "fp-heavy-pdf", name: "季度报告.pdf", path: "D:\\fixture\\file-preview\\quarter.pdf", kind: "pdf", view: "pdf",
+                size: 1_024, state: "current", version: "v1", via: ["link"]),
     ]
 
     /// The answer, written the way a newer computer marks it up: pictures in place, links that match `files`, an
@@ -930,6 +936,8 @@ enum DemoData {
     [多页说明.pdf](D:/fixture/file-preview/pages.pdf) 有三页。
 
     [长日志](D:/fixture/file-preview/long.log)、[数据.csv](D:/fixture/file-preview/data.csv)、[提示音.mp3](D:/fixture/file-preview/tone.mp3)、[演示视频.mp4](D:/fixture/file-preview/clip.mp4)、[资料.zip](D:/fixture/file-preview/files.zip)、[说明.md](D:/fixture/file-preview/notes.md)、[页面.html](D:/fixture/file-preview/page.html)。
+
+    还有一份大文件 [季度报告.docx](D:/fixture/file-preview/quarter.docx)，同一份的 [季度报告.pdf](D:/fixture/file-preview/quarter.pdf) 也在。
 
     生成的脚本是 `D:\fixture\file-preview\run.R`，说明写在 D:/fixture/file-preview/report.txt。
 
@@ -1214,6 +1222,10 @@ enum DemoData {
         AAALAAAAAAAAAAAAAACAARwBAABfcmVscy8ucmVsc1BLAQIUABQAAAAIAAAAWl3OeekWXwEAAGwCAAARAAAAAAAAAAAAAACAAfUBAAB3b3JkL2
         RvY3VtZW50LnhtbFBLBQYAAAAAAwADALkAAACDAwAAAAA=
         """, options: .ignoreUnknownCharacters) ?? Data()
+
+    /// 季度报告.docx of 文件预览示例: named .docx, but not a Word file at all, so the system's converter makes its
+    /// own error page of it and the failure page (design 4.1) can be looked at. Made-up words only.
+    static let heavyDocx = "这不是 Word 文件，只是用来检查失败页的固定内容。\n"
 
     /// A file picked from the demo computer (从电脑选择文件): its ticket and its text.
     static let computerFile = "固定测试内容"
