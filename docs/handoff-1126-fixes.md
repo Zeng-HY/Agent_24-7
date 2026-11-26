@@ -282,9 +282,17 @@ SVG 的规则同第 4.2 节第 4 条。
 - 下载、缓存、点开大图仍走原来的 `workspace.sentPicture`，没开新接口。
 - 画图时文字里的 `[图片]` 前缀和 DeepSeek 的 `[N 张图片]` 后缀都去掉；只有图没有字时气泡里只画图。
 
+**11-27 审后补三处（和安卓用同样的字）**
+
+- Claude 的发送也能到「电脑没收到」：核对时先问一次回执（Claude 走 `/api/agents/claude/receipt`，老电脑没有这个地址就退回 Claude 记录），`unknown` 且 `missing` 标成「电脑没收到」，其他情况照原来的 `claudeCheck` 走；问回执出错不报核对失败。`resend` 不再排除 Claude，重发的回答照 `applyReply` 的 `pressed` 分支走。
+- 核对那一行改成按回执原始的 `state`/`missing` 说：`unknown`+`missing` →「已核对：电脑没收到」；只有 `unknown` →「已核对：电脑查不到这条的记录」；`dispatching` →「已核对：电脑收到了，还在处理」；Claude 记录里既没送达也没排队 →「已核对：Claude 的记录里还没看到这条」；其他 →「已核对：<标签>」。这两段是 TeleplyCore 的纯函数 `checkResultText`/`claudeCheckResultText`。
+- 恢复草稿在输入框有字时不再消失：按钮一直在，只是不能点，下面一行灰字「输入框里有字，先清空才能恢复」。待核对发送记录里也是这样。
+- 测试加了：`checkResultText`/`claudeCheckResultText` 每一种；Claude 回执 `missing`、核对到「电脑没收到」、再用同一编号重发并走 `pressed`；`receiptLabel` 只对 send 认 `missing`（和安卓一致）。
+
 **改了哪些文件**
 
-- `TeleplyCore/Sources/TeleplyModel/ChatCore.swift`：`missingLabel`、`unknownReceiptLabel`，`receiptLabel`/`agentReceiptLabel` 加 `missing`（默认 false，旧调用不变）。
+- `TeleplyCore/Sources/TeleplyModel/ChatCore.swift`：`missingLabel`、`unknownReceiptLabel`，`receiptLabel`/`agentReceiptLabel` 加 `missing`（默认 false，旧调用不变），`checkResultText`/`claudeCheckResultText`。
+- `TeleplyCore/Sources/TeleplyModel/Relay.swift`：Claude 的回执改问 `/api/agents/claude/receipt`（老电脑 404 时由调用方退回 Claude 记录）。
 - `TeleplyCore/Sources/TeleplyModel/SentPictures.swift`：消息自带 `images` 的解析与合并、`wordsWithoutPictureMarks`。
 - `TeleplyCore/Sources/TeleplyModel/Models.swift`：**不在第 3.3 节列表里，只加了一个字段名**：`messageDetails` 里加 `"images"`（`parseMessage` 是唯一能看到消息原始 JSON 的地方；不加就拿不到消息自带的图）。
 - `TeleplyCore/Sources/TeleplyState/ChatModel.swift`：`checking`/`checkNotes`、核对反馈、`missing` 与「标签不变」的判断、`resend`、`restoreAndRemove`、`mayBeMissing`，把回执处理抽成 `applyReply`（首次发送和重发共用）；`save` 不让已移除的副本被晚到的回执复活。
@@ -294,11 +302,11 @@ SVG 的规则同第 4.2 节第 4 条。
 - `Teleply/Composer/ComposerView.swift`：`RecoveryBar`（待确认/电脑没收到），待确认的移除确认。
 - `Teleply/Chat/ChatSheets.swift`：PendingSheet 的两种副本、按钮、核对反馈和移除确认。
 - `Teleply/Chat/Timeline.swift`：只改用户气泡里取文字的那一行，用 `wordsWithoutPictureMarks`。
-- 测试：`TeleplyCoreTests/SendRecoveryTests.swift`（新建，5 项）、`TeleplyCoreTests/SentPicturesTests.swift`（加 2 项）。
+- 测试：`TeleplyCoreTests/SendRecoveryTests.swift`（新建，7 项）、`TeleplyCoreTests/SentPicturesTests.swift`（加 2 项）。
 
 **测试**
 
-- `SendRecoveryTests`：三种回执标签（有 `missing`、只有 `unknown`、其他状态）；重发用同一请求编号、同一文字和同一 `expected_turn`，且只有一条副本；老电脑只答 `unknown` 时标签不变并记下「可能没收到」；恢复草稿后副本变成已移除、字回到输入框；电脑答「已提交过」时回到待确认并显示原话。
+- `SendRecoveryTests`：三种回执标签（有 `missing`、只有 `unknown`、其他状态）；核对那一行的每一种说法；Claude 的回执 `missing` →「电脑没收到」，再用同一编号重发、走 `pressed` 分支；重发用同一请求编号、同一文字和同一 `expected_turn`，且只有一条副本；老电脑只答 `unknown` 时标签不变并记下「可能没收到」；恢复草稿后副本变成已移除、字回到输入框；电脑答「已提交过」时回到待确认并显示原话。
 - `SentPicturesTests`：消息自带图和记录配对图的合并、按 id 去重、path-only / 非 `/api/codex/image` / 超长或带斜杠的 id 跳过、没有 `images` 时结果与以前一样、只有图时文字为空。
 - 现有测试的调用方式没变（`receiptLabel`/`agentReceiptLabel` 的旧 3 参数调用仍可用）。
 
@@ -318,6 +326,7 @@ SVG 的规则同第 4.2 节第 4 条。
 3. SwiftUI：`.alert(_:isPresented:presenting:)` 配 `@State Submission?`，以及 `ViewThatFits` 里包一个 `@ViewBuilder` 方法。
 4. 演示的两个新文件：`ChatModel+SendDemo.swift` 跨文件访问 `@ObservationIgnored var demo`；`SendDemo` 的静态属性引用 `DemoData.row`/`DemoData.message`。
 5. `ChatModel.save` 把列表更新挪到写盘之前（为了让已移除不被晚到的回执复活），有没有哪个旧测试依赖原来的先后顺序。
+6. Claude 的回执地址：iOS 改成问 `/api/agents/claude/receipt`，和电脑端 `agents/claude.py` 的 `http_receipt` 是不是同一条路（安卓也是先走 `/api/agents/<app>/receipt`，老电脑 404 后退回 Claude 记录）。
 
 ### 10.2 线二 iPhone「文件」
 

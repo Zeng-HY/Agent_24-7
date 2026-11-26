@@ -773,14 +773,6 @@ public final class ChatModel {
         if synthetic { demo[record.request] = record } else { await store?.saveSubmission(record) }
     }
 
-    /// What 核对 came to, for its visible line (handoff 11-26 §3.1 point 5).
-    struct CheckOutcome: Equatable, Sendable {
-        var label: String
-        /// The computer's records know nothing and it did not say whether the request is missing (an older computer,
-        /// or one that cannot read its delivery records): the copy keeps its words and says so.
-        var unsure = false
-    }
-
     /// 核对: reads the receipt of [record] again; never sends it again. While it runs the bar and the sheet show
     /// 正在核对…; the result (已核对：…) stays a few seconds (handoff 11-26 §3.1 point 5).
     public func check(_ record: Submission) {
@@ -791,8 +783,7 @@ public final class ChatModel {
             guard let self else { return }
             var note: String?
             do {
-                let outcome = try await self.reconcile(record, client)
-                note = "已核对：" + (outcome.unsure ? "电脑查不到这条的记录，可能没收到。" : outcome.label)
+                note = try await self.reconcile(record, client)
             } catch {
                 if self.key == record.key { self.error = "核对失败，原提交仍保留；不会自动重发。" }
             }
@@ -817,19 +808,39 @@ public final class ChatModel {
         jsonValue(record.body)[SendNote.receiptUnknown].bool()
     }
 
+    /// What 核对 came to, as the one line it shows (handoff 11-26 §3.1 point 5).
     @discardableResult
-    func reconcile(_ record: Submission, _ client: RelayClient) async throws -> CheckOutcome {
+    func reconcile(_ record: Submission, _ client: RelayClient) async throws -> String {
         let synthetic = synthetic
         if record.app == "claude" && record.action == "send" {
-            // No receipts for Claude: what its record shows decides, and nothing is sent again.
-            guard let found = try await claudeCheck(record, client) else { return CheckOutcome(label: record.label) }
+            // 11-26: Claude's sends share the computer's delivery record with Codex. Ask the receipt first: `missing`
+            // means the computer never got it, and it can be sent again under the same request id. A receipt that
+            // cannot be read (an older computer without that address) is no reason to fail the check; its own record
+            // is asked as before.
+            let receipt = try? await client.receipt(device: record.device, app: record.app, chat: record.chat,
+                                                    request: record.request, catalog: catalog)
+            if let receipt, receipt["state"].string() == "unknown", receipt["missing"].bool() {
+                var next = record
+                var notes = jsonValue(record.body).object
+                if notes[SendNote.receiptUnknown] != nil {
+                    notes[SendNote.receiptUnknown] = nil
+                    next.body = jsonText(.object(notes))
+                }
+                next.label = missingLabel
+                await save(next, synthetic)
+                return checkResultText(state: "unknown", missing: true, label: missingLabel)
+            }
+            // No receipt state to go by: what Claude's record shows decides, and nothing is sent again.
+            guard let found = try await claudeCheck(record, client) else {
+                return claudeCheckResultText(delivered: false, queued: false)
+            }
             let label = found["delivered"].bool() ? "已送达" : found["queued"].bool() ? "已排队" : record.label
             if label != record.label {
                 var next = record
                 next.label = label
                 await save(next, synthetic)
             }
-            return CheckOutcome(label: label)
+            return claudeCheckResultText(delivered: found["delivered"].bool(), queued: found["queued"].bool())
         }
         let response = try await client.receipt(device: record.device, app: record.app, chat: record.chat, request: record.request,
                                                 catalog: catalog)
@@ -872,7 +883,7 @@ public final class ChatModel {
         if label != record.label { next.label = label }
         if bodyChanged { next.body = jsonText(.object(notes)) }
         if label != record.label || bodyChanged { await save(next, synthetic) }
-        return CheckOutcome(label: label, unsure: unsure)
+        return checkResultText(state: state, missing: missing, label: label)
     }
 
     /// 移除: takes a send that went nowhere off the list; the computer is not asked anything.
@@ -890,10 +901,13 @@ public final class ChatModel {
     /// so a first copy that arrives late cannot make a second message. The copy goes back to 提交中, and the usual
     /// receipt then words it. Only a tap sends; nothing is resent by itself.
     public func resend(_ record: Submission) {
-        guard let key, let client, key == record.key, record.action == "send", record.app != "claude",
+        guard let key, let client, key == record.key, record.action == "send",
               record.label == missingLabel else { return }
         guard foreground, ready, !inFlight.contains(key), control.available || sendsWhileAway(key.app) else { return }
-        var fields = jsonValue(record.body).object
+        let stored = jsonValue(record.body)
+        // The copy's own request id must be the body's: that id is what the computer de-duplicates by.
+        guard stored["request_id"].string() == record.request else { return }
+        var fields = stored.object
         for note in SendNote.all { fields[note] = nil }
         fields["request_id"] = .string(record.request)
         let body = JSONValue.object(fields)

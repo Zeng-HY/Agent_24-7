@@ -189,8 +189,15 @@ struct PendingSheet: View {
                                     .foregroundStyle(Palette.muted)
                             }
                             ViewThatFits(in: .horizontal) {
-                                HStack(spacing: 8) { actions(chat: chat, record: record, missing: missing) }
-                                VStack(alignment: .leading, spacing: 8) { actions(chat: chat, record: record, missing: missing) }
+                                HStack(spacing: 8) { actions(chat: chat, record: record, missing: missing, unsure: unsure) }
+                                VStack(alignment: .leading, spacing: 8) { actions(chat: chat, record: record, missing: missing, unsure: unsure) }
+                            }
+                            // 11-26: the button stays visible when the box already has words; this says why it
+                            // cannot be used.
+                            if !chat.draft.isEmpty, missing || unsure {
+                                Text("输入框里有字，先清空才能恢复")
+                                    .noteFont()
+                                    .foregroundStyle(Palette.muted)
                             }
                         }
                         .padding(16)
@@ -230,7 +237,7 @@ struct PendingSheet: View {
     }
 
     @ViewBuilder
-    private func actions(chat: ChatModel, record: Submission, missing: Bool) -> some View {
+    private func actions(chat: ChatModel, record: Submission, missing: Bool, unsure: Bool) -> some View {
         Button("核对状态") { chat.check(record) }
             .buttonStyle(PillStyle())
             .disabled(chat.submitting)
@@ -240,7 +247,7 @@ struct PendingSheet: View {
                 .disabled(chat.submitting || !(chat.control.available || sendsWhileAway(record.app)))
         }
         if record.action == "send" {
-            if missing || record.label == unknownReceiptLabel {
+            if missing || unsure {
                 // Its words go back in the box and this copy leaves the list, so sending them is a new request; the
                 // old request id is never posted again from here.
                 Button("恢复草稿") { chat.restoreAndRemove(record) }

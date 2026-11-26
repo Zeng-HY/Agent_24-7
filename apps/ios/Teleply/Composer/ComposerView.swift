@@ -93,6 +93,13 @@ private struct RecoveryBar: View {
                 HStack(spacing: 2) { actions(chat: chat, missing: missing, unsure: unsure) }
                 VStack(alignment: .leading, spacing: 0) { actions(chat: chat, missing: missing, unsure: unsure) }
             }
+            // 11-26: the button stays visible when the box already has words; this says why it cannot be used.
+            if !chat.draft.isEmpty, missing || unsure {
+                Text("输入框里有字，先清空才能恢复")
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+                    .padding(.leading, 2)
+            }
         }
         .padding(.leading, 14)
         .padding(.trailing, 6)
@@ -110,11 +117,9 @@ private struct RecoveryBar: View {
                 .buttonStyle(PillStyle(kind: .text, minHeight: 36))
                 .disabled(chat.submitting || !(chat.control.available || sendsWhileAway(record.app)))
                 .accessibilityLabel(Text("用原来的请求编号重发这条消息"))
-            if chat.draft.isEmpty {
-                Button("恢复草稿") { chat.restoreAndRemove(record) }
-                    .buttonStyle(PillStyle(kind: .text, minHeight: 36))
-                    .disabled(chat.submitting)
-            }
+            Button("恢复草稿") { chat.restoreAndRemove(record) }
+                .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                .disabled(chat.submitting || !chat.draft.isEmpty)
             Button("移除") { chat.dismiss(record) }
                 .buttonStyle(PillStyle(kind: .text, minHeight: 36))
                 .accessibilityLabel(Text("移除这条电脑没收到的记录"))
@@ -122,10 +127,10 @@ private struct RecoveryBar: View {
             Button("核对待发送消息") { chat.check(record) }
                 .buttonStyle(PillStyle(kind: .text, minHeight: 36))
                 .disabled(chat.submitting)
-            if unsure, chat.draft.isEmpty {
+            if unsure {
                 Button("恢复草稿") { chat.restoreAndRemove(record) }
                     .buttonStyle(PillStyle(kind: .text, minHeight: 36))
-                    .disabled(chat.submitting)
+                    .disabled(chat.submitting || !chat.draft.isEmpty)
             }
             Button("移除") { removing = record }
                 .buttonStyle(PillStyle(kind: .text, minHeight: 36))
