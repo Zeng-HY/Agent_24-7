@@ -377,9 +377,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         update(k) { it.copy(checking=record.request,checked=record.request,checkNote="",error=null) }
         scope.launch {
             try {
-                reconcile(record,service,synthetic)
-                val label=state.value.submissions.firstOrNull { it.request==record.request }?.label ?: record.label
-                if(binding==token) update(k) { it.copy(checking="",checked=record.request,checkNote=checkResultText(label)) }
+                val note=reconcile(record,service,synthetic,report=true)
+                if(binding==token) update(k) { it.copy(checking="",checked=record.request,checkNote=note ?: "已核对：${record.label}") }
                 delay(4_000)
                 if(binding==token) update(k) { if(it.checked==record.request) it.copy(checkNote="") else it }
             } catch(e:CancellationException) { throw e }
@@ -388,13 +387,24 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             }
         }
     }
-    private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean) {
+    private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean,report:Boolean=false):String? {
         if(isClaudeLayout(record.app) && record.action=="send") {
+            // 11-26: Claude's sends share the computer's delivery record with Codex. Ask the receipt first: missing means
+            // the computer never got it (and it can be sent again with the same request id); a broken receipt read is no
+            // reason to fail the check, so the record is asked as before.
+            val receipt=try { service.receipt(record.device,record.chat,record.request) }
+                catch(e:CancellationException) { throw e }
+                catch(_:Exception) { null }
+            if(receipt!=null && receipt.string("state")=="unknown" && receipt.optBoolean("missing")) {
+                val body=JSONObject(record.body).apply { remove(ReceiptUnknownKey) }
+                save(record.copy(label=MissingLabel,body=body.toString()),synthetic)
+                return if(report) checkResultText("unknown",true,MissingLabel) else null
+            }
             // No receipts for Claude: what its record shows decides, and nothing is sent again.
-            val r=claudeCheck(record,service) ?: return
+            val r=claudeCheck(record,service) ?: return if(report) claudeCheckResultText(false,false) else null
             val label=when { r.optBoolean("delivered") -> "已送达";r.optBoolean("queued") -> "已排队";else -> record.label }
             if(label!=record.label) save(record.copy(label=label),synthetic)
-            return
+            return if(report) claudeCheckResultText(r.optBoolean("delivered"),r.optBoolean("queued")) else null
         }
         val response=service.receipt(record.device,record.chat,record.request)
         require(response.string("request_id").let { it==record.request || it.isBlank() && response.string("state")=="unknown" })
@@ -409,5 +419,6 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         val body=JSONObject(record.body)
         if(state=="unknown" && !response.optBoolean("missing")) body.put(ReceiptUnknownKey,true) else body.remove(ReceiptUnknownKey)
         save(record.copy(label=label,body=body.toString()),synthetic)
+        return if(report) checkResultText(state,response.optBoolean("missing"),label) else null
     }
 }

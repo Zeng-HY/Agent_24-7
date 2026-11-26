@@ -53,10 +53,19 @@ fun receiptLabel(state: String, result: JSONObject, action: String, missing: Boo
     else -> "送达状态待确认"
 }
 
-/** The one line a finished 核对 leaves for a few seconds (design 3.1 item 5). */
-fun checkResultText(label: String): String = when (label) {
-    "电脑没收到", "已送达", "已接收", "已排队", "已取消排队", "未接收" -> "已核对：$label"
-    else -> "已核对：电脑查不到这条的记录"
+/** The one line a finished 核对 leaves for a few seconds (design 3.1 item 5), from the receipt itself, not its label. */
+fun checkResultText(state: String, missing: Boolean, label: String): String = when {
+    state=="unknown" && missing -> "已核对：电脑没收到"
+    state=="unknown" -> "已核对：电脑查不到这条的记录"
+    state=="dispatching" -> "已核对：电脑收到了，还在处理"
+    else -> "已核对：$label"
+}
+
+/** Claude has no delivery receipt: what its own record shows is the result (design 3.1 item 5). */
+fun claudeCheckResultText(delivered: Boolean, queued: Boolean): String = when {
+    delivered -> "已核对：已送达"
+    queued -> "已核对：已排队"
+    else -> "已核对：Claude 的记录里还没看到这条"
 }
 
 /** A send the computer's receipt says it never got, whose original request and content can be sent again. */

@@ -170,6 +170,7 @@ private fun SendStateBar(record: Submission?, chat: ComposerState, vm: ReaderVie
     val body = remember(record.body) { json(record.body) }
     // The computer answered unknown without missing: an older computer, or one that cannot read its record.
     val unknown = !missing && body.optBoolean(ReceiptUnknownKey)
+    val canRestore = chat.draft.isBlank()
     var confirming by remember(record.request) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(TeleplyShape.Tray).background(if (missing) p.stopBg else p.noteBg).padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 4.dp)) {
         Text(
@@ -181,13 +182,17 @@ private fun SendStateBar(record: Submission?, chat: ComposerState, vm: ReaderVie
         androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             if (missing) {
                 PillButton("重发", { vm.composer.resend(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting && chat.control.available, description = "用原来的请求编号和原来的内容再发一次")
-                if (chat.draft.isBlank()) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting)
+                PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = canRestore && !chat.submitting)
                 PillButton("移除", { vm.composer.dismiss(record) }, style = PillStyle.Text, minHeight = 36.dp, description = "移除这条电脑没收到的记录")
             } else {
                 PillButton(if (checking) "核对中…" else "核对待发送消息", { vm.composer.check(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting && !checking)
-                if (unknown && chat.draft.isBlank()) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting)
+                if (unknown) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = canRestore && !chat.submitting)
                 PillButton("移除", { confirming = true }, style = PillStyle.Text, minHeight = 36.dp, description = "移除这条待确认的记录")
             }
+        }
+        // The button stays visible when the box has words; this says why it cannot be used (11-26).
+        if (!canRestore && (missing || unknown)) {
+            Text("输入框里有字，先清空才能恢复", style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.padding(start = 2.dp, bottom = 4.dp))
         }
     }
     if (confirming) RemovePendingDialog(onConfirm = { confirming = false; vm.composer.dismiss(record) }, onDismiss = { confirming = false })

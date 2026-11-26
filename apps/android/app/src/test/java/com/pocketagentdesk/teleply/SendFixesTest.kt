@@ -25,6 +25,8 @@ private class SendApi : TestApi() {
     val receipts = mutableMapOf<String, JSONObject>()
     val sent = mutableListOf<JSONObject>()
     var fail: Exception? = null
+    var receiptFails = false
+    var claudeDelivered = false
     var receiptGate: CompletableDeferred<Unit>? = null
     override suspend fun control(device: String, chat: String, fresh: Boolean) = Control(available = true, queueAvailable = true)
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
@@ -34,8 +36,12 @@ private class SendApi : TestApi() {
     }
     override suspend fun receipt(device: String, chat: String, request: String): JSONObject {
         receiptGate?.await()
+        if (receiptFails) throw java.io.IOException("timeout")
         return receipts[request] ?: JSONObject().put("state", "unknown")
     }
+    override suspend fun detail(device: String, route: String, query: Map<String, String?>, body: JSONObject?): JSONObject =
+        if (route == "chat/check") JSONObject().put("delivered", claudeDelivered).put("queued", false)
+        else super.detail(device, route, query, body)
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -45,7 +51,7 @@ class SendFixesTest {
     private fun body(id: String = "r1", text: String = "原来的内容") = JSONObject()
         .put("id", key.chat).put("request_id", id).put("text", text).put("intent", "auto").put("attachments", JSONArray())
 
-    private fun record(label: String = "送达状态待确认", id: String = "r1", text: String = "原来的内容", body: JSONObject = body(id, text)) =
+    private fun record(label: String = "送达状态待确认", id: String = "r1", text: String = "原来的内容", body: JSONObject = body(id, text), key: ChatKey = this.key) =
         Submission(id, key.scope, key.device, app = key.app, chat = key.chat, text = text, action = "send", turn = "",
             body = body.toString(), label = label)
 
@@ -60,9 +66,15 @@ class SendFixesTest {
         assertEquals("未接收", receiptLabel("rejected", JSONObject(), "send", missing = true))
         // A stop is not a message the computer can say it never got.
         assertEquals("送达状态待确认", receiptLabel("unknown", JSONObject(), "stop", missing = true))
-        assertEquals("已核对：电脑没收到", checkResultText(MissingLabel))
-        assertEquals("已核对：已送达", checkResultText("已送达"))
-        assertEquals("已核对：电脑查不到这条的记录", checkResultText("送达状态待确认"))
+        // 核对's line comes from the receipt's own state, not from the label a send happens to have.
+        assertEquals("已核对：电脑没收到", checkResultText("unknown", true, "电脑没收到"))
+        assertEquals("已核对：电脑查不到这条的记录", checkResultText("unknown", false, "送达状态待确认"))
+        assertEquals("已核对：电脑收到了，还在处理", checkResultText("dispatching", false, "送达状态待确认"))
+        assertEquals("已核对：已停止", checkResultText("accepted", false, "已停止"))
+        assertEquals("已核对：已送达", checkResultText("accepted", false, "已送达"))
+        assertEquals("已核对：已送达", claudeCheckResultText(true, false))
+        assertEquals("已核对：已排队", claudeCheckResultText(false, true))
+        assertEquals("已核对：Claude 的记录里还没看到这条", claudeCheckResultText(false, false))
     }
 
     /** The three answers on a stored send: missing, unknown only, and something else. */
@@ -195,5 +207,52 @@ class SendFixesTest {
         runCurrent()
         assertEquals("核对失败，原提交仍保留；不会自动重发。", c.state.value.error)
         assertEquals(MissingLabel, c.state.value.submissions.single().label)
+    }
+
+    /** A receipt still being processed is said in its own words, not as "查不到这条" (design 3.1 item 5). */
+    @Test fun checkTellsADispatchingReceiptApart() = runTest {
+        val store = SendStore()
+        store.records["r1"] = record()
+        val api = SendApi().apply { receipts["r1"] = JSONObject().put("state", "dispatching").put("request_id", "r1") }
+        val c = ChatController(backgroundScope, store)
+        c.bind(key, api, true, false) {}
+        runCurrent()
+        c.check(c.state.value.submissions.single())
+        runCurrent()
+        assertEquals("已核对：电脑收到了，还在处理", c.state.value.checkNote)
+        assertEquals("送达状态待确认", c.state.value.submissions.single().label)
+    }
+
+    /** 11-26: a Claude send asks the shared delivery record first, and can be 电脑没收到 and sent again. */
+    @Test fun aClaudeSendCanBeMissingAndSentAgain() = runTest {
+        val claudeKey = key.copy(app = "claude")
+        val store = SendStore()
+        store.records["r1"] = record(label = "送达状态待确认", key = claudeKey)
+        val api = SendApi().apply { receipts["r1"] = missing() }
+        val c = ChatController(backgroundScope, store)
+        c.bind(claudeKey, api, true, false) {}
+        runCurrent()
+        assertEquals(MissingLabel, c.state.value.submissions.single().label)
+        c.resend(c.state.value.submissions.single())
+        runCurrent()
+        assertEquals(1, api.sent.size)
+        assertEquals("r1", api.sent.single().string("request_id"))
+    }
+
+    /** A Claude receipt that cannot be read is no reason to fail the check: its own record is asked as before. */
+    @Test fun aClaudeReceiptFailureFallsBackToItsRecord() = runTest {
+        val claudeKey = key.copy(app = "claude")
+        val store = SendStore()
+        val b = body().put(ClaudeOffset, 100L).put(ClaudeCheckText, "原来的内容")
+        store.records["r1"] = record(key = claudeKey, body = b)
+        val api = SendApi().apply { receiptFails = true; claudeDelivered = true }
+        val c = ChatController(backgroundScope, store)
+        c.bind(claudeKey, api, true, false) {}
+        runCurrent()
+        assertEquals("已送达", c.state.value.submissions.single().label)
+        c.check(c.state.value.submissions.single())
+        runCurrent()
+        assertEquals("已核对：已送达", c.state.value.checkNote)
+        assertEquals(null, c.state.value.error)
     }
 }

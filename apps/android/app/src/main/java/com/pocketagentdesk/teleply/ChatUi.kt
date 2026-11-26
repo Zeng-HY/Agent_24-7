@@ -1479,12 +1479,15 @@ private fun PendingSheet(chat: ComposerState, vm: ReaderViewModel, onDismiss: ()
                 androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PillButton(if (checking) "核对中…" else "核对状态", { vm.composer.check(record) }, enabled = !chat.submitting && !checking)
                     if (missing) PillButton("重发", { vm.composer.resend(record) }, enabled = !chat.submitting && chat.control.available, style = PillStyle.Text)
-                    if ((missing || unknown) && chat.draft.isBlank()) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, enabled = !chat.submitting, style = PillStyle.Text)
+                    if (missing || unknown) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, enabled = chat.draft.isBlank() && !chat.submitting, style = PillStyle.Text)
                     if (!missing && !unknown && record.action == "send") {
                         PillButton("恢复提交快照", { vm.composer.restore(record) }, enabled = chat.draft.isBlank() && !chat.submitting, style = PillStyle.Text)
                     }
                     if (missing) PillButton("移除", { vm.composer.dismiss(record) }, enabled = !chat.submitting, style = PillStyle.Text)
                     if (!missing && record.label == "送达状态待确认") PillButton("移除", { confirming = true }, enabled = !chat.submitting, style = PillStyle.Text)
+                }
+                if (!chat.draft.isBlank() && (missing || unknown)) {
+                    Text("输入框里有字，先清空才能恢复", style = MaterialTheme.typography.note, color = p.muted)
                 }
             }
             if (confirming) RemovePendingDialog(onConfirm = { confirming = false; vm.composer.dismiss(record) }, onDismiss = { confirming = false })

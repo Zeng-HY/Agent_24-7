@@ -544,6 +544,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         val response = withLegacyFallback(device, app in LegacyApps, {
             request(devicePath(device, "/api/agents/$app/receipt"), query)
         }) {
+            // 11-26: Claude's unified receipt can say `missing`; a legacy host has no such route, so it answers unknown
+            // here and the caller falls back to Claude's own record.
             if (app == "claude") JSONObject().put("state", "unknown")
             else request(devicePath(device, "/api/$app/receipt"), query)
         }
