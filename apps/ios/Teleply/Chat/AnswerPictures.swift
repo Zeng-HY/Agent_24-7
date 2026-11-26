@@ -247,9 +247,8 @@ private struct FileStripCard: View {
                             .resizable()
                             .scaledToFill()
                     } else {
-                        Image(systemName: file.picture ? "photo" : "doc")
-                            .font(.system(size: 20))
-                            .foregroundStyle(Palette.muted.opacity(0.7))
+                        // A file that is not a picture, or a picture with no thumb yet: its type's own mark (§4.2, §4.3).
+                        FileTypeIcon(name: file.name, size: 42)
                     }
                 }
                 .frame(width: 48, height: 48)

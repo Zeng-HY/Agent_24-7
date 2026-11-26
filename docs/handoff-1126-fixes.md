@@ -266,7 +266,50 @@ SVG 的规则同第 4.2 节第 4 条。
 
 ### 10.2 线二 iPhone「文件」
 
-（待填）
+**做了什么**
+
+- P3（第 4.1 节）：文件页换了一条路——网页视图把状态（正在转换 / 已显示 / 失败）报给页面；失败两种都认：`didFail` 和 `didFailProvisionalNavigation`（`NSURLErrorCancelled` 除外，那是页面关掉），以及 `didFinish` 后用 `evaluateJavaScript` 读正文交给纯函数 `systemPreviewFailed`（少于 400 字、含 `ErrorDomain` 或 `(错误|error)\s*[0-9]{2,}`）。转换期间整页是转圈和「正在打开…」，`didFinish` 或失败后撤掉。
+- 失败页：大号文件类型图标和文件名，标题「iPhone 自带的预览打不开这份文件」，说明「文件本身没有问题。它太大或太复杂（比如几百页、几百张表），苹果系统自带的转换器处理不了。」，按钮「看 PDF 版」（有同名 PDF 时）、「用其他应用打开」（系统分享面板）、「保存到文件」。Word、Excel、PowerPoint 同一条路。
+- 同名 PDF：判断是纯函数 `sameNamePDF`（去扩展名比、不分大小写、只管最后一个点、没有 id 的 PDF 不算）。文件页从当前对话的消息里找这份文件所属的回答，再用那个回答的 `files`；从「电脑文件」浏览打开的文件（页面数据里有 `reference`）不找。**没有改 `Timeline.swift`、`ConversationView.swift`、`RootView.swift`**。「看 PDF 版」就地换文件页（同一个导航层），返回回到对话，不回到失败页。
+- P4（第 4.2、4.3 节）：新视图 `FileTypeIcon(name:size:)`，SwiftUI 画纸页、右上角折角（稍浅）、纸面用表里的颜色、白色粗体短字；不用图片素材、不画公司商标；深浅色同色；字多于 3 个字符缩小一档，另有 `minimumScaleFactor` 兜底。表放在 TeleplyCore（`FileTypeMark` + `fileTypeMark(for:)`），颜色用 RGB 的 0–255 数值，没有 `#E5483B` 这类原始字符串。16 行照抄；其他类型取扩展名大写前 4 个字符，没有扩展名就空着。
+- 用图标的地方：回答文件条（`FileStripCard`，非图片和没缩略图的图片）、文件页「不直接显示」、失败页、输入框附件（`AttachmentTiles`，只换图标）、「对话文件」列表、「电脑文件」列表（文件夹仍用文件夹图标）。SVG 核对过：`thumb` 为真时现在就会显示缩略图，没缩略图时是 SVG 图标；这两处没动。
+
+**改了哪些文件**
+
+- 新建：`apps/ios/Teleply/Files/FileTypeIcon.swift`、`apps/ios/TeleplyCore/Sources/TeleplyModel/FilePreviewRules.swift`、`apps/ios/TeleplyCore/Tests/TeleplyCoreTests/FilePreviewRulesTests.swift`。
+- 修改：`apps/ios/Teleply/Files/DocumentPreview.swift`、`apps/ios/Teleply/Files/FilePages.swift`、`apps/ios/Teleply/Chat/AnswerPictures.swift`、`apps/ios/Teleply/Composer/Attachments.swift`、`apps/ios/TeleplyCore/Sources/TeleplyDemo/DemoWorld.swift`、`apps/ios/TeleplyCore/Sources/TeleplyDemo/DemoTransport.swift`、`apps/ios/TeleplyCore/Tests/TeleplyCoreTests/AnswerFilesTests.swift`（只把演示文件条的期望列表加两个 id）。
+- 没动版本号、README、本地化文件，也没动线一的 `Timeline.swift`、`ComposerView.swift`、`ChatModel.swift`。
+
+**加了哪些测试**（`FilePreviewRulesTests`，6 项，TeleplyCoreTests）
+
+- 失败判断：中文「错误 912」、英文「error 912」、只有 `ErrorDomain`、「错误 12」、「ERROR 1024」、`error` 加制表符再加两位数字 → 失败；空页面、400 字以上的长正文（即使含 `ErrorDomain`）、短句没有错误、「错误」「error」后面没有两位数字 → 没失败。
+- 同名 PDF：大小写、文件名里多个点、「带.点的.报告.docx」对「带.点的.报告.PDF」、没有同名 PDF、PDF 没有 id、扩展名不是 pdf、问的名字没有点（按整名比）。
+- 图标表：16 行每行一个例子（字和 RGB 三个数）；同行其他扩展名（doc/pages/ods/tsv/key/tar.gz/log/markdown/kts/tiff/m4a/mov/msi）、大小写、未知扩展名大写取 4 个字符、没有扩展名（`Makefile`、`.gitignore`、`a.`）。
+- 演示：那份打不开的 docx 能找到同名 PDF；「文件预览示例」只在 `-TeleplyDemoFiles` 下列出。
+- `AnswerFilesTests` 里演示文件条的期望列表补上 `fp-heavy-docx`、`fp-heavy-pdf`。
+
+**演示**
+
+`-TeleplyDemoFiles` 的「文件预览示例」多了两个文件：`季度报告.docx`（内容不是 Word，系统转换会失败）和同一份的 `季度报告.pdf`；回答正文里两个都有链接，失败页上能看到「看 PDF 版」。默认截图组不用这个开关，现有截图不受影响。
+
+**怎么核对的**
+
+- 这台电脑没有 Swift，**没编译、没跑测试、没跑模拟器**。全部靠读代码加两个自查：
+- 新加的原始字符串只有失败判断那一个 `#"…"#`，里面没有 `"#`；颜色一律 RGB 数值。
+- 用一个粗写的 Swift 括号/字符串配平脚本（放在工作区子文件夹，不进仓库）把改过的 10 个文件过了一遍，0 处括号或字符串不闭合。
+
+**最担心编不过的地方**（按担心程度）
+
+1. `DocumentPreview` 新加的 `didFinish` / `didFail` / `didFailProvisionalNavigation` 三个可选 delegate 方法签名。`ci-testflight.sh` 见到「nearly matches optional requirement」就让构建失败；签名按 Apple 文档的 `WKNavigation!` 加 `any Error` 写，但本机没有 SDK 能核对。
+2. `evaluateJavaScript` 的 completion handler 在新 SDK 里的隔离标注。为了两种都能编过，回调里只写 `let body = value as? String ?? ""` 和 `Task { @MainActor in self.finished(body) }`；若 SDK 的标注是别的形式，仍可能报隔离错误。
+3. `FileTypeIcon` 里的 `Color(.sRGB, red:green:blue:opacity:)`、`Path.addQuadCurve`、`Text` 的字号 `markSize(width)`（CGFloat）——老 API，但只能靠读。
+4. `PickerSheet.rows(_:label:pick:)` 的 label 从三元组改成四元组，两处调用都改了；本机 grep 只有这两处，若还有遗漏会编不过。
+5. 演示里那份假 `.docx` 是不是真让系统转换器失败，以及系统错误页在 iOS 26 上能不能在 `didFinish` 后用 `innerText` 读到、是不是真的少于 400 字——只能等 Codemagic 模拟器或真机。
+6. `FilePage.pdfVersion` 靠 `model.messages` 找同名 PDF：文件页打开时当前对话的消息还没读进来时按钮不出现（不报错，只是少一个按钮）。
+
+**没做什么**
+
+没推送、没合并、没打包、没改版本号；没跑 Codemagic、没上真机；没读真实对话记录；没动别的工作树和别的路的文件。
 
 ### 10.3 线三 安卓「发送」
 

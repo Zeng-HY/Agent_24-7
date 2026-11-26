@@ -234,15 +234,18 @@ struct AttachmentTiles: View {
                         let preview = row["preview"].string().isEmpty ? nil : WorkspaceModel.photoFolder.appendingPathComponent(row["preview"].string())
                         Tile(symbol: row["image"].bool() ? "photo" : "doc", name: row["name"].string(),
                              status: status == "ready" ? nil : failed ? (row["error"].string().isEmpty ? "上传失败" : row["error"].string()) : "上传中",
-                             failed: failed, removeLabel: "移除附件 " + row["name"].string(), preview: preview, look: { looking = $0 }) {
+                             failed: failed, removeLabel: "移除附件 " + row["name"].string(),
+                             markName: row["image"].bool() ? nil : row["name"].string(),
+                             preview: preview, look: { looking = $0 }) {
                             workspace.removeUpload(row["local"].string())
                         }
                     }
                     ForEach(Array(references.enumerated()), id: \.offset) { _, reference in
                         let kind = reference["kind"].string()
                         let name = reference["name"].string().isEmpty ? reference["title"].string() : reference["name"].string()
-                        Tile(symbol: kind == "skill" ? "wand.and.stars" : kind == "chat" ? "bubble.left" : kind == "folder" ? "folder" : "doc",
-                             name: name, status: nil, failed: false, removeLabel: "移除引用 " + name) {
+                        let symbol = kind == "skill" ? "wand.and.stars" : kind == "chat" ? "bubble.left" : kind == "folder" ? "folder" : "doc"
+                        Tile(symbol: symbol, name: name, status: nil, failed: false, removeLabel: "移除引用 " + name,
+                             markName: symbol == "doc" ? name : nil) {
                             workspace.removeReference(reference["id"].string())
                         }
                     }
@@ -261,6 +264,8 @@ private struct Tile: View {
     let status: String?
     let failed: Bool
     let removeLabel: String
+    /// A file's own name, when its type's mark is drawn instead of [symbol] (§4.2).
+    var markName: String? = nil
     /// A picture's preview: shown in place of its icon and name, opened large when tapped.
     var preview: URL?
     var look: (URL) -> Void = { _ in }
@@ -280,6 +285,9 @@ private struct Tile: View {
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
                 .accessibilityLabel(Text("放大看 " + name))
+            } else if let markName {
+                FileTypeIcon(name: markName, size: 24)
+                    .accessibilityHidden(true)
             } else {
                 Image(systemName: symbol)
                     .font(.system(size: 14, weight: .medium))
@@ -430,7 +438,7 @@ struct PickerSheet: View {
             rows(items) { reference in
                 let title = reference["name"].string().isEmpty ? reference["title"].string() : reference["name"].string()
                 let detail = reference["description"].string()
-                return (title, detail.isEmpty ? nil : detail, "plus.circle")
+                return (title, detail.isEmpty ? nil : detail, "plus.circle", nil)
             } pick: { reference in
                 workspace.addReference(reference)
                 dismiss()
@@ -485,7 +493,8 @@ struct PickerSheet: View {
         if !items.isEmpty {
             rows(items) { row in
                 let file = row["kind"].string() == "file"
-                return (row["name"].string(), file && row.has("size") ? byteSize(row["size"].int64()) : nil, file ? "doc" : "folder")
+                return (row["name"].string(), file && row.has("size") ? byteSize(row["size"].int64()) : nil,
+                        file ? "doc" : "folder", file ? row["name"].string() : nil)
             } pick: { row in
                 if row["kind"].string() == "file" {
                     workspace.computerFile(row)
@@ -501,20 +510,27 @@ struct PickerSheet: View {
         }
     }
 
-    /// The rows of a list, in one grouped card (web .setting-group).
-    private func rows(_ items: [JSONValue], label: @escaping (JSONValue) -> (String, String?, String), pick: @escaping (JSONValue) -> Void) -> some View {
+    /// The rows of a list, in one grouped card (web .setting-group). A file shows its type's mark (§4.2); a folder, a
+    /// conversation or a skill keeps its own symbol.
+    private func rows(_ items: [JSONValue], label: @escaping (JSONValue) -> (String, String?, String, String?),
+                      pick: @escaping (JSONValue) -> Void) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 if index > 0 { Rectangle().fill(Palette.line).frame(height: 1).padding(.leading, 52) }
-                let (title, detail, symbol) = label(item)
+                let (title, detail, symbol, mark) = label(item)
                 Button {
                     pick(item)
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: symbol)
-                            .font(.system(size: 17))
-                            .foregroundStyle(Palette.muted)
-                            .frame(width: 24)
+                        if let mark {
+                            FileTypeIcon(name: mark, size: 24)
+                                .frame(width: 24)
+                        } else {
+                            Image(systemName: symbol)
+                                .font(.system(size: 17))
+                                .foregroundStyle(Palette.muted)
+                                .frame(width: 24)
+                        }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(title)
                                 .bodyFont()
