@@ -38,7 +38,12 @@ fun mergeLive(old: List<Message>, incoming: List<Message>): List<Message> {
     val merged=mergeMessages(old.filter { it.id !in aliases },incoming,false)
     return if(merged.all { it.order!=null }) merged.sortedBy { it.order } else merged
 }
-fun receiptLabel(state: String, result: JSONObject, action: String): String = when {
+/**
+ * What a receipt says a send's state is (11-26): a computer that knows its delivery record has no such request says
+ * so with `missing` (design §8.1), and that is the new 电脑没收到, not a state still to be settled.
+ */
+fun receiptLabel(state: String, result: JSONObject, action: String, missing: Boolean = false): String = when {
+    state=="unknown" && missing && action=="send" -> "电脑没收到"
     state=="cancelled" -> "已取消排队"
     state=="rejected" -> "未接收"
     state=="queued" -> "已排队"
@@ -47,3 +52,21 @@ fun receiptLabel(state: String, result: JSONObject, action: String): String = wh
     state=="accepted" -> "已接收"
     else -> "送达状态待确认"
 }
+
+/** The one line a finished 核对 leaves for a few seconds (design 3.1 item 5), from the receipt itself, not its label. */
+fun checkResultText(state: String, missing: Boolean, label: String): String = when {
+    state=="unknown" && missing -> "已核对：电脑没收到"
+    state=="unknown" -> "已核对：电脑查不到这条的记录"
+    state=="dispatching" -> "已核对：电脑收到了，还在处理"
+    else -> "已核对：$label"
+}
+
+/** Claude has no delivery receipt: what its own record shows is the result (design 3.1 item 5). */
+fun claudeCheckResultText(delivered: Boolean, queued: Boolean): String = when {
+    delivered -> "已核对：已送达"
+    queued -> "已核对：已排队"
+    else -> "已核对：Claude 的记录里还没看到这条"
+}
+
+/** A send the computer's receipt says it never got, whose original request and content can be sent again. */
+const val MissingLabel = "电脑没收到"

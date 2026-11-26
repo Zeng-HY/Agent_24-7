@@ -9,7 +9,9 @@ import org.json.JSONObject
 
 /** [focus] counts requests for the input to take the keyboard (继续修改 a Codex plan); [hint] then shows in the empty box.
  * [sent] counts sends from this page, so the page follows the bottom again (11-16). */
-data class ComposerState(val key:ChatKey?=null,val draft:String="",val ready:Boolean=false,val submitting:Boolean=false,val control:Control=Control(),val connection:String="实时连接未启动",val submissions:List<Submission> = emptyList(),val error:String?=null,val revision:Int=0,val draftReset:Int=0,val focus:Int=0,val hint:String="",val sent:Int=0)
+data class ComposerState(val key:ChatKey?=null,val draft:String="",val ready:Boolean=false,val submitting:Boolean=false,val control:Control=Control(),val connection:String="实时连接未启动",val submissions:List<Submission> = emptyList(),val error:String?=null,val revision:Int=0,val draftReset:Int=0,val focus:Int=0,val hint:String="",val sent:Int=0,
+    /** 核对 in progress for this request; then its one-line result [checkNote] for a few seconds ([checked]). */
+    val checking:String="",val checked:String="",val checkNote:String="")
 
 /**
  * Kept in a send's local copy (its body), never sent: where Claude's record stood when the computer pressed Enter and
@@ -19,9 +21,11 @@ internal const val ClaudeOffset="_claude_offset"
 internal const val ClaudeCheckText="_claude_check_text"
 internal const val DesktopDraftKey="_desktop_draft"
 internal const val SendErrorKey="_send_error"
-private val LocalKeys=listOf(ClaudeOffset,ClaudeCheckText,DesktopDraftKey,SendErrorKey)
+/** 11-26: the computer answered `unknown` without `missing`; kept so the bar can add its one line of explanation. */
+internal const val ReceiptUnknownKey="_receipt_unknown"
+private val LocalKeys=listOf(ClaudeOffset,ClaudeCheckText,DesktopDraftKey,SendErrorKey,ReceiptUnknownKey)
 /** Labels of sends still to be settled, and of a send taken off the list by the user. */
-private val Unsettled=listOf("提交中","送达状态待确认","已接收","已排队")
+private val Unsettled=listOf("提交中","送达状态待确认","已接收","已排队",MissingLabel)
 const val RemovedLabel="已移除"
 
 class ChatController(private val scope:CoroutineScope,private val persistent:ReaderStore) {
@@ -64,6 +68,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             try {
                 if(changed || !state.value.ready) {
                     val draft=if(synthetic) memory[next].orEmpty() else writes.withLock { persistent.draft(next) }
+                    // The demo's 11-26 story: a send the computer never got, seeded once per demo conversation.
+                    if(synthetic) FixtureSendStory.seed(demo,next)
                     val records=if(synthetic) demo.values.filter { it.scope==next.scope && it.device==next.device && it.chat==next.chat && it.app==next.app } else persistent.submissions(next)
                     if(t!=token) return@launch
                     memory[next]=draft
@@ -161,6 +167,35 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             try { restoreExtras(k,JSONObject(record.body));edit(record.text);mutable.update { it.copy(draftReset=it.draftReset+1) } }
             catch(e:Exception) { update(k) { it.copy(error=e.message ?: "提交快照未恢复") } }
         }
+    }
+    /**
+     * 恢复草稿 for a send the computer never got (design 3.1 item 2): the words and attachments go back into the box and
+     * the copy goes away, so sending them again is a new request. The 未接收 bar keeps its own 恢复草稿 as it was.
+     */
+    fun restoreAndRemove(record:Submission) {
+        val k=key ?: return
+        if(record.action!="send" || k!=ChatKey(record.scope,record.device,record.chat,record.app) || state.value.draft.isNotBlank()) return
+        if(record.label !in listOf(MissingLabel,"送达状态待确认")) return
+        restore(record)
+        if(state.value.draft.isNotBlank()) dismiss(record)
+    }
+    /**
+     * 重发 (design 3.1 item 2): the same request id and the same content go once more. The computer answers a request it
+     * already has from its record (`codex_control._begin`), so a late original cannot arrive twice; the label is 提交中
+     * until that answer comes.
+     */
+    fun resend(record:Submission) {
+        val k=key ?: return;val service=api ?: return
+        if(record.action!="send" || record.label!=MissingLabel) return
+        if(k!=ChatKey(record.scope,record.device,record.chat,record.app) || !foreground || !state.value.ready || !state.value.control.available || !inFlight.add(k)) return
+        val body=runCatching { JSONObject(record.body) }.getOrNull()
+        if(body==null || body.string("request_id")!=record.request) { inFlight.remove(k);return }
+        LocalKeys.forEach { body.remove(it) }
+        val next=record.copy(label="提交中",body=body.toString())
+        update(k) { it.copy(submitting=true,error=null) }
+        val synthetic=fixture
+        val binding=token
+        scope.launch { dispatch(k,service,"send",body,next,synthetic,binding,draftVersions[k] ?: 0,clearDraft=false,resend=true) }
     }
     fun send(queue:Boolean=false) = submit("send",queue=queue)
     /** 执行计划: Codex carries out the plan it made, in normal mode (web codex-ui.js send(planId)); the draft is left alone. */
@@ -269,10 +304,12 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         }
     }
     /** Keeps the copy first, then posts once; never posts again by itself (B03, B04). */
-    private suspend fun dispatch(k:ChatKey,service:ReadApi,action:String,body:JSONObject,record:Submission,synthetic:Boolean,binding:Int,version:Long,clearDraft:Boolean,extra:JSONObject?=null) {
+    private suspend fun dispatch(k:ChatKey,service:ReadApi,action:String,body:JSONObject,record:Submission,synthetic:Boolean,binding:Int,version:Long,clearDraft:Boolean,extra:JSONObject?=null,resend:Boolean=false) {
         var began=false
         try {
-            writes.withLock { if(synthetic) demo[record.request]=record else persistent.begin(record) }
+            // A 重发 keeps the draft (its content is the original request); every other send writes its snapshot and
+            // clears the box.
+            writes.withLock { if(synthetic) demo[record.request]=record else if(resend) persistent.submission(record) else persistent.begin(record) }
             began=true
             if(extra!=null) sentExtras(k,extra)
             // Only clear the exact submitted draft; newer edits survive even a slow database.
@@ -299,6 +336,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                 val failure=e as? ServiceFailure
                 val kept=if(failure?.notSubmitted==true) JSONObject(record.body).put(SendErrorKey,failure.message.orEmpty()).apply { if(failure.draft.isNotBlank()) put(DesktopDraftKey,failure.draft) }.toString() else record.body
                 save(record.copy(label=if(failure?.notSubmitted==true) "未接收" else "送达状态待确认",body=kept),synthetic)
+                // 重发: the computer's own words, e.g. 这次请求已提交过，结果尚未确认; the label is back to 待确认.
+                if(resend) failure?.detail?.takeIf { it.isNotBlank() }?.let { message -> update(k) { it.copy(error=message) } }
             }
             else update(k) { it.copy(error="无法保存提交快照，尚未发送。") }
         } finally { inFlight.remove(k);update(k) { it.copy(submitting=false) } }
@@ -330,26 +369,56 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             update(ChatKey(record.scope,record.device,record.chat,record.app)) { s -> s.copy(submissions=(listOf(record)+s.submissions.filter { it.request!=record.request }).sortedByDescending { it.created }) }
         } catch(_:Exception) { update(ChatKey(record.scope,record.device,record.chat,record.app)) { it.copy(error="回执保存失败，请保留原请求并核对。") } }
     }
+    /** 核对 (design 3.1 item 5): shows that it is running, then its one result for a few seconds. */
     fun check(record:Submission) {
-        val service=api ?: return;val synthetic=fixture
-        if(key!=ChatKey(record.scope,record.device,record.chat,record.app)) return
-        scope.launch { try { reconcile(record,service,synthetic) } catch(_:Exception) { update(ChatKey(record.scope,record.device,record.chat,record.app)) { it.copy(error="核对失败，原提交仍保留；不会自动重发。") } } }
+        val k=key ?: return;val service=api ?: return;val synthetic=fixture
+        if(k!=ChatKey(record.scope,record.device,record.chat,record.app) || state.value.checking.isNotBlank()) return
+        val binding=token
+        update(k) { it.copy(checking=record.request,checked=record.request,checkNote="",error=null) }
+        scope.launch {
+            try {
+                val note=reconcile(record,service,synthetic,report=true)
+                if(binding==token) update(k) { it.copy(checking="",checked=record.request,checkNote=note ?: "已核对：${record.label}") }
+                delay(4_000)
+                if(binding==token) update(k) { if(it.checked==record.request) it.copy(checkNote="") else it }
+            } catch(e:CancellationException) { throw e }
+            catch(_:Exception) {
+                if(binding==token) update(k) { it.copy(checking="",checkNote="",error="核对失败，原提交仍保留；不会自动重发。") }
+            }
+        }
     }
-    private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean) {
+    private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean,report:Boolean=false):String? {
         if(isClaudeLayout(record.app) && record.action=="send") {
+            // 11-26: Claude's sends share the computer's delivery record with Codex. Ask the receipt first: missing means
+            // the computer never got it (and it can be sent again with the same request id); a broken receipt read is no
+            // reason to fail the check, so the record is asked as before.
+            val receipt=try { service.receipt(record.device,record.chat,record.request) }
+                catch(e:CancellationException) { throw e }
+                catch(_:Exception) { null }
+            if(receipt!=null && receipt.string("state")=="unknown" && receipt.optBoolean("missing")) {
+                val body=JSONObject(record.body).apply { remove(ReceiptUnknownKey) }
+                save(record.copy(label=MissingLabel,body=body.toString()),synthetic)
+                return if(report) checkResultText("unknown",true,MissingLabel) else null
+            }
             // No receipts for Claude: what its record shows decides, and nothing is sent again.
-            val r=claudeCheck(record,service) ?: return
+            val r=claudeCheck(record,service) ?: return if(report) claudeCheckResultText(false,false) else null
             val label=when { r.optBoolean("delivered") -> "已送达";r.optBoolean("queued") -> "已排队";else -> record.label }
             if(label!=record.label) save(record.copy(label=label),synthetic)
-            return
+            return if(report) claudeCheckResultText(r.optBoolean("delivered"),r.optBoolean("queued")) else null
         }
         val response=service.receipt(record.device,record.chat,record.request)
         require(response.string("request_id").let { it==record.request || it.isBlank() && response.string("state")=="unknown" })
-        var label=receiptLabel(response.string("state"),response.optJSONObject("result") ?: JSONObject(),record.action)
+        val state=response.string("state")
+        var label=receiptLabel(state,response.optJSONObject("result") ?: JSONObject(),record.action,response.optBoolean("missing"))
         if(record.action=="stop") {
             val control=service.control(record.device,record.chat)
             label=when(control.turns[record.turn]) { "interrupted" -> "已停止"; "completed" -> "该轮已完成"; "failed" -> "该轮失败"; else -> label }
         }
-        save(record.copy(label=label),synthetic)
+        // unknown without missing: an older computer, or one that cannot read its record. The bar then says so in words;
+        // the note is kept in the copy only, never sent.
+        val body=JSONObject(record.body)
+        if(state=="unknown" && !response.optBoolean("missing")) body.put(ReceiptUnknownKey,true) else body.remove(ReceiptUnknownKey)
+        save(record.copy(label=label,body=body.toString()),synthetic)
+        return if(report) checkResultText(state,response.optBoolean("missing"),label) else null
     }
 }

@@ -841,7 +841,7 @@ abstract class ReaderUiScenarios {
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()
         listRow("加载更多对话").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==13 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==14 }
         listRow("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy }
         compose.onNodeWithContentDescription("返回").assertHasClickAction().performClick()
@@ -860,7 +860,7 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="running" }
         compose.onNodeWithText("没有找到对话").assertIsDisplayed()
         compose.onNodeWithText("清除筛选").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==12 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==13 }
     }
     /** 11-02: 已结束 asked for done, which the computer refuses: 状态筛选无效 instead of the rows. */
     @Test fun theEndedStateShowsTheFinishedRows() {
