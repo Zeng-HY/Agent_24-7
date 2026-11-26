@@ -810,7 +810,8 @@ fun Attachments(saved: JSONObject, vm: ReaderViewModel) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 6.dp, end = 6.dp, top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         uploads.forEach { row ->
             val status = when (row.string("status")) { "ready" -> null; "uploading", "checking" -> "上传中"; else -> "上传失败" }
-            Tile(if (row.optBoolean("image")) TeleplyIcons.Image else TeleplyIcons.File, row.string("name"), status, status == "上传失败", "移除附件 ${row.string("name")}", row.string("preview").ifBlank { null }, { looking = it }) { vm.workspace.removeUpload(row.string("local")) }
+            val image = row.optBoolean("image")
+            Tile(if (image) TeleplyIcons.Image else TeleplyIcons.File, row.string("name"), status, status == "上传失败", "移除附件 ${row.string("name")}", row.string("preview").ifBlank { null }, { looking = it }, fileMark = if (image) null else row.string("name")) { vm.workspace.removeUpload(row.string("local")) }
         }
         refs.forEach { ref ->
             val name = ref.string("name").ifBlank { ref.string("title") }
@@ -822,7 +823,7 @@ fun Attachments(saved: JSONObject, vm: ReaderViewModel) {
 
 /** [preview]: a picture's preview, drawn small in place of the icon and name, opened large ([onLook]) when tapped. */
 @Composable
-private fun Tile(icon: androidx.compose.ui.graphics.vector.ImageVector, name: String, status: String?, failed: Boolean, removeLabel: String, preview: String? = null, onLook: (String) -> Unit = {}, onRemove: () -> Unit) {
+private fun Tile(icon: androidx.compose.ui.graphics.vector.ImageVector, name: String, status: String?, failed: Boolean, removeLabel: String, preview: String? = null, onLook: (String) -> Unit = {}, fileMark: String? = null, onRemove: () -> Unit) {
     val p = LocalTeleply.current
     val thumbnail by produceState<ImageBitmap?>(null, preview) { value = preview?.let { withContext(Dispatchers.IO) { photoThumbnail(it, 160)?.asImageBitmap() } } }
     val picture = thumbnail
@@ -830,7 +831,8 @@ private fun Tile(icon: androidx.compose.ui.graphics.vector.ImageVector, name: St
         if (picture != null && preview != null) {
             Image(picture, contentDescription = "放大看 $name", contentScale = ContentScale.Crop,
                 modifier = Modifier.padding(vertical = 4.dp).size(40.dp).clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button) { onLook(preview) })
-        } else Icon(icon, contentDescription = null, tint = if (failed) p.error else p.muted, modifier = Modifier.size(16.dp))
+        } else if (fileMark != null) FileTypeIcon(fileMark, 18.dp)
+        else Icon(icon, contentDescription = null, tint = if (failed) p.error else p.muted, modifier = Modifier.size(16.dp))
         if (picture == null || status != null) Column(Modifier.weight(1f, fill = false).padding(start = 6.dp, top = 6.dp, bottom = 6.dp)) {
             if (picture == null) Text(name, style = MaterialTheme.typography.bodySmall, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (status != null) Text(status, style = MaterialTheme.typography.labelSmall, color = if (failed) p.error else p.muted)

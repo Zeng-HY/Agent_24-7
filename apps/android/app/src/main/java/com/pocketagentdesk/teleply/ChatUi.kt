@@ -819,7 +819,7 @@ private fun FileStripCard(file: FileRef) {
     ) {
         Box(Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)).background(p.panel), contentAlignment = Alignment.Center) {
             if (file.picture) FileStripThumb(file)
-            else Icon(TeleplyIcons.File, contentDescription = null, tint = p.muted, modifier = Modifier.size(22.dp))
+            else FileTypeIcon(file.name, 34.dp)
         }
         Text(file.name.ifBlank { "文件" }, style = MaterialTheme.typography.labelSmall, color = p.text, maxLines = 2,
             overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(top = 3.dp))
@@ -832,12 +832,11 @@ private fun FileStripCard(file: FileRef) {
 /** The strip's small thumb (§6.3: 320), grey with the type mark until it comes; no retry here, the page has one. */
 @Composable
 private fun FileStripThumb(file: FileRef) {
-    val p = LocalTeleply.current
     val loader = LocalAnswerThumb.current
     val image by produceState<android.graphics.Bitmap?>(null, file.id, file.version) { value = loader?.invoke(file, 320) }
     val bitmap = image
     if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-    else Icon(TeleplyIcons.Image, contentDescription = null, tint = p.muted.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+    else FileTypeIcon(file.name, 34.dp)
 }
 
 /** 打开新建对话 under a Codex reply (web .thread-link): as wide as the reply, the selected fill and ink, the chat mark first. */

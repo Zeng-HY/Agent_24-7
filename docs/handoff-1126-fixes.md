@@ -274,7 +274,64 @@ SVG 的规则同第 4.2 节第 4 条。
 
 ### 10.4 线四 安卓「文件」
 
-（待填）
+结论：P5 已复现并修好，P4 安卓部分已做完。提交两次：`c814062`（P5，附带失败页要用的类型图标和图标表测试）、下一个提交（P4 各处接入和本节结果）。
+
+#### P5 复现了什么（先复现，再改）
+
+演示数据里加了一份运行时生成的大 Word「大文档.docx」：400 张表、每张表后一个分页符，`word/document.xml` 解开后约 17 MB（压缩后 406 KB），内容全部编造，仓库里不放生成好的文件（`FixtureApi.kt` 的 `madeUpBigWord()`，只在示例里生成一份）。同一条回答里还有同名的「大文档.pdf」。
+
+在模拟器（AVD `AgentRemoteFresh`，`-no-window -gpu swiftshader_indirect`）上用演示数据打开它，日志要点（全文在 `F:\Android-Dev\work\20261101-island-duplicates\20261126-and-files\repro-log-p5-prefix.txt`）：
+
+```
+CrRendererMain invoked oom-killer ...
+Out of memory: Killed process 5023 (ocessService0:0) ... anon-rss:1583044kB ...
+E/chromium( 4183): Renderer process (5023) crash detected (code -1).
+I/ActivityManager: Process com.google.android.webview:sandboxed_process0 ... has died: fg BTOP
+E/chromium( 4183): Render process (5023) kill (OOM or update) wasn't handed by all associated webviews, killing application.
+I/ActivityManager: Process com.pocketagentdesk.teleply.dev (pid 4183) has died: fg TOP
+```
+
+确认了设计里的推测：网页视图的渲染进程被系统结束（这里是 oom-killer，渲染进程 anon-rss 约 1.5 GB），程序没有实现 `onRenderProcessGone`，Chromium 就按规矩把整个程序结束。程序是被系统结束的，没有崩溃堆栈，就是用户说的闪退。用大文件时在模拟器上是第一次打开就复现（模拟器内存紧张，比真机更容易）；复现前整页只有空白，`tile_manager.cc` 一直在报 `tile memory limits exceeded`。
+
+#### P5 怎么改的
+
+- 程序里每一个网页视图的 `WebViewClient` 都实现 `onRenderProcessGone`，返回 `true`，把网页视图从父容器摘下来并销毁，当前页换成失败页：`PreviewUi.kt` 的两处（HTML 页面、Word/Excel 页面）和 `CodeViewer.kt` 一处。HTML 和代码页的失败页是同一段说明加「用其他应用打开」（代码页没有控制器，只说明）。
+- `OfficePreview` 不再收 `ByteArray`：改成 `OfficePreview(file, bytes, path, failed, modifier)`，`shouldInterceptRequest` 拿到 `file` 时用 `FileInputStream(path)` 开一个新的流交给网页（CSV 的文本仍用内存里的字节，它本来就是读出来的文字）。
+- `WorkspaceController.file()`：有缓存且文件有版本号时只把缓存的路径放进 `WorkspaceState.previewFile`，`preview` 保持 `null`；没有版本号、没法按版本缓存的老电脑才退回下载字节（这时仍受下面门槛约束，超过门槛的字节马上丢掉）。旧代码里「缓存写了就整份读回内存」那一行删掉了。
+- 大小门槛：打开前只读压缩包中央目录，不解压正文（`zipEntrySizes`，文件和内存字节两种都有）。`word/document.xml` 解开后超过 8 MB、Excel 的 `xl/worksheets/*.xml` 合计超过 8 MB，或者文件本身超过 15 MB，就不画；`OfficePreviewLimit` 从 30 MB 改成 15 MB。失败页说明用「文件太大，手机里不直接显示。」；docx-preview/SheetJS 自己报失败（标题 `teleply:failed`）也用这一页，说明用默认的「文件太大或太复杂，手机里画不出来。文件本身没有问题。」
+- Word/Excel 失败页（`WorkspaceUi.kt` 的 `OfficeFailedPage`）：第 4.3 节的大号图标、文件名、标题「手机上显示不了这份文件」、说明，按钮「看 PDF 版」「用其他应用打开」「保存到文件」。看 PDF 版只在文件来自某条回答时找：从 `chat/files` 里找扩展名 pdf、名字去掉扩展名相同（不分大小写）的那个文件，找到才显示按钮；从电脑文件浏览打开的文件不找。
+- 离开页面时销毁网页视图：Word/Excel 和 HTML 原来有，`CodeViewer.kt` 原来没有，补上了。
+
+#### P4 怎么改的
+
+- 新文件 `FileTypeIcon.kt`：`FileTypeMark(label, color)` 的纯函数表和 `FileTypeIcon(name, size)`。图形用 Compose 代码画（Canvas 画一页纸，右上角折角用浅一档的颜色，中间白色粗体短字），不用图片素材、不用任何商标图形，深色模式同一套颜色；字多于 3 个时字号缩小。第 4.3 节每一行都照表实现，其他扩展名用大写、最多 4 个字符，没有扩展名就空着。
+- 接入：`ChatUi.kt` 的 `FileStripCard`/`FileStripThumb`（非图片文件、以及还没有缩略图的图片，34dp）；`ComposerUi.kt` 的附件 `Tile`（非图片附件，18dp）；`WorkspaceUi.kt` 的「不直接显示」那一屏（72dp）和 P5 的失败页（88dp）；「对话文件」和「电脑文件」列表的文件行（22dp，文件夹仍是文件夹图标）。
+- SVG：核对过，文件条里 `thumb` 为真的 SVG 本来就走 `FileStripThumb` 显示缩略图（`FileRef.picture = thumb && (view=="image"||view=="svg")`），没有缩略图时现在显示 SVG 图标；演示里的「标志.svg」确认有缩略图。
+- 列表行没有改 `Components.kt` 的 `CardRow`（不在 6.3 的清单里），而是在 `WorkspaceUi.kt` 里加了一个本地 `FileListRow`，外观照 `CardRow`，只把第一个图标换成类型图标。多了一小段重复的布局代码。
+
+#### 改了哪些文件
+
+- 代码（P5）：`PreviewUi.kt`（两处网页视图的 `onRenderProcessGone`、`OfficePreview` 改成流式读、失败页文字）、`CodeViewer.kt`（`onRenderProcessGone`、离开时销毁网页视图）、`WorkspaceController.kt`（大小门槛、`zipEntrySizes`/`officeTooLarge`、`siblingPdf`、`officeFailed` 和 `file()` 的取字节方式）、`WorkspaceUi.kt`（Word/Excel 失败页 `OfficeFailedPage`、网页视图停止页 `WebViewGonePage`、文件页接上流式来源）、`FixtureApi.kt`（演示的大 Word 和同名 PDF）、新建 `FileTypeIcon.kt`（P5 的失败页要用）。
+- 代码（P4）：`ChatUi.kt`（只文件条和文件块）、`ComposerUi.kt`（只附件图标）、`WorkspaceUi.kt`（「不直接显示」一屏、文件列表行）。
+- 测试：新建 `FileTypeIconTest.kt`、`OfficeLimitsTest.kt`，改 `WorkspaceControllerTest.kt`。
+- 文档：本节（`docs/handoff-1126-fixes.md`）。
+- 没改：版本号、`Models.kt`、`Components.kt`、`assets/office` 下的网页和脚本。为了不碰 6.3 清单之外的 `Components.kt`，列表行没有改 `CardRow`，而是在 `WorkspaceUi.kt` 里加了本地 `FileListRow`（外观照 `CardRow`，只换第一个图标）。
+
+#### 测试和模拟器验证
+
+- 开工基线：`testDebugUnitTest` 345 个测试，0 失败（31 个测试类）。
+- 最后：`testDebugUnitTest` 356 个测试，0 失败（33 个测试类）；`assembleDebug` 通过。新增测试：图标表每一行（`FileTypeIconTest`）、大小门槛和压缩包目录读取、演示的大 Word 确实超过门槛（`OfficeLimitsTest`）、控制器层的四件事——超过 15 MB 不下载、正文超过 8 MB 显示失败页且不要电脑的 PDF、docx-preview 失败显示失败页并带同名 PDF、有缓存时从缓存路径流式读而不把整份文件放进状态（`WorkspaceControllerTest`）。
+- 模拟器（同一个 debug 包）：大 Word 连续打开 5 次（每次返回再打开），程序始终是同一个进程（pid 未变），5 次都是失败页，logcat 里没有 `Render process`/`oom-killer`/`tile memory` 行（`verify-log-p5-postfix.txt`），此时也没有任何 WebView 渲染进程（`ps -A | grep -c sandboxed` 为 0）。小的 Word「发布说明.docx」和 Excel「预算表.xlsx」照常显示。失败页的「看 PDF 版」能打开同名的「大文档.pdf」。
+- 截图在工作区 `F:\Android-Dev\work\20261101-island-duplicates\20261126-and-files\`：`shot-03-fixed-bigword-1.png`（大 Word 失败页）、`shot-04-same-named-pdf.png`（看 PDF 版打开的 PDF）、`shot-09-bigword-fifth-open.png`（第五次打开仍是失败页）、`shot-07-small-word-drawn.png`（小 Word）、`shot-08-small-excel-drawn.png`（小 Excel）、`shot-10-answer-file-strip-icons.png`（回答文件条的类型图标）、`shot-06-conversation-files-icons.png`（对话文件列表的类型图标）、`shot-11-composer-attachment-icon.png`（输入框附件的 CSV 图标）。
+
+#### 没做什么、要看的
+
+- 没有改版本号，没有推送、合并、打包、签名、上传；没有连真手机，没有读真实对话记录，没有调用真实电脑端；所有演示内容都是编造的。
+- 失败页的「看 PDF 版」按设计只在回答里找同名 PDF；电脑自己提供的「把这份文件转成 PDF」（`preview: "pdf"`）不再作为 Word/Excel 失败的自动退路。超过 15 MB 的 Word 以前会自动请电脑转 PDF，现在按第 6.1 节改成失败页（用户点「看 PDF 版」才走别的文件）。
+- 没有版本号的 Word/Excel（老电脑）仍然要把字节读到内存里才能画，这时没有可流式读的缓存文件；门槛（正文 8 MB、文件 15 MB）保证这份字节不会更大，超过门槛的会立即丢掉。真机上如果有大量这种老电脑文件，值得再看是否要给「无版本」的缓存另找键。
+- 第 4.3 节表里的字和颜色是逐行照抄的，但图标样式（折角大小、字号）是我定的，若要和 iPhone 像素级一致，合并后可以对一下截图（iPhone 那一份在线二）。
+- 演示的大 Word 是运行时生成的（列表里显示 405.9 KB，解开正文约 17 MB），所以仓库里没有大文件；每次启动示例第一次打开它要多花一两秒生成。
+- `WorkspaceUi.kt` 同时被 P5 和 P4 用到：P5 的失败页要用第 4.3 节的图标，所以 `FileTypeIcon.kt` 和图标表测试先随 P5 提交，其余接入在 P4 的提交里。
 
 ### 10.5 线五 电脑
 

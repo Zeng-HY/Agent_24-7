@@ -406,7 +406,8 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
         items.forEachIndexed { index,row ->
             if(index>0) CardDivider()
             val file=row.string("kind")=="file"
-            CardRow(row.string("name"),{ if(file) { c.computerFile(row) } else c.refresh("remote",row.string("path")) },icon=if(file) TeleplyIcons.File else TeleplyIcons.Folder,chevron=!file)
+            if(file) FileListRow(row.string("name"),{ c.computerFile(row) })
+            else CardRow(row.string("name"),{ c.refresh("remote",row.string("path")) },icon=TeleplyIcons.Folder,chevron=true)
         }
     }
     if(data.optBoolean("has_more")) PillButton("下一页",{ c.refresh("remote",data.string("path"),data.string("next_offset")) },style=PillStyle.Text)
@@ -420,8 +421,29 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     else CardSection {
         items.forEachIndexed { index,f ->
             if(index>0) CardDivider()
-            CardRow(f.string("name"),{ c.file(f) },detail="${operationLabel(f.string("state"))} · ${f.optLong("size")} 字节",icon=TeleplyIcons.File,chevron=true,enabled=f.string("state")!="missing")
+            FileListRow(f.string("name"),{ c.file(f) },detail="${operationLabel(f.string("state"))} · ${f.optLong("size")} 字节",enabled=f.string("state")!="missing")
         }
+    }
+}
+
+/** One file in a list (11-26 design §4.2): its type's own icon first; a folder keeps the folder icon (see the callers). */
+@Composable private fun FileListRow(title:String,onClick:()->Unit,detail:String?=null,enabled:Boolean=true) {
+    val p=LocalTeleply.current
+    val interaction=remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Row(
+        Modifier.fillMaxWidth().heightIn(min=52.dp)
+            .background(if(pressed) p.groupPressed else androidx.compose.ui.graphics.Color.Transparent)
+            .then(if(enabled) Modifier.clickable(interaction,indication=null,role=Role.Button,onClick=onClick) else Modifier)
+            .padding(horizontal=16.dp,vertical=10.dp),
+        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp),
+    ) {
+        FileTypeIcon(title,22.dp)
+        Column(Modifier.weight(1f)) {
+            Text(title,style=MaterialTheme.typography.bodyLarge,color=p.text.copy(alpha=if(enabled) 1f else 0.45f))
+            if(!detail.isNullOrBlank()) Text(detail,style=MaterialTheme.typography.bodySmall,color=p.muted)
+        }
+        Icon(TeleplyIcons.ChevronRight,contentDescription=null,tint=p.muted,modifier=Modifier.size(18.dp))
     }
 }
 
@@ -535,7 +557,7 @@ fun fileSize(bytes:Long):String = when {
     val why=s.previewNote.ifBlank { s.transfer.takeIf { !s.savingFile && s.savedUri==null && it.startsWith("预览未能加载") }
         ?: if(data.string("kind")=="image" && size>PicturePreviewLimit) "这张图超过 30MB，不直接显示" else if(data.string("kind")=="pdf" && size>PdfPreviewLimit) "这个 PDF 超过 100MB，不直接显示" else if(size>PreviewLimit) "超过 20MB，不直接显示" else if(data.string("kind")=="text") "文件是空的" else "手机上看不了这类文件" }
     Column(Modifier.fillMaxWidth().padding(top=72.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        Icon(TeleplyIcons.File,contentDescription=null,tint=p.muted,modifier=Modifier.size(48.dp))
+        FileTypeIcon(data.string("name"), 72.dp)
         Text(data.string("name").ifBlank { "文件" },style=MaterialTheme.typography.bodyLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         Text("${fileSize(size)} · $why",style=MaterialTheme.typography.note,color=p.muted,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && !s.savingFile,style=PillStyle.Primary,leading=TeleplyIcons.Open)
