@@ -104,6 +104,7 @@ CLAUDE_SIDE_CHAT = "Side chat"
 # 11-26 P6: a picture pasted into Claude's box can take a while to show as a card on a loaded PC (the box read 0 cards for
 # 8 s), and one card can carry two "Remove" buttons, so the check counts cards and wants the count to hold still.
 CLAUDE_ATTACH_WAIT = 20          # seconds after one paste until its card has to be there
+CLAUDE_IMAGES_WAIT = 35          # seconds all the pictures of one send may take together: the phone gives the whole send 60
 CLAUDE_ATTACH_SETTLE = 0.6       # the count has to stay this long at the number wanted, then it is taken
 CLAUDE_ATTACH_RECALL_WAIT = 3    # after taking the pictures back, wait this long and count again for cards that came late
 CLAUDE_CARD_NEAR = 24            # pixels: the Remove buttons of one card sit within this of each other
@@ -2726,12 +2727,14 @@ class Desktop:
         """Pictures waiting in the message box, counted one per card."""
         return len(self._claude_attachment_cards(edit))
 
-    def _paste_claude_image(self,hwnd,root,item,edit,path,expected_count):
+    def _paste_claude_image(self,hwnd,root,item,edit,path,expected_count,wait=None):
         """Paste bitmap data, never text shortcuts. Submit only after the card is there and the count holds still.
 
         11-26 P6: the wait was 6 s and a loaded Claude took 8 s to draw the card; the count is of cards, and the paste
         is pressed once, never again while waiting. More cards than were pasted stops at once: the phone is told, and
-        the send does not go (what was put in is taken back by _send_claude_now)."""
+        the send does not go (what was put in is taken back by _send_claude_now). `wait` is this picture's share of the
+        send's whole picture time (CLAUDE_IMAGES_WAIT); when the rest of that time is shorter than CLAUDE_ATTACH_WAIT,
+        running out of it is reported as the computer being too slow, not as this one picture failing."""
         import io,win32clipboard,win32con
         from PIL import Image
         with Image.open(path) as source:
@@ -2753,7 +2756,7 @@ class Desktop:
             winctl.focus(hwnd);_,edit=self._claude_verified_prompt(root,item['id']);edit.SetFocus()
             if not edit.HasKeyboardFocus:raise InputNotSubmitted('Claude 图片粘贴焦点未确认，尚未发送')
             winctl.press(hwnd,'Control+v')  # once: waiting never pastes again
-            deadline=time.monotonic()+CLAUDE_ATTACH_WAIT
+            deadline=time.monotonic()+(CLAUDE_ATTACH_WAIT if wait is None else max(0.0,wait))
             observed=None;last=0;steady=None;trouble=''
             while True:
                 try:
@@ -2789,9 +2792,12 @@ class Desktop:
             except Exception:probe=[]
             self.log(f'Claude attachment probe expected={expected_count} observed={last} '
                      f'removes(kind,parent,at)={removes} scopes(depth,add,remove,visible_remove)={probe}')
+            detail=(f'read failed: {trouble}' if trouble else '')
+            if wait is not None and wait<CLAUDE_ATTACH_WAIT:  # the send's whole picture time ran out inside this paste
+                raise InputNotSubmitted('电脑上 Claude 显示图片太慢，尚未发送',detail)
             raise InputNotSubmitted(
                 f'第 {expected_count} 张图片核验未通过（输入区识别到 {last} 张），尚未发送；后续图片未继续粘贴，请检查桌面草稿',
-                (f'read failed: {trouble}' if trouble else ''))
+                detail)
         finally:
             _clip_open()
             try:
@@ -2876,9 +2882,12 @@ class Desktop:
                 doc,edit=self._fill_claude_prompt(item,root,text,replace)
                 if images:
                     if self._claude_image_count(edit):raise InputNotSubmitted('Claude 桌面已有附件，尚未发送；请先处理桌面草稿')
+                    images_until=time.monotonic()+CLAUDE_IMAGES_WAIT  # 11-26: all pictures of one send fit in the phone's 60 s
                     for index,image in enumerate(images,1):
+                        left=images_until-time.monotonic()
+                        if left<=0:raise InputNotSubmitted('电脑上 Claude 显示图片太慢，尚未发送')
                         placed=index  # before the paste: one that fails half-way has to be taken back too
-                        self._paste_claude_image(hwnd,root,item,edit,image['path'],index)
+                        self._paste_claude_image(hwnd,root,item,edit,image['path'],index,wait=min(CLAUDE_ATTACH_WAIT,left))
                     doc,edit=self._claude_verified_prompt(root,item['id'])
                     if self._claude_image_count(edit)!=len(images):raise InputNotSubmitted('Claude 附件数量已变化，尚未发送')
                 button=self._claude_send_button(doc,edit,item['id'])

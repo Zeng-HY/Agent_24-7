@@ -299,23 +299,28 @@ P1（第 7.2、8.1 节）：
 - `agents/base.py` 的 `http_receipt`（Antigravity 走这条）没有送达记录文件可查（它按对话记录判断），属于「记录文件不存在」，保持只回 `{"state": "unknown"}`，没有改。
 - 内部用 `receipt(...)["state"] != "unknown"` 判断的地方（`new_conversations.py`、`agents/deepseek.py` 等）行为不变。
 
-**改了哪些文件**：`chats.py`、`codex_control.py`、`codex_apptools.py`、`deepseek_control.py`、`agents/claude.py`、`tests/test_claude_send.py`、`tests/test_codex_delivery.py`、`tests/test_codex_apptools.py`、`tests/test_deepseek_control.py`、`tests/test_unified_routes.py`、`tests/test_no_hardcoded_agents.py`。
+**审后补的两处（第 7.1 节第 6 条、超时）**
+1. Claude 的三条发送路都写送达记录了，纯文字也一样：空闲时的桌面发送（`chat_send_with_references`）、Claude 正在干活时交给遥应排队（`_hook_queue_send`）、插话（`claude_control.send_steer`）。每条都是先 `_begin`（同一个编号已有结果就直接返回那个结果），成功后 `_finish`，确定什么都没提交时 `reject_delivery`（`SendNotSubmitted` / `InputNotSubmitted`、输入框里有别人的字、排队编号冲突），说不清有没有按下的（回车间结果未确认、接口超时）保持 `dispatching` 不动。插话原来内存里的 `steer_submissions` 去重保留。插话要拿到记录，`ClaudeAgent.on_server_init` 把 `server.codex` 挂到 `Controller.deliveries` 上；测试里直接构造的 Controller 没有它时不写记录。这样纯文字发送核对时不再是 `missing`，同一编号重发也不会让 Claude 收到两条。
+2. 一次发送里所有图片的等待时间合计不超过 35 秒（`CLAUDE_IMAGES_WAIT`）：每张取「20 秒」和「剩下的总时间」里小的那个；总时间用完还没数对就停下、收回、报「电脑上 Claude 显示图片太慢，尚未发送」。加上其它步骤也在接口的 60 秒以内。
 
-超出第 7.3 节清单的三处，改动都很小：
+**改了哪些文件**：`chats.py`、`codex_control.py`、`codex_apptools.py`、`deepseek_control.py`、`claude_control.py`、`agents/claude.py`、`tests/test_claude_send.py`、`tests/test_codex_delivery.py`、`tests/test_codex_apptools.py`、`tests/test_deepseek_control.py`、`tests/test_unified_routes.py`、`tests/test_no_hardcoded_agents.py`。
+
+超出第 7.3 节清单的四处，改动都很小：
 - `deepseek_control.py`：DeepSeek 的回执在这里，不在 `agents/` 里，改的是一个返回值。
-- `agents/claude.py`：除了回执，还在图片发送失败处改送达记录，这是第 7.1 节第 6 条要求的（Claude 的送达记录只在这条路上写）。
+- `agents/claude.py`：除了回执，还在三条发送路上写送达记录（第 7.1 节第 6 条和审后的要求；Claude 的送达记录只在这些路上写）。
+- `claude_control.py`：`send_steer` 加 `_begin` / `_finish` / 拒绝时记 rejected，`Controller.__init__` 加一个 `deliveries=None`（审后要求）。
 - `tests/test_no_hardcoded_agents.py`：chats.py 的 `_claude_*` 属性计数 63 → 73（新加的贴图核对/收回方法也是 `_claude_*`；这个测试就是靠固定数字发现新写法的）。
 
 **测试**：
-- 相关测试（`test_claude_send`、`test_claude_side_chat`、`test_claude_hooks`、`test_claude_new_folder_layout`、`test_claude_new_environment`、`test_codex_delivery`、`test_codex_apptools`、`test_deepseek_control`、`test_unified_routes`、`test_no_hardcoded_agents`、`test_data_folder_wipe`、`test_locked_send`）：297 通过，0 失败。
-- 全量 `pytest`：1567 通过，41 失败，7 跳过。41 个失败是 31 个测试项加 10 个 webkit/子项，全是这台机器没装 Playwright 浏览器（`...\ms-playwright\webkit-2359\Playwright.exe` 不存在，`BrowserType.launch` 一开始就失败），和这次改动无关；分布：`test_answer_files_preview` 3、`test_answer_files_resources` 3、`test_answer_files_web` 1、`test_dev6_navigation_links` 1 个加 1 个 webkit 子项、`test_home_startup` 3 个子项、`test_list_status_filter` 7、`test_page_parts` 2 个加 4 个 webkit 子项、`test_web_agents` 7、`test_web_antigravity` 5。已知的 3 个老失败（`test_mobile_polish` 的 snippet webkit 和 chromium、`test_relay_mobile_layout` 的 account home）也在其中。装了浏览器的机器上，全量应该只剩这 3 个。
+- 相关测试（`test_claude_send`、`test_claude_side_chat`、`test_claude_hooks`、`test_claude_control`、`test_claude_new_folder_layout`、`test_claude_new_environment`、`test_claude_next_step`、`test_codex_delivery`、`test_codex_apptools`、`test_deepseek_control`、`test_unified_routes`、`test_no_hardcoded_agents`、`test_data_folder_wipe`、`test_locked_send`、`test_new_conversations`、`test_send_accepted_at`）：381 通过，0 失败（其中 `test_claude_send` 78 个）。
+- 全量 `pytest`（审前那一版代码）：1567 通过，41 失败，7 跳过。41 个失败是 31 个测试项加 10 个 webkit/子项，全是这台机器没装 Playwright 浏览器（`...\ms-playwright\webkit-2359\Playwright.exe` 不存在，`BrowserType.launch` 一开始就失败），和这次改动无关；分布：`test_answer_files_preview` 3、`test_answer_files_resources` 3、`test_answer_files_web` 1、`test_dev6_navigation_links` 1 个加 1 个 webkit 子项、`test_home_startup` 3 个子项、`test_list_status_filter` 7、`test_page_parts` 2 个加 4 个 webkit 子项、`test_web_agents` 7、`test_web_antigravity` 5。已知的 3 个老失败（`test_mobile_polish` 的 snippet webkit 和 chromium、`test_relay_mobile_layout` 的 account home）也在其中。装了浏览器的机器上，全量应该只剩这 3 个。审后这一版按安排没有重跑全量。
 - 另有一次 `test_claude_hooks` 的地址测试在负载重时失败（本地端口），单独重跑通过。
-- 新增的测试：一张卡片两个 Remove 按钮算 1 张、两张卡片（预览同名）算 2 张、看不见的 Remove 按预览配对算、没有可读卡片时按位置归并；卡片 8 秒后才出现也能成功且只按一次 Ctrl+V；期望 1 张来了 2 张立刻停并带那句话；一直不出现时只报数字、日志里没有文件名；收回时每张卡片按一次 Remove、清空文字、3 秒后晚到的也删、日志只有数字；一条已经贴了一张之后失败的发送会被收回且不按发送；贴图之前就拒绝的发送不动框；图片发送以「没提交」失败后记录是 `rejected`、同一请求编号再来拿到的是 rejected 而不是「已提交过」；回执三种情况（有记录、没记录、记录文件不存在）在 `codex_control` 和 `codex_apptools` 各测一遍，DeepSeek 的没记录/有记录也测了，Claude 的 `http_receipt` 会把 `missing` 带出去。
+- 新增的测试：一张卡片两个 Remove 按钮算 1 张、两张卡片（预览同名）算 2 张、看不见的 Remove 按预览配对算、没有可读卡片时按位置归并；卡片 8 秒后才出现也能成功且只按一次 Ctrl+V；期望 1 张来了 2 张立刻停并带那句话；一直不出现时只报数字、日志里没有文件名；收回时每张卡片按一次 Remove、清空文字、3 秒后晚到的也删、日志只有数字；一条已经贴了一张之后失败的发送会被收回且不按发送；贴图之前就拒绝的发送不动框；5 张都很慢时总耗时不超过 35 秒、收回并报「电脑上 Claude 显示图片太慢」；图片发送以「没提交」失败后记录是 `rejected`、同一请求编号再来拿到的是 rejected 而不是「已提交过」；三条发送路各有一条「先写记录、成功后回执是 accepted 且不是 missing、同编号再来返回同一结果、不再发第二次」，纯文字被拒时是 rejected（空闲桌面发送、交给遥应排队、插话各一）；回执三种情况（有记录、没记录、记录文件不存在）在 `codex_control` 和 `codex_apptools` 各测一遍，DeepSeek 的没记录/有记录也测了，Claude 的 `http_receipt` 会把 `missing` 带出去。
 
 **要我看的地方**
-1. Claude 的纯文字发送历来不写送达记录（只有带图、Codex 通道、DeepSeek、新建对话写）。按第 7.2 节的规则，这类请求核对时会被回答 `missing: true`（手机显示「电脑没收到」），即使它其实送到了。要消掉这个误报，得给 Claude 纯文字发送也写送达记录；这次没做，第 7.3 节也没给这个位置。
+1. 排队那条（`_hook_queue_send`）成功时记录是 `accepted`，不是 `queued`：消息已经交给遥应、还没交给 Claude，和原来带图排队的记法一致。手机在发送回答里已经按 `queued` 处理，核对时回 accepted 表示「电脑收到了」。
 2. 位置归并的 24 px 是估的。真实界面里 RuntimeId 都读得到，那条路只是兜底。
-3. 每张图最多等 20 秒；一次发 5 张又都卡住时，整次发送可能超过接口的 60 秒上限（原来 6 秒时不会）。超时没改。
-4. 收回会清空输入框的字，前提是开始前框里没有别人的字和附件（已有检查）。贴图前就发现框里已有附件的那种拒绝，不清空、不删附件。
-5. 真机核对按第 7.1 节第 7 条留给审核的人在用户同意后做；这次没碰正在运行的 Claude，也没改版本号和更新说明。
+3. 收回会清空输入框的字，前提是开始前框里没有别人的字和附件（已有检查）。贴图前就发现框里已有附件的那种拒绝，不清空、不删附件。
+4. 真机核对按第 7.1 节第 7 条留给审核的人在用户同意后做；这次没碰正在运行的 Claude，也没改版本号和更新说明。
+
 

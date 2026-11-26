@@ -10,6 +10,7 @@ import traceback
 
 import chats
 import claude_hooks
+import codex_control
 
 from .base import Agent, NotFound, make_manifest
 
@@ -684,29 +685,40 @@ class ClaudeAgent(Agent):
         base = text
         offset = chats.file_size(chats.conv_path(item))
         request_id = str(body.get("request_id", ""))
-        if images:
+        recorded = False
+        if codex_control.recordable(request_id):
+            # 11-26: every Claude send keeps a delivery record, words or pictures. The phone's 核对 reads it (so a
+            # message that did arrive is never reported as 没收到), and a resend of the same number gets this result
+            # back instead of reaching Claude twice.
             previous = handler.server.codex._begin(request_id, tid, body)
             if previous:
                 return previous
-            try:
-                lines = self._queue_images(handler, tid, images)
-            except (OSError, KeyError, ValueError) as exc:
-                self._reject_delivery(handler, request_id, exc)  # 11-26 P6: recorded, then refused before any submit
-                raise chats.InputNotSubmitted("图片已移除或不存在，尚未发送") from exc
-            text = f"{base}\n\n" + "\n".join(lines) if base else "\n".join(lines)
+            recorded = True
         try:
+            if images:
+                try:
+                    lines = self._queue_images(handler, tid, images)
+                except (OSError, KeyError, ValueError) as exc:
+                    raise chats.InputNotSubmitted("图片已移除或不存在，尚未发送") from exc
+                text = f"{base}\n\n" + "\n".join(lines) if base else "\n".join(lines)
             _, duplicate = hooks.enqueue_message(tid, text, base, request_id)
-        except ValueError as exc:
+        except chats.SendNotSubmitted as exc:
+            if recorded:
+                codex_control.reject_delivery(handler.server.codex, request_id, exc)  # recorded, then refused, no submit
+            raise
+        except ValueError as exc:  # the queue already has this number for another message: nothing was handed over
+            if recorded:
+                codex_control.reject_delivery(handler.server.codex, request_id, exc)
             raise chats.ChatError("请求编号已用于其他消息") from exc
         if duplicate:  # a retry of something already handed over: let the receipt look at the recent record too
             offset = max(0, offset - (1 << 20))
         result = {"ok": True, "pressed": True, "offset": offset, "running": True,
                   "check_text": base, "text": "已交给遥应，等这一轮结束", "queued": True,
                   "accepted_at": int(time.time() * 1000)}
-        if images:
-            for image in images:
-                image["used"] = True
-                handler.server.codex._write_meta(image)
+        for image in images:
+            image["used"] = True
+            handler.server.codex._write_meta(image)
+        if recorded:
             handler.server.codex._finish(request_id, result)
         return result
 
@@ -731,6 +743,8 @@ class ClaudeAgent(Agent):
         # The old attribute names stay (tests and the rest of the service read them); the module sets them now.
         server.claude_hooks = bridge
         server.claude.hooks = None if (getattr(server, "cfg", {}) or {}).get("claude_hooks") is False else bridge
+        # 11-26: 插话 (send_steer) keeps a delivery record too, so 核对 can answer for it as for any other send.
+        server.claude.deliveries = getattr(server, "codex", None)
         self.set_service(server, bridge)
         # Warm-up comes after the bridge exists and is reachable through server.claude_hooks.
         if hasattr(bridge, "refresh_sessions"):
@@ -759,20 +773,6 @@ class ClaudeAgent(Agent):
                 handler.log.write(traceback.format_exc())
         handler._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
 
-    @staticmethod
-    def _reject_delivery(handler, request_id: str, exc: Exception) -> None:
-        """11-26 P6: this send never left the desktop, so its delivery record says 未接收 (rejected) with the reason,
-        instead of staying 'dispatching' for good. The same request number sent again then gets that answer back, never
-        "这次请求已提交过，结果尚未确认". Never raises: the refusal itself is what the phone has to see."""
-        if not request_id:
-            return
-        try:
-            handler.server.codex._finish(str(request_id), {
-                "ok": False, "delivery_state": "rejected", "request_id": str(request_id), "text": str(exc)[:350],
-            })
-        except Exception:
-            pass
-
     def chat_send_with_references(self, handler, body: dict) -> dict:
         import time
         tid = str(body.get("id", ""))
@@ -798,12 +798,19 @@ class ClaudeAgent(Agent):
                 if queued is not None:
                     return queued
         if images:
-            previous = handler.server.codex._begin(str(body.get("request_id", "")), tid, body)
-            if previous:
-                return previous
             for image in images:
                 image["used"] = True
                 handler.server.codex._write_meta(image)
+        # 11-26: every Claude send keeps a delivery record, words or pictures. The phone's 核对 reads it (so a message
+        # that did arrive is never reported as 没收到), and a resend of the same number gets the first result back
+        # instead of reaching Claude twice.
+        request_id = str(body.get("request_id", ""))
+        recorded = False
+        if codex_control.recordable(request_id):
+            previous = handler.server.codex._begin(request_id, tid, body)
+            if previous:
+                return previous
+            recorded = True
         replace = {"replace": body["replace_draft"][:2000]} if isinstance(body.get("replace_draft"), str) else {}
         try:
             result = (
@@ -811,8 +818,8 @@ class ClaudeAgent(Agent):
                 if images else handler.desktop.send(self.id, tid, text, **replace)
             )
         except chats.SendNotSubmitted as exc:  # a draft in the box, the wrong window, no Send: nothing was submitted
-            if images:
-                self._reject_delivery(handler, str(body.get("request_id", "")), exc)
+            if recorded:
+                codex_control.reject_delivery(handler.server.codex, request_id, exc)
             raise
         result["accepted_at"] = int(time.time() * 1000)
         for image in images:
@@ -820,8 +827,8 @@ class ClaudeAgent(Agent):
             handler.server.codex._write_meta(image)
         if body.get("references") or images:
             result["check_text"] = text
-        if images:
-            handler.server.codex._finish(body["request_id"], result)
+        if recorded:
+            handler.server.codex._finish(request_id, result)
         return result
 
     def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:

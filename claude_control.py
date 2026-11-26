@@ -223,6 +223,7 @@ class Controller:
     window_sink=threading.local()  # 11-24: per thread, the dict a window read fills for _read_keeping
     def __init__(self,desktop):
         self.desktop=desktop;self.cache={};self.choices={};self.lock=threading.RLock();self.menu_context=None;self.steer_submissions={}
+        self.deliveries=None  # the delivery record, set by ClaudeAgent.on_server_init (11-26: 插话 writes one too)
         self.revalidating={}  # conversation -> the thread reading its window again for the next poll (11-24)
         from claude_archive import SessionActions
         self.session_actions = SessionActions(self)
@@ -1299,7 +1300,11 @@ class Controller:
             self.desktop.run(self._dismiss_popup,item,timeout=12);self.menu_context=None;return {'ok':True}
 
     def send_steer(self,tid,text,expected_anchor,request_id,display=None):
-        """Submit once, then promote only the newly observed exact-text queued item."""
+        """Submit once, then promote only the newly observed exact-text queued item.
+
+        steer_submissions keeps a repeat of the same number from being submitted twice while this service runs; the
+        delivery record (11-26) says what became of it, so the phone's 核对 can answer for a 插话 as for any other send,
+        and the same number sent again after a restart gets that answer instead of reaching Claude twice."""
         with self.lock:
             if not re.fullmatch(r'[a-zA-Z0-9_-]{12,80}',request_id):raise chats.InputNotSubmitted('无效补充请求编号，尚未发送')
             fingerprint=signature([tid,text,expected_anchor]);previous=self.steer_submissions.get(request_id)
@@ -1308,14 +1313,25 @@ class Controller:
                 if previous.get('result'):return previous['result']
                 raise chats.ChatError('这条补充指令已有提交记录，尚未确认，不会重复发送')
             item=chats.find('claude',tid);text=chats.clean_text(text)
+            import codex_control
+            deliveries=getattr(self,'deliveries',None);recorded=False
+            if deliveries is not None and codex_control.recordable(request_id):
+                prior=deliveries._begin(request_id,tid,{'id':tid,'request_id':request_id,'intent':'steer',
+                                                       'expected_turn':expected_anchor,'text':text})
+                if prior:return prior
+                recorded=True
+            def refused(exc):
+                """A 插话 that definitely did not get submitted is 未接收 in the record; one that may have is left alone."""
+                if recorded:codex_control.reject_delivery(deliveries,request_id,exc)
             hooks=self.hooks
             if hooks is not None and text and not text.lstrip().startswith('/'):
                 hs=self._hook_status(item)
                 if hs is not None and hs.get('running'):
                     if expected_anchor and hs.get('anchor') and expected_anchor!=hs['anchor']:
-                        raise chats.InputNotSubmitted('Claude 当前轮次已变化，尚未发送补充指令')
+                        exc=chats.InputNotSubmitted('Claude 当前轮次已变化，尚未发送补充指令');refused(exc);raise exc
                     try:_,duplicate=hooks.enqueue_steer(tid,text,display if display is not None else text,request_id)
-                    except ValueError:raise chats.ChatError('请求编号已用于其他消息') from None
+                    except ValueError:
+                        exc=chats.ChatError('请求编号已用于其他消息');refused(exc);raise exc from None
                     offset=chats.file_size(chats.conv_path(item))
                     if duplicate:offset=max(0,offset-(1<<20))
                     result={'ok':True,'steer_requested':True,'offset':offset,
@@ -1323,6 +1339,7 @@ class Controller:
                             'text':'已交给遥应，会在当前这一步做完后交给 Claude',
                             'accepted_at':int(time.time()*1000)}
                     self.steer_submissions[request_id]={'fingerprint':fingerprint,'result':result}
+                    if recorded:deliveries._finish(request_id,result)
                     return result
             def run():
                 state=self._read(item)
@@ -1346,7 +1363,8 @@ class Controller:
             try:
                 result=self.desktop.run(run,timeout=60)
                 self.steer_submissions[request_id]={'fingerprint':fingerprint,'result':result}
+                if recorded:deliveries._finish(request_id,result)
                 return result
-            except chats.SendNotSubmitted:
-                self.steer_submissions.pop(request_id,None);raise
+            except chats.SendNotSubmitted as exc:
+                self.steer_submissions.pop(request_id,None);refused(exc);raise
             finally:self.cache.pop(tid,None)

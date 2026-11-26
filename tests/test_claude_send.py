@@ -854,6 +854,28 @@ class AttachmentPasteTests(unittest.TestCase):
         self.assertIn('removes(kind,parent,at)',line)
         self.assertNotIn('secret-name.png',line)  # a file name never reaches the log
 
+    def test_five_slow_pictures_stop_at_the_picture_time_limit_and_are_taken_back(self):
+        # 11-26: one send's pictures together may take CLAUDE_IMAGES_WAIT, not 20 s each: the phone gives the send 60 s
+        clock={'now':0.0}
+        d=object.__new__(chats.Desktop);d.input_lock=threading.Lock();d.log=Mock();d.sent_last={}
+        edit=FakeControl('Prompt','EditControl')
+        d._claude_open=Mock(return_value=(1,'root'));d._claude_show=Mock();d._keyboard_owner=Mock(return_value=None)
+        d._claude_wait_prompt=Mock();d._fill_claude_prompt=Mock(return_value=('doc',edit))
+        d._claude_verified_prompt=Mock(return_value=('doc',edit))
+        d._claude_image_count=lambda box:min(5,int(clock['now']//7))  # every card takes seven seconds to show
+        d._claude_take_back=Mock()
+        submit=Mock();d._claude_send_button=Mock(return_value=SimpleNamespace(GetInvokePattern=lambda:SimpleNamespace(Invoke=submit)))
+        with self.paste(),patch('chats.require_send_desktop'),patch('chats.conversation_title',return_value='test'),\
+             patch('chats.winctl.focus'),patch('chats.winctl.press'),patch('chats._clip_open'),\
+             patch('chats.time.monotonic',side_effect=lambda:clock['now']),\
+             patch('chats.time.sleep',side_effect=lambda seconds:clock.__setitem__('now',clock['now']+seconds)):
+            with self.assertRaises(chats.InputNotSubmitted) as refused:
+                d._send_claude({'id':'s','title':'test'},'test',[{'path':f'{i}.png'} for i in range(1,6)])
+        self.assertEqual(str(refused.exception),'电脑上 Claude 显示图片太慢，尚未发送')
+        self.assertLessEqual(clock['now'],chats.CLAUDE_IMAGES_WAIT+0.5,clock['now'])
+        d._claude_take_back.assert_called_once()
+        submit.assert_not_called()
+
     def test_taking_back_presses_one_remove_per_card_and_clears_the_words(self):
         d,edit=self.desktop(Mock(return_value=0))
         first,second,late=(FakeControl('Remove image.png','ButtonControl') for _ in range(3))
@@ -894,8 +916,8 @@ class AttachmentPasteTests(unittest.TestCase):
         d._paste_claude_image.assert_not_called();d._claude_take_back.assert_not_called()
 
 
-class AttachmentDeliveryTests(unittest.TestCase):
-    """11-26 P6: an image send the desktop turned away before submitting is 未接收 in the record, not 待确认 for good."""
+class DeliveryRecordFixture(unittest.TestCase):
+    """A real delivery record in a temporary folder, and a handler whose computer it is; no desktop is ever touched."""
     def setUp(self):
         import codex_control
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -903,21 +925,108 @@ class AttachmentDeliveryTests(unittest.TestCase):
         self.bridge.attachment=Mock(return_value={'id':'c'*32,'path':str(Path(self.tmp.name)/'one.png'),'app':'claude',
                                                   'original_size':10,'width':1,'height':1})
         self.bridge._write_meta=Mock()
-        self.body={'id':'local_s','text':'看图','attachments':['c'*32],'request_id':'img-refusal-0001'}
+        self.item={'id':'local_s','app':'claude','title':'t'}
     def handler(self,send):
         return SimpleNamespace(server=SimpleNamespace(codex=self.bridge,claude=SimpleNamespace(hooks=None)),
                                desktop=SimpleNamespace(send=send))
+    def hook_handler(self):
+        return SimpleNamespace(server=SimpleNamespace(codex=self.bridge,claude=SimpleNamespace(hooks=None)),desktop=SimpleNamespace())
+
+
+class AttachmentDeliveryTests(DeliveryRecordFixture):
+    """11-26 P6: an image send the desktop turned away before submitting is 未接收 in the record, not 待确认 for good."""
     def test_a_refused_image_send_reads_back_as_rejected_and_never_as_still_pending(self):
         from agents.claude import ClaudeAgent
         send=Mock(side_effect=chats.InputNotSubmitted('Claude 桌面已有附件，尚未发送；请先处理桌面草稿'))
+        body={'id':'local_s','text':'看图','attachments':['c'*32],'request_id':'img-refusal-0001'}
         with self.assertRaises(chats.InputNotSubmitted):
-            ClaudeAgent().chat_send_with_references(self.handler(send),self.body)
+            ClaudeAgent().chat_send_with_references(self.handler(send),body)
         rec=self.bridge.receipt('local_s','img-refusal-0001')
         self.assertEqual(rec['state'],'rejected')
         self.assertIn('尚未发送',rec['result']['text'])
-        again=ClaudeAgent().chat_send_with_references(self.handler(send),self.body)  # the same request number again
+        again=ClaudeAgent().chat_send_with_references(self.handler(send),body)  # the same request number again
         self.assertEqual(again['delivery_state'],'rejected')  # the record's answer, not “这次请求已提交过”
         self.assertEqual(send.call_count,1)
+
+
+class TextSendDeliveryTests(DeliveryRecordFixture):
+    """11-26: every Claude send keeps a record, words as well as pictures, so 核对 answers for a plain message too and a
+    resend of the same number never reaches Claude twice."""
+    def text_body(self,request_id):
+        return {'id':'local_s','text':'你好','request_id':request_id}
+    def test_a_text_send_keeps_a_record_and_the_same_number_returns_it(self):
+        from agents.claude import ClaudeAgent
+        send=Mock(return_value={'ok':True,'pressed':True,'offset':0,'running':False,'text':'已提交'})
+        first=ClaudeAgent().chat_send_with_references(self.handler(send),self.text_body('text-request-0001'))
+        rec=self.bridge.receipt('local_s','text-request-0001')
+        self.assertEqual(rec['state'],'accepted')  # the phone never reports 电脑没收到 for a message that arrived
+        self.assertNotIn('missing',rec)
+        self.assertEqual(rec['result']['text'],'已提交')
+        again=ClaudeAgent().chat_send_with_references(self.handler(send),self.text_body('text-request-0001'))
+        self.assertEqual(again,first)  # the record's answer, not a second message
+        self.assertEqual(send.call_count,1)
+    def test_a_refused_text_send_is_rejected_and_replays_as_rejected(self):
+        from agents.claude import ClaudeAgent
+        send=Mock(side_effect=chats.DesktopDraft('电脑上 Claude 的输入框里有别的字','e'))
+        with self.assertRaises(chats.InputNotSubmitted):
+            ClaudeAgent().chat_send_with_references(self.handler(send),self.text_body('text-refusal-0001'))
+        rec=self.bridge.receipt('local_s','text-refusal-0001')
+        self.assertEqual(rec['state'],'rejected')
+        again=ClaudeAgent().chat_send_with_references(self.handler(send),self.text_body('text-refusal-0001'))
+        self.assertEqual(again['delivery_state'],'rejected')
+        self.assertEqual(send.call_count,1)
+
+
+class HookQueueDeliveryTests(DeliveryRecordFixture):
+    """11-26: a message handed to 遥应 while Claude runs keeps a record too, words as well as pictures."""
+    def agent(self,hook):
+        from agents.claude import ClaudeAgent
+        agent=ClaudeAgent();agent._hook_bridge=Mock(return_value=hook);agent._hook_running=Mock(return_value=True)
+        return agent
+    def test_a_queued_text_send_keeps_a_record_and_the_same_number_replays_it(self):
+        hook=Mock();hook.enqueue_message.return_value=('queued-1',False)
+        agent=self.agent(hook);body={'id':'local_s','text':'排队的话','request_id':'queue-request-0001'}
+        with patch('chats.find',return_value=self.item),patch('chats.conv_path',return_value=None),patch('chats.file_size',return_value=0):
+            first=agent._hook_queue_send(self.hook_handler(),self.item,'local_s','排队的话',[],body)
+        self.assertTrue(first['queued'])
+        rec=self.bridge.receipt('local_s','queue-request-0001')
+        self.assertEqual(rec['state'],'accepted')
+        self.assertNotIn('missing',rec)
+        with patch('chats.find',return_value=self.item),patch('chats.conv_path',return_value=None),patch('chats.file_size',return_value=0):
+            again=agent._hook_queue_send(self.hook_handler(),self.item,'local_s','排队的话',[],body)
+        self.assertEqual(again,first)  # the record's answer, not a second queue entry
+        self.assertEqual(hook.enqueue_message.call_count,1)
+
+
+class SteerDeliveryTests(DeliveryRecordFixture):
+    """11-26: 插话 keeps its in-memory guard and writes a delivery record as well."""
+    def controller(self):
+        import claude_control
+        desktop=Mock();desktop.run=lambda fn,*a,**kw:fn(*a)
+        desktop.send=Mock(return_value={'ok':True,'pressed':True,'offset':7,'running':True,'text':'已提交'})
+        ctrl=claude_control.Controller(desktop);ctrl.hooks=None;ctrl.deliveries=self.bridge
+        ctrl._read=Mock(return_value={'on_screen':True,'running':True,'turn_anchor':'anchor-1'})
+        ctrl._document=Mock(return_value=(0,None,'doc'));ctrl._queued=Mock(return_value=[])
+        return ctrl,desktop
+    def test_a_steer_keeps_a_record_and_the_same_number_replays_it(self):
+        ctrl,desktop=self.controller()
+        with patch('chats.find',return_value=self.item),patch('chats.Desktop.check',return_value={'delivered':True}):
+            first=ctrl.send_steer('local_s','补充一句','anchor-1','steer-request-0001')
+        rec=self.bridge.receipt('local_s','steer-request-0001')
+        self.assertEqual(rec['state'],'accepted')
+        self.assertNotIn('missing',rec)
+        ctrl.steer_submissions.clear()  # as after a restart: only the record is left
+        with patch('chats.find',return_value=self.item),patch('chats.Desktop.check',return_value={'delivered':True}):
+            again=ctrl.send_steer('local_s','补充一句','anchor-1','steer-request-0001')
+        self.assertEqual(again,first)
+        self.assertEqual(desktop.send.call_count,1)
+    def test_a_steer_that_never_got_submitted_is_rejected(self):
+        ctrl,desktop=self.controller()
+        desktop.run=Mock(side_effect=chats.InputNotSubmitted('Claude 当前轮次已变化，尚未发送补充指令'))
+        with patch('chats.find',return_value=self.item):
+            with self.assertRaises(chats.InputNotSubmitted):
+                ctrl.send_steer('local_s','补充一句','anchor-1','steer-refusal-0001')
+        self.assertEqual(self.bridge.receipt('local_s','steer-refusal-0001')['state'],'rejected')
 
 
 if __name__=='__main__':unittest.main()

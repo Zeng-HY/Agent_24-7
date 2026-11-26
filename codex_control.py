@@ -89,6 +89,28 @@ def untaken(exc, codes=UNTAKEN):
 
 STUCK_AFTER = 600  # seconds: no send is still on its way to Codex this long after it began (relay and pipe give up first)
 
+# A send's request number, as the delivery record takes it and as a receipt can be asked for it later. The phone's own
+# numbers are 12-80 letters, digits, '-' or '_' (11-26: every Claude send keeps a record now, not only picture sends).
+REQUEST_ID = re.compile(r"[a-zA-Z0-9_-]{12,80}")
+
+
+def recordable(request_id) -> bool:
+    """Whether this request number can go into the delivery record (and be looked up by it afterwards)."""
+    return isinstance(request_id, str) and REQUEST_ID.fullmatch(request_id) is not None
+
+
+def reject_delivery(bridge, request_id, exc) -> None:
+    """11-26 P6: a send the desktop turned away before submitting anything is 未接收 (rejected) with the reason, instead
+    of staying 'dispatching' for good. The same request number sent again then gets that answer back, never "这次请求
+    已提交过，结果尚未确认". Never raises: the refusal itself is what the phone has to see."""
+    if not recordable(request_id):
+        return
+    try:
+        bridge._finish(str(request_id), {"ok": False, "delivery_state": "rejected",
+                                         "request_id": str(request_id), "text": str(exc)[:350]})
+    except Exception:
+        pass
+
 
 def record_missing(path, request_id, table="deliveries"):
     """11-26 P1/8.1: whether this assistant's delivery record file proves the phone's message was never received.
@@ -1154,7 +1176,7 @@ class Bridge:
             con.close()
 
     def _begin(self, rid, tid, body):
-        if not re.fullmatch(r"[a-zA-Z0-9_-]{12,80}", rid):
+        if not recordable(rid):
             raise ControlError("无效的发送请求编号", 400)
         fingerprint = hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         with self._db() as con:
