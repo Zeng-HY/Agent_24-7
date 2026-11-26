@@ -49,4 +49,30 @@ class SentPicturesTest {
         // The time comes with the message from the computer (parseMessage keeps it).
         assertEquals("2026-10-20T08:00:00.000Z", JSONObject(parseMessage(JSONObject("""{"id":"m","role":"user","text":"[图片] x","time":"2026-10-20T08:00:00.000Z"}""")).details).string("time"))
     }
+
+    /** 11-26 (design 3.2): the message's own pictures follow the recorded ones, by id once; unusable entries are skipped. */
+    @Test fun aMessageCarriesItsOwnPicturesAfterTheRecordedOnes() {
+        val own = listOf(
+            MessageImage("a", "同一张.png", "/api/codex/image?id=a"),
+            MessageImage("b", "自己的.png", "/api/codex/image?thumb=1&id=b"),
+            MessageImage("../x", "坏编号.png", "/api/codex/image?id=../x"),
+            MessageImage("path-only", "只有路径.png", ""),
+        )
+        val message = user("m1", "[图片] 插话", request = "r1").copy(images = own)
+        val found = sentPictures(listOf(message), listOf(record("r1", listOf("a", "c"), text = "插话")))
+        assertEquals(listOf("a", "c", "b"), found["m1"]?.map { it.id })
+        assertEquals(listOf("a.png", "c.png", "自己的.png"), found["m1"]?.map { it.name })
+        // A steering message has no request id and no send record: only its own pictures show.
+        val steering = user("m2", "[图片] 插话").copy(images = listOf(MessageImage("a", "", "/api/codex/image?id=a")))
+        assertEquals(listOf(SentPicture("a", "图片")), sentPictures(listOf(steering), emptyList())["m2"])
+        // Without images the result is exactly what it was.
+        assertTrue(sentPictures(listOf(user("m3", "你好")), emptyList()).isEmpty())
+    }
+
+    /** The computer's own `images` on a message are kept even when it sends no `files` at all (an older computer). */
+    @Test fun parseMessageKeepsTheMessagesOwnPictures() {
+        val message = parseMessage(JSONObject("""{"id":"m","role":"user","text":"[图片] 看图","images":[{"id":"a","name":"图.png","url":"/api/codex/image?id=a"},{"id":"p","name":"x.png","path":"C:/x.png"}]}"""))
+        assertEquals(listOf(MessageImage("a", "图.png", "/api/codex/image?id=a"), MessageImage("p", "x.png", "")), message.images)
+        assertNull(message.files)
+    }
 }

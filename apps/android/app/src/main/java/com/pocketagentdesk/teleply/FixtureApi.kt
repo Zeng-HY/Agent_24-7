@@ -149,7 +149,9 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
         catch (e: Exception) { Diagnostics.finish(timer, 0, if (e is ServiceFailure) "HTTP ${e.status}" else "网络失败"); throw e }
     }
 
-    override suspend fun receipt(device: String, chat: String, request: String) = net().let { world.receipts[request] ?: JSONObject().put("state", "unknown") }
+    override suspend fun receipt(device: String, chat: String, request: String) = net().let {
+        world.receipts[request] ?: if (request == FixtureSendStory.MISSING_REQUEST) FixtureSendStory.missingReceipt() else JSONObject().put("state", "unknown")
+    }
 
     override suspend fun config() = "fixture"
     override suspend fun accountConfig(): JSONObject = JSONObject().put("version", "fixture").put("email_enabled", false)
@@ -333,6 +335,7 @@ class FixtureWorld {
         Chat(AWAY_CLAUDE, "电脑上没在显示的 Claude 对话", "测试项目", "照样能发，电脑会先切过去", "idle", "claude", NOW - 12_600_000),
         Chat(UNGROUPED, "未分组的会话", "", "不在 DeepSeek 工作区里，多是脚本或命令行开的一次性会话", "idle", "deepseek", NOW - 14_400_000, group = true,
             children = listOf(Chat("ds-stray-1", "整理下载目录（脚本）", "", "", "idle", "deepseek", NOW - 14_400_000, kind = "script")), childCount = 1),
+        FixtureSendStory.chat(),
     )
     fun firstPage() = (created.map { it.first }.reversed() + all()).filter { "${it.app}:${it.id}" !in archivedKeys && "${it.app}:${it.id}" !in deleted }
 
@@ -501,6 +504,11 @@ class FixtureWorld {
             }
             else -> {
                 val raw = JSONObject(CODEX_STATE)
+                // The 11-26 发送 story has no waiting card of its own.
+                if (chat == FixtureSendStory.CHAT) {
+                    raw.put("questions", JSONArray())
+                    return Control(true, run, if (run) turn else "", true, queued, turnMap, false, raw.toString())
+                }
                 if (chat == "plan-demo") {
                     raw.put("questions", JSONArray()).put("plan", JSONObject().put("id", "plan-item-1").put("turn_id", "plan-turn").put("text", PLAN).put("ready", !planDone && running["codex"] != true))
                         .put("images", JSONArray(PLAN_PICTURES))
@@ -736,6 +744,7 @@ class FixtureWorld {
     )).toString()
 
     fun messages(app: String, chat: String): List<Message> = when {
+        chat == FixtureSendStory.CHAT -> FixtureSendStory.messages()
         created.any { it.first.id == chat } -> created.first { it.first.id == chat }.second.let { text ->
             listOf(Message("$chat-1", "user", text.ifBlank { "请查看这些图片或引用。" }), Message("$chat-2", "assistant", "本地示例：收到，这是固定的回复。"))
         }

@@ -680,7 +680,7 @@ fun UserBubble(text: String, receipt: String? = null, sending: Boolean = false, 
                 }
             }
         }
-        if (receipt != null) Text(receipt, style = MaterialTheme.typography.bodySmall, color = if (receipt == "送达状态待确认") p.amber else p.muted, modifier = Modifier.padding(top = 4.dp, end = 4.dp).semantics { liveRegion = LiveRegionMode.Polite })
+        if (receipt != null) Text(receipt, style = MaterialTheme.typography.bodySmall, color = if (receipt == "送达状态待确认" || receipt == MissingLabel) p.amber else p.muted, modifier = Modifier.padding(top = 4.dp, end = 4.dp).semantics { liveRegion = LiveRegionMode.Polite })
     }
 }
 
@@ -1457,22 +1457,37 @@ private fun SearchSheet(s: ReaderState, vm: ReaderViewModel, onDismiss: () -> Un
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun PendingSheet(chat: ComposerState, vm: ReaderViewModel, onDismiss: () -> Unit) {
     val p = LocalTeleply.current
-    val rows = chat.submissions.filter { it.label in listOf("提交中", "送达状态待确认", "已接收", "已排队") }
+    val rows = chat.submissions.filter { it.label in listOf("提交中", "送达状态待确认", "已接收", "已排队", MissingLabel) }
     TeleplySheet("待核对发送记录", onDismiss, trailing = "${rows.size} 条") {
         InfoNote("这些消息的结果还没确认。核对只读取回执，不会重新发送。")
+        if (chat.checkNote.isNotBlank()) Text(chat.checkNote, style = MaterialTheme.typography.note, color = p.muted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         if (rows.isEmpty()) Text("没有待核对的记录", style = MaterialTheme.typography.note, color = p.muted)
         rows.forEach { record ->
+            val missing = record.label == MissingLabel
+            val checking = chat.checking == record.request
+            val unknown = !missing && record.label == "送达状态待确认" &&
+                runCatching { JSONObject(record.body).optBoolean(ReceiptUnknownKey) }.getOrDefault(false)
+            var confirming by remember(record.request) { mutableStateOf(false) }
             QuestionCard {
-                Text(record.label, style = MaterialTheme.typography.labelLarge, color = if (record.label == "送达状态待确认") p.amber else p.text)
+                Text(record.label, style = MaterialTheme.typography.labelLarge, color = if (record.label == "送达状态待确认" || missing) p.amber else p.text)
                 Text(record.text, style = MaterialTheme.typography.card, color = p.text, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PillButton("核对状态", { vm.composer.check(record) }, enabled = !chat.submitting)
-                    if (record.action == "send") PillButton("恢复提交快照", { vm.composer.restore(record) }, enabled = chat.draft.isBlank() && !chat.submitting, style = PillStyle.Text)
+                if (unknown) Text("电脑查不到这条的记录，可能没收到。", style = MaterialTheme.typography.note, color = p.muted)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PillButton(if (checking) "核对中…" else "核对状态", { vm.composer.check(record) }, enabled = !chat.submitting && !checking)
+                    if (missing) PillButton("重发", { vm.composer.resend(record) }, enabled = !chat.submitting && chat.control.available, style = PillStyle.Text)
+                    if ((missing || unknown) && chat.draft.isBlank()) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, enabled = !chat.submitting, style = PillStyle.Text)
+                    if (!missing && !unknown && record.action == "send") {
+                        PillButton("恢复提交快照", { vm.composer.restore(record) }, enabled = chat.draft.isBlank() && !chat.submitting, style = PillStyle.Text)
+                    }
+                    if (missing) PillButton("移除", { vm.composer.dismiss(record) }, enabled = !chat.submitting, style = PillStyle.Text)
+                    if (!missing && record.label == "送达状态待确认") PillButton("移除", { confirming = true }, enabled = !chat.submitting, style = PillStyle.Text)
                 }
             }
+            if (confirming) RemovePendingDialog(onConfirm = { confirming = false; vm.composer.dismiss(record) }, onDismiss = { confirming = false })
         }
     }
 }

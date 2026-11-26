@@ -123,12 +123,7 @@ fun InputArea(s: ReaderState, vm: ReaderViewModel, chat: ComposerState, ws: Work
                 QueueTray(s.app, s.catalog, chat, raw, vm, ws)
                 val last = chat.submissions.firstOrNull { it.label != RemovedLabel }
                 if (last != null && last.action == "send" && last.label == "未接收") RejectedBar(last, chat, vm)
-                if (last != null && last.label == "送达状态待确认") {
-                    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(TeleplyShape.Tray).background(p.noteBg).padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("上一条送达状态待确认", style = MaterialTheme.typography.note, color = p.noteText, modifier = Modifier.weight(1f).padding(vertical = 8.dp))
-                        PillButton("核对待发送消息", { vm.composer.check(last) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting)
-                    }
-                }
+                SendStateBar(last, chat, vm)
             }
             ComposerCard(s, vm, chat, ws, raw, saved)
         }
@@ -158,6 +153,57 @@ private fun RejectedBar(record: Submission, chat: ComposerState, vm: ReaderViewM
             PillButton("移除", { vm.composer.dismiss(record) }, style = PillStyle.Text, minHeight = 36.dp, description = "移除这条没发出去的记录")
         }
     }
+}
+
+/**
+ * The bar above the input card for a send still to be settled (11-26, design 3.1): 电脑没收到 with 重发 / 恢复草稿 /
+ * 移除, or 送达状态待确认 with 核对 / 移除 (and 恢复草稿 when the computer could not say whether it got it). Every 核对
+ * leaves one line for a few seconds; 移除 on 待确认 asks first, because the computer may have the message after all.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun SendStateBar(record: Submission?, chat: ComposerState, vm: ReaderViewModel) {
+    val p = LocalTeleply.current
+    if (record == null || record.label !in listOf("送达状态待确认", MissingLabel)) return
+    val missing = record.label == MissingLabel
+    val checking = chat.checking == record.request
+    val body = remember(record.body) { json(record.body) }
+    // The computer answered unknown without missing: an older computer, or one that cannot read its record.
+    val unknown = !missing && body.optBoolean(ReceiptUnknownKey)
+    var confirming by remember(record.request) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(TeleplyShape.Tray).background(if (missing) p.stopBg else p.noteBg).padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 4.dp)) {
+        Text(
+            if (missing) "电脑没收到这条消息，可以重发。" else "上一条送达状态待确认",
+            style = MaterialTheme.typography.note, color = if (missing) p.stopText else p.noteText, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        if (unknown) Text("电脑查不到这条的记录，可能没收到。", style = MaterialTheme.typography.note, color = p.noteText, modifier = Modifier.padding(top = 2.dp))
+        androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (missing) {
+                PillButton("重发", { vm.composer.resend(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting && chat.control.available, description = "用原来的请求编号和原来的内容再发一次")
+                if (chat.draft.isBlank()) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting)
+                PillButton("移除", { vm.composer.dismiss(record) }, style = PillStyle.Text, minHeight = 36.dp, description = "移除这条电脑没收到的记录")
+            } else {
+                PillButton(if (checking) "核对中…" else "核对待发送消息", { vm.composer.check(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting && !checking)
+                if (unknown && chat.draft.isBlank()) PillButton("恢复草稿", { vm.composer.restoreAndRemove(record) }, style = PillStyle.Text, minHeight = 36.dp, enabled = !chat.submitting)
+                PillButton("移除", { confirming = true }, style = PillStyle.Text, minHeight = 36.dp, description = "移除这条待确认的记录")
+            }
+        }
+    }
+    if (confirming) RemovePendingDialog(onConfirm = { confirming = false; vm.composer.dismiss(record) }, onDismiss = { confirming = false })
+}
+
+/** 移除 on a 待确认 copy asks first: only the phone forgets it, the computer may still have the message (design 3.1 item 4). */
+@Composable
+internal fun RemovePendingDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val p = LocalTeleply.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("移除这条记录？") },
+        text = { Text("只从手机上去掉这条。如果电脑其实收到了，它仍会出现在对话里。") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("移除", color = p.error) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 /**
@@ -244,9 +290,12 @@ private fun QueueTray(app: String, catalog: AgentCatalogSnapshot, chat: Composer
  * the composer was left and opened again). Pure, so the JVM tests can read it without a screen.
  */
 internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Boolean, local: String, result: String,
-                            unknown: Boolean, away: String?, receipt: String?, capsNote: String? = null): String? = when {
+                            unknown: Boolean, away: String?, receipt: String?, capsNote: String? = null,
+                            checkNote: String? = null): String? = when {
     chatError != null -> chatError
     wsError != null && !paneOpen -> wsError
+    // 11-26: a 核对 just finished; the line stays a few seconds (design 3.1 item 5).
+    checkNote != null -> checkNote
     local.isNotBlank() -> local
     result.isNotBlank() && !paneOpen && away == null -> result
     unknown -> "上次操作的结果还没确认"
@@ -254,7 +303,7 @@ internal fun statusLineText(chatError: String?, wsError: String?, paneOpen: Bool
     away != null -> away
     // 此刻能力说不能发（第二批 A1）：控制态 capability_notes 里的原因。
     capsNote != null -> capsNote
-    receipt != null && receipt != "送达状态待确认" -> receipt
+    receipt != null && receipt !in listOf("送达状态待确认", MissingLabel) -> receipt
     else -> null
 }
 
@@ -276,7 +325,7 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
     }
     val receipt = chat.submissions.firstOrNull { it.label != RemovedLabel }?.label?.takeIf { it != "未接收" }
     val unknown = saved.optJSONObject("pending_action")?.string("status") == "unknown"
-    val text = statusLineText(chat.error, ws.error, ws.pane != null, local, ws.result, unknown, away, receipt, capsNote)
+    val text = statusLineText(chat.error, ws.error, ws.pane != null, local, ws.result, unknown, away, receipt, capsNote, chat.checkNote.ifBlank { null })
     val color = if (chat.error != null || ws.error != null && ws.pane == null) p.error else p.muted
     if (text == null) return
     val opens = !unknown && away != null && text == away

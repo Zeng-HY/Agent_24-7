@@ -18,10 +18,10 @@ data class Chat(val id: String, val title: String, val folder: String = "", val 
  * [length] is the whole message's length as the computer counts it, what 展开全文 says when [truncated].
  * [files] is the answer's file list from §5.1 of the file-preview design: an empty list too means a newer computer,
  * null means the computer is older and the phone falls back to [openLinkedFile]. [fileNotes] say why a file-like link
- * could not be given (6.4).
+ * could not be given (6.4). [images] are the pictures a user message carries itself (11-26, design §8.2).
  */
 data class Message(val id: String, val role: String, val text: String, val truncated: Boolean = false, val kind: String = "", val status: String = "", val order: Double? = null, val aliases: List<String> = emptyList(),val details:String="{}",val phase:String="",val request:String="",val length:Int=0,
-                   val files: List<FileRef>? = null, val fileNotes: List<FileNote> = emptyList())
+                   val files: List<FileRef>? = null, val fileNotes: List<FileNote> = emptyList(), val images: List<MessageImage> = emptyList())
 /**
  * A file an answer names (file-preview design §5.1), as the computer lists it. [view] picks how the file page shows it
  * (`image`, `svg`, `code`, …); [version] is the `v` its addresses carry; [texts] are the words a `code` or `path`
@@ -144,7 +144,10 @@ fun sortsAfter(a: Chat, b: Chat, sort: String): Boolean {
  */
 private val MessageDetails = listOf("tool","title","changes","activity_turn","items","tool_id","recap","ask","actions","blocked","open","brief","offer","label","child","status","mode","origin","thinking","source_id","time")
 fun parseMessage(j: JSONObject): Message {
-    val base = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"),j.optInt("length"))
+    // 11-26 (design §8.2): the pictures this message carries itself, also when the computer is too old to send `files`.
+    val images = j.optJSONArray("images")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+        .map { MessageImage(it.string("id"), it.string("name"), it.string("url")) } }.orEmpty()
+    val base = Message(j.getString("id"), j.string("role"), j.string("text"), j.optBoolean("truncated"), j.string("kind"), j.string("tool_status"), if(j.has("order")) j.getDouble("order") else null, j.optJSONArray("projection_aliases")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),JSONObject().apply { MessageDetails.forEach { key -> if(j.has(key)) put(key,j.get(key)) } }.toString(),j.string("phase"),j.string("client_request_id"),j.optInt("length"),images = images)
     // §5.1: an answer carries `files`, an empty list too, once the computer knows about file previews; no field at all
     // is an older computer, and every link then goes the way it did in 1.0.10.
     if(!j.has("files") || j.isNull("files")) return base
