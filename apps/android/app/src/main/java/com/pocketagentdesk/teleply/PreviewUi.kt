@@ -3,6 +3,7 @@ package com.pocketagentdesk.teleply
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.webkit.CookieManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -13,9 +14,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.viewinterop.AndroidView
@@ -75,7 +79,16 @@ fun HtmlPreview(source: String, file: JSONObject, vm: ReaderViewModel, modifier:
     val base = remember(file) { previewBase(file.string("path")) }
     val page = remember(source) { "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" + source }
     val webView = remember { arrayOfNulls<WebView>(1) }
+    val context = LocalContext.current
+    // 11-26: a heavy page can take the web view's renderer process with it. That must not end the app.
+    var gone by remember(source) { mutableStateOf(false) }
     DisposableEffect(Unit) { onDispose { webView[0]?.apply { stopLoading(); destroy() }; webView[0] = null } }
+    if (gone) {
+        WebViewGonePage(file.string("name"), "手机内存不足，这一页的网页视图已停止。文件本身没有问题。", modifier) {
+            if (file.string("id").isNotBlank()) vm.workspace.shareFile(context, file, true)
+        }
+        return
+    }
     AndroidView(
         factory = { context ->
             WebView(context).apply {
@@ -96,6 +109,14 @@ fun HtmlPreview(source: String, file: JSONObject, vm: ReaderViewModel, modifier:
                 }
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
                 webViewClient = object : WebViewClient() {
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        gone = true
+                        runCatching { view.stopLoading() }
+                        webView[0] = null
+                        runCatching { (view.parent as? android.view.ViewGroup)?.removeView(view) }
+                        runCatching { view.destroy() }
+                        return true
+                    }
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val url = request.url
                         // A jump within the page stays here; a tapped link opens in the phone's browser; nothing else leaves.
@@ -147,19 +168,35 @@ fun sheetKind(name: String): String? = name.substringAfterLast('.', "").lowercas
  * app's own copies of them (assets/office, the way the open-source Gander does it). The page loads nothing but those
  * and the file: no internet, no cookie and no bridge to the app; a tapped link opens in the phone's browser. A file it
  * cannot draw sets the page's title, and [failed] runs. It fills what [modifier] gives it.
+ *
+ * 11-26: the file itself is no longer held as a [ByteArray] in the page's state. With [path] (the copy kept on this
+ * phone) every request for it opens a stream of that file; only a CSV's already-read text still comes as [bytes]. A
+ * web view whose renderer process is ended by the system is destroyed here and [failed] runs, instead of taking the
+ * whole app down with it.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit, modifier: Modifier = Modifier) {
+fun OfficePreview(file: JSONObject, bytes: ByteArray?, path: String?, failed: () -> Unit, modifier: Modifier = Modifier) {
     val page = phoneOffice(file.string("name")) ?: return
     // A CSV or TSV is drawn from the UTF-8 text the phone read (11-16); the page is told which separator to use.
     val sheet = sheetKind(file.string("name")) ?: ""
     val dark = LocalTeleply.current.dark
     val onFailed by rememberUpdatedState(failed)
-    key(bytes) {
+    // The page's own file: a fresh stream of the kept original, or the CSV text already in memory.
+    val source: (() -> java.io.InputStream?)? = if (path != null) {
+        { runCatching { java.io.FileInputStream(path) }.getOrNull() }
+    } else if (bytes != null) {
+        { ByteArrayInputStream(bytes) }
+    } else {
+        null
+    }
+    var gone by remember(bytes, path) { mutableStateOf(false) }
+    key(bytes, path) {
         val webView = remember { arrayOfNulls<WebView>(1) }
         DisposableEffect(Unit) { onDispose { webView[0]?.apply { stopLoading(); destroy() }; webView[0] = null } }
-        AndroidView(
+        if (gone) {
+            WebViewGonePage(file.string("name"), "手机内存不足，这一页的网页视图已停止。文件本身没有问题。", modifier)
+        } else AndroidView(
             factory = { context ->
                 WebView(context).apply {
                     webView[0] = this
@@ -180,6 +217,16 @@ fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit, modifi
                         override fun onReceivedTitle(view: WebView, title: String?) { if (title == "teleply:failed") onFailed() }
                     }
                     webViewClient = object : WebViewClient() {
+                        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                            gone = true
+                            runCatching { view.stopLoading() }
+                            webView[0] = null
+                            runCatching { (view.parent as? android.view.ViewGroup)?.removeView(view) }
+                            runCatching { view.destroy() }
+                            // The page becomes the failure page, with its way to the PDF and to another app.
+                            onFailed()
+                            return true
+                        }
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                             val url = request.url
                             if (url.host == OfficeHost) return url.fragment == null
@@ -190,7 +237,8 @@ fun OfficePreview(bytes: ByteArray, file: JSONObject, failed: () -> Unit, modifi
                             val url = request.url
                             val path = url.path.orEmpty().removePrefix("/")
                             if (url.host == OfficeHost) {
-                                if (path == "file") return WebResourceResponse("application/octet-stream", null, ByteArrayInputStream(bytes))
+                                // The file streams from where this phone keeps it (11-26), not from a ByteArray in the page.
+                                if (path == "file") source?.invoke()?.let { return WebResourceResponse("application/octet-stream", null, it) }
                                 val type = OfficeTypes[path.substringAfterLast('.', "")]
                                 if (type != null && ".." !in path) runCatching { view.context.assets.open("office/$path") }.getOrNull()?.let { return WebResourceResponse(type, "utf-8", it) }
                             }

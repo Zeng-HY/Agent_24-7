@@ -454,12 +454,15 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
     val meta=data.optJSONObject("meta") ?: JSONObject()
     val ready=!s.busy && s.error==null
     val table=sheet!=null && shown=="phone" && bytes!=null && !asSource
+    // A Word or Excel file drawn here (11-26: from the kept original, streamed, not from a ByteArray) or its failure page.
+    val phoneReady=shown=="phone" && (bytes!=null || keptFile!=null)
+    val officeFailed=shown=="failed" && phoneOffice(name)!=null && sheet==null && !asSource
     val shownPicture=kind=="image" && (keptFile!=null || bytes!=null)
     val shownPdf=(kind=="pdf" || shown=="pdf") && (keptFile!=null || bytes!=null)
     val codeView=data.string("view") in setOf("code","text") && s.result.isNotBlank()
     val mediaView=data.string("view") in setOf("audio","video")
     val archiveView=data.string("view")=="archive" && zipFile(name)
-    val fill=s.converting || table || shownPicture || shownPdf || codeView || mediaView || archiveView || (sheet==null && bytes!=null && shown=="phone" && !asSource) || (html && rendered && s.result.isNotBlank())
+    val fill=s.converting || table || shownPicture || shownPdf || codeView || mediaView || archiveView || (sheet==null && phoneReady && !asSource) || officeFailed || (html && rendered && s.result.isNotBlank())
     val menus=LocalMenuHost.current;val more=remember { MenuAnchor() }
     PageFrame(name,null,fileBack(data,c),fill=fill,actions={
         CapsuleToolbar(Modifier.menuAnchor(more)) {
@@ -490,7 +493,8 @@ private fun recentFirst(context:Context,app:String,folders:List<JSONObject>):Lis
                     codeView -> CodeView(s.result,data,p.dark,Modifier.fillMaxSize())
                     mediaView -> MediaPage(vm,data)
                     archiveView -> ZipPage(data)
-                    bytes!=null && shown=="phone" -> OfficePreview(bytes,data,c::officeFailed,Modifier.fillMaxSize())
+                    officeFailed -> OfficeFailedPage(data,s,{ pdf -> c.file(pdf) },{ c.shareFile(context,JSONObject(s.data),true) },{ pickerKey=k;saving=JSONObject(s.data);save.launch(name) },ready && !s.savingFile)
+                    phoneReady -> OfficePreview(data,if(keptFile!=null) null else bytes,keptFile?.path,c::officeFailed,Modifier.fillMaxSize())
                     shownPdf && keptFile!=null -> PdfPages(keptFile)
                     shownPdf && bytes!=null -> PdfPages(bytes)
                     shownPicture && keptFile!=null -> PicturePreview(keptFile)
@@ -535,6 +539,42 @@ fun fileSize(bytes:Long):String = when {
         Text(data.string("name").ifBlank { "文件" },style=MaterialTheme.typography.bodyLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         Text("${fileSize(size)} · $why",style=MaterialTheme.typography.note,color=p.muted,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
         PillButton("用其他应用打开",{ c.shareFile(context,JSONObject(s.data),true) },enabled=!s.busy && !s.savingFile,style=PillStyle.Primary,leading=TeleplyIcons.Open)
+    }
+}
+
+/**
+ * A Word or Excel file the phone does not draw (11-26, design §6.1): too big for this phone, or docx-preview/SheetJS
+ * could not draw it, or the web view's renderer was ended. The file itself is fine: the page offers the same-named PDF
+ * from the answer ([pdf]), another app, and saving. The icon and the name are the file's own.
+ */
+@Composable private fun OfficeFailedPage(data:JSONObject,s:WorkspaceState,onPdf:((JSONObject)->Unit)?,onOpen:()->Unit,onSave:()->Unit,saveEnabled:Boolean) {
+    val p=LocalTeleply.current
+    val name=data.string("name").ifBlank { "文件" }
+    val pdf=data.optJSONObject("pdf_file")
+    Column(Modifier.fillMaxSize().padding(horizontal=24.dp,vertical=32.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
+        FileTypeIcon(name, 88.dp)
+        Text(name,style=MaterialTheme.typography.bodyLarge,color=p.text,textAlign=androidx.compose.ui.text.style.TextAlign.Center,modifier=Modifier.padding(top=16.dp))
+        Text("手机上显示不了这份文件",style=MaterialTheme.typography.titleMedium,color=p.text,textAlign=androidx.compose.ui.text.style.TextAlign.Center,modifier=Modifier.padding(top=12.dp))
+        Text(s.previewNote.ifBlank { "文件太大或太复杂，手机里画不出来。文件本身没有问题。" },style=MaterialTheme.typography.note,color=p.muted,textAlign=androidx.compose.ui.text.style.TextAlign.Center,modifier=Modifier.padding(top=8.dp))
+        Column(Modifier.padding(top=20.dp),verticalArrangement=Arrangement.spacedBy(10.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+            if(pdf!=null) PillButton("看 PDF 版",{ onPdf?.invoke(pdf) },enabled=onPdf!=null,style=PillStyle.Primary,leading=TeleplyIcons.File)
+            PillButton("用其他应用打开",onOpen,enabled=!s.busy && !s.savingFile,style=if(pdf==null) PillStyle.Primary else PillStyle.Secondary,leading=TeleplyIcons.Open)
+            PillButton("保存到文件",onSave,enabled=saveEnabled,style=PillStyle.Text,leading=TeleplyIcons.Save)
+        }
+    }
+}
+
+/**
+ * A web view whose renderer process the system ended (11-26): the page says so in words, and when it can, offers the
+ * file to another app instead of the dead view. The same words for an HTML page and a code page.
+ */
+@Composable fun WebViewGonePage(name:String,text:String,modifier:Modifier=Modifier,onOpen:(()->Unit)?=null) {
+    val p=LocalTeleply.current
+    Column(modifier.fillMaxSize().padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
+        if(name.isNotBlank()) FileTypeIcon(name,72.dp)
+        Text("手机上显示不了这一页",style=MaterialTheme.typography.titleMedium,color=p.text,modifier=Modifier.padding(top=16.dp))
+        Text(text,style=MaterialTheme.typography.note,color=p.muted,textAlign=androidx.compose.ui.text.style.TextAlign.Center,modifier=Modifier.padding(top=8.dp))
+        if(onOpen!=null) PillButton("用其他应用打开",onOpen,modifier=Modifier.padding(top=16.dp),style=PillStyle.Primary,leading=TeleplyIcons.Open)
     }
 }
 

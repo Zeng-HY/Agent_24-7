@@ -40,7 +40,11 @@ const val PicturePreviewLimit=30L*1024*1024
 /** §5.8: a PDF may be this large and still open on its page, kept on disk rather than in memory. */
 const val PdfPreviewLimit=100L*1024*1024
 /** §5.8: a Word or Excel file may be this large to be drawn by the phone's own pages. */
-const val OfficePreviewLimit=30L*1024*1024
+const val OfficePreviewLimit=15L*1024*1024
+/** 11-26: and its body (word/document.xml, or Excel's worksheets) may be this large: past it the page says so instead. */
+const val OfficeBodyLimit=8L*1024*1024
+/** 11-26: what the failure page says for a file the phone will not draw (design §6.1). */
+const val OfficeTooLargeNote="文件太大，手机里不直接显示。"
 
 /** Why the computer's Office gave no PDF: in its own words when it gave some (10-27). */
 fun pdfFailure(e:Exception):String = when(e) {
@@ -782,9 +786,13 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      * (user 10-28: "Word 和 Excel 在手机上直接显示"; [phoneOffice], "preview": "phone"). A CSV or TSV is drawn as a table
      * from the file itself too, whatever kind the computer gives it (11-16), its bytes read here as UTF-8 or GB18030
      * ([decodeCsvText]) because the computer's text preview knows only UTF-8 and UTF-16. PowerPoint, the old .doc and
-     * .ppt, and a Word or Excel file over 20 MB show as the PDF the computer's Office makes when it offers one
-     * ("preview": "pdf" in the list or meta, 10-27; kept as "pdf": true). 保存到手机, 系统分享 and 用其他应用打开 take
-     * the file itself, and work while the PDF is being made.
+     * .ppt show as the PDF the computer's Office makes when it offers one ("preview": "pdf" in the list or meta, 10-27;
+     * kept as "pdf": true). 保存到手机, 系统分享 and 用其他应用打开 take the file itself, and work while the PDF is made.
+     *
+     * 11-26: a Word or Excel file is no longer read whole into the page's state. Its kept copy on this phone is what the
+     * page streams from ([WorkspaceState.previewFile]); only a plain JVM without a cache still gets bytes. A file whose
+     * body is too big (or that is too big itself) shows the failure page instead, with its same-named PDF if the answer
+     * listed one.
      */
     fun file(file:JSONObject) {
         val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
@@ -800,11 +808,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             val cached = mediaDir!=null
             val pictureLimit = if(cached) PicturePreviewLimit else PreviewLimit
             val pdfLimit = if(cached) PdfPreviewLimit else PreviewLimit
-            val officeLimit = if(cached) OfficePreviewLimit else PreviewLimit
             // A CSV or TSV is read here as text, whatever the computer calls it; it never goes through a PDF.
             val sheet=sheetKind(name)
+            // The page that draws a Word or Excel file here (11-26: a CSV has a table page, not this one).
+            val page=phoneOffice(name)?.takeIf { sheet==null }
             val pdf=kind=="download" && sheet==null && (meta.string("preview")=="pdf" || file.string("preview")=="pdf")
-            val phone=phoneOffice(name)!=null && (size<=0 || size<=officeLimit) && (kind=="download" || sheet!=null)
+            val phone=phoneOffice(name)!=null && (kind=="download" || sheet!=null)
             val data=JSONObject(file.toString()).put("kind",kind).put("name",name).put("meta",meta).apply {
                 remove("preview");remove("pdf")
                 if(pdf) put("pdf",true)
@@ -859,21 +868,58 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                     // Pictures, PDFs and Word/Excel are kept on disk (§7), not read whole into memory first.
                     val picture=kind=="image" && (size<=0 || size<=pictureLimit)
                     val document=(kind=="pdf" || pdf) && (size<=0 || size<=pdfLimit)
-                    if(picture || document || phone) {
+                    // 11-26: a Word or Excel file past the file limit is not fetched at all; the failure page says so.
+                    val overLimit=page!=null && size>OfficePreviewLimit
+                    if(!overLimit && (picture || document || phone)) {
                         val ref=FileRef(id=file.getString("id"),name=name,version=version,size=size,modified=meta.optLong("modified"))
                         // With the app's cache, the file goes to disk; a plain JVM (tests) keeps the old in-memory way.
                         if(cached) {
                             val kept=cachedAnswerFile(ref)
-                            if(kept!=null) { keptFile=kept.path;if(phone) bytes=kept.readBytes() }
-                            else if((picture || document || phone) && size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                            // The file stays on disk and is streamed from there (11-26): a Word or Excel file is never
+                            // read back into the page. A computer that gives no version to keep it by (or a cache that
+                            // could not be written) leaves no file to stream, so its bytes are read as before — the
+                            // size limits below keep that bounded, and a file past them is dropped at once.
+                            if(kept!=null) keptFile=kept.path
+                            else if(size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
+                            else if(page!=null) note="预览未能加载，仍可尝试保存原文件。"
                         } else if(size<=PreviewLimit) bytes=service.download(k.device,k.chat,file.getString("id"))
                     }
                 }
             } catch(e:CancellationException) { throw e } catch(_:Exception) { note="预览未能加载，仍可尝试保存原文件。" }
             // A CSV that could not be read, or is empty, says why instead of showing an empty table.
             if(sheet!=null && bytes==null) data.put("preview","failed")
+            // 11-26: a Word or Excel file is drawn only when its body (word/document.xml, Excel's worksheets) and the
+            // file itself are small enough. Only the zip's directory is read for that, never its body.
+            if(page!=null) {
+                val stored=keptFile?.let { java.io.File(it) }
+                val total=when { size>0 -> size; stored!=null -> stored.length(); bytes!=null -> bytes!!.size.toLong(); else -> 0L }
+                if(total>OfficePreviewLimit) unshown=OfficeTooLargeNote
+                else if(stored!=null || bytes!=null) officeTooLarge(page,total,if(stored!=null) zipEntrySizes(stored) else zipEntrySizes(bytes!!))?.let { unshown=it }
+                if(unshown.isNotBlank()) {
+                    data.put("preview","failed")
+                    bytes=null
+                    // The same-named PDF the answer listed, when there is one (design §4.1 third point).
+                    if(file.optBoolean("linked")) siblingPdf(k,service,name)?.let { data.put("pdf_file",it) }
+                }
+            }
             if(g==generation) update(k) { it.copy(data=data.toString(),result=text,preview=bytes,previewFile=keptFile,busy=false,transfer=note,previewNote=unshown) }
         } catch(e:CancellationException) { throw e } catch(e:Exception) { if(g==generation) update(k) { it.copy(error=e.message,busy=false,converting=false) } } }
+    }
+    /**
+     * A PDF the answer lists beside a file of the same name (11-26, design §4.1 third point), for the failure page's
+     * 看 PDF 版: the conversation's file list, matched by name without its extension, in any case. Null when there is
+     * none, or the list cannot be read; a file opened from the computer's browser has no answer, so none is looked for.
+     */
+    private suspend fun siblingPdf(k:ChatKey,service:ReadApi,name:String):JSONObject? {
+        val stem=name.substringBeforeLast('.',"").trim()
+        if(stem.isBlank()) return null
+        val listed=runCatching {
+            listing?.takeIf { it.first==k }?.second ?: service.detail(k.device,"chat/files",mapOf("app" to k.app,"id" to k.chat)).also { listing=k to it }
+        }.getOrNull() ?: return null
+        return listed.rows("items") { it }.firstOrNull { item ->
+            item.string("id").isNotBlank() && item.string("state")!="missing" && fileExtension(item.string("name"))=="pdf" &&
+                item.string("name").substringBeforeLast('.',"").equals(stem,ignoreCase=true)
+        }
     }
     /** The computer's PDF of a file for the page of generation [g]; kept on disk like any other original (§7). */
     private suspend fun convert(k:ChatKey,service:ReadApi,file:FileRef,g:Int) {
@@ -889,9 +935,11 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         if(g==generation) update(k) { it.copy(converting=false,preview=if(kept==null) pdf else null,previewFile=kept?.path) }
     }
     /**
-     * The phone could not draw the open Word or Excel file (a damaged or protected one), or the table of a CSV or TSV:
-     * the computer's PDF when it offers one, as before 10-28; a CSV has none, so its source is shown instead (11-16).
-     * Once per page; the buttons keep taking the file itself.
+     * The phone could not draw the open Word or Excel file (a damaged or protected one, or the web view's renderer was
+     * ended), or the table of a CSV or TSV. 11-26: a Word or Excel file gets the failure page (design §6.1), which
+     * offers the same-named PDF from the answer when there is one; the computer's own PDF is no longer asked for here.
+     * A CSV has no PDF: its source, already read, is shown instead (11-16). Once per page; saving and sharing still
+     * take the file itself.
      */
     fun officeFailed() {
         val k=key ?: return;val service=api ?: return;val s=state.value;val g=generation
@@ -902,9 +950,13 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="表格显示不了，下面是原文") }
             return
         }
-        if(!data.optBoolean("pdf")) { update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="手机上显示不了这个文件，可保存后使用系统应用打开。") };return }
-        update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","pdf").toString(),converting=true,previewNote="") }
-        read=launchSafe { convert(k,service,FileRef(id=data.getString("id"),name=data.string("name"),version=data.string("v")),g) }
+        update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="") }
+        // The same-named PDF the answer listed, when it came from an answer: found after the page says it failed.
+        if(!data.optBoolean("linked")) return
+        read=launchSafe {
+            val pdf=siblingPdf(k,service,data.string("name")) ?: return@launchSafe
+            if(g==generation) update(k) { it.copy(data=JSONObject(it.data).put("pdf_file",pdf).toString()) }
+        }
     }
     @Volatile private var listing:Pair<ChatKey,JSONObject>?=null
     /**
@@ -989,3 +1041,52 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
 }
 
 fun actionIdentity(route:String,body:JSONObject)=route+":"+(listOf("question_id","event_id","call_id","token","tool_id","title").firstNotNullOfOrNull { body.string(it).ifBlank { null } } ?: body.string("kind"))
+
+/**
+ * A zip's entries and their uncompressed sizes, read from its central directory: what is left of the file is not
+ * decompressed, so a huge Word or Excel file can be judged before it is drawn (11-26). Empty for something that is
+ * not a readable zip (the page then tries, and its own failure page says it could not).
+ */
+fun zipEntrySizes(file:java.io.File):Map<String,Long> = runCatching {
+    java.util.zip.ZipFile(file).use { zip ->
+        zip.entries().asSequence().filter { !it.isDirectory }.associate { it.name to it.size.coerceAtLeast(0) }
+    }
+}.getOrDefault(emptyMap())
+
+/** [zipEntrySizes] for a zip held in memory (a plain JVM without the phone's cache): its central directory, too. */
+fun zipEntrySizes(zip:ByteArray):Map<String,Long> {
+    fun u16(at:Int)= (zip[at].toInt() and 0xff) or ((zip[at+1].toInt() and 0xff) shl 8)
+    fun u32(at:Int)= u16(at).toLong() or (u16(at+2).toLong() shl 16)
+    var end=-1
+    // The end of the central directory is the last 22 bytes, plus a comment of at most 64 KB.
+    for(at in maxOf(0,zip.size-22-65535)..zip.size-22) if(u32(at)==0x06054b50L) { end=at;break }
+    if(end<0) return emptyMap()
+    var at=u32(end+16).toInt()
+    val sizes=mutableMapOf<String,Long>()
+    repeat(u16(end+10)) {
+        if(at<0 || at+46>zip.size || u32(at)!=0x02014b50L) return sizes
+        val size=u32(at+24)
+        val nameLength=u16(at+28);val extra=u16(at+30);val comment=u16(at+32)
+        if(at+46+nameLength>zip.size) return sizes
+        val name=String(zip,at+46,nameLength,Charsets.UTF_8)
+        // 0xFFFFFFFF means the real size is in a zip64 extra field: too big to draw either way.
+        if(!name.endsWith("/")) sizes[name]=if(size==0xFFFFFFFFL) Long.MAX_VALUE else size
+        at+=46+nameLength+extra+comment
+    }
+    return sizes
+}
+
+/**
+ * Why the phone does not draw a Word or Excel file (11-26, design §6.1), or null when it may: the file is past
+ * [OfficePreviewLimit], or its body is past [OfficeBodyLimit] — word/document.xml for Word, the worksheets' XML added up
+ * for Excel. [entries] is [zipEntrySizes] of the file, read before anything is drawn.
+ */
+fun officeTooLarge(page:String,size:Long,entries:Map<String,Long>):String? {
+    if(size>OfficePreviewLimit) return OfficeTooLargeNote
+    val body=when(page) {
+        "word" -> entries["word/document.xml"] ?: 0L
+        "sheet" -> entries.entries.sumOf { (name,bytes) -> if(name.startsWith("xl/worksheets/") && name.endsWith(".xml")) bytes else 0L }
+        else -> 0L
+    }
+    return if(body>OfficeBodyLimit) OfficeTooLargeNote else null
+}

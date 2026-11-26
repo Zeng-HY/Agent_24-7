@@ -97,6 +97,9 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
             "fp-report" -> FixtureWorld.REPORT_TEXT.toByteArray()
             "fp-audio" -> java.util.Base64.getDecoder().decode(MP3)
             "fp-video" -> java.util.Base64.getDecoder().decode(MP4)
+            // 11-26: a Word file too big to draw on the phone, made up here so that nothing real is kept in the tree.
+            "fp-bigdoc" -> madeUpBigWord()
+            "fp-bigdoc-pdf" -> java.util.Base64.getDecoder().decode(FixtureWorld.PDF)
             "fp-note" -> FixtureWorld.previewText("fp-note")!!.toByteArray()
             else -> "固定测试内容".toByteArray()
         }
@@ -206,7 +209,7 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     private fun previewMeta(id: String): JSONObject? = FixtureWorld.PREVIEW_FILES.find { it.id == id }?.let { file ->
         JSONObject().put("kind", file.kind).put("name", file.name).put("state", file.state.ifBlank { "current" })
             .put("size", file.size).put("view", file.view)
-            .apply { if (file.preview.isNotBlank()) put("preview", file.preview) }
+            .apply { if (file.version.isNotBlank()) put("v", file.version); if (file.preview.isNotBlank()) put("preview", file.preview) }
     }
 
     override suspend fun history(device: String, chat: String, before: String?, around: String?, count: Int): Page<Message> {
@@ -929,6 +932,10 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
             FileRef(id = "fp-chart", name = "图表.png", path = "D:\\fixture\\file-preview\\chart.png", kind = "image", view = "image", size = 462, state = "current", version = "v1", width = 1200, height = 800, thumb = true, via = listOf("image")),
             FileRef(id = "fp-logo", name = "标志.svg", path = "D:\\fixture\\file-preview\\logo.svg", kind = "download", view = "svg", size = 300, state = "current", version = "v1", width = 240, height = 120, thumb = true, via = listOf("image")),
             FileRef(id = "fp-contract", name = "合同.pdf", path = "D:\\fixture\\file-preview\\contract.pdf", kind = "pdf", view = "pdf", size = 36_864, state = "current", version = "v1", via = listOf("link")),
+            // 11-26: a Word file whose body is ~17 MB (400 tables), so the phone shows its failure page; the same answer
+            // also has a PDF of the same name, which that page can open.
+            FileRef(id = "fp-bigdoc", name = "大文档.docx", path = "D:\\fixture\\file-preview\\big.docx", kind = "download", view = "download", size = 415_598L, state = "current", version = "v1", via = listOf("link")),
+            FileRef(id = "fp-bigdoc-pdf", name = "大文档.pdf", path = "D:\\fixture\\file-preview\\big.pdf", kind = "pdf", view = "pdf", size = 1_022L, state = "current", version = "v1", via = listOf("link")),
             FileRef(id = "fp-analysis", name = "分析.R", path = "D:\\fixture\\file-preview\\analysis.R", kind = "text", view = "code", lang = "r", size = 1_200, state = "current", version = "v1", via = listOf("link")),
             FileRef(id = "fp-budget", name = "预算表.xlsx", path = "D:\\fixture\\file-preview\\budget.xlsx", kind = "download", view = "table", preview = "pdf", size = 2_293, state = "current", version = "v1", via = listOf("link")),
             FileRef(id = "fp-shot-1", name = "截图一.png", path = "D:\\fixture\\file-preview\\shot-1.png", kind = "image", view = "image", size = 462, state = "current", version = "v1", width = 1080, height = 720, thumb = true, via = listOf("presented")),
@@ -1012,9 +1019,12 @@ MEMORY.md:12-14|note=[meeting notes are kept as bullet points]
             JSONObject().put("id", "fixture-md").put("name", "说明.md").put("path", "D:\\fixture\\说明.md").put("kind", "text").put("state", "current").put("size", 200),
             // Office files the computer offers as PDF (10-27): Word and Excel are drawn on the phone (10-28), the
             // PowerPoint one is the computer's PDF.
-            JSONObject().put("id", "fixture-docx").put("name", "发布说明.docx").put("path", "D:\\fixture\\发布说明.docx").put("kind", "download").put("state", "current").put("size", 1757).put("preview", "pdf"),
-            JSONObject().put("id", "fixture-xlsx").put("name", "预算表.xlsx").put("path", "D:\\fixture\\预算表.xlsx").put("kind", "download").put("state", "current").put("size", 2293).put("preview", "pdf"),
-            JSONObject().put("id", "fixture-pptx").put("name", "季度汇报.pptx").put("path", "D:\\fixture\\季度汇报.pptx").put("kind", "download").put("state", "current").put("size", 36_864).put("preview", "pdf"),
+            JSONObject().put("id", "fixture-docx").put("name", "发布说明.docx").put("path", "D:\\fixture\\发布说明.docx").put("kind", "download").put("state", "current").put("size", 1757).put("v", "v1").put("preview", "pdf"),
+            JSONObject().put("id", "fixture-xlsx").put("name", "预算表.xlsx").put("path", "D:\\fixture\\预算表.xlsx").put("kind", "download").put("state", "current").put("size", 2293).put("v", "v1").put("preview", "pdf"),
+            JSONObject().put("id", "fixture-pptx").put("name", "季度汇报.pptx").put("path", "D:\\fixture\\季度汇报.pptx").put("kind", "download").put("state", "current").put("size", 36_864).put("v", "v1").put("preview", "pdf"),
+            // 11-26: the file preview answer's big Word file and its same-named PDF, as the computer lists them.
+            JSONObject().put("id", "fp-bigdoc").put("name", "大文档.docx").put("path", "D:\\fixture\\file-preview\\big.docx").put("kind", "download").put("state", "current").put("size", 415_598L).put("v", "v1"),
+            JSONObject().put("id", "fp-bigdoc-pdf").put("name", "大文档.pdf").put("path", "D:\\fixture\\file-preview\\big.pdf").put("kind", "pdf").put("state", "current").put("size", 1_022L).put("v", "v1"),
         )
         /** What the demo computer's Office makes of 季度汇报.pptx: a valid one-page PDF (1,022 bytes). */
         const val PDF = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MDAgNDIwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0NzEgPj4Kc3RyZWFtCjAuOTMgMC45NSAxIHJnIDI0IDI0IDU1MiAzNzIgcmUgZgowLjE1IDAuMzkgMC45MiByZyAyNCAzNDAgNTUyIDU2IHJlIGYKQlQgL0YxIDIyIFRmIDEgMSAxIHJnIDQ0IDM2MCBUZCAoUXVhcnRlcmx5IHJlcG9ydCAtIGRlbW8pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMzAwIFRkIChDb252ZXJ0ZWQgZnJvbSBQb3dlclBvaW50IG9uIHRoZSBjb21wdXRlci4pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMjcwIFRkICgxLiBXb3JkIGFuZCBFeGNlbCBmaWxlcyBzaG93IG9uIHRoZSBwaG9uZS4pIFRqIEVUCkJUIC9GMSAxNSBUZiAwLjEgMC4xIDAuMTIgcmcgNDQgMjQ1IFRkICgyLiBQb3dlclBvaW50IHNob3dzIGFzIHRoZSBjb21wdXRlcidzIFBERi4pIFRqIEVUCkJUIC9GMSAxMSBUZiAwLjQ1IDAuNDcgMC41MiByZyA0NCA2MCBUZCAoVGVsZXBseSBsb2NhbCBkZW1vKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2NCAwMDAwMCBuIAowMDAwMDAwMTIxIDAwMDAwIG4gCjAwMDAwMDAyNDcgMDAwMDAgbiAKMDAwMDAwMDc2OSAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjgzOQolJUVPRgo="
@@ -1094,3 +1104,44 @@ val message = "A deliberately long line to verify horizontal scrolling without m
         const val MP3 = "SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjQ1LjEwMAAAAAAAAAAAAAAA/+PIwAAAAAAAAAAAAEluZm8AAAAPAAAAAAAABIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAExhdmM1OC45MQAAAAAAAAAAAAAAAAAAAAAAAAAAAASAAACkSwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         const val MP4 = "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"
 fun fixtureZipListing(): JSONObject = JSONObject().put("entries", JSONArray(listOf(JSONObject().put("name", "docs/").put("size", 0).put("packed", 0).put("dir", true), JSONObject().put("name", "docs/说明.md").put("size", 812).put("packed", 402).put("dir", false), JSONObject().put("name", "data.csv").put("size", 1536).put("packed", 620).put("dir", false)))).put("total", 3).put("truncated", false)
+
+/**
+ * 大文档.docx (11-26), for the demo only: 400 invented tables with a page break after each, so `word/document.xml` is
+ * about 17 MB and the phone cannot draw it (the failure page says so). It is made here rather than kept as a file:
+ * nothing real is in it, and the tree stays small. One copy a run.
+ */
+fun madeUpBigWord(): ByteArray = bigWordBytes ?: synchronized(bigWordLock) {
+    bigWordBytes ?: makeBigWord().also { bigWordBytes = it }
+}
+private val bigWordLock = Any()
+@Volatile private var bigWordBytes: ByteArray? = null
+
+private fun makeBigWord(): ByteArray {
+    val xml = StringBuilder(18 * 1024 * 1024)
+    xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
+    xml.append("<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>")
+    xml.append("<w:p><w:r><w:t>编造的测试文档</w:t></w:r></w:p>")
+    for (t in 1..400) {
+        xml.append("<w:p><w:r><w:t>第 ").append(t).append(" 张表：编造的数据</w:t></w:r></w:p>")
+        xml.append("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>")
+        for (r in 1..60) {
+            xml.append("<w:tr>")
+            for (c in 1..6) xml.append("<w:tc><w:tcPr><w:tcW w:w=\"1500\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>行").append(r).append("列").append(c).append("的编造内容</w:t></w:r></w:p></w:tc>")
+            xml.append("</w:tr>")
+        }
+        xml.append("</w:tbl><w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>")
+    }
+    xml.append("<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"0\" w:footer=\"0\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>")
+    val out = java.io.ByteArrayOutputStream()
+    java.util.zip.ZipOutputStream(out).use { zip ->
+        fun put(name: String, text: String) {
+            zip.putNextEntry(java.util.zip.ZipEntry(name))
+            zip.write(text.toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+        }
+        put("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>")
+        put("_rels/.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>")
+        put("word/document.xml", xml.toString())
+    }
+    return out.toByteArray()
+}

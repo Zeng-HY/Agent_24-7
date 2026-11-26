@@ -1,6 +1,7 @@
 package com.pocketagentdesk.teleply
 
 import android.annotation.SuppressLint
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -9,7 +10,10 @@ import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -44,9 +48,17 @@ fun CodeView(text: String, file: org.json.JSONObject, dark: Boolean, modifier: M
         }
     }
     key(text) {
-        AndroidView(
+        val webView = remember { arrayOfNulls<WebView>(1) }
+        // 11-26: leaving the page destroys the web view, so its renderer is not left behind with every code page.
+        DisposableEffect(Unit) { onDispose { webView[0]?.apply { stopLoading(); destroy() }; webView[0] = null } }
+        // 11-26: a renderer the system ends must not take the app with it; the page then says so in words.
+        var gone by remember(text) { mutableStateOf(false) }
+        if (gone) {
+            WebViewGonePage(file.string("name"), "手机内存不足，代码页已停止。文件本身没有问题，可以返回后用其他应用打开。", modifier)
+        } else AndroidView(
             factory = { context ->
                 WebView(context).apply {
+                    webView[0] = this
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = false
@@ -61,6 +73,14 @@ fun CodeView(text: String, file: org.json.JSONObject, dark: Boolean, modifier: M
                         loadWithOverviewMode = false
                     }
                     webViewClient = object : WebViewClient() {
+                        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                            gone = true
+                            runCatching { view.stopLoading() }
+                            webView[0] = null
+                            runCatching { (view.parent as? android.view.ViewGroup)?.removeView(view) }
+                            runCatching { view.destroy() }
+                            return true
+                        }
                         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                             val url = request.url
                             if (url.host != ViewerHost) return notFound()
