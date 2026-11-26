@@ -54,7 +54,7 @@ struct FileTypeIcon: View {
 }
 
 /// The sheet: a page with its top-right corner cut off, the three other corners rounded.
-private struct FilePageShape: Shape {
+nonisolated struct FilePageShape: Shape {
     let fold: CGFloat
 
     func path(in rect: CGRect) -> Path {
@@ -79,7 +79,7 @@ private struct FilePageShape: Shape {
 }
 
 /// The folded corner itself: the triangle under the cut, a little lighter than the sheet.
-private struct FilePageFoldShape: Shape {
+nonisolated struct FilePageFoldShape: Shape {
     let fold: CGFloat
 
     func path(in rect: CGRect) -> Path {
