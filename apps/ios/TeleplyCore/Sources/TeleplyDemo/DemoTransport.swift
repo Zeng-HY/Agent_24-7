@@ -71,6 +71,8 @@ public struct DemoTransport: RelayFileTransport {
         case "fp-run", "fp-analysis": Data(DemoData.previewSource.utf8)
         case "fp-report": Data(DemoData.previewReport.utf8)
         case "fp-longlog": Data(DemoData.previewLongLog.utf8)
+        case "fp-heavy-docx": Data(DemoData.heavyDocx.utf8)
+        case "fp-heavy-pdf": Data(base64Encoded: DemoData.pdf, options: .ignoreUnknownCharacters) ?? Data()
         case "fp-csv": Data(DemoData.previewCSV.utf8)
         case "fp-markdown": Data(DemoData.previewMarkdown.utf8)
         case "fp-html": Data(DemoData.previewHTML.utf8)

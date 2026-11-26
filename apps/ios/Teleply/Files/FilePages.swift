@@ -64,9 +64,7 @@ struct FilesSheet: View {
                                     workspace.file(file)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        Image(systemName: file["kind"].string() == "image" ? "photo" : "doc.text")
-                                            .font(.system(size: 17))
-                                            .foregroundStyle(Palette.muted)
+                                        FileTypeIcon(name: file["name"].string(), size: 24)
                                             .frame(width: 24)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(file["name"].string())
@@ -169,7 +167,11 @@ struct FilePage: View {
                     if kind == "pdf" {
                         PDFPreview(url: shown)
                     } else {
-                        DocumentPreview(url: shown)
+                        DocumentPreviewPage(url: shown, name: name, pdf: pdfVersion,
+                                            busy: workspace.transferring,
+                                            openPDF: { model.workspace.openAnswerFile($0) },
+                                            share: { copy { sharing = $0 } },
+                                            save: { copy { saving = $0 } })
                             .id(shown)
                     }
                 }
@@ -238,6 +240,22 @@ struct FilePage: View {
                     .presentationDetents([.medium, .large])
             }
         }
+    }
+
+    /// The answer's PDF of the same name, when this page was opened from an answer (design 4.1.3): 看 PDF 版 on the
+    /// failure page. A file picked under 从电脑选择文件 has no answer behind it and looks none up.
+    private var pdfVersion: FileRef? {
+        let workspace = model.workspace
+        guard !workspace.data["reference"].isObject else { return nil }
+        let id = workspace.data["id"].string()
+        guard !id.isEmpty else { return nil }
+        let name = workspace.data["name"].string()
+        for message in model.messages {
+            guard let files = message.files, files.contains(where: { $0.id == id }) else { continue }
+            guard let pdf = sameNamePDF(in: files, for: name) else { return nil }
+            return pdf.id == id ? nil : pdf
+        }
+        return nil
     }
 
     /// ⋯: how to show the text of HTML or Markdown, then what to do with the file itself; its state and size above.
@@ -315,9 +333,7 @@ struct FilePage: View {
         let limit = WorkspaceModel.pagePreviewLimit(kind: kind, name: name)
         let why = unshownReason(kind: kind, size: size, limit: limit, looks: looks)
         VStack(spacing: 12) {
-            Image(systemName: "doc")
-                .font(.system(size: 44))
-                .foregroundStyle(Palette.muted)
+            FileTypeIcon(name: name, size: 72)
             Text(name)
                 .bodyFont()
                 .foregroundStyle(Palette.ink)
