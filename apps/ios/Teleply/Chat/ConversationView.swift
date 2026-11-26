@@ -6,9 +6,15 @@ import TeleplyState
 /// ring and ⋯ in the title bar; the messages scroll under it and under the glass input card. It always opens at the
 /// latest messages (user 10-27). Following the bottom only while the reader is there; reading above keeps its place
 /// and "有新消息 ↓" appears (B09). A redraw leaves unchanged messages alone (TimelineItem, TimelineMemo), and the ⋯
-/// menu keeps what it opens to itself (ConversationMenu): a long conversation stays quick (10-27).
+/// menu keeps what it opens to itself (ConversationMenu): a long conversation stays quick (10-27). In a wide iPad
+/// window its title bar's leading button folds the list away (11-27).
 struct ConversationView: View {
     let model: AppModel
+    /// The window is wide enough for the list beside this conversation (iPad, 11-27): only then is the list's fold
+    /// button in this page's title bar.
+    let wide: Bool
+    /// 对话列表收起 (11-27), kept by the window (RootView); the title bar's button toggles it.
+    @Binding var listCollapsed: Bool
     @State private var position = ScrollPosition(idType: String.self)
     /// 11-16: following new output, and whether it is unseen while reading above (Android ReadingFollow).
     @State private var reading = ReadingFollow()
@@ -242,6 +248,21 @@ struct ConversationView: View {
 
     @ToolbarContentBuilder
     private func toolbar(control: Control) -> some ToolbarContent {
+        // 11-27 (design §11.1.4): 对话列表收起, where an iPad app keeps its sidebar button — the title bar's very
+        // leading place, and it stays there folded or not. Only a wide window with a conversation open has it; the
+        // words follow what the button does now, the shortcut list keeps one name for the pair.
+        if column.buttonShown {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    listCollapsed.toggle()
+                } label: {
+                    Label("显示/隐藏对话列表", systemImage: "sidebar.left")
+                        .labelStyle(.iconOnly)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
+                .accessibilityLabel(Text(column.collapsed ? "展开对话列表" : "收起对话列表"))
+            }
+        }
         // The middle of the bar takes what the back button and the right side leave; the title sits left in it, so it
         // starts beside the back button (spec 4.3) without a fixed width.
         ToolbarItem(placement: .principal) {
@@ -252,6 +273,12 @@ struct ConversationView: View {
         if !isNewPage(model.chat?.id) {
             conversationTools(control: control)
         }
+    }
+
+    /// Where the list and its fold button stand (design §11.1): the button is the wide window's, on an open
+    /// conversation only, and its words say which way it goes.
+    private var column: ListColumnLayout {
+        listColumnLayout(wide: wide, setting: listCollapsed, screen: model.screen)
     }
 
     @ToolbarContentBuilder

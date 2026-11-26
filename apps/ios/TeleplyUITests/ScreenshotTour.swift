@@ -432,6 +432,60 @@ final class ScreenshotTour: XCTestCase {
         app.terminate()
     }
 
+    /// 11-27 (design §11.3, 线六): the iPad's conversation list folds away in the two columns and comes back — the
+    /// list beside the conversation, the conversation alone, then the list again. iPhone skips it; the pictures are
+    /// the screen's (an iPad's own screenshot comes out turned in landscape, Apple's forum 665859). It starts from
+    /// wherever an earlier run left 对话列表收起: the button itself says which way it goes, so the first picture is
+    /// the list beside the conversation either way. Run it alone: `codemagic.ps1 -Mode shots -Only
+    /// "testIPadListCollapse" -Device "iPad mini"`.
+    @MainActor func testIPadListCollapse() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "iPad only")
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        let app = launch(appearance: "light", extra: ["-TeleplyDemo"])
+        let enter = app.buttons["进入示例"]
+        XCTAssertTrue(enter.waitForExistence(timeout: 20), "the demo's 登录 never showed")
+        enter.tap()
+        XCTAssertTrue(app.staticTexts["我的电脑"].waitForExistence(timeout: 10), "我的电脑 never showed")
+        let connect = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "测试电脑 A")).firstMatch
+        XCTAssertTrue(connect.waitForExistence(timeout: 5), "测试电脑 A had no 连接")
+        connect.tap()
+        let first = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "原生阅读示例")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "the list never showed its rows")
+        first.tap()
+        XCTAssertTrue(app.staticTexts["原生阅读示例"].firstMatch.waitForExistence(timeout: 10), "the conversation never opened")
+
+        // An earlier run may have left the list folded: the same button unfolds it, so the pictures and the checks
+        // below always start from the list beside the conversation.
+        let maybeUnfold = app.buttons["展开对话列表"].firstMatch
+        if maybeUnfold.waitForExistence(timeout: 3) {
+            maybeUnfold.tap()
+            sleep(1)
+        }
+        let fold = app.buttons["收起对话列表"].firstMatch
+        XCTAssertTrue(fold.waitForExistence(timeout: 5), "the wide window's conversation has no 收起对话列表")
+        XCTAssertTrue(app.buttons["打开导航"].firstMatch.isHittable, "the list column is not beside the conversation")
+        screenSnap(app, page: "55-ipad-list-open", variant: "ipad-portrait")
+        let buttonBefore = fold.frame.minX
+
+        fold.tap()
+        let unfold = app.buttons["展开对话列表"].firstMatch
+        XCTAssertTrue(unfold.waitForExistence(timeout: 5), "the button did not turn into 展开对话列表")
+        XCTAssertFalse(app.buttons["打开导航"].firstMatch.isHittable,
+                       "the list column stayed beside the folded conversation")
+        screenSnap(app, page: "56-ipad-list-folded", variant: "ipad-portrait")
+        // The conversation's title bar starts at the window's left edge now, where the list column used to be.
+        XCTAssertLessThan(unfold.frame.minX, buttonBefore - 100, "the conversation did not take the window")
+
+        XCTAssertTrue(unfold.exists, "the folded list has no button to come back")
+        unfold.tap()
+        XCTAssertTrue(app.buttons["收起对话列表"].firstMatch.waitForExistence(timeout: 5), "the list did not come back")
+        screenSnap(app, page: "57-ipad-list-open-again", variant: "ipad-portrait")
+        XCTAssertTrue(app.buttons["打开导航"].firstMatch.isHittable, "the unfolded list is not beside the conversation")
+        app.terminate()
+    }
+
     /// 11-22: turning the iPad while words are typed: the conversation stays open and the box keeps them (the
     /// pictures of a turned iPad in the simulator are windows on a wallpaper, so this test takes none).
     @MainActor func testIPadRotation() throws {

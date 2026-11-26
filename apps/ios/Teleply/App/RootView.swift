@@ -14,6 +14,9 @@ struct RootView: View {
     /// 调试用: show the app as if the window were narrow (a developer switch, or the screenshot tour's launch
     /// argument `-TeleplyForceNarrow`). Always false in a release build.
     @AppStorage("TeleplyForceNarrow") private var forceNarrowSetting = false
+    /// 11-27 (design §11.1): 对话列表收起 on an iPad. Kept by the phone, so the next launch opens the same way; only
+    /// a wide window with a conversation open applies it (ListColumnLayout).
+    @AppStorage("TeleplyListCollapsed") private var listCollapsed = false
 
     private var forceNarrow: Bool {
         #if DEBUG
@@ -66,7 +69,8 @@ struct RootView: View {
             case .launch: LaunchView()
             case .login: LoginView(model: model)
             case .devices: DevicesView(model: model)
-            case .workspace: WorkspaceView(model: model, wide: wide, windowWidth: windowWidth, windowControlsInset: windowControlsInset)
+            case .workspace: WorkspaceView(model: model, wide: wide, windowWidth: windowWidth, windowControlsInset: windowControlsInset,
+                                           listCollapsed: $listCollapsed)
             }
         }
         .animation(.easeOut(duration: 0.2), value: page)
@@ -120,7 +124,8 @@ struct RootView: View {
 /// and the swipe back work (spec 4.3). The stack follows the model: reading pushes, leaving pops. 新建对话 and a
 /// new conversation's result sheet come up over either. In a wide window on an iPad the list and the conversation
 /// stand side by side instead, each in its own place: the list column on the left, the conversation (and a file or
-/// 本轮差异 over it) in a stack on the right.
+/// 本轮差异 over it) in a stack on the right. The list column can be slid away (11-27): the conversation then has
+/// the window, and a button in its title bar brings the list back.
 private struct WorkspaceView: View {
     let model: AppModel
     /// The window is wide enough for both columns.
@@ -129,7 +134,10 @@ private struct WorkspaceView: View {
     let windowWidth: CGFloat
     /// Room the window's own controls take at the top-left (iPadOS 26); 0 on a phone or full screen.
     let windowControlsInset: CGFloat
+    /// 对话列表收起 (11-27), kept by the window (RootView); only a wide window with a conversation open applies it.
+    @Binding var listCollapsed: Bool
     @Environment(Chrome.self) private var chrome
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -149,22 +157,44 @@ private struct WorkspaceView: View {
         }
     }
 
-    /// The list on the left, the conversation on the right. Pulling the sidebar out stays the list page's gesture,
-    /// so it cannot fight the conversation's swipe back; the list's ☰ is always there.
+    /// The list on the left, the conversation on the right. The list keeps its own width and its state and is slid
+    /// off the window's left edge when folded (11-27), so its scroll position and the words in its search survive;
+    /// the conversation's leading room goes with it, the two meeting at the same 1 pt line until the list is gone.
+    /// Pulling the sidebar out stays the list page's gesture, so it cannot fight the conversation's swipe back.
     private var columns: some View {
         DrawerHost(model: model, enabled: model.screen == .chats, windowControlsInset: windowControlsInset) {
-            HStack(spacing: 0) {
-                ChatListView(model: model, windowControlsInset: windowControlsInset)
-                    .frame(width: columnWidth)
-                Rectangle()
-                    .fill(Palette.line)
-                    .frame(width: 1)
+            ZStack(alignment: .leading) {
                 NavigationStack(path: path) {
                     WidePlaceholder()
                         .navigationDestination(for: WorkspaceRoute.self) { route in destination(route) }
                 }
+                .padding(.leading, column.listShown ? columnWidth + 1 : 0)
+                HStack(spacing: 0) {
+                    ChatListView(model: model, windowControlsInset: windowControlsInset)
+                        .frame(width: columnWidth)
+                    Rectangle()
+                        .fill(Palette.line)
+                        .frame(width: 1)
+                }
+                .frame(maxHeight: .infinity)
+                .offset(x: column.listShown ? 0 : -(columnWidth + 1))
+                .opacity(column.listShown ? 1 : 0)
+                .allowsHitTesting(column.listShown)
+                .accessibilityHidden(!column.listShown)
             }
+            // 0.25 s each way; with Reduce Motion it is a switch, not a slide (design §11.1.3).
+            .animation(foldAnimation, value: column.listShown)
         }
+    }
+
+    /// The list's slide: 0.25 s of ease in and out, or no motion at all when the system asks for less.
+    private var foldAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.25)
+    }
+
+    /// Where the list and its fold button stand (design §11.1): folded only in a wide window with a conversation open.
+    private var column: ListColumnLayout {
+        listColumnLayout(wide: wide, setting: listCollapsed, screen: model.screen)
     }
 
     /// 320 points is the sidebar's own width, and enough for the list's title bar and rows; 380 at most, so the
@@ -175,7 +205,7 @@ private struct WorkspaceView: View {
     private func destination(_ route: WorkspaceRoute) -> some View {
         switch route {
         case .reading:
-            ConversationView(model: model)
+            ConversationView(model: model, wide: wide, listCollapsed: $listCollapsed)
                 // Two columns have no page to go back to: another row on the left replaces this one.
                 .navigationBarBackButtonHidden(wide)
         case .detail:

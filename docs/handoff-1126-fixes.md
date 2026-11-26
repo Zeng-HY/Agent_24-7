@@ -391,7 +391,60 @@ SVG 的规则同第 4.2 节第 4 条。
 
 ### 10.6 线六 iPad「收起对话列表」
 
-（待填）
+**结论**：第 11.1 节第 1–7 条和 11.3 节都做了；这台电脑没有 Swift，**没编译、没跑测试、没跑截图**，等 Codemagic 编译和跑测试。
+
+**做了什么**
+
+- 开关（第 1 条）：`RootView` 加 `@AppStorage("TeleplyListCollapsed")`，默认展开；它是唯一的读写处，用 `$listCollapsed` 传给 `WorkspaceView` 和 `ConversationView`。重开 App 保持上次的样子。
+- 什么时候能收（第 2 条）：新纯函数 `listColumnLayout(wide:setting:screen:)`（`TeleplyState/ListColumn.swift`）算三件事：`listShown`、`buttonShown`、`collapsed`。只有宽窗口且 `.reading` 才有按钮、才收起；`.chats` 时列表总在、按钮不出现（设置不生效），所以不会只剩一页空白；窄窗口和 iPhone 没有按钮。
+- 收起的样子（第 3 条）：宽窗口的两栏从 `HStack` 改成 `ZStack(alignment: .leading)`：右边对话栈 `.padding(.leading, listShown ? columnWidth + 1 : 0)`，左边列表和 1pt 分隔线作为一个 `HStack` 整体按 `-(columnWidth + 1)` 往左移，配 `.opacity`、`.allowsHitTesting`、`.accessibilityHidden`。列表视图一直在视图树里、宽度不变（不销毁重建），滚动位置和搜索框里的字保留；`setSideBySide` 和 10 秒刷新没动，收起时照旧刷新，展开时是新的。`.animation(foldAnimation, value: column.listShown)` 是 `.easeInOut(duration: 0.25)`，减弱动态效果时 `foldAnimation` 为 `nil`（直接切换，不滑）。
+- 按钮（第 4 条）：`ConversationView` 的 `.toolbar` 加 `ToolbarItem(placement: .topBarLeading)`；`Label("显示/隐藏对话列表", systemImage: "sidebar.left").labelStyle(.iconOnly)`，无障碍标签随状态「收起对话列表」/「展开对话列表」。只有传进来的 `wide` 为真时出现，收起和展开时都不挪地方。
+- 键盘（第 5 条）：同一个按钮加 `.keyboardShortcut("s", modifiers: [.command, .control])`；Label 的标题是「显示/隐藏对话列表」，按住 ⌘ 的列表用它，无障碍标签另给动态的「收起对话列表」/「展开对话列表」。
+- 第 6 条（窗口按钮）：见下一段。
+- 第 7 条：`listShown` 只看 `screen` 和设置：关对话回到 `.chats` 时列表一定回来；再开一个对话按存着的开关收起或展开。列表的 10 秒刷新走 `AppModel.listShown`（`sideBySide && reading`），没改，所以收起时照旧。
+
+**第 11.1 节第 6 条（窗口按钮）是怎么处理的**
+
+没有加额外距离，原因是新按钮在**系统导航栏**里：`ToolbarItem(placement: .topBarLeading)`，不是应用自己画的标题栏。`WindowControls.swift` 已经写明 iPadOS 26 的窗口按钮由系统导航栏自己让开，只有应用自己画的栏（列表顶栏、侧栏）才要用 `WindowControls.inset` 的 72 点；再给导航栏里的按钮加同样的 72 点，会和系统的让位叠在一起。**窗口模式没验过**（模拟器和真机都没跑）；如果真被三个圆点挡住，处理是在这个按钮的内容上补 `WindowControls.inset` 的 leading padding（`WindowControls` 在应用 target 里，`ConversationView` 直接可用）。
+
+**改了哪些文件**
+
+- 新建 `apps/ios/TeleplyCore/Sources/TeleplyState/ListColumn.swift`：`ListColumnLayout`、`listColumnLayout(wide:setting:screen:)`。
+- 新建 `apps/ios/TeleplyCore/Tests/TeleplyCoreTests/ListColumnTests.swift`：4 项。
+- `apps/ios/Teleply/App/RootView.swift`：`@AppStorage`、`WorkspaceView` 的 `@Binding`、两栏改 `ZStack` 和移动/动画、`ConversationView` 的新参数。
+- `apps/ios/Teleply/Chat/ConversationView.swift`：`wide` 和 `@Binding`、顶栏按钮和快捷键、`column`。
+- `apps/ios/TeleplyUITests/ScreenshotTour.swift`：只在 `ScreenshotTour` 类里加 `testIPadListCollapse`（`ci-check.sh` 的 `-Only` 写死 `-only-testing:TeleplyUITests/ScreenshotTour/<名字>`，放别的类跑不到）；`testIPadTour` 没动。
+- 没动 `ChatListView.swift`（不需要）、版本号、README、`Localizable.xcstrings`。
+
+**加了哪些测试**
+
+- `ListColumnTests`（TeleplyCoreTests，4 项）：20 种组合（够宽/不够宽 × 开关 × `launch`/`login`/`devices`/`chats`/`reading`）逐条对 `listShown`/`buttonShown`/`collapsed`；宽窗口没有对话时列表总在且没有按钮；存着的收起在列表页不生效、再开对话又收起、展开后还在；窄窗口和 iPhone 一律不收起。
+- `testIPadListCollapse`（iPad 才跑，iPhone 跳过）：演示数据 → 进示例 → 连 测试电脑 A → 开「原生阅读示例」→ 如果上一次留下收起就先点「展开对话列表」→ 截图 `55-ipad-list-open` → 点「收起对话列表」→ 断言按钮变成「展开对话列表」、列表的「打开导航」不可点 → 截图 `56-ipad-list-folded` → 点「展开对话列表」→ 断言列表回来 → 截图 `57-ipad-list-open-again`。开头不依赖上一个测试留下的状态（看按钮自己的文字反过来展开），结尾是展开的。
+  - 没有用 `-TeleplyListCollapsed NO` 清状态：启动参数落在 `NSArgumentDomain`，读 `UserDefaults` 时优先级高于 `@AppStorage` 自己写进去的值，按钮会看起来怎么点都不变。用按钮反过来展开更稳。
+  - `ci-check.sh` 默认那张 iPad 四个用例的列表没动（不在第 11.2 节的可改文件里），所以它要按第 11.3 节的 `-Only "testIPadListCollapse"` 单独跑。
+
+**怎么核对的**
+
+- 没有 Swift，**没编译、没跑测试、没跑模拟器/真机、没跑 Codemagic**。
+- 5 个改动/新文件过了括号和字符串配平的脚本（放在工作区子文件夹，不进仓库）：0 处不闭合；新代码里没有原始字符串（没有一处 `#"`）。
+- `ConversationView` 只有 `RootView` 一个调用处，`WorkspaceView` 只有 `RootView.content` 一个调用处，都跟着改了。
+- 纯函数的三条规则在单元测试里重新算一遍（不照抄实现），20 种组合都在。
+
+**没做 / 没验**
+
+- 没验证台前调度窗口模式下系统导航栏会不会自己让开三个圆点；只按 `WindowControls.swift` 里 0.8.0 的结论（系统导航栏自己让开）。
+- 没验证按住 ⌘ 的快捷键列表显示的是 Label 标题「显示/隐藏对话列表」还是动态的无障碍标签；代码里两者分开写，只能等真机按 ⌘ 看。
+- 新文字（「收起对话列表」「展开对话列表」「显示/隐藏对话列表」）没进 `Localizable.xcstrings`（不在可改列表），英文界面会显示中文。
+- 没推送、没合并、没改版本号、没动别的工作树和别的路的文件。
+
+**最担心编不过的几处**
+
+1. `ConversationView` 新加 `@Binding` 后，成员初始化器从 `ConversationView(model:)` 变成 `ConversationView(model:wide:listCollapsed:)`，调用处在另一个文件；`@State` 都是私有的——现有 `RootView(model:)` 也是同一种写法，应该没问题，但这是最容易漏的。
+2. `ZStack` + `NavigationStack` 的 `.padding(.leading)`：编译应该没问题，但系统导航栏、`safeAreaBar` 和列表的 72 点让位在运行时是否和原来的 `HStack` 一样，只能看截图。
+3. `Animation?` 的 `foldAnimation` 配 `.animation(_:value:)`；`.keyboardShortcut("s", modifiers: [.command, .control])` 的 `EventModifiers` 数组字面量。
+4. `Label(...).labelStyle(.iconOnly)` 放进 `ToolbarItem(placement: .topBarLeading)`，和现有 `.toolbarRole(.editor)` + `.principal` 标题的排布：按钮应该在最左、标题往右让一点，没有 SDK 能核对。
+5. `ListColumnLayout: Sendable` 在 `TeleplyState`（默认 `MainActor` 隔离）里，测试用 `@MainActor`；现有 `NewTarget`/`NewHandoff` 也是这个写法。
+
 
 ## 11 线六 iPad「收起对话列表」（11-27 加）
 
