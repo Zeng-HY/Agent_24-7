@@ -274,7 +274,7 @@ SVG 的规则同第 4.2 节第 4 条。
 
 ### 10.4 线四 安卓「文件」
 
-结论：P5 已复现并修好，P4 安卓部分已做完。提交两次：`c814062`（P5，附带失败页要用的类型图标和图标表测试）、下一个提交（P4 各处接入和本节结果）。
+结论：P5 已复现并修好，P4 安卓部分已做完。提交两次：`c814062`（P5，附带失败页要用的类型图标和图标表测试）、下一个提交（P4 各处接入和本节结果）。审阅后按意见补了第三个提交：把 1.0.11 的「电脑转 PDF」按原来的顺序接回来——文件或正文超过门槛、以及手机画失败时，电脑提供 `preview == "pdf"` 就先 `convert(...)`，转换不了才显示失败页；这次改动的测试、结果见下面各节。
 
 #### P5 复现了什么（先复现，再改）
 
@@ -298,7 +298,7 @@ I/ActivityManager: Process com.pocketagentdesk.teleply.dev (pid 4183) has died: 
 - 程序里每一个网页视图的 `WebViewClient` 都实现 `onRenderProcessGone`，返回 `true`，把网页视图从父容器摘下来并销毁，当前页换成失败页：`PreviewUi.kt` 的两处（HTML 页面、Word/Excel 页面）和 `CodeViewer.kt` 一处。HTML 和代码页的失败页是同一段说明加「用其他应用打开」（代码页没有控制器，只说明）。
 - `OfficePreview` 不再收 `ByteArray`：改成 `OfficePreview(file, bytes, path, failed, modifier)`，`shouldInterceptRequest` 拿到 `file` 时用 `FileInputStream(path)` 开一个新的流交给网页（CSV 的文本仍用内存里的字节，它本来就是读出来的文字）。
 - `WorkspaceController.file()`：有缓存且文件有版本号时只把缓存的路径放进 `WorkspaceState.previewFile`，`preview` 保持 `null`；没有版本号、没法按版本缓存的老电脑才退回下载字节（这时仍受下面门槛约束，超过门槛的字节马上丢掉）。旧代码里「缓存写了就整份读回内存」那一行删掉了。
-- 大小门槛：打开前只读压缩包中央目录，不解压正文（`zipEntrySizes`，文件和内存字节两种都有）。`word/document.xml` 解开后超过 8 MB、Excel 的 `xl/worksheets/*.xml` 合计超过 8 MB，或者文件本身超过 15 MB，就不画；`OfficePreviewLimit` 从 30 MB 改成 15 MB。失败页说明用「文件太大，手机里不直接显示。」；docx-preview/SheetJS 自己报失败（标题 `teleply:failed`）也用这一页，说明用默认的「文件太大或太复杂，手机里画不出来。文件本身没有问题。」
+- 大小门槛：打开前只读压缩包中央目录，不解压正文（`zipEntrySizes`，文件和内存字节两种都有）。`word/document.xml` 解开后超过 8 MB、Excel 的 `xl/worksheets/*.xml` 合计超过 8 MB，或者文件本身超过 15 MB，就不在手机里画；`OfficePreviewLimit` 从 30 MB 改成 15 MB。**不画时先走 1.0.11 的电脑转 PDF**：列表或 meta 里有 `preview == "pdf"`（页面数据里 `pdf: true`）就照旧调 `convert(...)` 显示电脑转的 PDF，文件超过 15 MB 时连原文件都不下载；电脑不提供这条路，才显示失败页，说明「文件太大，手机里不直接显示。」docx-preview/SheetJS 自己报失败（标题 `teleply:failed`）或渲染进程被结束时同样先试电脑的 PDF（`officeFailed`），转换失败或没有提供才落到失败页，说明用默认的「文件太大或太复杂，手机里画不出来。文件本身没有问题。」或电脑给的原因。
 - Word/Excel 失败页（`WorkspaceUi.kt` 的 `OfficeFailedPage`）：第 4.3 节的大号图标、文件名、标题「手机上显示不了这份文件」、说明，按钮「看 PDF 版」「用其他应用打开」「保存到文件」。看 PDF 版只在文件来自某条回答时找：从 `chat/files` 里找扩展名 pdf、名字去掉扩展名相同（不分大小写）的那个文件，找到才显示按钮；从电脑文件浏览打开的文件不找。
 - 离开页面时销毁网页视图：Word/Excel 和 HTML 原来有，`CodeViewer.kt` 原来没有，补上了。
 
@@ -320,14 +320,15 @@ I/ActivityManager: Process com.pocketagentdesk.teleply.dev (pid 4183) has died: 
 #### 测试和模拟器验证
 
 - 开工基线：`testDebugUnitTest` 345 个测试，0 失败（31 个测试类）。
-- 最后：`testDebugUnitTest` 356 个测试，0 失败（33 个测试类）；`assembleDebug` 通过。新增测试：图标表每一行（`FileTypeIconTest`）、大小门槛和压缩包目录读取、演示的大 Word 确实超过门槛（`OfficeLimitsTest`）、控制器层的四件事——超过 15 MB 不下载、正文超过 8 MB 显示失败页且不要电脑的 PDF、docx-preview 失败显示失败页并带同名 PDF、有缓存时从缓存路径流式读而不把整份文件放进状态（`WorkspaceControllerTest`）。
+- 最后：`testDebugUnitTest` 357 个测试，0 失败（33 个测试类）；`assembleDebug` 通过。新增测试：图标表每一行（`FileTypeIconTest`）、大小门槛和压缩包目录读取、演示的大 Word 确实超过门槛（`OfficeLimitsTest`）、控制器层的几件事——超过 15 MB 且有 `pdf: true` 时不下载原文件、直接走电脑的 PDF；正文超过 8 MB 且有 `pdf: true` 时走电脑的 PDF、没有时显示失败页；手机画失败且有 `pdf: true` 时走电脑的 PDF、转换失败显示失败页；docx-preview 失败且没有 PDF 时显示失败页并带同名 PDF；有缓存时从缓存路径流式读而不把整份文件放进状态（`WorkspaceControllerTest`）。
 - 模拟器（同一个 debug 包）：大 Word 连续打开 5 次（每次返回再打开），程序始终是同一个进程（pid 未变），5 次都是失败页，logcat 里没有 `Render process`/`oom-killer`/`tile memory` 行（`verify-log-p5-postfix.txt`），此时也没有任何 WebView 渲染进程（`ps -A | grep -c sandboxed` 为 0）。小的 Word「发布说明.docx」和 Excel「预算表.xlsx」照常显示。失败页的「看 PDF 版」能打开同名的「大文档.pdf」。
 - 截图在工作区 `F:\Android-Dev\work\20261101-island-duplicates\20261126-and-files\`：`shot-03-fixed-bigword-1.png`（大 Word 失败页）、`shot-04-same-named-pdf.png`（看 PDF 版打开的 PDF）、`shot-09-bigword-fifth-open.png`（第五次打开仍是失败页）、`shot-07-small-word-drawn.png`（小 Word）、`shot-08-small-excel-drawn.png`（小 Excel）、`shot-10-answer-file-strip-icons.png`（回答文件条的类型图标）、`shot-06-conversation-files-icons.png`（对话文件列表的类型图标）、`shot-11-composer-attachment-icon.png`（输入框附件的 CSV 图标）。
 
 #### 没做什么、要看的
 
 - 没有改版本号，没有推送、合并、打包、签名、上传；没有连真手机，没有读真实对话记录，没有调用真实电脑端；所有演示内容都是编造的。
-- 失败页的「看 PDF 版」按设计只在回答里找同名 PDF；电脑自己提供的「把这份文件转成 PDF」（`preview: "pdf"`）不再作为 Word/Excel 失败的自动退路。超过 15 MB 的 Word 以前会自动请电脑转 PDF，现在按第 6.1 节改成失败页（用户点「看 PDF 版」才走别的文件）。
+- 失败页的「看 PDF 版」按设计只在回答里找同名 PDF；它和 1.0.11 的「电脑转 PDF」（`preview: "pdf"`）是两条路：后者先走，转换失败才落到失败页，失败页上还能试同名 PDF。
+- 超过 8 MB 正文的 Word/Excel，为了判断正文大小仍要把文件取到手机上一次（只读压缩包目录）；超过 15 MB 的才完全不下载。这一点和「不把整份文件放进界面状态」不冲突，取来的文件在缓存里，页面读的是它的流。
 - 没有版本号的 Word/Excel（老电脑）仍然要把字节读到内存里才能画，这时没有可流式读的缓存文件；门槛（正文 8 MB、文件 15 MB）保证这份字节不会更大，超过门槛的会立即丢掉。真机上如果有大量这种老电脑文件，值得再看是否要给「无版本」的缓存另找键。
 - 第 4.3 节表里的字和颜色是逐行照抄的，但图标样式（折角大小、字号）是我定的，若要和 iPhone 像素级一致，合并后可以对一下截图（iPhone 那一份在线二）。
 - 演示的大 Word 是运行时生成的（列表里显示 405.9 KB，解开正文约 17 MB），所以仓库里没有大文件；每次启动示例第一次打开它要多花一两秒生成。

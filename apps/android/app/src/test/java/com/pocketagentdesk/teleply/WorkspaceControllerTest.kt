@@ -137,10 +137,10 @@ class WorkspaceControllerTest {
         assertEquals("pdf",JSONObject(c.state.value.data).string("preview"));assertEquals("download",JSONObject(c.state.value.data).string("kind"))
         gate.complete(Unit);runCurrent()
         assertFalse(c.state.value.converting);assertEquals("%PDF",String(c.state.value.preview!!));assertEquals("",c.state.value.previewNote)
-        // A Word file past the 15 MB limit is not fetched and not drawn (11-26): the failure page says why, no PDF.
+        // A Word file past the 15 MB limit: the computer's PDF (1.0.11 kept), the file itself not fetched.
         c.file(JSONObject().put("id","big").put("name","大报告.docx"));runCurrent()
-        assertEquals("failed",JSONObject(c.state.value.data).string("preview"));assertEquals(OfficeTooLargeNote,c.state.value.previewNote)
-        assertNull(c.state.value.preview);assertFalse(c.state.value.converting)
+        assertEquals("pdf",JSONObject(c.state.value.data).string("preview"));assertEquals("%PDF",String(c.state.value.preview!!))
+        assertFalse(c.state.value.converting);assertEquals(listOf("doc","sheet"),fetched)
         // The computer cannot: its words, no preview, and nothing else held up.
         fails=ServiceFailure(500,detail="电脑上的 PowerPoint 没有响应");c.file(JSONObject().put("id","deck").put("name","旧汇报.ppt"));runCurrent()
         assertEquals("没能转成 PDF：电脑上的 PowerPoint 没有响应",c.state.value.previewNote);assertNull(c.state.value.preview)
@@ -149,12 +149,12 @@ class WorkspaceControllerTest {
         c.close();assertEquals("",c.state.value.previewNote)
         // No "preview": as before, no PDF asked for.
         c.file(JSONObject().put("id","plain").put("name","数据.bin"));runCurrent()
-        assertEquals(listOf("slides","deck"),asked);assertFalse(JSONObject(c.state.value.data).has("preview"));assertFalse(c.state.value.converting)
+        assertEquals(listOf("slides","big","deck"),asked);assertFalse(JSONObject(c.state.value.data).has("preview"));assertFalse(c.state.value.converting)
         assertEquals(listOf("doc","sheet"),fetched)
     }
     /**
-     * 11-26: a Word or Excel file docx-preview cannot draw shows the failure page, with its same-named PDF when the
-     * answer listed one; the computer's own PDF is not asked for by itself any more.
+     * 11-26: a Word or Excel file the phone cannot draw, and the computer does not offer a PDF of, shows the failure
+     * page with its same-named PDF when the answer listed one.
      */
     @Test fun aFileThePhoneCannotDrawShowsTheFailurePage()=runTest {
         val asked=mutableListOf<String>()
@@ -182,13 +182,18 @@ class WorkspaceControllerTest {
         c.officeFailed();runCurrent()
         assertEquals("failed",JSONObject(c.state.value.data).string("preview"));assertFalse(JSONObject(c.state.value.data).has("pdf_file"))
     }
-    /** 11-26: a Word or Excel file whose body is over 8 MB is not drawn; only the zip's directory is read for that. */
-    @Test fun aWordFileTooBigToDrawShowsTheFailurePageWithoutTheComputersPdf()=runTest {
+    /**
+     * 11-26: a Word or Excel file over the size limits is not drawn. The computer's own PDF comes first when it offers
+     * one (1.0.11 kept: on the computer it often shows the whole file); without it, the failure page says why. Only
+     * the zip's directory is read to judge the body, so the file is fetched for that but its body is never unpacked.
+     */
+    @Test fun aWordFileTooBigToDrawUsesTheComputersPdfWhenOfferedAndTheFailurePageOtherwise()=runTest {
         val big=madeUpZip("word/document.xml" to (OfficeBodyLimit.toInt()+1024))
         val fetched=mutableListOf<String>();val asked=mutableListOf<String>()
+        // No PDF offered: the failure page, after reading only the zip's directory.
         val api=object:ReadApi by FixtureApi() {
             override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
-                JSONObject().put("kind","download").put("size",big.size).put("state","current").put("preview","pdf")
+                JSONObject().put("kind","download").put("size",big.size).put("state","current")
             override suspend fun download(device:String,chat:String,file:String):ByteArray { fetched+=file;return big }
             override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray { asked+=file;return "%PDF".toByteArray() }
         }
@@ -197,7 +202,33 @@ class WorkspaceControllerTest {
         assertEquals("failed",JSONObject(c.state.value.data).string("preview"))
         assertEquals(OfficeTooLargeNote,c.state.value.previewNote);assertNull(c.state.value.preview)
         assertEquals(listOf("big"),fetched);assertEquals(emptyList<String>(),asked)
-        // Excel: its worksheets' XML added up.
+        // Offered: the computer's PDF, as 1.0.11 did; the page draws that instead of the failure page. The file itself
+        // still comes once — the body limit is judged from its zip's directory — but it stays a file on disk, not bytes.
+        fetched.clear();asked.clear()
+        val offered=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
+                JSONObject().put("kind","download").put("size",big.size).put("state","current").put("preview","pdf")
+            override suspend fun download(device:String,chat:String,file:String):ByteArray { fetched+=file;return big }
+            override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray { asked+=file;return "%PDF".toByteArray() }
+        }
+        c.bind(key,offered,false);runCurrent()
+        c.file(JSONObject().put("id","with-pdf").put("name","带PDF的文档.docx"));runCurrent()
+        assertEquals("pdf",JSONObject(c.state.value.data).string("preview"));assertEquals("%PDF",String(c.state.value.preview!!))
+        assertFalse(c.state.value.converting);assertEquals(listOf("with-pdf"),fetched);assertEquals(listOf("with-pdf"),asked)
+        assertNull(c.state.value.previewFile)
+        // A file past 15 MB is not fetched at all; the computer's PDF straight away.
+        fetched.clear();asked.clear()
+        val huge=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
+                JSONObject().put("kind","download").put("size",OfficePreviewLimit+1).put("state","current").put("preview","pdf")
+            override suspend fun download(device:String,chat:String,file:String):ByteArray { fetched+=file;return "PK".toByteArray() }
+            override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray { asked+=file;return "%PDF".toByteArray() }
+        }
+        c.bind(key,huge,false);runCurrent()
+        c.file(JSONObject().put("id","huge").put("name","超大文档.docx"));runCurrent()
+        assertEquals("pdf",JSONObject(c.state.value.data).string("preview"));assertEquals("%PDF",String(c.state.value.preview!!))
+        assertEquals(emptyList<String>(),fetched);assertEquals(listOf("huge"),asked)
+        // Excel: its worksheets' XML added up, no PDF offered — the failure page too.
         val sheets=madeUpZip("xl/worksheets/sheet1.xml" to (5*1024*1024),"xl/worksheets/sheet2.xml" to (4*1024*1024))
         val excel=object:ReadApi by FixtureApi() {
             override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
@@ -207,6 +238,32 @@ class WorkspaceControllerTest {
         c.bind(key,excel,false);runCurrent()
         c.file(JSONObject().put("id","excel").put("name","大表格.xlsx"));runCurrent()
         assertEquals("failed",JSONObject(c.state.value.data).string("preview"));assertEquals(OfficeTooLargeNote,c.state.value.previewNote)
+    }
+    /**
+     * 11-26: when the computer offers its own PDF, a Word file the phone cannot draw is turned into that PDF (1.0.11
+     * kept); a conversion that fails gives the failure page, saying why in the computer's words.
+     */
+    @Test fun aFileThePhoneCannotDrawUsesTheComputersPdfWhenItOffersOne()=runTest {
+        var asked=0;var fails:Exception?=null
+        val api=object:ReadApi by FixtureApi() {
+            override suspend fun detail(device:String,route:String,query:Map<String,String?>,body:JSONObject?):JSONObject =
+                JSONObject().put("kind","download").put("size",12).put("state","current").put("preview","pdf")
+            override suspend fun download(device:String,chat:String,file:String)="PK".toByteArray()
+            override suspend fun filePdf(device:String,chat:String,file:String,limit:Long):ByteArray { asked++;fails?.let { throw it };return "%PDF".toByteArray() }
+        }
+        val c=WorkspaceController(backgroundScope,WorkspaceStore());c.bind(key,api,false);runCurrent()
+        c.file(JSONObject().put("id","offered").put("name","坏了.docx"));runCurrent()
+        assertEquals("phone",JSONObject(c.state.value.data).string("preview"))
+        c.officeFailed();runCurrent()
+        assertEquals(1,asked);assertEquals("pdf",JSONObject(c.state.value.data).string("preview"))
+        assertEquals("%PDF",String(c.state.value.preview!!));assertFalse(c.state.value.converting)
+        // The computer cannot convert: the failure page, with its reason.
+        fails=ServiceFailure(500,detail="电脑上的 Word 没有响应")
+        c.file(JSONObject().put("id","broken").put("name","又坏了.docx"));runCurrent()
+        c.officeFailed();runCurrent()
+        val failed=JSONObject(c.state.value.data)
+        assertEquals(2,asked);assertEquals("failed",failed.string("preview"));assertNull(c.state.value.preview)
+        assertEquals("没能转成 PDF：电脑上的 Word 没有响应",c.state.value.previewNote)
     }
     /**
      * 11-26: with the phone's cache, a Word file is drawn from its kept copy — its path, streamed by the page — and is

@@ -791,8 +791,8 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
      *
      * 11-26: a Word or Excel file is no longer read whole into the page's state. Its kept copy on this phone is what the
      * page streams from ([WorkspaceState.previewFile]); only a plain JVM without a cache still gets bytes. A file whose
-     * body is too big (or that is too big itself) shows the failure page instead, with its same-named PDF if the answer
-     * listed one.
+     * body is too big (or that is too big itself) is shown as the computer's PDF when it offers one (1.0.11 kept), and
+     * only without it as the failure page, which can still offer the answer's same-named PDF.
      */
     fun file(file:JSONObject) {
         val k=key ?: return;val service=api ?: return;saveJob?.cancel();read?.cancel();val g=++generation
@@ -889,12 +889,21 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
             // A CSV that could not be read, or is empty, says why instead of showing an empty table.
             if(sheet!=null && bytes==null) data.put("preview","failed")
             // 11-26: a Word or Excel file is drawn only when its body (word/document.xml, Excel's worksheets) and the
-            // file itself are small enough. Only the zip's directory is read for that, never its body.
+            // file itself are small enough. Only the zip's directory is read for that, never its body. Past the limit
+            // the computer's Office can still turn it into a PDF (1.0.11, kept: for many computers that shows the whole
+            // file); only without that does the failure page say the phone cannot draw it.
             if(page!=null) {
                 val stored=keptFile?.let { java.io.File(it) }
                 val total=when { size>0 -> size; stored!=null -> stored.length(); bytes!=null -> bytes!!.size.toLong(); else -> 0L }
                 if(total>OfficePreviewLimit) unshown=OfficeTooLargeNote
                 else if(stored!=null || bytes!=null) officeTooLarge(page,total,if(stored!=null) zipEntrySizes(stored) else zipEntrySizes(bytes!!))?.let { unshown=it }
+                if(unshown.isNotBlank() && pdf) {
+                    // Not fetched at all when the file itself is past the limit; the computer's PDF is shown instead.
+                    data.put("preview","pdf")
+                    if(g==generation) update(k) { it.copy(data=data.toString(),busy=false,converting=true,preview=null,previewFile=null,previewNote="",transfer=note) }
+                    convert(k,service,FileRef(id=file.getString("id"),name=name,version=version,size=size,modified=meta.optLong("modified")),g)
+                    return@launchSafe
+                }
                 if(unshown.isNotBlank()) {
                     data.put("preview","failed")
                     bytes=null
@@ -921,13 +930,25 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
                 item.string("name").substringBeforeLast('.',"").equals(stem,ignoreCase=true)
         }
     }
-    /** The computer's PDF of a file for the page of generation [g]; kept on disk like any other original (§7). */
+    /**
+     * The computer's PDF of a file for the page of generation [g]; kept on disk like any other original (§7). 11-26: a
+     * Word or Excel file whose conversion fails gives the failure page (and the answer's same-named PDF, if listed);
+     * anything else keeps saying why there is no preview.
+     */
     private suspend fun convert(k:ChatKey,service:ReadApi,file:FileRef,g:Int) {
         var note=""
         val pdf=try { service.filePdf(k.device,k.chat,file.id,if(mediaDir!=null) PdfPreviewLimit else PreviewLimit) }
             catch(e:CancellationException) { throw e }
             catch(e:Exception) { note=pdfFailure(e);null }
-        if(pdf==null) { if(g==generation) update(k) { it.copy(converting=false,previewNote=note) };return }
+        if(pdf==null) {
+            if(g!=generation) return
+            val data=JSONObject(state.value.data)
+            val page=data.string("name").let { phoneOffice(it)!=null && sheetKind(it)==null }
+            if(!page) { update(k) { it.copy(converting=false,previewNote=note) };return }
+            if(data.optBoolean("linked")) siblingPdf(k,service,data.string("name"))?.let { data.put("pdf_file",it) }
+            update(k) { it.copy(converting=false,preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote=note) }
+            return
+        }
         val dir=mediaDir
         val kept=if(dir==null) null else withContext(Dispatchers.IO) {
             FileCache(java.io.File(dir,FileCacheFolder),FileCacheLimit).writeStream(k.device,file.id,file.stableVersion() ?: "pdf","pdf") { it.write(pdf) }
@@ -936,10 +957,10 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
     }
     /**
      * The phone could not draw the open Word or Excel file (a damaged or protected one, or the web view's renderer was
-     * ended), or the table of a CSV or TSV. 11-26: a Word or Excel file gets the failure page (design §6.1), which
-     * offers the same-named PDF from the answer when there is one; the computer's own PDF is no longer asked for here.
-     * A CSV has no PDF: its source, already read, is shown instead (11-16). Once per page; saving and sharing still
-     * take the file itself.
+     * ended), or the table of a CSV or TSV. 11-26: the computer's own PDF comes first (1.0.11: the computer's Office can
+     * often show the whole file), and only when it does not offer one, or the conversion fails, the failure page
+     * (design §6.1), which offers the same-named PDF from the answer when there is one. A CSV has no PDF: its source,
+     * already read, is shown instead (11-16). Once per page; saving and sharing still take the file itself.
      */
     fun officeFailed() {
         val k=key ?: return;val service=api ?: return;val s=state.value;val g=generation
@@ -948,6 +969,12 @@ class WorkspaceController(private val scope:CoroutineScope,private val store:Rea
         // A CSV or TSV is read here and the computer has no PDF of it: show the source that is already here.
         if(data.string("sheet").isNotBlank() || sheetKind(data.string("name"))!=null) {
             update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="表格显示不了，下面是原文") }
+            return
+        }
+        if(data.optBoolean("pdf")) {
+            // 1.0.11 kept: the computer's Office turns it into a PDF; a conversion that fails lands on the failure page.
+            update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","pdf").toString(),converting=true,previewNote="") }
+            read=launchSafe { convert(k,service,FileRef(id=data.getString("id"),name=data.string("name"),version=data.string("v")),g) }
             return
         }
         update(k) { it.copy(preview=null,previewFile=null,data=data.put("preview","failed").toString(),previewNote="") }
