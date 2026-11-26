@@ -46,6 +46,45 @@ struct SentPicturesTests {
         #expect(sentPictures(messages: [message], records: [record])["m1"]?.map(\.id) == ["a"])
     }
 
+    /// 11-26 (handoff §3.2): a user message may carry its own pictures (`images`), e.g. an interjection sent while the
+    /// source worked, which no send record mentions. They go after the record's pictures, by id still unseen, and items
+    /// the computer cannot serve (only a path, or a url outside /api/codex/image) are left out.
+    @Test func aMessageCarriesItsOwnPicturesAfterTheRecordsAndOnlyOnce() throws {
+        let own: [JSONValue] = [
+            ["id": "a", "name": "a.png", "url": "/api/codex/image?id=a"],
+            ["id": "b", "name": "b.png", "url": "/api/codex/image?id=b"],
+            ["id": "path-only", "name": "c.png", "path": "D:/fixture/c.png"],
+            ["id": "elsewhere", "name": "d.png", "url": "/api/file?id=d"],
+            ["id": "a/b", "name": "e.png", "url": "/api/codex/image?id=a/b"],
+            ["id": .string(String(repeating: "x", count: 65)), "name": "f.png", "url": "/api/codex/image?id=long"],
+        ]
+        let message = try parseMessage(["id": "m1", "role": "user", "text": "[图片] 看这张", "images": .array(own)])
+        // The record's "a" comes first; the message's own "a" is not drawn twice.
+        let found = sentPictures(messages: [message], records: [record("r1", ["a"], text: "看这张")])
+        #expect(found["m1"]?.map(\.id) == ["a", "b"])
+        // With no send record at all, the message's own pictures still show.
+        #expect(sentPictures(messages: [message], records: [])["m1"]?.map(\.id) == ["a", "b"])
+        // Without `images`, the result is what it always was.
+        #expect(sentPictures(messages: [user("m1", "看这张", request: "r1")], records: [record("r1", ["a"], text: "看这张")])
+            .mapValues { $0.map(\.id) } == ["m1": ["a"]])
+        // The [图片] prefix and DeepSeek's [N 张图片] suffix both leave the bubble's words.
+        #expect(wordsWithoutPictureMarks("[图片] 看这张") == "看这张")
+        #expect(wordsWithoutPictureMarks("看这张\n[2 张图片]") == "看这张")
+        #expect(wordsWithoutPictureMarks("没有图") == "没有图")
+    }
+
+    /// A message with nothing but pictures: the grid is all the bubble shows.
+    @Test func aMessageOfPicturesAloneHasNoWordsLeft() throws {
+        let message = try parseMessage(["id": "m1", "role": "user", "text": "[图片] [图片]",
+                                        "images": .array([
+                                            ["id": "a", "name": "a.png", "url": "/api/codex/image?id=a"],
+                                            ["id": "b", "name": "b.png", "url": "/api/codex/image?id=b"],
+                                        ])])
+        let found = sentPictures(messages: [message], records: [])
+        #expect(found["m1"]?.map(\.id) == ["a", "b"])
+        #expect(wordsWithoutPictureMarks(message.text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     @Test func onlyAMessageWithTheMarkAndTheSameWordsTakesPictures() {
         let records = [record("c1", ["a"], text: "看 这张图")]
         #expect(sentPictures(messages: [user("m1", "看这张图")], records: records).isEmpty)

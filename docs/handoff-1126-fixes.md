@@ -262,7 +262,71 @@ SVG 的规则同第 4.2 节第 4 条。
 
 ### 10.1 线一 iPhone「发送」
 
-（待填）
+**结论**：P1、P2 的 iPhone 部分按第 3.1、3.2 节做完，未编译、未跑测试（这台电脑没有 Swift），等 Codemagic 编译和跑测试。
+
+**P1 做了什么**
+
+- 回执的 `missing`（第 8.1 节）读出来了：`state == "unknown"` 且 `missing == true` 时标签是新的「电脑没收到」；只有 `unknown`（老电脑、或读不了送达记录）时标签不变，并给这条副本记一个 `_receipt_unknown` 备注。
+- `unknown` 且没有 `missing` 时标签不变这条，也修掉了老代码把「已接收」拉回「待确认」的副作用：没有证据时保留原来的标签。
+- 「电脑没收到」那条下面一行「电脑没收到这条消息，可以重发。」，按钮依次是「重发」「恢复草稿」「移除」（草稿不为空时不显示「恢复草稿」）。
+- 重发：用原请求编号和原请求体（去掉手机自己记的备注）再发一次；标签先回「提交中」，之后照正常回执走。电脑答「这次请求已提交过，结果尚未确认…」时原样显示那句话并回到「待确认」。不会自动重发。
+- 待确认（`unknown` 且无 `missing`）时，加一行「电脑查不到这条的记录，可能没收到。」和「恢复草稿」「移除」；「送达状态待确认」本身也有「移除」，点了先弹确认「只从手机上去掉这条。如果电脑其实收到了，它仍会出现在对话里。」
+- 待确认/电脑没收到这两种副本的「恢复草稿」都会把字和附件放回输入框并把副本从列表上拿掉，之后发的是新请求（否则同字重发现在会被「同样的字还在待确认」拦住）。
+- 每次点「核对」都有反馈：核对中显示进度和「正在核对…」，核完显示「已核对：电脑没收到 / 已送达 / …」几秒；失败仍显示「核对失败，原提交仍保留；不会自动重发。」
+- 待核对发送记录（PendingSheet）里加进「电脑没收到」和按钮；待确认的「恢复提交快照」对这两种副本改成「恢复草稿」（会移除副本）。
+- 「同样的字还在待确认时拒绝再发」这条规则仍只拦「提交中 / 待确认」，不拦「电脑没收到」。
+
+**P2 做了什么**
+
+- 用户消息自己的 `images` 也画出来：先放按发送状态记录配到的图，再放消息自带、按 id 还没出现过的图，同一个 id 只画一次；`id` 沿用原来的校验，`url` 不以 `/api/codex/image` 开头的（只有 path 的项）跳过。
+- 下载、缓存、点开大图仍走原来的 `workspace.sentPicture`，没开新接口。
+- 画图时文字里的 `[图片]` 前缀和 DeepSeek 的 `[N 张图片]` 后缀都去掉；只有图没有字时气泡里只画图。
+
+**11-27 审后补三处（和安卓用同样的字）**
+
+- Claude 的发送也能到「电脑没收到」：核对时先问一次回执（Claude 走 `/api/agents/claude/receipt`，老电脑没有这个地址就退回 Claude 记录），`unknown` 且 `missing` 标成「电脑没收到」，其他情况照原来的 `claudeCheck` 走；问回执出错不报核对失败。`resend` 不再排除 Claude，重发的回答照 `applyReply` 的 `pressed` 分支走。
+- 核对那一行改成按回执原始的 `state`/`missing` 说：`unknown`+`missing` →「已核对：电脑没收到」；只有 `unknown` →「已核对：电脑查不到这条的记录」；`dispatching` →「已核对：电脑收到了，还在处理」；Claude 记录里既没送达也没排队 →「已核对：Claude 的记录里还没看到这条」；其他 →「已核对：<标签>」。这两段是 TeleplyCore 的纯函数 `checkResultText`/`claudeCheckResultText`。
+- 恢复草稿在输入框有字时不再消失：按钮一直在，只是不能点，下面一行灰字「输入框里有字，先清空才能恢复」。待核对发送记录里也是这样。
+- 测试加了：`checkResultText`/`claudeCheckResultText` 每一种；Claude 回执 `missing`、核对到「电脑没收到」、再用同一编号重发并走 `pressed`；`receiptLabel` 只对 send 认 `missing`（和安卓一致）。
+
+**改了哪些文件**
+
+- `TeleplyCore/Sources/TeleplyModel/ChatCore.swift`：`missingLabel`、`unknownReceiptLabel`，`receiptLabel`/`agentReceiptLabel` 加 `missing`（默认 false，旧调用不变），`checkResultText`/`claudeCheckResultText`。
+- `TeleplyCore/Sources/TeleplyModel/Relay.swift`：Claude 的回执改问 `/api/agents/claude/receipt`（老电脑 404 时由调用方退回 Claude 记录）。
+- `TeleplyCore/Sources/TeleplyModel/SentPictures.swift`：消息自带 `images` 的解析与合并、`wordsWithoutPictureMarks`。
+- `TeleplyCore/Sources/TeleplyModel/Models.swift`：**不在第 3.3 节列表里，只加了一个字段名**：`messageDetails` 里加 `"images"`（`parseMessage` 是唯一能看到消息原始 JSON 的地方；不加就拿不到消息自带的图）。
+- `TeleplyCore/Sources/TeleplyState/ChatModel.swift`：`checking`/`checkNotes`、核对反馈、`missing` 与「标签不变」的判断、`resend`、`restoreAndRemove`、`mayBeMissing`，把回执处理抽成 `applyReply`（首次发送和重发共用）；`save` 不让已移除的副本被晚到的回执复活。
+- `TeleplyCore/Sources/TeleplyState/ChatModel+SendDemo.swift`（新建）：`-TeleplyDemoSend` 时在演示里放一条「电脑没收到」的副本。
+- `TeleplyCore/Sources/TeleplyDemo/DemoSend.swift`（新建）：演示行「发送恢复示例」、一条带两张图自己的插话。
+- `TeleplyCore/Sources/TeleplyDemo/DemoWorld.swift`：**三处各一行**把它接上（列表多加一行、`control` 不给这个演示对话塞固定问题卡、`messages` 用演示消息）。
+- `Teleply/Composer/ComposerView.swift`：`RecoveryBar`（待确认/电脑没收到），待确认的移除确认。
+- `Teleply/Chat/ChatSheets.swift`：PendingSheet 的两种副本、按钮、核对反馈和移除确认。
+- `Teleply/Chat/Timeline.swift`：只改用户气泡里取文字的那一行，用 `wordsWithoutPictureMarks`。
+- 测试：`TeleplyCoreTests/SendRecoveryTests.swift`（新建，7 项）、`TeleplyCoreTests/SentPicturesTests.swift`（加 2 项）。
+
+**测试**
+
+- `SendRecoveryTests`：三种回执标签（有 `missing`、只有 `unknown`、其他状态）；核对那一行的每一种说法；Claude 的回执 `missing` →「电脑没收到」，再用同一编号重发、走 `pressed` 分支；重发用同一请求编号、同一文字和同一 `expected_turn`，且只有一条副本；老电脑只答 `unknown` 时标签不变并记下「可能没收到」；恢复草稿后副本变成已移除、字回到输入框；电脑答「已提交过」时回到待确认并显示原话。
+- `SentPicturesTests`：消息自带图和记录配对图的合并、按 id 去重、path-only / 非 `/api/codex/image` / 超长或带斜杠的 id 跳过、没有 `images` 时结果与以前一样、只有图时文字为空。
+- 现有测试的调用方式没变（`receiptLabel`/`agentReceiptLabel` 的旧 3 参数调用仍可用）。
+
+**演示**：启动参数 `-TeleplyDemoSend`（只在 DEBUG 有效，默认关）。打开「发送恢复示例」能看到一条「电脑没收到」和一条带两张图的用户消息；关掉开关时列表、消息和截图组都与原来一样。
+
+**没做 / 没验**
+
+- 这台电脑没有 Swift，**没编译、没跑测试、没跑截图巡览**；只按类型和可选值逐处静态核对过，并查了新加的唯一一处原始字符串（没有 `"#`）。
+- 没碰别的路线的文件；没改版本号、README 更新说明。
+- `ConversationView.swift` 里 ⋯ 菜单的「待核对发送记录」计数仍只算「提交中 / 待确认」（原有行为），所以一条对话只剩「电脑没收到」时该菜单入口不出现；输入区上方那条有全部按钮。这个文件不在第 3.3 节列表里，没动。
+- 新标签「电脑没收到」没有英文翻译：`Hints.swift` 不在可改列表里，英文界面会显示中文；标签比较都用同一个常量，行为不受影响。新加的界面文字（「重发」「正在核对…」「已核对：…」「电脑查不到这条的记录，可能没收到。」等）也没进 `Localizable.xcstrings`（不在可改列表里），英文界面会显示中文。
+
+**最担心编不过的几处**
+
+1. `ChatModel` 的新代码（`CheckOutcome`、`check`/`noteCheck` 里的 `Task`、`resend` 里捕获 `backgroundTime` 返回的闭包和 `body`/`attempt`）在 Swift 6 的 MainActor 默认隔离下能否直接编译。
+2. `SentPictures.swift` 里 `compactMap(SentPicture.init(own:))` 这个带标签的初始化器引用写法。
+3. SwiftUI：`.alert(_:isPresented:presenting:)` 配 `@State Submission?`，以及 `ViewThatFits` 里包一个 `@ViewBuilder` 方法。
+4. 演示的两个新文件：`ChatModel+SendDemo.swift` 跨文件访问 `@ObservationIgnored var demo`；`SendDemo` 的静态属性引用 `DemoData.row`/`DemoData.message`。
+5. `ChatModel.save` 把列表更新挪到写盘之前（为了让已移除不被晚到的回执复活），有没有哪个旧测试依赖原来的先后顺序。
+6. Claude 的回执地址：iOS 改成问 `/api/agents/claude/receipt`，和电脑端 `agents/claude.py` 的 `http_receipt` 是不是同一条路（安卓也是先走 `/api/agents/<app>/receipt`，老电脑 404 后退回 Claude 记录）。
 
 ### 10.2 线二 iPhone「文件」
 

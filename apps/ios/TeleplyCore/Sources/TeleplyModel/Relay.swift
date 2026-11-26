@@ -478,14 +478,16 @@ public struct RelayClient: Sendable {
         }
     }
 
-    /// A send's receipt by its request id (Codex, DeepSeek, and a new assistant at its own address); Claude keeps
-    /// none, its record is checked instead.
+    /// A send's receipt by its request id (Codex, DeepSeek, Claude and a new assistant at its own address). 11-26:
+    /// Claude's sends share Codex's delivery record on the computer, so its receipt can say `missing` too; it is served
+    /// at the assistant's own address. An older computer without that address answers 404, and the caller falls back to
+    /// Claude's own record (ChatModel.reconcile).
     public func receipt(device: String, app: String, chat: String, request: String,
                         catalog: AgentCatalogSnapshot = .current) async throws -> JSONValue {
-        guard catalog.isLegacy(app) else {
+        // A new assistant, and 11-26 Claude, answer at their own address.
+        guard catalog.isLegacy(app), app != "claude" else {
             return try await agentReceipt(device: device, agent: app, chat: chat, request: request)
         }
-        guard app != "claude" else { return ["state": "unknown"] }
         let response = try await json(get(Self.devicePath(device, "/api/\(app)/receipt"), query: [("id", chat), ("request_id", request)]))
         guard app == "deepseek", response["state"].string() != "unknown", case .object(var fields) = response else { return response }
         guard response["id"].string() == chat else { throw ReadFailure("回执会话身份不匹配") }

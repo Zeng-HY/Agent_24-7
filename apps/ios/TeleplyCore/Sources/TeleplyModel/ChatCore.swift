@@ -180,8 +180,17 @@ public func mergeLive(_ old: [Message], _ incoming: [Message]) -> [Message] {
     return merged.enumerated().sorted { ($0.element.order!, $0.offset) < ($1.element.order!, $1.offset) }.map(\.element)
 }
 
-/// The words under a sent message: only real evidence says 已送达 (spec B03, B04).
-public func receiptLabel(state: String, result: JSONValue, action: String) -> String {
+/// A receipt that says nothing either way (spec B03): the words under a send before its result is known.
+public let unknownReceiptLabel = "送达状态待确认"
+
+/// 11-26: the computer's delivery records have no such request id (`missing`, handoff 11-26 §8.1), so a send the phone
+/// kept never reached it. The same request id may go out again: the computer de-duplicates by it (codex_control._begin).
+public let missingLabel = "电脑没收到"
+
+/// The words under a sent message: only real evidence says 已送达 (spec B03, B04). 11-26: `missing` says the computer's
+/// delivery records know nothing of the request at all, so the phone can send it again under the same request id.
+public func receiptLabel(state: String, result: JSONValue, action: String, missing: Bool = false) -> String {
+    if state == "unknown", missing, action == "send" { return missingLabel }
     let words: String
     switch state {
     case "cancelled": words = "已取消排队"
@@ -192,15 +201,34 @@ public func receiptLabel(state: String, result: JSONValue, action: String) -> St
     // 0.6.6: a command the source ran itself (/compact); no message of it will ever be in the record to confirm it.
     case "accepted" where !result["command"].string().isEmpty: words = "已送达"
     case "accepted": words = "已接收"
-    default: words = "送达状态待确认"
+    default: words = unknownReceiptLabel
     }
     return Hints.text(words)
 }
 
 /// A new assistant's receipt (handoff 3.4): its own address says `delivered` and `queued` itself, so those words
-/// carry the same meanings the three's receipts have; everything else reads as before.
-public func agentReceiptLabel(state: String, result: JSONValue, action: String) -> String {
+/// carry the same meanings the three's receipts have; everything else reads as before. 11-26: `missing` says the
+/// same thing here as for the three (handoff 11-26 §8.1).
+public func agentReceiptLabel(state: String, result: JSONValue, action: String, missing: Bool = false) -> String {
+    if state == "unknown", missing, action == "send" { return missingLabel }
     if state == "accepted" && result["delivered"].bool() { return Hints.text("已送达") }
     if state == "unknown" && result["queued"].bool() { return Hints.text("已排队") }
     return receiptLabel(state: state, result: result, action: action)
+}
+
+/// The one line a finished 核对 leaves for a few seconds (handoff 11-26 §3.1 point 5), from the receipt itself, not
+/// from the label a send happened to keep. The words are the same as Android's (ChatCore.kt checkResultText).
+public func checkResultText(state: String, missing: Bool, label: String) -> String {
+    if state == "unknown", missing { return "已核对：电脑没收到" }
+    if state == "unknown" { return "已核对：电脑查不到这条的记录" }
+    if state == "dispatching" { return "已核对：电脑收到了，还在处理" }
+    return "已核对：" + label
+}
+
+/// Claude's 核对 line: the computer's delivery record says nothing useful, so its own record is what was looked at
+/// (handoff 11-26 §3.1 point 5).
+public func claudeCheckResultText(delivered: Bool, queued: Bool) -> String {
+    if delivered { return "已核对：已送达" }
+    if queued { return "已核对：已排队" }
+    return "已核对：Claude 的记录里还没看到这条"
 }

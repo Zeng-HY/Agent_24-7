@@ -18,6 +18,13 @@ public struct SentPicture: Sendable, Equatable, Identifiable {
         let name = json["name"].string()
         self.init(id: id, name: name.isEmpty ? "图片" : name)
     }
+
+    /// A picture a user message carries itself (`images`, handoff 11-26 §8.2): the computer serves these under
+    /// /api/codex/image. Items that only carry a path and a digest id cannot be fetched and are left out, not reported.
+    init?(own json: JSONValue) {
+        guard json["url"].string().hasPrefix("/api/codex/image"), let picture = SentPicture(json) else { return nil }
+        self = picture
+    }
 }
 
 /// The pictures to show in each user message, by the message's id (user 10-27: a sent picture showed as "[图片]";
@@ -46,6 +53,17 @@ public func sentPictures(messages: [Message], records: [JSONValue]) -> [String: 
         }
         if let found { taken[found.id] = pictures }
     }
+    // 11-26: a message may carry its pictures itself (`images`, handoff 11-26 §8.2), e.g. an interjection sent while
+    // the source worked, which no send record of the state mentions. They go after the ones matched above, by id
+    // still unseen, so a picture both places knows is drawn once.
+    for message in users where !message.details["images"].array.isEmpty {
+        var pictures = taken[message.id] ?? []
+        var seen = Set(pictures.map(\.id))
+        for picture in message.details["images"].array.compactMap(SentPicture.init(own:)) where seen.insert(picture.id).inserted {
+            pictures.append(picture)
+        }
+        if !pictures.isEmpty { taken[message.id] = pictures }
+    }
     return taken
 }
 
@@ -66,6 +84,12 @@ func wordsAfterPictureMarks(_ text: String) -> String? {
 
 /// The same, for a record that may carry no picture mark at all (matching a send to its row).
 func wordsIgnoringPictureMarks(_ text: String) -> String {
+    wordsAfterPictureMarks(text) ?? text
+}
+
+/// A message's words without the marks the computer writes for pictures: Claude's `[图片]` prefix and DeepSeek's
+/// `[N 张图片]` suffix. A bubble that draws the pictures itself shows these words only.
+public func wordsWithoutPictureMarks(_ text: String) -> String {
     wordsAfterPictureMarks(text) ?? text
 }
 

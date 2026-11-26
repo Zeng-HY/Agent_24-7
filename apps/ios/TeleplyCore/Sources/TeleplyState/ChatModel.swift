@@ -21,11 +21,18 @@ public enum SendNote {
     public static let acceptedAt = acceptedAtNote
     /// 0.6.6: the command the source ran itself (Outbox.swift).
     public static let command = commandNote
-    static let all = [claudeOffset, claudeCheckText, desktopDraft, sendError, command, acceptedAt]
+    /// 11-26: 核对 found the computer's records know nothing and it did not say whether the request is missing (an
+    /// older computer, or one that cannot read its delivery records). The copy keeps it so the bar can say so.
+    public static let receiptUnknown = receiptUnknownNote
+    static let all = [claudeOffset, claudeCheckText, desktopDraft, sendError, command, acceptedAt, receiptUnknown]
 }
 
-/// Labels of sends still to be settled, and of a send taken off the list by the user.
-let unsettledLabels: Set<String> = ["提交中", "送达状态待确认", "已接收", "已排队"]
+/// 11-26: the note in a send's body for a 核对 that found no evidence either way (see SendNote.receiptUnknown).
+let receiptUnknownNote = "_receipt_unknown"
+
+/// Labels of sends still to be settled, and of a send taken off the list by the user. 电脑没收到 is one of them: it is
+/// looked at again when the conversation opens, in case the first copy arrived after all.
+let unsettledLabels: Set<String> = ["提交中", unknownReceiptLabel, missingLabel, "已接收", "已排队"]
 public let removedLabel = "已移除"
 
 /// What a timed request came to, by the web's rules: not done on the computer, delivery unconfirmed, or done.
@@ -79,6 +86,10 @@ public final class ChatModel {
     public internal(set) var acknowledged = 0
     /// 11-16: one more send from this page, so the page follows the bottom again (Android ComposerState.sent).
     public internal(set) var sent = 0
+    /// 11-26: the sends whose receipt 核对 is reading now, so the bar and the sheet can show 正在核对….
+    public internal(set) var checking: Set<String> = []
+    /// 11-26: 核对's result for each send (已核对：…), gone again a few seconds later (handoff 11-26 §3.1 point 5).
+    public internal(set) var checkNotes: [String: String] = [:]
 
     /// True while a tap waits on the computer (web claude-ui.js `choosing`): no state poll then.
     @ObservationIgnored public var pollPaused: () -> Bool = { false }
@@ -174,6 +185,8 @@ public final class ChatModel {
         foreground = active
         self.synthetic = synthetic
         self.onFrame = onFrame
+        // -TeleplyDemoSend: the demo's 发送恢复示例 conversation starts with a send the computer says it never got.
+        if synthetic, let next { seedSendDemo(next) }
         if changed {
             control = Control()
             connection = "实时连接未启动"
@@ -433,14 +446,29 @@ public final class ChatModel {
 
     /// 恢复草稿 / 恢复提交快照: a send's words (and what went with it) back in an empty box.
     public func restore(_ record: Submission) {
-        guard let key, key == record.key, draft.isEmpty else { return }
+        _ = restore(record, removing: false)
+    }
+
+    /// 恢复草稿 for a send whose result is unknown (送达状态待确认 or 电脑没收到, handoff 11-26 §3.1): the words and files
+    /// go back in an empty box, and the copy leaves the list, so sending them again is a new request. Nothing is sent
+    /// here; if the old copy actually arrived, the computer's record still shows it.
+    public func restoreAndRemove(_ record: Submission) {
+        _ = restore(record, removing: true)
+    }
+
+    @discardableResult
+    func restore(_ record: Submission, removing: Bool) -> Bool {
+        guard let key, key == record.key, draft.isEmpty else { return false }
         do {
             try restoreExtras(key, jsonValue(record.body))
             edit(record.text)
             draftReset += 1
         } catch {
             self.error = describe(error)
+            return false
         }
+        if removing { dismiss(record) }
+        return true
     }
 
     // MARK: Sending, stopping and the queue (spec B03–B06)
@@ -467,7 +495,9 @@ public final class ChatModel {
         let generic = !catalog.isLegacy(key.app)
         let modes: [String] = generic ? Self.sendModes(of: control, app: key.app, catalog: catalog) : []
         let words = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if action == "send", !planned, submissions.contains(where: { $0.action == "send" && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ["提交中", "送达状态待确认"].contains($0.label) }) {
+        // 11-26: 电脑没收到 is deliberately not in this list: those words may go again (重发, or as a new request), and
+        // the computer de-duplicates the old request id itself (handoff 11-26 §3.1 point 7).
+        if action == "send", !planned, submissions.contains(where: { $0.action == "send" && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == words && ["提交中", unknownReceiptLabel].contains($0.label) }) {
             error = "相同内容的原提交尚待确认，请先核对状态，不能重复发送。"
             return
         }
@@ -616,46 +646,7 @@ public final class ChatModel {
                 throw error
             }
             if action == "send" { timed("消息提交", ContinuousClock.now - started, speedOutcome(result)) }
-            if action != "stop", key.app == "codex", result["request_id"].string() != record.request { throw ReadFailure("回执身份不匹配") }
-            if action == "send", key.app == "claude", result["pressed"].bool() {
-                // The computer pressed Enter in Claude's box; whether Claude read it is looked for in its record.
-                var notes = jsonValue(record.body).object
-                notes[SendNote.claudeOffset] = .number(Double(result["offset"].int64()))
-                let check = result["check_text"].string()
-                notes[SendNote.claudeCheckText] = .string(check.isEmpty ? body["text"].string() : check)
-                let accepted = result["accepted_at"].int64()  // 11-01: the computer's own clock, for Outbox.swift
-                if accepted > 0 { notes[SendNote.acceptedAt] = .number(Double(accepted)) }
-                var pressed = record
-                pressed.label = "已接收"
-                pressed.body = jsonText(.object(notes))
-                await save(pressed, synthetic)
-                Task { [weak self] in await self?.confirmClaude(pressed, client, synthetic) }
-            } else {
-                var done = record
-                var notes = jsonValue(record.body).object
-                var changed = false
-                if action == "stop" && result["ended"].bool() {
-                    done.label = "该轮已结束"
-                } else {
-                    let state = result["delivery_state"].string()
-                    // A new assistant's action replies say `ok` (and `accepted` when it took it); the three keep
-                    // their own reading of `accepted` (handoff 3.4).
-                    let generic = !catalog.isLegacy(key.app)
-                    let took = result["accepted"].bool() || (generic && result["ok"].bool(or: true))
-                    done.label = receiptLabel(state: state.isEmpty ? (took ? "accepted" : "unknown") : state, result: result, action: action)
-                    if action == "send", !result["command"].string().isEmpty {
-                        notes[SendNote.command] = result["command"]
-                        changed = true
-                    }
-                }
-                let accepted = result["accepted_at"].int64()  // 11-01: the computer's own clock, for Outbox.swift
-                if action == "send", accepted > 0 {
-                    notes[SendNote.acceptedAt] = .number(Double(accepted))
-                    changed = true
-                }
-                if changed { done.body = jsonText(.object(notes)) }
-                await save(done, synthetic)
-            }
+            try await applyReply(result, record, action: action, key: key, client: client, synthetic: synthetic)
             if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat, catalog: catalog), binding == token, foreground, self.key == key {
                 take(fresh, key)
             }
@@ -670,13 +661,61 @@ public final class ChatModel {
                     kept.body = jsonText(.object(notes))
                     kept.label = "未接收"
                 } else {
-                    kept.label = "送达状态待确认"
+                    kept.label = unknownReceiptLabel
                 }
                 await save(kept, synthetic)
             } else if self.key == key {
                 self.error = "无法保存提交快照，尚未发送。"
             }
         }
+    }
+
+    /// What the computer's answer to a send, stop or queue move means for the copy it was sent from: its label and the
+    /// notes the page and Outbox read (11-01, 11-26). Shared by a first send and 重发 so both follow one set of rules.
+    func applyReply(_ result: JSONValue, _ record: Submission, action: String, key: ChatKey, client: RelayClient,
+                    synthetic: Bool) async throws {
+        if action != "stop", key.app == "codex", result["request_id"].string() != record.request {
+            throw ReadFailure("回执身份不匹配")
+        }
+        if action == "send", key.app == "claude", result["pressed"].bool() {
+            // The computer pressed Enter in Claude's box; whether Claude read it is looked for in its record.
+            var notes = jsonValue(record.body).object
+            notes[SendNote.claudeOffset] = .number(Double(result["offset"].int64()))
+            let check = result["check_text"].string()
+            notes[SendNote.claudeCheckText] = .string(check.isEmpty ? record.text : check)
+            let accepted = result["accepted_at"].int64()  // 11-01: the computer's own clock, for Outbox.swift
+            if accepted > 0 { notes[SendNote.acceptedAt] = .number(Double(accepted)) }
+            var pressed = record
+            pressed.label = "已接收"
+            pressed.body = jsonText(.object(notes))
+            await save(pressed, synthetic)
+            Task { [weak self] in await self?.confirmClaude(pressed, client, synthetic) }
+            return
+        }
+        var done = record
+        var notes = jsonValue(record.body).object
+        var changed = false
+        if action == "stop" && result["ended"].bool() {
+            done.label = "该轮已结束"
+        } else {
+            let state = result["delivery_state"].string()
+            // A new assistant's action replies say `ok` (and `accepted` when it took it); the three keep
+            // their own reading of `accepted` (handoff 3.4).
+            let generic = !catalog.isLegacy(key.app)
+            let took = result["accepted"].bool() || (generic && result["ok"].bool(or: true))
+            done.label = receiptLabel(state: state.isEmpty ? (took ? "accepted" : "unknown") : state, result: result, action: action)
+            if action == "send", !result["command"].string().isEmpty {
+                notes[SendNote.command] = result["command"]
+                changed = true
+            }
+        }
+        let accepted = result["accepted_at"].int64()  // 11-01: the computer's own clock, for Outbox.swift
+        if action == "send", accepted > 0 {
+            notes[SendNote.acceptedAt] = .number(Double(accepted))
+            changed = true
+        }
+        if changed { done.body = jsonText(.object(notes)) }
+        await save(done, synthetic)
     }
 
     /// Looks for a Claude send in its record for about 25 s, as the web does after Enter: read, queued, or still
@@ -717,40 +756,91 @@ public final class ChatModel {
     }
 
     func save(_ record: Submission, _ synthetic: Bool) async {
-        if synthetic { demo[record.request] = record } else { await store?.saveSubmission(record) }
-        guard key == record.key else { return }
-        let before = submissions.first { $0.request == record.request }?.label
-        submissions = ([record] + submissions.filter { $0.request != record.request }).sorted { $0.created > $1.created }
-        if before == "提交中" || before == nil, ["已接收", "已送达", "已排队"].contains(record.label), record.action == "send" {
-            acknowledged += 1
-            acknowledgedSend(record)
-        }
-    }
-
-    /// 核对: reads the receipt of [record] again; never sends it again.
-    public func check(_ record: Submission) {
-        guard let client, key == record.key else { return }
-        Task { [weak self] in
-            do {
-                try await self?.reconcile(record, client)
-            } catch {
-                if self?.key == record.key { self?.error = "核对失败，原提交仍保留；不会自动重发。" }
+        // 11-26: a copy the user took off the list stays off, even when a receipt already on its way arrives after the
+        // tap (核对, or the check a conversation does when it opens). Sending the words again makes a new request id.
+        if key == record.key, record.label != removedLabel,
+           submissions.contains(where: { $0.request == record.request && $0.label == removedLabel }) { return }
+        // The list takes the new words before the write: a save that comes in while this one waits for the store then
+        // sees them (the removed copy stays removed).
+        if key == record.key {
+            let before = submissions.first { $0.request == record.request }?.label
+            submissions = ([record] + submissions.filter { $0.request != record.request }).sorted { $0.created > $1.created }
+            if before == "提交中" || before == nil, ["已接收", "已送达", "已排队"].contains(record.label), record.action == "send" {
+                acknowledged += 1
+                acknowledgedSend(record)
             }
         }
+        if synthetic { demo[record.request] = record } else { await store?.saveSubmission(record) }
     }
 
-    func reconcile(_ record: Submission, _ client: RelayClient) async throws {
+    /// 核对: reads the receipt of [record] again; never sends it again. While it runs the bar and the sheet show
+    /// 正在核对…; the result (已核对：…) stays a few seconds (handoff 11-26 §3.1 point 5).
+    public func check(_ record: Submission) {
+        guard let client, key == record.key, !checking.contains(record.request) else { return }
+        checking.insert(record.request)
+        error = nil
+        Task { [weak self] in
+            guard let self else { return }
+            var note: String?
+            do {
+                note = try await self.reconcile(record, client)
+            } catch {
+                if self.key == record.key { self.error = "核对失败，原提交仍保留；不会自动重发。" }
+            }
+            self.checking.remove(record.request)
+            if let note { self.noteCheck(record.request, note) }
+        }
+    }
+
+    /// Keeps 核对's result under its send for a few seconds (handoff 11-26 §3.1 point 5).
+    func noteCheck(_ request: String, _ text: String) {
+        checkNotes[request] = text
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, self.checkNotes[request] == text else { return }
+            self.checkNotes[request] = nil
+        }
+    }
+
+    /// Whether 核对 found no record and the computer did not say whether the request is missing: the copy shows
+    /// 电脑查不到这条的记录，可能没收到 and offers 恢复草稿 / 移除 (handoff 11-26 §3.1 point 3).
+    public func mayBeMissing(_ record: Submission) -> Bool {
+        jsonValue(record.body)[SendNote.receiptUnknown].bool()
+    }
+
+    /// What 核对 came to, as the one line it shows (handoff 11-26 §3.1 point 5).
+    @discardableResult
+    func reconcile(_ record: Submission, _ client: RelayClient) async throws -> String {
         let synthetic = synthetic
         if record.app == "claude" && record.action == "send" {
-            // No receipts for Claude: what its record shows decides, and nothing is sent again.
-            guard let found = try await claudeCheck(record, client) else { return }
+            // 11-26: Claude's sends share the computer's delivery record with Codex. Ask the receipt first: `missing`
+            // means the computer never got it, and it can be sent again under the same request id. A receipt that
+            // cannot be read (an older computer without that address) is no reason to fail the check; its own record
+            // is asked as before.
+            let receipt = try? await client.receipt(device: record.device, app: record.app, chat: record.chat,
+                                                    request: record.request, catalog: catalog)
+            if let receipt, receipt["state"].string() == "unknown", receipt["missing"].bool() {
+                var next = record
+                var notes = jsonValue(record.body).object
+                if notes[SendNote.receiptUnknown] != nil {
+                    notes[SendNote.receiptUnknown] = nil
+                    next.body = jsonText(.object(notes))
+                }
+                next.label = missingLabel
+                await save(next, synthetic)
+                return checkResultText(state: "unknown", missing: true, label: missingLabel)
+            }
+            // No receipt state to go by: what Claude's record shows decides, and nothing is sent again.
+            guard let found = try await claudeCheck(record, client) else {
+                return claudeCheckResultText(delivered: false, queued: false)
+            }
             let label = found["delivered"].bool() ? "已送达" : found["queued"].bool() ? "已排队" : record.label
             if label != record.label {
                 var next = record
                 next.label = label
                 await save(next, synthetic)
             }
-            return
+            return claudeCheckResultText(delivered: found["delivered"].bool(), queued: found["queued"].bool())
         }
         let response = try await client.receipt(device: record.device, app: record.app, chat: record.chat, request: record.request,
                                                 catalog: catalog)
@@ -760,12 +850,18 @@ public final class ChatModel {
         // `queued` and `stage` at the top (handoff 3.4).
         let detail = response["result"].isObject ? response["result"] : response
         let state = response["state"].string()
+        // 11-26: `missing` next to `state: unknown` says the delivery records have no such request id at all (§8.1).
+        let missing = response["missing"].bool() || detail["missing"].bool()
         var label = catalog.isLegacy(record.app)
-            ? receiptLabel(state: state, result: response["result"], action: record.action)
-            : agentReceiptLabel(state: state, result: detail, action: record.action)
+            ? receiptLabel(state: state, result: response["result"], action: record.action, missing: missing)
+            : agentReceiptLabel(state: state, result: detail, action: record.action, missing: missing)
+        // 11-26 (§3.1 point 3): unknown without `missing` is no evidence either way, so a copy that already had words
+        // keeps them; before, an old computer pulled 已接收 and 电脑没收到 back to 待确认 here.
+        let noEvidence = state == "unknown" && !missing && label == Hints.text(unknownReceiptLabel)
+        if noEvidence { label = record.label }
         if record.action == "stop" {
-            let state = try await client.control(device: record.device, app: record.app, chat: record.chat, catalog: catalog)
-            switch state.turns[record.turn] {
+            let fresh = try await client.control(device: record.device, app: record.app, chat: record.chat, catalog: catalog)
+            switch fresh.turns[record.turn] {
             case "interrupted": label = "已停止"
             case "completed": label = "该轮已完成"
             case "failed": label = "该轮失败"
@@ -773,8 +869,21 @@ public final class ChatModel {
             }
         }
         var next = record
-        next.label = label
-        await save(next, synthetic)
+        var notes = jsonValue(record.body).object
+        var bodyChanged = false
+        // Only a send still waiting on its result says so: 已接收 keeps its own words without the "may not have
+        // arrived" line, and 电脑没收到 already says the same thing more strongly.
+        let unsure = noEvidence && record.action == "send" && label == unknownReceiptLabel
+        if unsure {
+            if notes[SendNote.receiptUnknown] == nil { notes[SendNote.receiptUnknown] = .bool(true); bodyChanged = true }
+        } else if notes[SendNote.receiptUnknown] != nil {
+            notes[SendNote.receiptUnknown] = nil
+            bodyChanged = true
+        }
+        if label != record.label { next.label = label }
+        if bodyChanged { next.body = jsonText(.object(notes)) }
+        if label != record.label || bodyChanged { await save(next, synthetic) }
+        return checkResultText(state: state, missing: missing, label: label)
     }
 
     /// 移除: takes a send that went nowhere off the list; the computer is not asked anything.
@@ -782,8 +891,75 @@ public final class ChatModel {
         guard record.label != "提交中" else { return }
         var removed = record
         removed.label = removedLabel
+        checkNotes[record.request] = nil
         let synthetic = synthetic
         Task { [weak self] in await self?.save(removed, synthetic) }
+    }
+
+    /// 重发 for a send the computer says it never got (handoff 11-26 §3.1 point 2): the same request id and the same
+    /// request body go out again. The computer de-duplicates by the id and the whole request (codex_control._begin),
+    /// so a first copy that arrives late cannot make a second message. The copy goes back to 提交中, and the usual
+    /// receipt then words it. Only a tap sends; nothing is resent by itself.
+    public func resend(_ record: Submission) {
+        guard let key, let client, key == record.key, record.action == "send",
+              record.label == missingLabel else { return }
+        guard foreground, ready, !inFlight.contains(key), control.available || sendsWhileAway(key.app) else { return }
+        let stored = jsonValue(record.body)
+        // The copy's own request id must be the body's: that id is what the computer de-duplicates by.
+        guard stored["request_id"].string() == record.request else { return }
+        var fields = stored.object
+        for note in SendNote.all { fields[note] = nil }
+        fields["request_id"] = .string(record.request)
+        let body = JSONValue.object(fields)
+        var copy = record
+        copy.label = "提交中"
+        copy.body = jsonText(body)
+        let attempt = copy
+        inFlight.insert(key)
+        submitting = true
+        error = nil
+        checkNotes[record.request] = nil
+        let synthetic = synthetic
+        let binding = token
+        let slot = "resend:" + record.request
+        let give = backgroundTime { [weak self] in self?.sends[slot]?.cancel() }
+        sends[slot] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.inFlight.remove(key)
+                if self.key == key { self.submitting = false }
+                self.sends[slot] = nil
+                give()
+            }
+            await self.save(attempt, synthetic)
+            do {
+                let result = try await client.command(device: key.device, app: key.app, route: "send", body: body,
+                                                      catalog: self.catalog)
+                try await self.applyReply(result, attempt, action: "send", key: key, client: client, synthetic: synthetic)
+                if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat, catalog: self.catalog),
+                   binding == self.token, self.foreground, self.key == key {
+                    self.take(fresh, key)
+                }
+            } catch {
+                var kept = attempt
+                if let failure = error as? ServiceFailure {
+                    if failure.notSubmitted {
+                        var notes = body.object
+                        notes[SendNote.sendError] = .string(failure.message)
+                        if !failure.draft.isEmpty { notes[SendNote.desktopDraft] = .string(failure.draft) }
+                        kept.body = jsonText(.object(notes))
+                        kept.label = "未接收"
+                    } else {
+                        // 已提交过，结果尚未确认 (codex_control._begin): the computer's own sentence, and it waits again.
+                        kept.label = unknownReceiptLabel
+                        self.error = failure.message
+                    }
+                } else {
+                    kept.label = unknownReceiptLabel
+                }
+                await self.save(kept, synthetic)
+            }
+        }
     }
 
     /// 换掉电脑上的「…」再发 (web resendReplacing): Claude turned the message away because its box on the computer

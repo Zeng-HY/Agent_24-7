@@ -129,14 +129,20 @@ struct SelectTextSheet: View {
 }
 
 /// 待核对发送记录 (web workspace-ui.js; Android PendingSheet): sends whose result is not confirmed yet. 核对状态
-/// reads the receipt again; 恢复提交快照 puts a send back in an empty box. Nothing is sent again.
+/// reads the receipt again; 恢复提交快照 puts a send back in an empty box. 11-26 (handoff §3.1 point 6): a copy the
+/// computer has no record of can be sent again under its own request id, and a send whose result is unknown can be
+/// put back in the box (as a new request) or taken off the list. Nothing is sent again by itself.
 struct PendingSheet: View {
     let model: AppModel
     @Environment(\.dismiss) private var dismiss
+    /// 待确认's 移除 asks first (handoff 11-26 §3.1 point 4).
+    @State private var removing: Submission?
 
     var body: some View {
         let chat = model.conversation
-        let rows = chat.submissions.filter { ["提交中", "送达状态待确认", "已接收", "已排队"].contains($0.label) }
+        let rows = chat.submissions.filter {
+            ["提交中", unknownReceiptLabel, missingLabel, "已接收", "已排队"].contains($0.label)
+        }
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -149,23 +155,49 @@ struct PendingSheet: View {
                             .foregroundStyle(Palette.muted)
                     }
                     ForEach(rows) { record in
+                        let missing = record.label == missingLabel
+                        let unsure = record.action == "send" && !missing && chat.mayBeMissing(record)
                         VStack(alignment: .leading, spacing: 10) {
                             Text(record.label)
                                 .buttonFont()
-                                .foregroundStyle(record.label == "送达状态待确认" ? Palette.warning : Palette.ink)
+                                .foregroundStyle(missing || record.label == unknownReceiptLabel ? Palette.warning : Palette.ink)
                             Text(record.text)
                                 .scaledFont(15, relativeTo: .callout, lineHeight: 1.6)
                                 .foregroundStyle(Palette.ink)
                                 .lineLimit(4)
-                            HStack(spacing: 8) {
-                                Button("核对状态") { chat.check(record) }
-                                    .buttonStyle(PillStyle())
-                                    .disabled(chat.submitting)
-                                if record.action == "send" {
-                                    Button("恢复提交快照") { chat.restore(record) }
-                                        .buttonStyle(PillStyle(kind: .text))
-                                        .disabled(!chat.draft.isEmpty || chat.submitting)
+                            if missing {
+                                Text("电脑没收到这条消息，可以重发。")
+                                    .noteFont()
+                                    .foregroundStyle(Palette.muted)
+                            } else if unsure {
+                                Text("电脑查不到这条的记录，可能没收到。")
+                                    .noteFont()
+                                    .foregroundStyle(Palette.muted)
+                            }
+                            if chat.checking.contains(record.request) {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("正在核对…")
+                                        .noteFont()
+                                        .foregroundStyle(Palette.muted)
                                 }
+                                .accessibilityElement(children: .combine)
+                            } else if let note = chat.checkNotes[record.request] {
+                                Text(note)
+                                    .noteFont()
+                                    .foregroundStyle(Palette.muted)
+                            }
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 8) { actions(chat: chat, record: record, missing: missing, unsure: unsure) }
+                                VStack(alignment: .leading, spacing: 8) { actions(chat: chat, record: record, missing: missing, unsure: unsure) }
+                            }
+                            // 11-26: the button stays visible when the box already has words; this says why it
+                            // cannot be used.
+                            if !chat.draft.isEmpty, missing || unsure {
+                                Text("输入框里有字，先清空才能恢复")
+                                    .noteFont()
+                                    .foregroundStyle(Palette.muted)
                             }
                         }
                         .padding(16)
@@ -192,6 +224,47 @@ struct PendingSheet: View {
             }
         }
         .presentationBackground(Palette.sheet)
+        .alert("只从手机上去掉这条？", isPresented: removingShown, presenting: removing) { record in
+            Button("取消", role: .cancel) {}
+            Button("移除", role: .destructive) { chat.dismiss(record) }
+        } message: { _ in
+            Text("只从手机上去掉这条。如果电脑其实收到了，它仍会出现在对话里。")
+        }
+    }
+
+    private var removingShown: Binding<Bool> {
+        Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
+    }
+
+    @ViewBuilder
+    private func actions(chat: ChatModel, record: Submission, missing: Bool, unsure: Bool) -> some View {
+        Button("核对状态") { chat.check(record) }
+            .buttonStyle(PillStyle())
+            .disabled(chat.submitting)
+        if record.action == "send", missing {
+            Button("重发") { chat.resend(record) }
+                .buttonStyle(PillStyle(kind: .text))
+                .disabled(chat.submitting || !(chat.control.available || sendsWhileAway(record.app)))
+        }
+        if record.action == "send" {
+            if missing || unsure {
+                // Its words go back in the box and this copy leaves the list, so sending them is a new request; the
+                // old request id is never posted again from here.
+                Button("恢复草稿") { chat.restoreAndRemove(record) }
+                    .buttonStyle(PillStyle(kind: .text))
+                    .disabled(!chat.draft.isEmpty || chat.submitting)
+            } else {
+                Button("恢复提交快照") { chat.restore(record) }
+                    .buttonStyle(PillStyle(kind: .text))
+                    .disabled(!chat.draft.isEmpty || chat.submitting)
+            }
+        }
+        if missing || record.label == unknownReceiptLabel {
+            Button("移除") {
+                if missing { chat.dismiss(record) } else { removing = record }
+            }
+            .buttonStyle(PillStyle(kind: .text))
+        }
     }
 }
 
