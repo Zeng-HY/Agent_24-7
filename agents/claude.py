@@ -686,10 +686,10 @@ class ClaudeAgent(Agent):
         offset = chats.file_size(chats.conv_path(item))
         request_id = str(body.get("request_id", ""))
         recorded = False
-        if codex_control.recordable(request_id):
+        if images or codex_control.recordable(request_id):
             # 11-26: every Claude send keeps a delivery record, words or pictures. The phone's 核对 reads it (so a
             # message that did arrive is never reported as 没收到), and a resend of the same number gets this result
-            # back instead of reaching Claude twice.
+            # back instead of reaching Claude twice. A picture send always began its record, before its pictures.
             previous = handler.server.codex._begin(request_id, tid, body)
             if previous:
                 return previous
@@ -797,20 +797,21 @@ class ClaudeAgent(Agent):
                 queued = self._hook_queue_send(handler, item, tid, text, images, body)
                 if queued is not None:
                     return queued
-        if images:
-            for image in images:
-                image["used"] = True
-                handler.server.codex._write_meta(image)
         # 11-26: every Claude send keeps a delivery record, words or pictures. The phone's 核对 reads it (so a message
         # that did arrive is never reported as 没收到), and a resend of the same number gets the first result back
-        # instead of reaching Claude twice.
+        # instead of reaching Claude twice. A picture send always began its record, as before; a word-only send does
+        # when the phone gave it a number the record can take (an old client's send without one still goes).
         request_id = str(body.get("request_id", ""))
         recorded = False
-        if codex_control.recordable(request_id):
+        if images or codex_control.recordable(request_id):
             previous = handler.server.codex._begin(request_id, tid, body)
             if previous:
                 return previous
             recorded = True
+        if images:
+            for image in images:
+                image["used"] = True
+                handler.server.codex._write_meta(image)
         replace = {"replace": body["replace_draft"][:2000]} if isinstance(body.get("replace_draft"), str) else {}
         try:
             result = (

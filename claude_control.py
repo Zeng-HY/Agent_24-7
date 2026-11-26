@@ -1315,7 +1315,7 @@ class Controller:
             item=chats.find('claude',tid);text=chats.clean_text(text)
             import codex_control
             deliveries=getattr(self,'deliveries',None);recorded=False
-            if deliveries is not None and codex_control.recordable(request_id):
+            if deliveries is not None:
                 prior=deliveries._begin(request_id,tid,{'id':tid,'request_id':request_id,'intent':'steer',
                                                        'expected_turn':expected_anchor,'text':text})
                 if prior:return prior
