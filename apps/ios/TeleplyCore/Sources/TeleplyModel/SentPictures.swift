@@ -36,7 +36,7 @@ public func sentPictures(messages: [Message], records: [JSONValue]) -> [String: 
     let users = messages.filter { $0.role == "user" }
     var taken: [String: [SentPicture]] = [:]
     for record in records.reversed() {
-        let pictures = record["images"].array.compactMap(SentPicture.init)
+        let pictures = record["images"].array.compactMap { SentPicture($0) }
         guard !pictures.isEmpty else { continue }
         let request = record["request_id"].string()
         var found = request.isEmpty ? nil : users.last { taken[$0.id] == nil && $0.request == request }
