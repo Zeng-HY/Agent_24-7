@@ -148,7 +148,7 @@ public final class DemoWorld: Sendable {
         // The cards as far as they have been answered; a conversation the demo just made has nothing waiting.
         let made = state.created.contains { $0.row["id"].string() == chat }
         switch app {
-        case _ where made || fixtureRunning:
+        case _ where made || fixtureRunning || chat == SendDemo.chat:
             fields["prompt"] = nil
             fields["interactions"] = []
             fields["questions"] = []
@@ -478,7 +478,7 @@ public final class DemoWorld: Sendable {
                 }
                 return .object(fields)
             }
-            let extra: [JSONValue] = site == nil && filesDemo ? [DemoData.previewRow] : []
+            let extra: [JSONValue] = (site == nil && filesDemo ? [DemoData.previewRow] : []) + (SendDemo.on ? [SendDemo.row] : [])
             return (Array(state.created.map(\.row).reversed()) + listed + extra).filter { row in
                 let key = row["app"].string() + ":" + row["id"].string()
                 return !state.archived.contains(key) && !state.deleted.contains(key)
@@ -1026,6 +1026,8 @@ enum DemoData {
         // 文件预览示例 (file-preview design §6.1), listed only with -TeleplyDemoFiles: names, paths and contents all
         // made up.
         if chat == "file-preview" { return previewMessages }
+        // 发送恢复示例, listed only with -TeleplyDemoSend (handoff 11-26 §3.2): a message with pictures of its own.
+        if chat == SendDemo.chat, SendDemo.on { return SendDemo.messages }
         if app == "claude" && chat == "claude-next" {
             let plan: JSONValue = .array([("读现有测试", "completed"), ("补发布说明的测试", "completed"), ("跑一遍全部测试", "in_progress"), ("更新说明文档", "pending")]
                 .map { ["text": .string($0.0), "status": .string($0.1)] })

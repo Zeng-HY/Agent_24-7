@@ -9,6 +9,8 @@ struct InputArea: View {
     let model: AppModel
     /// The question bar's tap: to the first card in the timeline.
     var onAsk: () -> Void = {}
+    /// 待确认's 移除 asks first: it takes the copy off the phone only (handoff 11-26 §3.1 point 4).
+    @State private var removing: Submission?
 
     var body: some View {
         let chat = model.conversation
@@ -19,20 +21,8 @@ struct InputArea: View {
             if let last, last.action == "send", last.label == "未接收" {
                 RejectedBar(model: model, record: last)
             }
-            if let last, last.label == "送达状态待确认" {
-                HStack(spacing: 4) {
-                    Text("上一条送达状态待确认")
-                        .noteFont()
-                        .foregroundStyle(Palette.noteInk)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                    Button("核对待发送消息") { chat.check(last) }
-                        .buttonStyle(PillStyle(kind: .text, minHeight: 36))
-                        .disabled(chat.submitting)
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 4)
-                .background(Palette.noteFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            if let last, last.action == "send", last.label == unknownReceiptLabel || last.label == missingLabel {
+                RecoveryBar(model: model, record: last, removing: $removing)
             }
             ComposerCard(model: model)
         }
@@ -40,6 +30,107 @@ struct InputArea: View {
         .padding(.bottom, 8)
         .frame(maxWidth: 820)
         .animation(.easeOut(duration: 0.2), value: chat.submissions.first?.label)
+        .alert("只从手机上去掉这条？", isPresented: removingShown, presenting: removing) { record in
+            Button("取消", role: .cancel) {}
+            Button("移除", role: .destructive) { chat.dismiss(record) }
+        } message: { _ in
+            Text("只从手机上去掉这条。如果电脑其实收到了，它仍会出现在对话里。")
+        }
+    }
+
+    private var removingShown: Binding<Bool> {
+        Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
+    }
+}
+
+/// A send still to be settled (handoff 11-26 §3.1): 送达状态待确认 when the computer said nothing either way, and
+/// 电脑没收到 when its delivery records have no such request id. 待确认 can be read again; once the computer says it
+/// cannot tell, or says nothing of the send, its words can go back in the box (as a new request) or the copy can be
+/// removed. 电脑没收到 can also go again under its own request id, which the computer de-duplicates. Nothing here is
+/// sent by itself.
+private struct RecoveryBar: View {
+    let model: AppModel
+    let record: Submission
+    @Binding var removing: Submission?
+
+    var body: some View {
+        let chat = model.conversation
+        let missing = record.label == missingLabel
+        let unsure = !missing && chat.mayBeMissing(record)
+        VStack(alignment: .leading, spacing: 2) {
+            if missing {
+                Text("电脑没收到这条消息，可以重发。")
+                    .noteFont()
+                    .foregroundStyle(Palette.warning)
+                    .lineLimit(3)
+            } else {
+                Text("上一条送达状态待确认")
+                    .noteFont()
+                    .foregroundStyle(Palette.noteInk)
+            }
+            if unsure {
+                Text("电脑查不到这条的记录，可能没收到。")
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+            }
+            if chat.checking.contains(record.request) {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在核对…")
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                }
+                .padding(.vertical, 2)
+                .accessibilityElement(children: .combine)
+            } else if let note = chat.checkNotes[record.request] {
+                Text(note)
+                    .noteFont()
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(3)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 2) { actions(chat: chat, missing: missing, unsure: unsure) }
+                VStack(alignment: .leading, spacing: 0) { actions(chat: chat, missing: missing, unsure: unsure) }
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.noteFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func actions(chat: ChatModel, missing: Bool, unsure: Bool) -> some View {
+        if missing {
+            // The same request id and the same request body go again; the computer de-duplicates by both.
+            Button("重发") { chat.resend(record) }
+                .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                .disabled(chat.submitting || !(chat.control.available || sendsWhileAway(record.app)))
+                .accessibilityLabel(Text("用原来的请求编号重发这条消息"))
+            if chat.draft.isEmpty {
+                Button("恢复草稿") { chat.restoreAndRemove(record) }
+                    .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                    .disabled(chat.submitting)
+            }
+            Button("移除") { chat.dismiss(record) }
+                .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                .accessibilityLabel(Text("移除这条电脑没收到的记录"))
+        } else {
+            Button("核对待发送消息") { chat.check(record) }
+                .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                .disabled(chat.submitting)
+            if unsure, chat.draft.isEmpty {
+                Button("恢复草稿") { chat.restoreAndRemove(record) }
+                    .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                    .disabled(chat.submitting)
+            }
+            Button("移除") { removing = record }
+                .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                .accessibilityLabel(Text("移除这条待确认的记录"))
+        }
     }
 }
 

@@ -385,8 +385,9 @@ struct UserBubble: View {
 
     private var bubble: some View {
         let dark = scheme == .dark
-        // With its pictures shown, their [图片] mark goes from the words.
-        let words = pictures.isEmpty ? message.text : picturedWords(message.text) ?? message.text
+        // With its pictures shown, their marks go from the words: Claude's [图片] prefix and DeepSeek's [N 张图片]
+        // suffix (11-26: a message may carry its own pictures too, handoff §3.2).
+        let words = pictures.isEmpty ? message.text : wordsWithoutPictureMarks(message.text)
         return TrailingFraction(fraction: 0.88) {
             VStack(alignment: .leading, spacing: 8) {
                 if !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
