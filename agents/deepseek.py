@@ -246,7 +246,6 @@ class DeepSeekAgent(Agent):
         return catalog[:limit], catalog
 
     def notify_poll(self, notifier, found, item: dict) -> bool:
-        from datetime import datetime
         import time
         import deepseek_control
         import notify
@@ -298,7 +297,7 @@ class DeepSeekAgent(Agent):
             if waiting is not None:
                 waiting.pop(conv, None)
             started = notify.turn_start(previous.get("since"), starts, now) or None
-            notifier._running(item, {"started": datetime.fromtimestamp(started).isoformat() if started else "",
+            notifier._running(item, {"started": notify.time_text(started) if started else "",
                                      "key": str(starts[-1]) if starts else "", "action": action})
             if action and hasattr(notifier, "_step"):
                 notifier._step(item, {"action": action}, notifier.relay_on())

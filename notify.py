@@ -52,6 +52,7 @@ SNAPSHOT_AGAIN = 60       # an empty snapshot, sent again once this later, for a
 STEP_GAP = 15             # seconds between two progress events of one conversation (0.6.4)
 APPROVAL_EVERY = 12       # seconds between desktop reads of a running Codex conversation's approvals (11-16)
 LIMIT = 30              # conversations of each app looked at, newest first (and any still under way: _followed)
+LATEST_TIME = 4102444800  # 2100-01-01 00:00:00 UTC: a turn's time later than this is a placeholder, not a time (11-27)
 DEFAULT_SERVER = "https://api.day.app"
 # The Codex threads a person talks in: the desktop's and the command line's, started by the user, by this service's
 # new-conversation button (no thread_source) or by another conversation. Not: codex exec runs (the translation
@@ -152,6 +153,23 @@ def used_text(started: int, ended: int) -> str:
         return f"用了 {minutes} 分钟"
     hours, rest = divmod(minutes, 60)
     return f"用了 {hours} 小时" + (f" {rest} 分钟" if rest else "")
+
+
+def time_text(seconds) -> str:
+    """A turn's time as the ISO text a running record is told with; '' when there is none.
+
+    0 is no time, and so is one no clock has: a 0001-01-01 placeholder reads as a huge negative number on 11-27,
+    and datetime.fromtimestamp refuses those on Windows. Such a turn is told as one 遥应 noticed itself."""
+    try:
+        value = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0 or value > LATEST_TIME:
+        return ""
+    try:
+        return datetime.fromtimestamp(value).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return ""
 
 
 def notice_state(end: dict) -> str:

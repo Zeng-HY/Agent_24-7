@@ -54,6 +54,8 @@ TAIL_BYTES = 256 << 10
 LIST_SECONDS = 2.0        # at most one database read this often, even when it changed
 CACHE_LIMIT = 8           # conversations kept parsed
 FULL_CACHE_LIMIT = 4      # full transcripts kept for cut answers
+EPOCH_1971 = 31536000     # 1971-01-01 00:00:00 UTC: a record's time before this is a placeholder, not a time
+LATEST_TIME = 4102444800  # 2100-01-01 00:00:00 UTC: nothing this program shows a timer from is later (11-27)
 
 # The app's own local service (the same one the user's ag.py drives).
 SERVICE = "exa.language_server_pb.LanguageServerService"
@@ -195,12 +197,15 @@ def _one_line(text, limit: int = TOOL_VALUE_LIMIT) -> str:
 
 
 def _seconds(value) -> int:
-    """A recorded time as Unix seconds; 0 when it is not one. The record keeps 7 fraction digits."""
+    """A recorded time as Unix seconds; 0 when it is not one. The record keeps 7 fraction digits.
+    A placeholder such as 0001-01-01 (it was in a real row on 11-27) is no time: the answer is 0, never a negative
+    number that Windows' datetime.fromtimestamp refuses later."""
     text = _TIME_FRACTION.sub(r"\1", str(value or ""))
     try:
-        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
-    except (TypeError, ValueError):
+        found = int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError, OSError, OverflowError):
         return 0
+    return found if found >= EPOCH_1971 else 0
 
 
 def _iso(value) -> str:
@@ -210,12 +215,14 @@ def _iso(value) -> str:
 
 
 def _millis(value) -> int:
-    """A recorded time as Unix milliseconds, so rows less than a second apart still sort correctly."""
+    """A recorded time as Unix milliseconds, so rows less than a second apart still sort correctly.
+    Before 1971 (a placeholder, not a time) the answer is 0, as in _seconds."""
     text = _TIME_FRACTION.sub(r"\1", str(value or ""))
     try:
-        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000)
-    except (TypeError, ValueError):
+        found = int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000)
+    except (TypeError, ValueError, OSError, OverflowError):
         return 0
+    return found if found >= EPOCH_1971 * 1000 else 0
 
 
 def _text(value) -> str:
@@ -1931,7 +1938,7 @@ class AntigravityAgent(Agent):
         return recent, full
 
     def notify_poll(self, notifier, found, item: dict) -> bool:
-        from datetime import datetime
+        import notify
         conv = (self.id, str(item.get("id") or ""))
         status = item.get("status") or "unknown"
         initial = conv not in notifier.ended
@@ -1961,7 +1968,7 @@ class AntigravityAgent(Agent):
             if notifier.waiting.pop(conv, None) is not None:
                 notifier.reported_running.discard(conv)
             started = int(item.get("turn_started") or 0)
-            started_iso = datetime.fromtimestamp(started).isoformat() if started else ""
+            started_iso = notify.time_text(started)
             action = STEP_NAMES.get(_last_tool_name(path), "") if path is not None else ""
             notifier._running(item, {"started": started_iso, "key": str(item.get("updated") or ""),
                                      "action": action})

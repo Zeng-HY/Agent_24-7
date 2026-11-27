@@ -112,6 +112,19 @@ class TurnEnd(unittest.TestCase):
         self.assertEqual(notify.turn_end("claude", [failed.encode(), side.encode()])["state"], "failed")
 
 
+class TurnTime(unittest.TestCase):
+    """11-27: the running record is told a turn's time as ISO text. A value no clock has (a 0001-01-01 placeholder
+    read as a huge negative number on this computer) is no time, and Windows' datetime.fromtimestamp never sees it."""
+
+    def test_a_placeholder_time_is_no_time(self):
+        for value in (0, None, "", "not a number", -62135596800, 4102444801):
+            self.assertEqual(notify.time_text(value), "", value)
+
+    def test_a_real_time_is_the_iso_text_it_was(self):
+        self.assertEqual(notify.time_text(1767323000), datetime.fromtimestamp(1767323000).isoformat())
+        self.assertEqual(notify.time_text(4102444800), datetime.fromtimestamp(4102444800).isoformat())
+
+
 class Watcher(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

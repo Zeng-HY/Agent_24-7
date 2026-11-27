@@ -412,13 +412,13 @@ class TestingAgent(Agent):
         return rows[:limit], rows
 
     def notify_poll(self, notifier, found, item: dict) -> bool:
-        from datetime import datetime
+        import notify
         conv = (self.id, item["id"])
         status = item.get("status", "unknown")
         if status == "running":
             notifier.waiting.pop(conv, None)
             ts = int(item.get("turn_started") or 0)
-            started_iso = datetime.fromtimestamp(ts).isoformat() if ts else ""
+            started_iso = notify.time_text(ts)
             step = item.get("step", "")
             notifier._running(item, {"started": started_iso, "key": str(ts), "action": step})
             if step:

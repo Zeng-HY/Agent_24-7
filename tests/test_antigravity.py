@@ -447,6 +447,41 @@ class NotifyTests(Base):
         self.assertEqual(notifier.ran[0]["action"], "edit")
 
 
+class PlaceholderTimeTests(Base):
+    """11-27 10:39: one row's last input time was a placeholder (0001-01-01). It read as a huge negative number, and
+    Windows' datetime.fromtimestamp refused it with OSError [Errno 22] in the notify thread (caught and logged as a
+    read error). A time before 1971 is no time at all."""
+
+    def test_a_placeholder_time_is_no_time(self):
+        for value in ("0001-01-01 00:00:00.0000000", "0001-01-01 00:00:00.0000000+08:00",
+                      "1969-12-31 23:59:59+00:00", "1970-01-01 00:00:00+00:00", "", None, "不是时间"):
+            self.assertEqual(antigravity._seconds(value), 0, value)
+            self.assertEqual(antigravity._millis(value), 0, value)
+
+    def test_a_real_time_is_still_read(self):
+        text = "2026-11-20 09:59:00.0000001+08:00"
+        self.assertEqual(antigravity._seconds(text), epoch(text))
+        self.assertEqual(antigravity._millis(text), millis(text))
+
+    def test_the_notice_thread_meets_it_without_an_error(self):
+        self.build(rows=[fake.row("a", status="CASCADE_RUN_STATUS_RUNNING",
+                                  last_user_input_time="0001-01-01 00:00:00.0000000+08:00")],
+                   transcripts={"a": [fake.record(1, "PLANNER_RESPONSE", "MODEL", "开始")]})
+        agent = antigravity.AGENT()
+        notifier = FakeNotifier()
+        item = agent.notify_conversations(10)[0][0]
+        self.assertEqual(item["turn_started"], 0)
+        agent.notify_poll(notifier, None, item)  # this is the call that raised: datetime.fromtimestamp(-62135596800)
+        self.assertEqual(notifier.ran[0]["started"], "")  # no time: the island says "not from the record"
+        fake.write(self.home, [fake.row("a", status="CASCADE_RUN_STATUS_IDLE",
+                                        last_user_input_time="0001-01-01 00:00:00.0000000+08:00")],
+                   transcripts={"a": [fake.record(1, "PLANNER_RESPONSE", "MODEL", "开始")]})
+        antigravity.reset()
+        agent.notify_poll(notifier, None, agent.notify_conversations(10)[0][0])
+        self.assertEqual([end["state"] for end in notifier.told], ["done"])
+        self.assertGreater(notifier.told[0]["started"], 0)  # 遥应 noticed it itself, as before
+
+
 class RouteTests(Base):
     def setUp(self) -> None:
         super().setUp()
