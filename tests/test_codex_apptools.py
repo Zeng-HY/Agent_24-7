@@ -1342,6 +1342,98 @@ class RunningCommandStateTests(AppToolsBridgeTests):
         self.assertNotIn("kill_command", body["capability_notes"])
 
 
+class ServerMsAndPhoneTimingTests(AppToolsBridgeTests):
+    """11-27 S3: protocol-2 send answers carry server_ms; client_prev writes one numbers-only line."""
+
+    def _server(self, logs: list | None = None):
+        self.legacy._codex_hooks = _FakeHooks()
+        self.legacy._apptools_bridge = self.bridge
+        return SimpleNamespace(
+            machine={"name": "测试电脑", "apps": ["codex"], "voice": False},
+            cfg={"token": "secret"},
+            codex=self.legacy,
+            log=SimpleNamespace(write=(logs.append if logs is not None else (lambda t: None))),
+        )
+
+    def _call(self, server, path: str, body: dict, protocol: int = 2):
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-ms"]):
+            ca.reset_route_cache()
+            return _call_http(server, "POST", path, body, protocol=protocol)
+
+    def test_codex_send_queue_and_kill_answers_carry_server_ms(self) -> None:
+        server = self._server()
+        code, body = self._call(server, "/api/codex/send", {
+            "id": TID, "request_id": "req-ms-000001", "text": "你好",
+        })
+        self.assertEqual(code, 200)
+        self.assertIsInstance(body["server_ms"], int)
+        self.assertGreaterEqual(body["server_ms"], 0)
+
+        # Old phones (protocol 1) get exactly the old answer
+        _code, old = self._call(server, "/api/codex/send", {
+            "id": TID, "request_id": "req-ms-000002", "text": "老手机",
+        }, protocol=1)
+        self.assertNotIn("server_ms", old)
+
+        # Queue promotion
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        self.bridge.send({"id": TID, "request_id": "req-ms-q00001", "text": "排队", "intent": "queue"})
+        code, promoted = self._call(server, "/api/codex/queue-action", {
+            "id": TID, "request_id": "req-ms-q00002", "message_id": "req-ms-q00001", "action": "promote",
+        })
+        self.assertEqual(code, 200)
+        self.assertIsInstance(promoted["server_ms"], int)
+
+        # Kill command
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"timestamp": TS2, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-run"}}) + "\n")
+            f.write(json.dumps({"timestamp": TS2, "type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "call-ms-1", "input": "Start-Sleep 30",
+            }}) + "\n")
+        code, killed = self._call(server, "/api/agents/codex/kill-command", {"id": TID})
+        self.assertEqual(code, 200)
+        self.assertIsInstance(killed["server_ms"], int)
+
+    def test_client_prev_writes_one_numbers_only_log_line(self) -> None:
+        logs: list[str] = []
+        server = self._server(logs)
+        code, _body = self._call(server, "/api/codex/send", {
+            "id": TID,
+            "request_id": "req-ms-100001",
+            "text": "这条消息的文字不能进日志",
+            "client_sent_ms": 1764200000000,
+            "client_prev": {"request_id": "prev-request-0001", "roundtrip_ms": 1234, "server_ms": 900},
+        })
+        self.assertEqual(code, 200)
+        lines = [line for line in logs if line.startswith("phone timing ")]
+        self.assertEqual(lines, [
+            "phone timing request=prev-req roundtrip_ms=1234 server_ms=900 network_ms=334",
+        ])
+        self.assertNotIn("文字不能进日志", lines[0])
+
+        # A phone-reported server time larger than the round trip is floored at 0
+        logs.clear()
+        self._call(server, "/api/codex/send", {
+            "id": TID, "request_id": "req-ms-100002", "text": "第二次",
+            "client_prev": {"request_id": "prev-two-000001", "roundtrip_ms": 100, "server_ms": 300},
+        })
+        self.assertEqual(
+            [line for line in logs if line.startswith("phone timing ")],
+            ["phone timing request=prev-two roundtrip_ms=100 server_ms=300 network_ms=0"],
+        )
+
+        # Not a number, or no client_prev: nothing written
+        logs.clear()
+        self._call(server, "/api/codex/send", {
+            "id": TID, "request_id": "req-ms-100003", "text": "第三次",
+            "client_prev": {"request_id": "prev-bad-00001", "roundtrip_ms": "很多", "server_ms": 1},
+        })
+        self._call(server, "/api/codex/send", {
+            "id": TID, "request_id": "req-ms-100004", "text": "第四次",
+        })
+        self.assertEqual([line for line in logs if line.startswith("phone timing ")], [])
+
+
 class ChatsDisplayStep1Tests(unittest.TestCase):
     def test_self_delegation_counts_as_own_message_and_other_chat_keeps_origin(self) -> None:
         def make_line(source_id: str, ident: str, text: str) -> bytes:

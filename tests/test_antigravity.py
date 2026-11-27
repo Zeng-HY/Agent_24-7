@@ -524,6 +524,7 @@ class RouteTests(Base):
             handler.do_POST()
             self.assertEqual(sent[0][0], 200)
             self.assertEqual(json.loads(sent[0][1])["text"], "已交给 Antigravity")
+            self.assertIsInstance(json.loads(sent[0][1])["server_ms"], int)
             self.assertEqual(hub.calls("SendUserCascadeMessage")[-1]["body"],
                              {"cascadeId": "a", "items": [{"text": "从手机发的"}]})
 

@@ -1866,8 +1866,18 @@ class AntigravityAgent(Agent):
         except Exception as exc:
             handler._json({"error": str(exc) or "图片没有收到"}, getattr(exc, "status", 400))
 
+    def _with_server_ms(self, handler, started: float, result):
+        """11-27 S3: protocol-2 answers say how long this computer spent; old phones see no change."""
+        import remote
+        ms = remote.server_ms_for(handler, started)
+        if ms is None or not isinstance(result, dict):
+            return result
+        return {**result, "server_ms": ms}
+
     def http_send(self, handler, body: dict) -> None:
         """A message with pictures: every picture is decoded and re-encoded before any of them is sent."""
+        import time
+        started = time.monotonic()
         images = []
         try:
             ids = body.get("attachments")
@@ -1897,7 +1907,7 @@ class AntigravityAgent(Agent):
                     handler.server.codex._write_meta(image)
                 except Exception:
                     pass
-            handler._json(result)
+            handler._json(self._with_server_ms(handler, started, result))
         except ControlError as exc:
             handler._json({"error": str(exc), "not_submitted": True}, exc.status)
         except Exception as exc:

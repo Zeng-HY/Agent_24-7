@@ -773,8 +773,17 @@ class ClaudeAgent(Agent):
                 handler.log.write(traceback.format_exc())
         handler._send(200, json.dumps(reply, ensure_ascii=False).encode("utf-8") if reply else b"", "application/json")
 
+    def _with_server_ms(self, handler, started: float, result):
+        """11-27 S3: protocol-2 answers say how long this computer spent; old phones see no change."""
+        import remote
+        ms = remote.server_ms_for(handler, started)
+        if ms is None or not isinstance(result, dict):
+            return result
+        return {**result, "server_ms": ms}
+
     def chat_send_with_references(self, handler, body: dict) -> dict:
         import time
+        started = time.monotonic()
         tid = str(body.get("id", ""))
         text = str(body.get("text", ""))
         images = []
@@ -796,7 +805,7 @@ class ClaudeAgent(Agent):
             if self._hook_running(handler, item):
                 queued = self._hook_queue_send(handler, item, tid, text, images, body)
                 if queued is not None:
-                    return queued
+                    return self._with_server_ms(handler, started, queued)
         # 11-26: every Claude send keeps a delivery record, words or pictures. The phone's 核对 reads it (so a message
         # that did arrive is never reported as 没收到), and a resend of the same number gets the first result back
         # instead of reaching Claude twice. A picture send always began its record, as before; a word-only send does
@@ -806,7 +815,7 @@ class ClaudeAgent(Agent):
         if images or codex_control.recordable(request_id):
             previous = handler.server.codex._begin(request_id, tid, body)
             if previous:
-                return previous
+                return self._with_server_ms(handler, started, previous)
             recorded = True
         if images:
             for image in images:
@@ -830,7 +839,7 @@ class ClaudeAgent(Agent):
             result["check_text"] = text
         if recorded:
             handler.server.codex._finish(request_id, result)
-        return result
+        return self._with_server_ms(handler, started, result)
 
     def _upload_for_chat(self, handler, tid: str, name: str, raw: bytes) -> dict:
         return handler.server.codex.upload(tid, name, raw, self.id)
@@ -893,6 +902,8 @@ class ClaudeAgent(Agent):
         handler._json({"state": "unknown", "id": tid, "request_id": rid})
 
     def http_send(self, handler, body: dict) -> None:
+        import time
+        started = time.monotonic()
         if body.get("intent") == "steer" and (body.get("expected_turn") or body.get("turn_id")):
             def run():
                 tid = str(body.get("id", ""))
@@ -922,7 +933,7 @@ class ClaudeAgent(Agent):
                 result = handler.server.claude.send_steer(tid, text, expected, str(body.get("request_id", "")), display=display)
                 result = self.steer_receipt(result)
                 result["check_text"] = display
-                return result
+                return self._with_server_ms(handler, started, result)
             self._run_claude_post(handler, "/api/claude/steer", run)
             return
         handler._chat_call(handler._send_with_references, {**body, "app": self.id}, timeout=60)

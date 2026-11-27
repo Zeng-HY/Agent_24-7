@@ -157,6 +157,7 @@ class UnifiedRouteTests(unittest.TestCase):
             code, body = call_api(self.server, "POST", "/api/agents/codex/send", {"id": "c1", "text": "hello", "request_id": "r1"})
             self.assertEqual((code, body["accepted"]), (200, True))
             self.assertIn("accepted_at", body)
+            self.assertIsInstance(body["server_ms"], int)
 
             code, body = call_api(self.server, "POST", "/api/agents/codex/stop", {"id": "c1", "expected_turn": "t1"})
             self.assertEqual((code, body["ok"]), (200, True))
@@ -164,6 +165,7 @@ class UnifiedRouteTests(unittest.TestCase):
 
             code, body = call_api(self.server, "POST", "/api/agents/codex/queue", {"id": "c1", "item_id": "q1", "action": "steer"})
             self.assertEqual((code, body["ok"]), (200, True))
+            self.assertIsInstance(body["server_ms"], int)
             self.assertEqual(self.codex.queue_action.call_args.args[0]["message_id"], "q1")
             self.assertEqual(self.codex.queue_action.call_args.args[0]["action"], "promote")
 
@@ -220,6 +222,7 @@ class UnifiedRouteTests(unittest.TestCase):
 
             code, body = call_api(self.server, "POST", "/api/agents/claude/send", {"id": "cl1", "text": "hello"})
             self.assertEqual((code, body["ok"]), (200, True))
+            self.assertIsInstance(body["server_ms"], int)
 
             code, body = call_api(self.server, "POST", "/api/agents/claude/send", {
                 "id": "cl1", "text": "steer", "intent": "steer", "expected_turn": "anc1", "request_id": "steer-123456",
@@ -227,6 +230,7 @@ class UnifiedRouteTests(unittest.TestCase):
             # 11-24: a steer says where to look for it, as a queued send does; without that the phone never asks again
             self.assertEqual((code, body["steer_requested"], body["pressed"], body["offset"], body["check_text"]),
                              (200, True, True, 42, "steer"))
+            self.assertIsInstance(body["server_ms"], int)
 
             code, body = call_api(self.server, "POST", "/api/agents/claude/stop", {"id": "cl1", "token": "tok-1"})
             self.assertEqual((code, body["ok"]), (200, True))
@@ -265,6 +269,7 @@ class UnifiedRouteTests(unittest.TestCase):
 
             code, body = call_api(self.server, "POST", "/api/agents/deepseek/send", {"id": "d1", "text": "hi", "intent": "auto"})
             self.assertEqual((code, body["accepted"]), (200, True))
+            self.assertIsInstance(body["server_ms"], int)
             self.assertEqual(self.deepseek.send.call_args.args[0]["intent"], "steer")
 
             code, body = call_api(self.server, "POST", "/api/agents/deepseek/stop", {"id": "d1", "turn_id": "dt1"})

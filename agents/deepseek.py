@@ -454,13 +454,22 @@ class DeepSeekAgent(Agent):
         q = handler._query()
         self._run_deepseek(handler, lambda bridge: bridge.receipt(q.get("request_id", "")))
 
+    def _with_server_ms(self, handler, started: float, result):
+        """11-27 S3: protocol-2 answers say how long this computer spent; old phones see no change."""
+        import remote
+        ms = remote.server_ms_for(handler, started)
+        if ms is None or not isinstance(result, dict):
+            return result
+        return {**result, "server_ms": ms}
+
     def http_send(self, handler, body: dict) -> None:
         import time
         payload = {**body, "intent": "steer"} if body.get("intent") == "auto" else body
+        started = time.monotonic()
         def run(bridge):
             result = bridge.send(payload)
             result["accepted_at"] = int(time.time() * 1000)
-            return result
+            return self._with_server_ms(handler, started, result)
         self._run_deepseek(handler, run)
 
     def http_stop(self, handler, body: dict) -> None:
@@ -517,10 +526,11 @@ class DeepSeekAgent(Agent):
         import deepseek_control
         if sub == "send":
             import time
+            started = time.monotonic()
             def run(bridge):
                 result = bridge.send(body)
                 result["accepted_at"] = int(time.time() * 1000)
-                return result
+                return self._with_server_ms(handler, started, result)
             self._run_deepseek(handler, run)
         elif sub == "stop":
             self._run_deepseek(handler, lambda bridge: bridge.stop(body.get("id"), body.get("expected_turn")))

@@ -244,6 +244,19 @@ class Log:
 # ---------------------------------------------------------------- http
 
 
+def server_ms_for(handler, started: float) -> int | None:
+    """11-27 S3: how long this computer spent, for protocol-2 phones only.
+
+    Old phones (protocol 1) get exactly the answer they got before, so their reading is unchanged.
+    """
+    try:
+        if handler._client_protocol() < 2:
+            return None
+    except Exception:
+        return None
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
 def hook_agent(path: str):
     """The assistant whose hook address this path belongs to, or None (decided by the registry, not by name)."""
     for agent in agent_registry.load():
@@ -431,6 +444,33 @@ class Handler(BaseHTTPRequestHandler):
             return data if isinstance(data, dict) else {"_bad": "请求体不是 JSON 对象"}
         except Exception:
             return {"_bad": "请求体不是合法的 UTF-8 JSON"}
+
+    def _log_client_timing(self, body: dict) -> None:
+        """11-27 S3: the phone's previous round trip and this computer's part of it, numbers only.
+
+        Never reads or compares the phone's clock; network_ms is roundtrip - the server_ms that phone
+        received for that earlier request, floored at 0.
+        """
+        prev = body.get("client_prev") if isinstance(body, dict) else None
+        if not isinstance(prev, dict):
+            return
+        try:
+            roundtrip_ms = int(prev.get("roundtrip_ms"))
+            server_ms = int(prev.get("server_ms"))
+        except (TypeError, ValueError):
+            return
+        request_id = re.sub(r"[^0-9A-Za-z-]", "", str(prev.get("request_id") or ""))[:8]
+        network_ms = max(0, roundtrip_ms - server_ms)
+        write = getattr(getattr(self, "log", None), "write", None)
+        if not callable(write):
+            return
+        try:
+            write(
+                f"phone timing request={request_id} roundtrip_ms={roundtrip_ms} "
+                f"server_ms={server_ms} network_ms={network_ms}"
+            )
+        except Exception:
+            pass
 
     def _hung_up(self) -> bool:
         """Whether the other side closed this connection while its request waits (Claude Code: Stop, its timeout, or
@@ -756,6 +796,7 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("_bad"):
             self._json({"error": body["_bad"]}, 400)
             return
+        self._log_client_timing(body)
         if path.startswith("/api/agents/"):
             agent, sub = self._agent_for_unified(path)
             if agent is not None:
