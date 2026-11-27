@@ -150,6 +150,12 @@ public final class ChatModel {
     @ObservationIgnored var inFlight: Set<ChatKey> = []
     @ObservationIgnored var confirming: Set<String> = []
     @ObservationIgnored var sends: [String: Task<Void, Never>] = [:]
+    /// 11-27 (S5; design §4.2): the few-second watch of the waiting interjection's receipt, so the line goes as soon as the
+    /// computer's records have the words — Codex never says so again on its own (see watchSteerWait).
+    @ObservationIgnored var steerPoll: Task<Void, Never>?
+    /// Tells one watch's ending from the next one's: leaving the conversation (or the phone going back) cancels a watch,
+    /// and a new one may start before the cancelled task has woken up.
+    @ObservationIgnored var steerPollGeneration = 0
     /// A state read after an action (refreshControl), so tests can wait for it.
     @ObservationIgnored var refreshing: Task<Void, Never>?
 
@@ -213,6 +219,12 @@ public final class ChatModel {
             steerSince = [:]
             killNote = nil
         }
+        // 11-27 (S5): the receipt watch belongs to one conversation in front — leaving it, or going back, stops it.
+        if changed || !active {
+            steerPollGeneration += 1
+            steerPoll?.cancel()
+            steerPoll = nil
+        }
         guard let next else { return }
         let restore = changed || !ready
         task = Task { [weak self] in await self?.run(next, client, t, restore: restore, active: active) }
@@ -255,6 +267,9 @@ public final class ChatModel {
                     try? await reconcile(record, client)
                 }
                 guard t == token else { return }
+                // 11-27 (S5): an interjection the computer took but has not delivered is watched from here on, so its line
+                // goes as soon as the computer's records have the words.
+                watchSteerWait()
                 // The local demo has no live stream (Android: an empty flow).
                 if synthetic {
                     connection = "本地固定场景"
@@ -513,8 +528,8 @@ public final class ChatModel {
     }
 
     /// 11-27 (design §4.2, S5): the newest interjection the computer took that still waits for the step the source is on,
-    /// so the grey line can say what it waits for. Nothing waits once the turn is over: for Codex the phone does not ask
-    /// for a receipt again after 已接收, so the words go with the turn rather than counting on forever.
+    /// so the grey line can say what it waits for. Its receipt is read every few seconds until it is delivered
+    /// (`watchSteerWait`); a turn that is over has nothing left to wait for, and the line goes with it.
     public var steerWait: Submission? {
         guard control.running else { return nil }
         return submissions.first { steerWaiting($0) }
@@ -527,6 +542,36 @@ public final class ChatModel {
         let since = steerSince[record.request] ?? record.created
         return max(0, Int((now() - since) / 1_000))
     }
+
+    /// 11-27 (S5; design §4.2): while an interjection the computer took still waits, its receipt is read every few seconds
+    /// by the usual rules (`reconcile`), so the line goes the moment the computer's delivery records have the words.
+    /// Codex says 已接收 once and never again on its own, so without this the line kept counting the whole rest of the
+    /// turn (the 11-27 morning's fifth and sixth messages were in at 7:54:47 and the turn ran past 8:01). One
+    /// interjection at a time — the newest waiting one; only while this conversation and the phone are in front; nothing
+    /// after the turn, after a quarter of an hour, or once it is delivered. A failure is no news and is tried again.
+    func watchSteerWait() {
+        guard steerPoll == nil, foreground, !synthetic, let key, let client, steerWait != nil else { return }
+        steerPollGeneration += 1
+        let generation = steerPollGeneration
+        let pacer = self.pacer
+        steerPoll = Task { [weak self] in
+            defer {
+                if let self, self.steerPollGeneration == generation { self.steerPoll = nil }
+            }
+            while !Task.isCancelled {
+                // The send's own answer has just been read, so the first look comes a few seconds later.
+                do { try await pacer.wait(Self.steerPollEvery) } catch { return }
+                guard !Task.isCancelled, let self, self.foreground, self.key == key, let next = self.steerWait else { return }
+                guard self.steerWaitSeconds(next) < Self.steerPollLimit else { return }
+                // The same rules as 核对; a receipt that cannot be read changes nothing, and the next look comes soon.
+                _ = try? await self.reconcile(next, client)
+            }
+        }
+    }
+
+    /// 11-27 (S5): how often the waiting interjection's receipt is read, and how long at most (design §4.2).
+    static let steerPollEvery: Duration = .seconds(3)
+    static let steerPollLimit = 15 * 60
 
     /// 结束这条命令，马上插话 (design §4.3; handoff 11-27 §6.4): ends the one command the source runs now, and its turn goes
     /// on, so the interjection waiting for that command goes in as soon as it stops. Only a tap does this; the computer
@@ -879,6 +924,9 @@ public final class ChatModel {
                 steerSince[record.request] = nil
             }
             submissions = ([record] + submissions.filter { $0.request != record.request }).sorted { $0.created > $1.created }
+            // 11-27 (S5): the computer has just taken this interjection; from now on its receipt is read every few
+            // seconds, so the line goes the moment the words are in its records.
+            if steerWaiting(record) { watchSteerWait() }
             if before == "提交中" || before == nil, ["已接收", "已送达", "已排队"].contains(record.label), record.action == "send" {
                 acknowledged += 1
                 acknowledgedSend(record)

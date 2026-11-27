@@ -15,16 +15,21 @@ final class SteerComputer: RelayStreamingTransport, @unchecked Sendable {
     let killRefusal: (status: Int, text: String)?
     /// What a receipt says: `state`, and whether the delivery records have no such request id.
     let receipt: (state: String, missing: Bool)
+    /// Receipts answered in turn when a test wants them to change (the last one repeated); nil plays `receipt` alone.
+    let receiptSequence: [JSONValue]?
 
     private let turn = Mutexed(true)
     private let ended = Mutexed(false)
+    private let receiptStep = Mutexed(0)
     private let streams = Mutexed<[AsyncThrowingStream<[UInt8], any Error>.Continuation]>([])
 
     init(serverMs: Int? = 310, killRefusal: (status: Int, text: String)? = nil,
-         receipt: (state: String, missing: Bool) = (state: "accepted", missing: false)) {
+         receipt: (state: String, missing: Bool) = (state: "accepted", missing: false),
+         receiptSequence: [JSONValue]? = nil) {
         self.serverMs = serverMs
         self.killRefusal = killRefusal
         self.receipt = receipt
+        self.receiptSequence = receiptSequence
     }
 
     /// The turn runs, and the command with it, until a test ends it.
@@ -67,9 +72,18 @@ final class SteerComputer: RelayStreamingTransport, @unchecked Sendable {
             return .json(Self.text(.object(reply)))
         }
         if path.hasSuffix("/receipt") {
-            var reply: [String: JSONValue] = ["request_id": .string(queryValue(request, "request_id") ?? ""),
-                                              "state": .string(receipt.state)]
-            if receipt.missing { reply["missing"] = true }
+            var reply: [String: JSONValue]
+            if let sequence = receiptSequence, !sequence.isEmpty {
+                let taken = receiptStep.withLock { step -> Int in
+                    defer { step += 1 }
+                    return min(step, sequence.count - 1)
+                }
+                reply = sequence[taken].object
+            } else {
+                reply = ["state": .string(receipt.state)]
+                if receipt.missing { reply["missing"] = true }
+            }
+            reply["request_id"] = .string(queryValue(request, "request_id") ?? "")
             return .json(Self.text(.object(reply)))
         }
         return RelayResponse(status: 404)
@@ -212,6 +226,38 @@ struct SteerSpeedTests {
         await until { !model.control.running }
         #expect(model.steerWait == nil)
         #expect(model.sendKey == SendKeyModes())
+    }
+
+    /// 11-27 (S5; design §4.2 point 1): while an interjection waits, its receipt is read again every few seconds, so a
+    /// send the computer's records now hold (accepted with `conversation_record`) turns into 已送达 and the line and the
+    /// watch both stop — without waiting for the turn to end (the 11-27 morning's fifth and sixth messages went in at
+    /// 7:54:47 while their turn ran past 8:01).
+    @Test func aWaitingInterjectionIsDeliveredByTheReceiptWatch() async {
+        let computer = SteerComputer(receiptSequence: [
+            ["state": "accepted", "result": ["accepted": true, "evidence": ["source": "app_tools_ack"]]],
+            ["state": "accepted", "result": ["accepted": true, "evidence": ["source": "conversation_record"]]],
+        ])
+        let pacer = CountingPacer(free: 8)
+        let ids = Mutexed(0)
+        let clock = Mutexed<Int64>(10_000)
+        let model = ChatModel(pacer: pacer, newID: { ids.withLock { $0 += 1; return "request-\($0)" } },
+                              now: { clock.withLock { $0 } })
+        model.bind(key, client: RelayClient(origin: .default, transport: computer), clientGeneration: 0, active: true,
+                   synthetic: false) { _, _ in }
+        await until { model.ready && model.control.available }
+        model.edit("插一句")
+        model.send()
+        await model.settleSends()
+        // The first receipt still says app_tools_ack, the second one has the words in Codex's own record.
+        await until { model.submissions.first?.label == "已送达" }
+        #expect(model.submissions.first?.label == "已送达")
+        #expect(model.steerWait == nil)
+        #expect(pacer.waits.contains(.seconds(3)))
+        // One at a time, and stopped once delivered: two receipts, then no more.
+        let asked = await computer.log.items.filter { $0.url.path.hasSuffix("/receipt") }.count
+        #expect(asked == 2)
+        for _ in 0..<500 { await Task.yield() }
+        #expect(await computer.log.items.filter { $0.url.path.hasSuffix("/receipt") }.count == asked)
     }
 
     // MARK: §4.3 — 结束这条命令，马上插话

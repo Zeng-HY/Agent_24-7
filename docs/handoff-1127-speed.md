@@ -196,7 +196,7 @@
 - 一行灰字放在**输入框上面**（设计允许的第二种位置）：`等 Codex 做完这一步再插进去 · 已等 N 秒`，名字用当前助手（`Labels.sourceName`），N 用手机自己的钟、从收到电脑回答那一刻起算，`TimelineView` 每秒重画。
 - 判断是纯函数 `steerWaiting`：`action == "send"`、标签「已接收」、请求体的 `intent == "steer"`。排队（已排队）、执行计划、已送达、已移除都不算。
 - 起算时刻记在 `ChatModel.steerSince`（按请求编号）：标签刚变「已接收」时记一次；已经是「已接收」的（重启后、或核对只改了备注）沿用，没有就退回这条副本的发送时刻。
-- 另外**多关了一个口子**（设计没写，理由在下面）：这一行还要求 `control.running`。Codex 的副本进了「已接收」之后，手机不会再去轮询它的回执（`reconcile` 只在进对话、停止、排队离开队列时跑），只按标签判断会一直数下去；回合结束了就没什么可等的，字也就收了。
+- **每 3 秒问一次回执**（审后补的）：有一条插话在等时，`ChatModel.watchSteerWait` 每 3 秒按 `reconcile` 现成的规则读一次这条的回执。电脑把送达记录改成带 `conversation_record` 证据的 accepted 之后，标签变「已送达」，这行字消失，轮询也停。只问最新那条在等的；只在这个对话和手机都在前台时问；这一轮结束、或者等满 15 分钟就停；回执出错不报错，下一个 3 秒再问。这一行仍然要求 `control.running`，作为回合结束的兜底。本地示例不轮询（演示的回执永远没有证据），演示里那行字照常显示。
 
 **S2（4.3）：结束这条命令，马上插话**
 
@@ -218,20 +218,21 @@
 
 - `TeleplyCore/Sources/TeleplyModel/ChatCore.swift`：`RunningCommand`、`Control.command`（新存储属性，`Equatable` 一起比）、`Control.canKillCommand`、`SendKeyModes`、`steerWaiting`、`sendIntent`、`steerWaitingText`、`killCommandConfirmText`、`killCommandStartedText`、`PhoneTiming`、`milliseconds`、`phoneTiming`、`clientPrev`、`timingWords`；文件头补了 `import Foundation`（原来没有，新代码用 `Data` 和 `String(format:)`）。
 - `TeleplyCore/Sources/TeleplyModel/Relay.swift`：`killCommand(device:app:chat:turn:)`，打到 `/api/agents/<id>/kill-command`。
-- `TeleplyCore/Sources/TeleplyState/ChatModel.swift`：`sendKey`、`steerWait`、`steerWaitSeconds`、`killCommand()`、`noteKill`、`killing`、`killNote`、`lastTiming`、`steerSince`；`submit` 带 `client_sent_ms`/`client_prev`；`dispatch` 记来回并给提示条加一段；`save` 记/清起算时刻；`resendReplacing` 换新数字；`bind` 里接上演示。
+- `TeleplyCore/Sources/TeleplyState/ChatModel.swift`：`sendKey`、`steerWait`、`steerWaitSeconds`、`watchSteerWait`（3 秒回执轮询，`steerPoll`/`steerPollGeneration`）、`killCommand()`、`noteKill`、`killing`、`killNote`、`lastTiming`、`steerSince`；`submit` 带 `client_sent_ms`/`client_prev`；`dispatch` 记来回并给提示条加一段；`save` 记/清起算时刻并在插话被收下时开始轮询；`run` 在进对话时开始；`bind` 在离开或退到后台时停；`resendReplacing` 换新数字。
 - `TeleplyCore/Sources/TeleplyState/ChatModel+SteerDemo.swift`（新建）：`-TeleplyDemoSteer` 时给 `插话等待示例` 放一条「已接收」的插话副本。
 - `TeleplyCore/Sources/TeleplyDemo/DemoSteer.swift`（新建）：那一条列表行、那份记录、那个开关。
 - `TeleplyCore/Sources/TeleplyDemo/DemoWorld.swift`：`steerDemo`（公开 init 的默认值是开关）、那个对话的状态（`running`、`command`、`capabilities_now.kill_command`）、`killCommand`、列表多一行、记录走 `SteerDemo.messages`。
 - `TeleplyCore/Sources/TeleplyDemo/DemoTransport.swift`：`/api/agents/codex/kill-command` 和老的 `/api/codex/kill-command` 两条都接上；记录带开关。
 - `Teleply/Composer/ComposerView.swift`：`SteerWaitBar`（灰字、秒数、按钮、确认、结果一句话）、发送键改成点/按住两种、无障碍标签和提示。
 - `Teleply/Settings/SettingsView.swift`：`SpeedLog.add` 的成功判断改 `hasPrefix`（见上）。
-- 测试：`TeleplyCoreTests/SteerSpeedTests.swift`（新建，12 项）。
+- 测试：`TeleplyCoreTests/SteerSpeedTests.swift`（新建，13 项）。
 - **没动**：`Teleply/Chat/Timeline.swift`、`ConversationView.swift`（灰字放在输入框上面，这两处都不用改）、`ChatSheets.swift`、`AppModel*.swift`、`AgentCatalog.swift`、`TeleplyApp.swift`、`LaunchOptions.swift`、README 和版本号。
 
 **测试加了哪些**
 
 - 运行中点发送是插话、按住那一条是排队：同一条 `/api/codex/send` 上，第一条 `intent=steer` 且有 `expected_turn`，第二条 `intent=queue`，副本标签「已排队」；`sendKey` 三种情况（两种都行、只有一种、空闲）的 `tapQueues`/`holdQueues`。
 - 等待字样：`steerWaiting` 对七种副本（已接收/已排队/已送达/已移除/intent auto/intent queue/queue-action）的判断；`steerWaitingText` 的名字和秒数（含负数记 0）；模型上从 0 秒数到 3 秒、移除后和回合结束后消失、`sendKey` 回到全否。
+- 3 秒回执轮询（审后补的）：回执先答 accepted（`app_tools_ack`）、再答 accepted（`conversation_record`），标签变「已送达」、`steerWait` 变空、问过两次（一次只问一条），之后再怎么让出都不再问；也验了问的间隔是 3 秒。
 - `kill-command` 按钮的条件：能杀、不能杀、命令没在跑、状态里没有 `command`（老电脑）、没有 `kill_command`、`kill_command` 为假，共六种；确认那句的原话。模型上：请求打到 `/api/agents/codex/kill-command`、带 `id` 和 `turn_id`、成功后说「已结束命令，正在插话…」且按钮消失、这一轮还在；409 时显示电脑那句话、命令没被杀、按钮还在。
 - `client_prev` 和网络时间：820 减 310 等于 510、「0.5 秒 / 0.3 秒」的说法、电脑比来回还长时记 0、老电脑没有 `server_ms` 时不算也不带 `client_prev`；模型上第一次发送带 `client_sent_ms` 不带 `client_prev`，第二次带上第一次的请求编号和 `server_ms`；「重发」原样带第一次的 `client_sent_ms`/`client_prev`。
 - 演示：`DemoWorld(steerDemo: true)` 的那个对话状态有 `command` 和 `kill_command`、列表行只在开关打开时出现、`kill-command` 打过去之后命令没了而这一轮还在、别的对话被 409 拒。
@@ -242,7 +243,7 @@
 
 - 这台电脑没有 Swift：**没编译、没跑测试、没跑截图巡览**。只按类型和可选值逐处静态核对，括号配平，测试里新加的原始字符串都查过没有 `"#`。
 - 真机上没验：按住发送键的菜单在玻璃输入卡上好不好按、VoiceOver 的「按住可排队」、灰字每秒重画的代价、确认框在底部栏里的样子。
-- Codex 的「已接收」副本手机不再轮询回执，所以真机上这行字在回合结束时消失，而不是等「已送达」；设计只写了「已送达或移除时消失」，这是我加的一条收口，理由在上面。
+- 3 秒轮询在真机上的请求量和耗电没量过：一条在等的插话最多每 3 秒一次回执、最多 15 分钟（约 300 次），一条进去就停。
 - Claude 的「立即补充」走的是它桌面上的令牌（`workspace.action("claude/choose")`，`WorkspaceModel.swift` 不在第 4.5 节的可改文件里），这次没给它计时；Codex/DeepSeek 的 `promote` 计时了。
 - 演示里的发送回答没有 `server_ms`，所以在演示里看不到提示条那一段（真电脑 dev.59 才有）；`client_sent_ms`/`client_prev` 在演示里照发，不显示。
 - `kill_command` 只从 `capabilities_now` 读：以后要给新助手用，得在 `AgentCapabilities` 里加字段（不在这次的可改文件里）。
