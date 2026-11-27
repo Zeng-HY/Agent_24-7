@@ -71,7 +71,7 @@
 
 ## 4 结果
 
-结论：第 2.1、2.2、2.3 节都做完了。钟差为 0 时所有输出和原来逐字节一样（`tests/test_action_golden.py` 通过，golden 没有重新生成）；新增 28 个测试全过；相关测试文件全过；全量 pytest 1696 通过、7 跳过，只剩那 3 个已知的老失败。
+结论：第 2.1、2.2、2.3 节都做完了。钟差为 0 时所有输出和原来逐字节一样（`tests/test_action_golden.py` 通过，golden 没有重新生成）；新增 31 个测试全过；相关测试文件全过；全量 pytest 1696 通过、7 跳过，只剩那 3 个已知的老失败。审后补了过程卡片那一族（下条 `f95c375`）。
 
 **做了什么**
 
@@ -100,12 +100,12 @@
   - `deepseek_control.Bridge.state`：`turn_started`、`turn_ended`、`compact_started`；
   - `agents/antigravity.py` 的 `state()`：`turn_started`、`turn_ended`。
 - 非文件型助手的对话页：`deepseek_control.Bridge.conversation`、`agents/antigravity.py` 的 `read()`。
+- 过程卡片（`activity_turns`，毫秒；审后补的 `f95c375`）：`chat_history.conversation` 发出去的 `activity_turns[*]` 里 `started_at`、`ended_at`、`paused_at` 和 `pauses` 里每一段的起止，用 `to_true_ms` 一起平移（`chat_history.true_activity_clock`）；`paused_ms` 是时长，不动。网页的过程卡片就是拿它们减 `Date.now()`（`static/interaction-ui.js:91`）；`/api/chat` 和实时帧的 `meta.activity_turns` 都来自这一处，只加一次，`entry` 里留着的那份仍是原始值。
 - 通知和灵动岛事件（`notify.py` 发给中转的 Feed）：`_tell`（完成/失败/在等你选，`asking()` 也走它）的 `started`、`ended`；`_running` 的 `since`、`started`；`_step` 的 `since`；`_snapshot` 里每个 running/waiting 项的 `since`、`started`。各助手的 `notify_poll` 只把原始值交给这四个出口，没有各自再加。
 
 **没有改的，和原因**
 
 - 消息的 `time`（ISO 字符串）、`created`、`updated`、`accepted_at`、送达记录的时间、文件的 `modified`：按第 2.2 节不动；它们主要彼此比较（发送记录的 `created` 配消息的 `time`）。
-- `activity_turns[*]` 的 `started_at`、`ended_at`、`paused_at`、`pauses`（毫秒）：第 2.2 节的清单里没有这一族，所以没动。**它确实也被减**：网页的过程卡片用它们减 `Date.now()`（`static/interaction-ui.js:91`），所以网页上那张卡片的计时仍会多出钟差；`/api/chat` 的同一个回答里，`turn_started`（秒，已校正）和 `activity_turns[*].started_at`（毫秒，未校正）是同一时刻的两种写法。要补的话是把这四个绝对时间一起平移（`paused_ms` 是时长，不动）。这一项请你定。
 - `notify.used_text`（「用了 N 分钟」）和 `notice_state`：两者相减，钟差抵消，改了反而多绕一圈。
 - `claude_hooks` 里自己记的 `turn_started`/`turn_ended`：只做内部比较（手工 Stop 与记录对照），不直接发给手机；经 `claude_control._held` 出去时才加。
 - `agents/testing.py` 的 `state()`/`summary()`：`TELEPLY_TEST_AGENTS=1` 才加载的测试专用假助手，不是真实的发出路径。
@@ -114,17 +114,17 @@
 **测试**
 
 - 新增 `tests/test_pc_clock.py`（13 个）：没有样本为 0；中位数；3 秒门槛；变化不超过 2 秒不动、超过才动；回落进门槛后不再校正；每次变化只写一行且只有数字；写日志抛异常不影响；0/空值/字符串原样；开始与结束的差不变；假 `Date` 头喂 `on_request_end`；没有 `Date` 头不取样；真 aiohttp 回答走同一个 `TraceConfig`；`Agent.run` 确实建了带这个回调的 `ClientSession`。
-- 新增 `tests/test_clock_correction.py`（10 个）：钟差 46 秒时，列表行、任务行、控制状态（运行/完成/压缩）、通知事件（done/running/step/snapshot）里的开始、结束都加了 46 秒且差值不变；钟差为 0 时列表行和事件逐字节是原来的值。
+- 新增 `tests/test_clock_correction.py`（13 个）：钟差 46 秒时，列表行、任务行、控制状态（运行/完成/压缩）、通知事件（done/running/step/snapshot）里的开始、结束都加了 46 秒且差值不变；过程卡片的 `started_at`、`ended_at`、`paused_at`、`pauses` 都加了 46 000 毫秒，`ended_at - started_at - paused_ms` 不变；钟差为 0 时列表行、事件和过程卡片逐字节是原来的值。
 - 第 2.3 节新增 5 个：`tests/test_antigravity.py` 3 个（占位时间得到 0、真时间照旧、通知线程遇到它不报错）、`tests/test_notify.py` 2 个（`time_text`）。
-- 相关测试：`test_antigravity` + `test_notify` + 上面两个新文件 180 通过（5 subtests）；`test_action_golden`、`test_summary_turn_timer`、`test_chats_visible_apps`、`test_codex_status`、`test_live_history`、`test_read_golden` 47 通过；Claude 的 5 个文件 191 通过（2 subtests）；Codex/DeepSeek/agents 的 5 个文件 255 通过（36 subtests）；中转的 6 个文件 113 通过、5 跳过（4 subtests）。
-- 全量 pytest（19 分 16 秒）：1696 通过、7 跳过、136 subtests 通过、3 失败，就是已知那 3 个（`test_mobile_polish` 的 snippet webkit 和 chromium 各一个、`test_relay_mobile_layout` 的 account home），和其它改动无关。
+- 相关测试：`test_antigravity` + `test_notify` + 上面两个新文件 183 通过（5 subtests）；`test_action_golden`、`test_summary_turn_timer`、`test_chats_visible_apps`、`test_codex_status`、`test_live_history`、`test_read_golden` 47 通过；Claude 的 5 个文件 191 通过（2 subtests）；Codex/DeepSeek/agents 的 5 个文件 255 通过（36 subtests）；中转的 6 个文件 113 通过、5 跳过（4 subtests）；过程卡片改动后又跑了 `test_activity_records`、`test_live_history`、`test_history_cache_speed`、`test_history_projection`、`test_chat_delegation`、`test_action_golden`、`test_read_golden` 51 通过，`test_claude_hooks`、`test_claude_record_repeats`、`test_summary_turn_timer`、`test_codex_hooks` 122 通过。
+- 全量 pytest（19 分 16 秒）：1696 通过、7 跳过、136 subtests 通过、3 失败，就是已知那 3 个（`test_mobile_polish` 的 snippet webkit 和 chromium 各一个、`test_relay_mobile_layout` 的 account home），和其它改动无关。这次全量是在审后补过程卡片之前跑的；按你说的，补完没有再跑全量，只跑了上面那些相关文件。
 
 **改了哪些文件**：`pc_clock.py`（新）、`relay_agent.py`、`chats.py`、`chat_history.py`、`codex_control.py`、`codex_apptools.py`、`claude_control.py`、`deepseek_control.py`、`agents/antigravity.py`、`agents/deepseek.py`、`agents/testing.py`、`notify.py`、`tests/test_pc_clock.py`（新）、`tests/test_clock_correction.py`（新）、`tests/test_antigravity.py`、`tests/test_notify.py`、本设计第 4 节。没有改版本号和更新说明。
 
 **要我看的地方**
 
-1. `activity_turns` 那一族（网页过程卡片的计时）没改，见上面「没有改的」第二条；要不要补，你定。
-2. 钟差是秒级 `Date` 头算的，46 秒会落在 45.5～46 秒之间（中位数），门槛之内的抖动不会写日志。
-3. 钟差只在连上中转、收到回答之后才有样本；进程刚起来还没连上时是 0，行为和现在一样；连上过之后即使掉线也保持最后一次的值（进程内）。
-4. 钟差变化的那行日志会进当天的日志文件，一行一次，只在变化超过 2 秒时写。
+1. 钟差是秒级 `Date` 头算的，46 秒会落在 45.5～46 秒之间（中位数），门槛之内的抖动不会写日志。
+2. 钟差只在连上中转、收到回答之后才有样本；进程刚起来还没连上时是 0，行为和现在一样；连上过之后即使掉线也保持最后一次的值（进程内）。
+3. 钟差变化的那行日志会进当天的日志文件，一行一次，只在变化超过 2 秒时写。
+4. 过程卡片的平移也把 `pauses` 里每一段的起止一起加了（只加一端会让暂停时长对不上）；`paused_ms` 是已经算好的时长，没有动，网页那张卡的时长不受影响。
 
