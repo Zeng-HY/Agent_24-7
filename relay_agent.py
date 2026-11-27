@@ -5,8 +5,9 @@ import json
 import random
 import time
 from urllib.parse import urlsplit
-from aiohttp import (ClientSession, ClientTimeout, WSMsgType, ClientResponseError, ClientSSLError,
+from aiohttp import (ClientSession, ClientTimeout, TraceConfig, WSMsgType, ClientResponseError, ClientSSLError,
                      ClientConnectorError, ConnectionTimeoutError, ServerTimeoutError, WSServerHandshakeError)
+import pc_clock
 from relay_transport import CHUNK, MAX_BODY, REQUEST_HEADERS, RESPONSE_HEADERS
 from relay_service import clean_target
 
@@ -223,8 +224,13 @@ class Agent:
 
     async def run(self):
         delay=1
+        # 11-27: every answer the relay sends carries a Date header; those samples say how far this computer's clock
+        # is off, which is what the phone subtracts its own now from. No extra connection, no time server.
+        trace=TraceConfig()
+        trace.on_request_end.append(pc_clock.on_request_end)
+        if self.link: pc_clock.set_log(self.link.write)
         async with ClientSession(timeout=ClientTimeout(total=None,sock_connect=15,sock_read=120),
-                                 auto_decompress=False,trust_env=False) as client:
+                                 auto_decompress=False,trust_env=False,trace_configs=[trace]) as client:
             while not self.stopping:
                 if self.link:self.link.attempt()
                 started=asyncio.get_running_loop().time()
