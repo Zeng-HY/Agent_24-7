@@ -1,7 +1,7 @@
 """11-27: the times the phone subtracts its own "now" from go out against the relay's clock (pc_clock), and a turn's
 length must not change: its start and its end are shifted together. This checks the places they leave by: the list
-rows, the control state (and the live stream's control), the task rows, and the events the relay turns into a notice
-and an island.
+rows, the control state (and the live stream's control), the task rows, the activity card's clock (the web page counts
+it from these milliseconds), and the events the relay turns into a notice and an island.
 
 Everything here is made up: a made-up rollout file, a made-up desktop state, a made-up notifier. No real record,
 log, config or running app is read.
@@ -43,6 +43,24 @@ def offset_by(seconds: float) -> pc_clock.Clock:
     clock = pc_clock.reset(clock=lambda: NOW)
     clock.add(NOW + seconds, NOW)
     return clock
+
+
+def event(ts: str, **payload) -> str:
+    return json.dumps({"type": "event_msg", "timestamp": ts, "payload": payload}) + "\n"
+
+
+def reply(ts: str, **payload) -> str:
+    return json.dumps({"type": "response_item", "timestamp": ts, "payload": payload}) + "\n"
+
+
+# One Codex turn: it starts, waits 20 s for the user's answer, and completes 5 s after the answer came back.
+STARTED_AT, ASKED_AT, ANSWERED_AT, ENDED_AT = (
+    unix("2026-11-27T" + at + "Z") for at in ("05:00:00", "05:00:05", "05:00:25", "05:00:30"))
+FINISHED = [event("2026-11-27T05:00:00Z", type="task_started", turn_id="t1"),
+            reply("2026-11-27T05:00:05Z", type="function_call", name="request_user_input", call_id="q"),
+            reply("2026-11-27T05:00:25Z", type="function_call_output", call_id="q"),
+            event("2026-11-27T05:00:30Z", type="task_complete", turn_id="t1")]
+WAITING = FINISHED[:2]  # the answer never came: the turn is paused, not ended
 
 
 class ListRowTests(unittest.TestCase):
@@ -101,6 +119,60 @@ class ListRowTests(unittest.TestCase):
         self.assertEqual((rows[0]["turn_started"], rows[0]["turn_ended"]),
                          (self.started + 46, self.ended + 46))
         self.assertEqual(rows[0]["turn_ended"] - rows[0]["turn_started"], 60)
+
+
+class ActivityClockTests(unittest.TestCase):
+    """The web page's activity card (static/interaction-ui.js, line 91) counts its duration up from started_at — or
+    down to ended_at / paused_at — against Date.now(), and each pause up from its own start. These are the same
+    family as turn_started, in milliseconds, so they move by the same offset and the card's duration does not."""
+
+    def setUp(self) -> None:
+        self.addCleanup(pc_clock.reset)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "rollout.jsonl"
+        item = {"app": "codex", "id": "c1", "title": "改一行", "folder": "", "cwd": "",
+                "updated": 1767323000000, "created": 1767322900000, "pinned": False}
+        for patcher in (mock.patch.object(chats, "find", lambda app, tid: dict(item)),
+                        mock.patch.object(chats, "conv_path", lambda row: self.path)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.history = chat_history.History()
+        self.history._load = lambda: ([dict(item)], [])
+
+    def clock(self, lines: list[str], offset: float = 0.0) -> dict:
+        """The page's activity clock for this made-up record, read with [offset] seconds of clock difference."""
+        self.path.write_text("".join(lines), encoding="utf-8")
+        if offset:
+            offset_by(offset)
+        else:
+            pc_clock.reset(clock=lambda: NOW)
+        page = self.history.conversation("codex", "c1", 10)
+        return page["activity_turns"]["t1"]
+
+    def test_with_no_offset_the_clock_is_exactly_what_it_was(self):
+        clock = self.clock(FINISHED)
+        self.assertEqual((clock["started_at"], clock["ended_at"]), (STARTED_AT * 1000, ENDED_AT * 1000))
+        self.assertEqual(clock["pauses"], [[ASKED_AT * 1000, ANSWERED_AT * 1000]])
+        self.assertEqual(clock["paused_ms"], 20_000)
+
+    def test_a_slow_clock_moves_every_time_and_keeps_the_duration(self):
+        before = self.clock(FINISHED)
+        clock = self.clock(FINISHED, SLOW)
+        self.assertEqual(clock["started_at"], STARTED_AT * 1000 + 46_000)
+        self.assertEqual(clock["ended_at"], ENDED_AT * 1000 + 46_000)
+        self.assertEqual(clock["pauses"], [[ASKED_AT * 1000 + 46_000, ANSWERED_AT * 1000 + 46_000]])
+        self.assertEqual(clock["paused_ms"], before["paused_ms"])  # a duration: it does not move
+        self.assertEqual(clock["ended_at"] - clock["started_at"] - clock["paused_ms"],
+                         before["ended_at"] - before["started_at"] - before["paused_ms"])
+        self.assertEqual(clock["status"], "completed")
+
+    def test_a_waiting_turn_moves_its_pause_too(self):
+        self.assertEqual(self.clock(WAITING)["paused_at"], ASKED_AT * 1000)
+        clock = self.clock(WAITING, SLOW)
+        self.assertEqual(clock["paused_at"], ASKED_AT * 1000 + 46_000)
+        self.assertEqual(clock["started_at"], STARTED_AT * 1000 + 46_000)
+        self.assertNotIn("ended_at", clock)
 
 
 class ControlStateTests(unittest.TestCase):

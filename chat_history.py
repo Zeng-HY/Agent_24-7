@@ -191,6 +191,23 @@ class _ScanCache:
     __slots__=('key','scan')
     def __init__(self,key,scan):self.key=key;self.scan=scan
 
+
+def true_activity_clock(turn):
+    """One activity turn's clock with its absolute times on the phone's clock (11-27).
+
+    The web page counts its activity card up from started_at (or to ended_at / paused_at) against Date.now(), and
+    each pause up from its own start: every absolute time moves by the same offset, so the card's duration does not
+    change. paused_ms is already a duration. The turn's own dict is never touched: this is a copy."""
+    if not isinstance(turn,dict):return turn
+    out=dict(turn)
+    for key in ('started_at','ended_at','paused_at'):
+        if out.get(key):out[key]=pc_clock.to_true_ms(out[key])
+    pauses=out.get('pauses')
+    if isinstance(pauses,list):
+        out['pauses']=[[pc_clock.to_true_ms(value) for value in pair] if isinstance(pair,(list,tuple)) else pair
+                       for pair in pauses]
+    return out
+
 class Transcript:
     def __init__(self,path,app,cwd='',tid=''):
         from agents import registry
@@ -704,7 +721,10 @@ class History:
                 'turn_ended':pc_clock.to_true_seconds(seconds(clock.get('ended_at'))),
                 'turn_status':clock.get('status',''),
                 'step':entry.state.get('step','') if chats._status(entry.state,entry.mtime/1e9)=='running' else '',
-                'activity_turns':{k:v for k,v in turns.items() if k == current or k in {m.get('activity_turn') for m in page}},
+                # 11-27: the web page's activity card counts up from these against its own now; the times in them
+                # move, the duration they add up to does not. The entry keeps the record's own values.
+                'activity_turns':{k:true_activity_clock(v) for k,v in turns.items()
+                                  if k == current or k in {m.get('activity_turn') for m in page}},
                 'activity_current':current,
                 'has_more':start>0,'next_cursor':page[0]['id'] if start>0 and page else None,'has_newer':end<len(rows),'reset':reset,'total':len(rows)}
     @staticmethod
