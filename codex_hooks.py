@@ -1120,6 +1120,31 @@ class CodexHookServer:
             "text": "已结束当前命令并请求停止" if killed else "已请求停止，等待当前步骤结束后停下",
         }
 
+    def kill_command(self, tid: str, *, turn_id: str = "") -> dict[str, Any]:
+        """End ONLY the running command; this turn continues and the phone's words go in right after."""
+        with self._lock:
+            active_cmd = dict(self._active_commands[tid]) if tid in self._active_commands else None
+        killed: list[int] = []
+        if active_cmd and active_cmd.get("command"):
+            killed = kill_running_command(
+                active_cmd["command"],
+                list_processes=self._list_processes,
+                kill_process=self._kill_process,
+                current_user=self._current_user,
+                log=self._log,
+            )
+        return {
+            "ok": bool(killed),
+            "killed": bool(killed),
+            "killed_pids": killed,
+            "turn_id": turn_id or (active_cmd.get("turn_id") if active_cmd else ""),
+            "text": (
+                "已结束当前命令，这一轮继续；你的话马上交给 Codex"
+                if killed
+                else "没找到这条命令的进程，可能已经结束了；请刷新后看看"
+            ),
+        }
+
     def submit_answer(self, tid: str, body: dict[str, Any]) -> dict[str, Any]:
         qid = str(body.get("question_id") or "")
         rid = str(body.get("request_id") or "")

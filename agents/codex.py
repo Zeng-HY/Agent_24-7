@@ -94,6 +94,7 @@ class CodexAgent(Agent):
             "search": True,
             "open": True,
             "stop": True,
+            "kill_command": True,
             "queue": True,
             "steer": True,
             "approve": True,
@@ -152,6 +153,7 @@ class CodexAgent(Agent):
                 "search": True,
                 "open": True,
                 "stop": bool(hooks_trusted),
+                "kill_command": bool(hooks_trusted),
                 "queue": True,
                 "steer": True,
                 "approve": bool(hooks_trusted),
@@ -181,6 +183,7 @@ class CodexAgent(Agent):
                     else "遥应的 Codex 钩子还没装上，手机暂时不能批准、停止、回答"
                 )
                 notes["stop"] = hook_reason
+                notes["kill_command"] = hook_reason
                 notes["approve"] = hook_reason
                 notes["answer"] = hook_reason
             return {"capabilities": caps, "notes": notes}
@@ -190,6 +193,7 @@ class CodexAgent(Agent):
             "search": True,
             "open": True,
             "stop": False,
+            "kill_command": False,
             "queue": False,
             "steer": False,
             "approve": False,
@@ -214,6 +218,7 @@ class CodexAgent(Agent):
             "steer": reason,
             "queue": reason,
             "stop": reason,
+            "kill_command": reason,
             "approve": reason,
             "answer": reason,
             "attachments": reason,
@@ -1166,6 +1171,57 @@ class CodexAgent(Agent):
             payload = {**body, "turn_id": body["expected_turn"]}
         self._run_codex_post(handler, payload, lambda bridge: bridge.stop_turn(payload))
 
+    def http_kill_command(self, handler, body: dict) -> None:
+        """11-27 S2: end only the running command; the turn goes on and the phone's steer goes in next."""
+        import codex_apptools
+
+        def run(_bridge):
+            tid = str(body.get("id", ""))
+            bridge = getattr(handler.server, "codex", None)
+            hooks = getattr(bridge, "_codex_hooks", None)
+            if hooks is None or not getattr(hooks, "is_trusted", lambda: False)():
+                raise codex_apptools.AppToolsError(
+                    "请在电脑上结束命令（在 Codex 设置 → Hooks 信任遥应钩子后，才能从手机结束命令）",
+                    409,
+                    code="hooks_not_trusted",
+                    not_submitted=True,
+                )
+            item = chats.find("codex", tid)
+            path = Path(item["path"]) if isinstance(item, dict) and item.get("path") else None
+            state = codex_apptools.latest_turn_state(path)
+            command = codex_apptools.command_state(state, hooks, tid)
+            if command is None:
+                raise codex_apptools.AppToolsError(
+                    "Codex 现在没有正在跑的命令，这一轮照常继续",
+                    409,
+                    code="no_running_command",
+                    not_submitted=True,
+                )
+            if not command.get("can_kill"):
+                raise codex_apptools.AppToolsError(
+                    "手机现在结束不了这条命令（可能是沙盒里跑的）；等它自己结束，或在电脑上停止",
+                    409,
+                    code="command_not_killable",
+                    not_submitted=True,
+                )
+            result = hooks.kill_command(tid, turn_id=str(body.get("turn_id") or ""))
+            if not result.get("killed"):
+                raise codex_apptools.AppToolsError(
+                    str(result.get("text") or "没找到这条命令的进程，可能已经结束了；请刷新后看看"),
+                    409,
+                    code="command_not_found",
+                    not_submitted=True,
+                )
+            return result
+
+        self._run_codex_post(handler, body, run)
+
+    def http_post(self, handler, sub: str, body: dict) -> None:
+        if sub == "kill-command":
+            self.http_kill_command(handler, body)
+            return
+        super().http_post(handler, sub, body)
+
     def http_queue(self, handler, body: dict) -> None:
         payload = body
         if "message_id" not in body and body.get("item_id"):
@@ -1238,6 +1294,8 @@ class CodexAgent(Agent):
             self.http_send(handler, body)
         elif sub == "stop":
             self.http_stop(handler, body)
+        elif sub == "kill-command":
+            self.http_kill_command(handler, body)
         elif sub == "answer":
             self.http_answer(handler, body)
         elif sub == "queue-action":

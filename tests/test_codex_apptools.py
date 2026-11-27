@@ -1117,6 +1117,231 @@ class DeliveryWatcherTests(AppToolsBridgeTests):
         self.assertEqual(result["evidence"]["message_id"], "call-watch-2")
 
 
+class LatestTurnCommandTests(unittest.TestCase):
+    """11-27 S2: a command counts as running until the rollout shows its output."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "rollout.jsonl"
+
+    def _append(self, rec: dict) -> None:
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def _start_turn(self, turn: str = "turn-run") -> None:
+        self._append({"timestamp": TS1, "type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}})
+
+    def _call(self, name: str, call_id: str, input_text: str, kind: str = "custom_tool_call") -> None:
+        self._append({
+            "timestamp": TS2,
+            "type": "response_item",
+            "payload": {"type": kind, "name": name, "call_id": call_id, "input": input_text},
+        })
+
+    def _output(self, call_id: str) -> None:
+        self._append({"timestamp": TS2, "type": "response_item", "payload": {"type": "function_call_output", "call_id": call_id, "output": "done"}})
+
+    @staticmethod
+    def _ts2_ms() -> int:
+        from datetime import datetime
+        return int(datetime.fromisoformat(TS2.replace("Z", "+00:00")).timestamp()) * 1000
+
+    def test_command_runs_until_its_matching_output_arrives(self) -> None:
+        self._start_turn()
+        self._call("exec", "call-run-1", "Start-Sleep 30")
+        state = ca.latest_turn_state(self.path)
+        self.assertEqual(state["command"], {"running": True, "since_ms": self._ts2_ms(), "name": "exec"})
+        self._output("call-run-1")
+        self.assertIsNone(ca.latest_turn_state(self.path)["command"])
+
+    def test_edit_and_message_calls_are_not_commands(self) -> None:
+        self._start_turn()
+        self._call("apply_patch", "call-edit-1", "*** Begin Patch")
+        self._call("send_message_to_thread", "call-msg-1", "hello")
+        self.assertIsNone(ca.latest_turn_state(self.path)["command"])
+
+    def test_turn_end_clears_the_open_command(self) -> None:
+        self._start_turn()
+        self._call("exec", "call-run-2", "dir")
+        self._append({"timestamp": TS2, "type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "turn-run"}})
+        self.assertIsNone(ca.latest_turn_state(self.path)["command"])
+
+    def test_a_newer_command_replaces_the_open_one(self) -> None:
+        self._start_turn()
+        self._call("exec", "call-run-3", "dir")
+        self._call("exec", "call-run-4", "git status")
+        state = ca.latest_turn_state(self.path)
+        self.assertEqual(state["command"]["name"], "exec")
+        self.assertEqual(state["command"]["running"], True)
+        self._output("call-run-3")
+        self.assertTrue(ca.latest_turn_state(self.path)["command"]["running"])  # the newer one is still open
+
+
+class _FakeHooks:
+    def __init__(self, *, trusted: bool = True, permission_mode: str = "bypassPermissions",
+                 command: str = "Start-Sleep 30", killed: bool = True) -> None:
+        self.trusted = trusted
+        self.killed = killed
+        self.kill_calls: list[tuple[str, str]] = []
+        self._active_commands = {TID: {"command": command, "permission_mode": permission_mode, "turn_id": "turn-run"}}
+
+    def is_trusted(self, fresh: bool = False) -> bool:
+        return self.trusted
+
+    def trust_status(self, fresh: bool = False) -> str:
+        return "enabled" if self.trusted else "pending_trust"
+
+    def note_phone_viewing(self, tid: str) -> None:
+        pass
+
+    def latest_progress_step(self, tid: str) -> str:
+        return ""
+
+    def latest_progress(self, tid: str):
+        return None
+
+    def pending_cards(self, tid: str) -> list:
+        return []
+
+    def kill_command(self, tid: str, *, turn_id: str = "") -> dict:
+        self.kill_calls.append((tid, turn_id))
+        return {
+            "ok": self.killed,
+            "killed": self.killed,
+            "killed_pids": [4321] if self.killed else [],
+            "turn_id": turn_id,
+            "text": "已结束当前命令，这一轮继续；你的话马上交给 Codex" if self.killed else "没找到这条命令的进程",
+        }
+
+
+class RunningCommandStateTests(AppToolsBridgeTests):
+    """11-27 S2: the state's `command` field and the kill-command endpoint."""
+
+    def _write_running_command(self) -> None:
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"timestamp": TS2, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-run"}}) + "\n")
+            f.write(json.dumps({"timestamp": TS2, "type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "call-run-1", "input": "Start-Sleep 30",
+            }}) + "\n")
+
+    def _server(self, hooks: _FakeHooks):
+        self.legacy._codex_hooks = hooks
+        self.legacy._apptools_bridge = self.bridge
+        return SimpleNamespace(
+            machine={"name": "测试电脑", "apps": ["codex"], "voice": False},
+            cfg={"token": "secret"},
+            codex=self.legacy,
+            log=SimpleNamespace(write=lambda t: None),
+        )
+
+    def test_state_reports_the_running_command_and_whether_the_phone_may_end_it(self) -> None:
+        self._write_running_command()
+        self.bridge.hooks = _FakeHooks()
+        st = self.bridge.status(TID, fresh=True)
+        self.assertEqual(st["command"]["running"], True)
+        self.assertEqual(st["command"]["since_ms"], 1767323050000)
+        self.assertTrue(st["command"]["can_kill"])
+
+    def test_sandboxed_command_cannot_be_ended_from_the_phone(self) -> None:
+        self._write_running_command()
+        self.bridge.hooks = _FakeHooks(permission_mode="read-only")
+        self.assertFalse(self.bridge.status(TID, fresh=True)["command"]["can_kill"])
+
+    def test_untrusted_hooks_cannot_end_the_command(self) -> None:
+        self._write_running_command()
+        self.bridge.hooks = _FakeHooks(trusted=False)
+        st = self.bridge.status(TID, fresh=True)
+        self.assertTrue(st["command"]["running"])
+        self.assertFalse(st["command"]["can_kill"])
+
+    def test_no_command_means_no_field(self) -> None:
+        self.bridge.hooks = _FakeHooks()
+        self.assertIsNone(self.bridge.status(TID, fresh=True)["command"])
+
+    def test_kill_command_ends_only_the_command(self) -> None:
+        self._write_running_command()
+        hooks = _FakeHooks()
+        server = self._server(hooks)
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-kill"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "POST", "/api/agents/codex/kill-command", {"id": TID, "turn_id": "turn-run"}, protocol=2)
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["killed_pids"], [4321])
+        self.assertEqual(hooks.kill_calls, [(TID, "turn-run")])
+        self.assertIn("这一轮继续", body["text"])
+
+        # The old address answers the same way
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-kill"]):
+            ca.reset_route_cache()
+            code_legacy, body_legacy = _call_http(server, "POST", "/api/codex/kill-command", {"id": TID}, protocol=2)
+        self.assertEqual(code_legacy, 200)
+        self.assertTrue(body_legacy["killed"])
+
+    def test_kill_command_refusals_are_409_with_a_plain_reason(self) -> None:
+        hooks = _FakeHooks(trusted=False)
+        server = self._server(hooks)
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-kill"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "POST", "/api/agents/codex/kill-command", {"id": TID}, protocol=2)
+        self.assertEqual((code, body["code"], body["not_submitted"]), (409, "hooks_not_trusted", True))
+
+        hooks = _FakeHooks()
+        server = self._server(hooks)
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-kill"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "POST", "/api/agents/codex/kill-command", {"id": TID}, protocol=2)
+        self.assertEqual((code, body["code"], body["not_submitted"]), (409, "no_running_command", True))
+
+        self._write_running_command()
+        hooks = _FakeHooks(permission_mode="read-only")
+        server = self._server(hooks)
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-kill"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "POST", "/api/agents/codex/kill-command", {"id": TID}, protocol=2)
+        self.assertEqual((code, body["code"], body["not_submitted"]), (409, "command_not_killable", True))
+
+        hooks = _FakeHooks(killed=False)
+        server = self._server(hooks)
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-kill"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "POST", "/api/agents/codex/kill-command", {"id": TID}, protocol=2)
+        self.assertEqual((code, body["code"], body["not_submitted"]), (409, "command_not_found", True))
+
+    def test_capabilities_report_whether_the_phone_may_end_a_command(self) -> None:
+        import codex_hooks as ch
+
+        server = SimpleNamespace(machine={"apps": ["codex"], "voice": False}, cfg={"token": "secret"},
+                                 codex=self.legacy, log=SimpleNamespace(write=lambda t: None))
+        self.legacy._apptools_bridge = self.bridge
+        fake_home = self.root / "kill_caps_home"
+        fake_home.mkdir()
+        ch.set_default_codex_home_override(fake_home)
+        self.addCleanup(ch.set_default_codex_home_override, None)
+        ch.reset_trust_cache()
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-caps"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+        self.assertFalse(body["capabilities_now"]["kill_command"])
+        self.assertIn("kill_command", body["capability_notes"])
+
+        ch.install_hooks(self.root / "TeleplyCodexHook.exe", codex_home=fake_home, log=lambda _t: None)
+        hp = fake_home / "hooks.json"
+        (fake_home / "config.toml").write_text(
+            f"[hooks.state.'{hp}:pre_tool_use:0:0']\ntrusted_hash = \"h1\"\n"
+            f"[hooks.state.'{hp}:permission_request:0:0']\ntrusted_hash = \"h2\"\n"
+            f"[hooks.state.'{hp}:stop:0:0']\ntrusted_hash = \"h3\"\n",
+            encoding="utf-8",
+        )
+        ch.reset_trust_cache()
+        with patch.object(ca, "_list_pipes", return_value=["codex-app-tools-caps"]):
+            ca.reset_route_cache()
+            code, body = _call_http(server, "GET", f"/api/agents/codex/state?id={TID}", protocol=2)
+        self.assertTrue(body["capabilities_now"]["kill_command"])
+        self.assertNotIn("kill_command", body["capability_notes"])
+
+
 class ChatsDisplayStep1Tests(unittest.TestCase):
     def test_self_delegation_counts_as_own_message_and_other_chat_keeps_origin(self) -> None:
         def make_line(source_id: str, ident: str, text: str) -> bytes:

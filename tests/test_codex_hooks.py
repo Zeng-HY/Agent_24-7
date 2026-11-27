@@ -291,6 +291,65 @@ class HookServerCoreTests(unittest.TestCase):
             "",
         )
 
+    def test_kill_command_ends_only_that_command_without_stopping_the_turn(self) -> None:
+        killed: list[int] = []
+        fake_procs = [
+            {"pid": 500, "ppid": 4, "name": "codex.exe", "cmdline": "codex.exe", "owner": r"PC\alice"},
+            {
+                "pid": 501,
+                "ppid": 500,
+                "name": "pwsh.exe",
+                "cmdline": r'"C:\Apps\codex-primary-runtime\pwsh.exe" -Command "Start-Sleep 30"',
+                "owner": r"PC\alice",
+            },
+            {
+                "pid": 502,
+                "ppid": 500,
+                "name": "pwsh.exe",
+                "cmdline": r'"C:\Apps\codex-primary-runtime\pwsh.exe" -Command "git status"',
+                "owner": r"PC\alice",
+            },
+        ]
+        server = ch.CodexHookServer(
+            pipe_name=r"\\.\pipe\teleply-unused",
+            list_processes=lambda: list(fake_procs),
+            kill_process=lambda pid: killed.append(pid) or True,
+            current_user="alice",
+        )
+        server.note_phone_viewing(TID)
+        self.assertEqual(
+            server.handle_event("PreToolUse", {
+                "session_id": TID, "turn_id": "turn-kill", "tool_name": "Bash",
+                "permission_mode": "bypassPermissions", "tool_input": {"command": "Start-Sleep 30"},
+            }),
+            "",
+        )
+
+        result = server.kill_command(TID, turn_id="turn-kill")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["killed"])
+        self.assertEqual(result["killed_pids"], [501])
+        self.assertEqual(killed, [501])
+        self.assertEqual(result["turn_id"], "turn-kill")
+        with server._lock:
+            self.assertNotIn(TID, server._stop_flags)  # the turn is not stopped
+
+        # The next tool call in the same turn is allowed (no stop-deny mark)
+        self.assertEqual(
+            server.handle_event("PreToolUse", {
+                "session_id": TID, "turn_id": "turn-kill", "tool_name": "Bash",
+                "tool_input": {"command": "echo after-kill"},
+            }),
+            "",
+        )
+
+        # No recorded command -> nothing to end
+        bare = ch.CodexHookServer(pipe_name=r"\\.\pipe\teleply-unused", list_processes=lambda: [],
+                                  kill_process=lambda pid: True, current_user="alice")
+        bare_result = bare.kill_command(TID)
+        self.assertFalse(bare_result["ok"])
+        self.assertEqual(bare_result["killed_pids"], [])
+
     def test_stop_hook_queue_handoff_and_stop_hook_active_loop_guard(self) -> None:
         queue = [{"id": "q1", "prompt": "请继续做下一步"}, {"id": "q2", "prompt": "最后再检查一遍"}]
         server = ch.CodexHookServer(

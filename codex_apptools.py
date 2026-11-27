@@ -67,6 +67,47 @@ def _log_request_tag(request_id: Any) -> str:
     return re.sub(r"[^0-9A-Za-z-]", "", str(request_id or ""))[:8]
 
 
+# 11-27 S2: permission modes whose commands run in Codex's sandbox account. kill_running_command
+# never touches that account, so the phone must not offer to end such a command.
+SANDBOX_PERMISSION_MODES = {
+    "default",
+    "read-only",
+    "readonly",
+    "workspace-write",
+    "workspacewrite",
+    "plan",
+    "acceptedits",
+    "accept-edits",
+    "on-request",
+    "on-request-approval",
+    "on-failure",
+    "untrusted",
+    "sandbox",
+}
+
+
+def is_full_access_permission(mode: Any) -> bool:
+    """True unless the recorded mode is a known sandbox mode (a missing mode is not proven sandboxed)."""
+    text = str(mode or "").strip().lower()
+    return text not in SANDBOX_PERMISSION_MODES
+
+
+def command_state(file_state: dict | None, hooks: Any, tid: str) -> dict[str, Any] | None:
+    """The `command` field phones read (6.3): running command and whether this phone may end it."""
+    command = (file_state or {}).get("command") if isinstance(file_state, dict) else None
+    if not isinstance(command, dict) or not command.get("running"):
+        return None
+    can_kill = False
+    if hooks is not None and getattr(hooks, "is_trusted", lambda: False)():
+        active = getattr(hooks, "_active_commands", {}).get(tid) or {}
+        can_kill = bool(active.get("command")) and is_full_access_permission(active.get("permission_mode"))
+    return {
+        "running": True,
+        "since_ms": int(command.get("since_ms") or 0),
+        "can_kill": bool(can_kill),
+    }
+
+
 class _CallTimes:
     """Milliseconds spent inside each kind of pipe call during one request (11-27 S4)."""
 
@@ -554,7 +595,7 @@ class AppToolsClient:
 
 
 def latest_turn_state(path: Path | None) -> dict[str, Any]:
-    """Read tail of a Codex rollout JSONL to find latest turn id, running status, timestamps and step."""
+    """Read tail of a Codex rollout JSONL to find latest turn id, running status, timestamps, step and command."""
     info: dict[str, Any] = {
         "turn_id": None,
         "running": None,
@@ -563,6 +604,7 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
         "step": "",
         "recent_turns": [],
         "stale": False,
+        "command": None,
     }
     if path is None or not path.is_file():
         return info
@@ -581,6 +623,27 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
     turns: dict[str, str] = {}
     turn_order: list[str] = []
     latest_ts = ""
+    # 11-27 S2: the last exec-like call in the tail that has no matching output yet.
+    open_command: dict[str, Any] | None = None
+
+    def open_call(call_id: Any, name: Any, argument: Any, ts: str) -> None:
+        nonlocal open_command
+        step = chats._step_of("codex", str(name or ""), str(argument or ""))
+        if step != "run":
+            return
+        open_command = {
+            "call_id": str(call_id or ""),
+            "name": str(name or ""),
+            "since_ms": unix(ts) * 1000,
+        }
+
+    def close_call(call_id: Any) -> None:
+        nonlocal open_command
+        if open_command is None:
+            return
+        if not call_id or not open_command.get("call_id") or str(call_id) == str(open_command["call_id"]):
+            open_command = None
+
     for raw in lines:
         try:
             rec = json.loads(raw)
@@ -608,6 +671,7 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
                 info["turn_started"] = unix(ts)
                 info["turn_ended"] = 0
                 info["step"] = ""
+                open_command = None
             elif ev in ("task_complete", "turn_aborted"):
                 status = "interrupted" if ev == "turn_aborted" else "completed"
                 key = tid or info["turn_id"]
@@ -619,16 +683,44 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
                 info["running"] = False
                 info["turn_ended"] = unix(ts)
                 info["step"] = ""
-        elif kind == "response_item" and payload.get("type") in ("function_call", "custom_tool_call"):
-            step = chats._step_of("codex", str(payload.get("name") or ""), str(payload.get("input") or ""))
-            if step:
-                info["step"] = step
+                open_command = None
+            elif ev == "item_completed":
+                item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+                item_type = str(item.get("type") or "")
+                if item_type in ("FunctionCall", "CustomToolCall"):
+                    open_call(
+                        item.get("call_id") or item.get("id"),
+                        item.get("name"),
+                        item.get("input") if "input" in item else item.get("arguments"),
+                        ts,
+                    )
+                elif item_type in ("FunctionCallOutput", "CustomToolCallOutput"):
+                    close_call(item.get("call_id") or item.get("id"))
+        elif kind == "response_item":
+            item_type = str(payload.get("type") or "")
+            if item_type in ("function_call", "custom_tool_call"):
+                step = chats._step_of("codex", str(payload.get("name") or ""), str(payload.get("input") or ""))
+                if step:
+                    info["step"] = step
+                open_call(
+                    payload.get("call_id") or payload.get("id"),
+                    payload.get("name"),
+                    payload.get("input") if "input" in payload else payload.get("arguments"),
+                    ts,
+                )
+            elif item_type in ("function_call_output", "custom_tool_call_output"):
+                close_call(payload.get("call_id") or payload.get("id"))
 
     if info["running"] is True:
         last_at = unix(latest_ts) or int(st.st_mtime)
         if time.time() - last_at >= chats.STALE_SECONDS:
             info["stale"] = True
     info["recent_turns"] = [{"id": tid, "status": turns[tid]} for tid in turn_order[-4:]]
+    info["command"] = (
+        {"running": True, "since_ms": open_command["since_ms"], "name": open_command["name"]}
+        if open_command
+        else None
+    )
     return info
 
 
@@ -1463,6 +1555,7 @@ class AppToolsBridge:
                 "queued": queued,
                 "queue_available": True,
                 "images": self.message_images(tid),
+                "command": command_state(file_state, self.hooks, tid),
                 "observed_at": int(time.time() * 1000),
             }
             if hook_notice:
