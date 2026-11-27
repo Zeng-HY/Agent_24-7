@@ -186,4 +186,48 @@
 
 ### 8.3 线 C 安卓
 
-（待填）
+已完成 S1、S5、S2、S3 的安卓部分，文字和流程按第 4.1 到 4.4 节。
+
+**S1 干活时直接插话**
+- 运行中**点**发送键就是插话（`send(queue = false)`，请求体 `intent: "steer"`）；不再默认「发送并排队」。
+- 运行中**按住**发送键弹出「排队到这一轮结束后再发」，选了才 `send(queue = true)`。只在助手同时有插话和排队时出现；只有一种的照它支持的那一种（Claude 只有插话，运行中直接插话）。
+- 运行中的无障碍标签是「发送（插话）」，长按提示「按住可排队」。不在运行时仍是「发送」。
+- 已经排队的消息和「立即补充」照旧。
+
+**S5 插话等待时说清楚在等什么**
+- 一条标签为「已接收」、请求体 `intent` 是 `steer` 的发送，在输入卡上方显示「等 Codex 做完这一步再插进去 · 已等 N 秒」；N 从收到电脑回答那一刻起算，每秒更新。变成「已送达」或移除后消失。
+- 助手名字取当前助手的名字（Codex / Claude / …）。
+
+**S2 结束命令，马上插话**
+- 等待行出现、控制态里 `command.running && command.can_kill`、`capabilities_now.kill_command` 为真时，同一行多一个「结束这条命令，马上插话」。
+- 点击先弹确认：「Codex 正在跑的这条命令会被结束，它的结果作废；你的话会马上交给 Codex。」确认后只调 `kill-command`，不带停止标记。
+- 成功显示「已结束命令，正在插话…」，并重读一次控制态让按钮消失；失败显示电脑给的原因。老电脑没有 `command` 时不显示按钮。
+
+**S3 手机这一半**
+- 发送、「立即补充」、`kill-command` 都用单调时钟记来回总时间；回答里有 `server_ms` 时算出「网络和中转」= 来回 − `server_ms`（不小于 0）。
+- 每次发送带 `client_sent_ms`；下一次发送把上一次的 `{request_id, roundtrip_ms, server_ms}` 放进 `client_prev`。重发沿用第一次请求体里存下的这两个字段，不换成新值（第 6.2 节）。
+- 诊断测速开启时，输入卡上方在测速提示处多显示一行「手机→电脑 0.6 秒 · 电脑处理 3.2 秒」，出现时机和原来的测速提示相同，不会更常弹出。`Diagnostics.kt`/`SettingsUi.kt` 不在第 5 节列出的文件里，所以没有改原来的 toast；这一段放在 `ComposerUi.kt` 的输入卡上方。
+
+**演示数据**
+- 新建 `FixtureSteerStory.kt`：对话「插话等待示例」。Codex 正在跑「列下载目录」，一条插话标签「已接收」，打开就能看到等待行和「结束这条命令，马上插话」；确认结束后命令字段变 `null`，显示「已结束命令，正在插话…」，按钮消失。演示列表因此多一条对话（分页后的测试期望从 13/14 改为 14/15）。
+
+**改了哪些文件**
+- 代码：`ChatController.kt`（发送/派发/插话等待/`kill-command`/计时与 `client_prev`）、`ComposerUi.kt`（发送键点按与长按、等待行、确认框、测速那一段）、`RelayApi.kt`（允许 `kill-command` 路由）、`FixtureApi.kt`（演示场景的控制态、回执和 `kill-command`）；新建 `FixtureSteerStory.kt`。
+- 测试：新建 `SpeedSteerTest.kt`（8 条）；`ReaderUiScenarios.kt` 新增一条等待行/结束命令的界面场景，并把演示列表条数从 13/14 改为 14/15。
+- 文档：本节。
+- 没改 `Models.kt`（`Control.command` 直接从控制态原文读，够了）；没有改版本号。
+
+**测试数字**
+- 开工前基线：`gradlew.bat --offline testDebugUnitTest`，370 个测试全部通过（34 个结果文件，0 失败）。
+- 做完：`gradlew.bat --offline testDebugUnitTest`，379 个测试全部通过（35 个结果文件，0 失败，新增 9 条）；`gradlew.bat --offline assembleDebug` 通过。
+
+**模拟器**
+- AVD `AgentRemoteFresh`（`-no-window -gpu swiftshader_indirect`），debug 包 `com.pocketagentdesk.teleply.dev`：设置 → 开发者选项 → 打开本地示例 → 进入示例 → 测试电脑 A → 插话等待示例。
+- 看到等待行和「已等 N 秒」每秒在走、「结束这条命令，马上插话」在行内；输入文字后按住发送键弹出「排队到这一轮结束后再发」；确认框文字与设计一致；确认后显示「已结束命令，正在插话…」，按钮消失，程序没有崩溃（logcat 无 FATAL）。
+- 截图在工作区 `F:\Android-Dev\work\20261101-island-duplicates\20261127-and-1013\`：`shot-01-steer-wait.png`（等待行 + 按钮）、`shot-02-confirm.png`（确认框）、`shot-03-killed.png`（已结束命令）、`shot-04-queue-menu.png`（长按排队菜单）。
+
+**没做什么、要看的**
+- 没有推送、合并、打包、签名、上传；没有连真手机；没有读真实对话记录，没有调用真实电脑端。演示内容全部编造。
+- 没有改版本号。
+- S3 的数字只在 `Diagnostics` 开启时显示；因为文件限制没有并进原来的 toast，而是输入卡上方单独一行。如果希望并进 toast，需要允许改 `Diagnostics.kt`/`SettingsUi.kt`。
+- 重发时的请求体沿用第一次存下的 `client_sent_ms`/`client_prev`；这一点有测试覆盖（`resendKeepsTheOriginalTimingFields`）。

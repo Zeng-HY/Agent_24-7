@@ -473,7 +473,8 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         return parseControl(raw.apply { if (app == "deepseek") { put("queue_available", true); DeepSeekUnshown.forEach { remove(it) } } })
     }
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
-        require(route in setOf("send","stop","queue-action","answer"))
+        // 11-27 S2 (design §6.4): kill-command ends only the running command, never the turn.
+        require(route in setOf("send","stop","queue-action","answer","kill-command"))
         return when (app) {
             "deepseek" -> {
                 val outgoing = JSONObject(body.toString())

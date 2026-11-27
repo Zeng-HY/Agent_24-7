@@ -153,7 +153,10 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     }
 
     override suspend fun receipt(device: String, chat: String, request: String) = net().let {
-        world.receipts[request] ?: if (request == FixtureSendStory.MISSING_REQUEST) FixtureSendStory.missingReceipt() else JSONObject().put("state", "unknown")
+        world.receipts[request]
+            ?: if (request == FixtureSendStory.MISSING_REQUEST) FixtureSendStory.missingReceipt()
+            else if (request == FixtureSteerStory.REQUEST) FixtureSteerStory.steerReceipt()
+            else JSONObject().put("state", "unknown")
     }
 
     override suspend fun config() = "fixture"
@@ -304,6 +307,8 @@ class FixtureWorld {
     private val claudePicked = mutableSetOf("t-choice-3")
     private var deepseekDecided = false
     private var running = mutableMapOf<String, Boolean>()
+    /** 11-27: the demo steer story's running command was ended by 结束这条命令. */
+    var steerKilled = false
     private var turns = mutableMapOf<String, String>()
     private var turnCount = 0
     private var nextPressed = ""
@@ -339,6 +344,7 @@ class FixtureWorld {
         Chat(UNGROUPED, "未分组的会话", "", "不在 DeepSeek 工作区里，多是脚本或命令行开的一次性会话", "idle", "deepseek", NOW - 14_400_000, group = true,
             children = listOf(Chat("ds-stray-1", "整理下载目录（脚本）", "", "", "idle", "deepseek", NOW - 14_400_000, kind = "script")), childCount = 1),
         FixtureSendStory.chat(),
+        FixtureSteerStory.chat(),
     )
     fun firstPage() = (created.map { it.first }.reversed() + all()).filter { "${it.app}:${it.id}" !in archivedKeys && "${it.app}:${it.id}" !in deleted }
 
@@ -455,6 +461,17 @@ class FixtureWorld {
         if (chat == AWAY_CODEX_STUCK) return Control(false, false, "", false, emptyList(), emptyMap(), false,
             if (codexOpenNotTaken) CODEX_NOT_TAKEN else CODEX_AWAY)
         if (chat == AWAY_CLAUDE) return awayClaude(chat !in away, run, turn, queued, turnMap)
+        // 11-27: Codex is running a command, and the phone's steer waits for that step to finish. After the demo's
+        // 结束这条命令 the command field goes to null (the turn itself keeps going).
+        if (chat == FixtureSteerStory.CHAT) {
+            val raw = JSONObject(CODEX_STATE)
+                .put("questions", JSONArray())
+                .put("running", true)
+                .put("turn_id", "steer-turn")
+                .put("command", if (steerKilled) JSONObject.NULL else JSONObject().put("running", true).put("since_ms", NOW - 8_000).put("can_kill", true))
+                .put("capabilities_now", JSONObject().put("kill_command", !steerKilled).put("send_modes", JSONArray(listOf("send", "steer", "queue"))))
+            return Control(true, true, "steer-turn", true, queued, mapOf("steer-turn" to "inProgress"), false, raw.toString())
+        }
         // A conversation the demo just created, or Codex made from a reply, has nothing waiting in it.
         if (created.any { it.first.id == chat } || chat == MADE_THREAD) return when (app) {
             "claude" -> Control(true, false, "", true, emptyList(), emptyMap(), false, JSONObject(CLAUDE_STATE).apply { remove("prompt") }.toString())
@@ -525,6 +542,8 @@ class FixtureWorld {
     }
 
     fun command(app: String, route: String, body: JSONObject): JSONObject {
+        // 11-27 S2: 结束这条命令 ends only the demo's running command; there is no turn stop here.
+        if (route == "kill-command") return killCommand(body)
         // 通用布局的答复（第二批 A3）：记下请求体，卡片标成答过，回一句中文结果。
         if (app == "testing" && route == "answer") {
             testingAnswers += JSONObject(body.toString())
@@ -552,9 +571,21 @@ class FixtureWorld {
                 "accepted"
             }
         }
-        val result = JSONObject().put("request_id", rid).put("accepted", true).put("delivery_state", state)
+        val result = JSONObject().put("request_id", rid).put("accepted", true).put("delivery_state", state).put("server_ms", 20)
         receipts[rid] = JSONObject().put("request_id", rid).put("state", state).put("result", result)
         return result
+    }
+
+    /**
+     * 11-27 S2: the demo computer ends the command in [FixtureSteerStory.CHAT] and leaves the turn running. Asking again,
+     * or asking for a conversation that has no command, is refused the way the real computer refuses (409, a reason).
+     */
+    fun killCommand(body: JSONObject): JSONObject {
+        if (body.string("id") != FixtureSteerStory.CHAT) throw ServiceFailure(409, detail = "这个对话里没有正在跑的命令", notSubmitted = true)
+        if (steerKilled) throw ServiceFailure(409, detail = "这条命令已经结束了", notSubmitted = true)
+        steerKilled = true
+        return JSONObject().put("ok", true).put("killed", true).put("killed_pids", JSONArray().put(4242))
+            .put("text", "本地示例：已结束那条命令").put("server_ms", 40)
     }
 
     /**
@@ -748,6 +779,7 @@ class FixtureWorld {
 
     fun messages(app: String, chat: String): List<Message> = when {
         chat == FixtureSendStory.CHAT -> FixtureSendStory.messages()
+        chat == FixtureSteerStory.CHAT -> FixtureSteerStory.messages()
         created.any { it.first.id == chat } -> created.first { it.first.id == chat }.second.let { text ->
             listOf(Message("$chat-1", "user", text.ifBlank { "请查看这些图片或引用。" }), Message("$chat-2", "assistant", "本地示例：收到，这是固定的回复。"))
         }

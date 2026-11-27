@@ -721,6 +721,22 @@ abstract class ReaderUiScenarios {
         compose.onNodeWithTag("composer").assertTextContains("")
         compose.onNodeWithText("批准",substring=false).assertDoesNotExist()
     }
+    /**
+     * 11-27 S5/S2: the demo conversation where Codex runs a command and a steer waits. The waiting line, the kill
+     * button, its confirmation, the success line, and the button going once the command is gone.
+     */
+    @Test fun steerWaitDemoShowsWaitingLineAndEndsTheCommand() {
+        launch();fixtureList();openChat("插话等待示例","steer-wait-demo")
+        compose.waitUntil(10000) { vm.composer.state.value.control.running && vm.composer.state.value.submissions.any { it.label=="已接收" } }
+        compose.onNodeWithText("等 Codex 做完这一步再插进去",substring=true).assertExists()
+        compose.onNodeWithContentDescription("发送（插话）").assertExists()
+        compose.onNodeWithContentDescription("结束这条命令，马上插话").assertExists().performClick()
+        compose.onNodeWithText("Codex 正在跑的这条命令会被结束，它的结果作废；你的话会马上交给 Codex。").assertExists()
+        compose.onNodeWithText("结束命令").performClick()
+        compose.waitUntil(10000) { vm.composer.state.value.killNote.isNotBlank() }
+        compose.onNodeWithText("已结束命令，正在插话…").assertExists()
+        compose.onNodeWithContentDescription("结束这条命令，马上插话").assertDoesNotExist()
+    }
     @get:Rule val compose=createComposeRule()
     protected lateinit var vm:ReaderViewModel
     protected lateinit var androidView:android.view.View
@@ -841,7 +857,7 @@ abstract class ReaderUiScenarios {
     @Test fun fixtureNavigationPaginationAndBack() {
         launch();fixtureList()
         listRow("加载更多对话").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==14 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.chats.size==15 }
         listRow("原生阅读示例").performClick()
         compose.waitUntil(10000) { vm.state.value.screen==Screen.Reading && !vm.state.value.busy }
         compose.onNodeWithContentDescription("返回").assertHasClickAction().performClick()
@@ -860,7 +876,7 @@ abstract class ReaderUiScenarios {
         compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listStatus=="running" }
         compose.onNodeWithText("没有找到对话").assertIsDisplayed()
         compose.onNodeWithText("清除筛选").performClick()
-        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==13 }
+        compose.waitUntil(10000) { !vm.state.value.busy && vm.state.value.listSource=="all" && vm.state.value.listStatus=="all" && vm.state.value.chats.size==14 }
     }
     /** 11-02: 已结束 asked for done, which the computer refuses: 状态筛选无效 instead of the rows. */
     @Test fun theEndedStateShowsTheFinishedRows() {

@@ -1,17 +1,41 @@
 package com.pocketagentdesk.teleply
 
 import java.util.UUID
+import kotlin.time.TimeSource
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
+/** 11-27 S3: the last request's numbers, kept so the next send can carry them in `client_prev` (design §6.2). */
+data class SendTiming(val requestId:String, val roundtripMs:Long, val serverMs:Long?)
+/** What the phone measured for the last send, promote or kill-command: the whole round trip, and the computer's own part. */
+data class SendSpeed(val serial:Long, val roundtripMs:Long, val serverMs:Long?, val networkMs:Long)
+/** The network and relay part: the whole round trip less what the computer says it spent (never below zero). */
+fun networkMs(roundtripMs:Long, serverMs:Long):Long = (roundtripMs-serverMs).coerceAtLeast(0)
+/** A send whose body asks for a steer (4.2: the waiting line is for these only). */
+internal fun isSteerSend(record:Submission):Boolean = record.action=="send" &&
+    runCatching { JSONObject(record.body).string("intent") }.getOrDefault("")=="steer"
+/** The one steer the computer has taken and not yet delivered; its waiting line shows above the input card. */
+internal fun waitingSteer(submissions:List<Submission>):Submission? =
+    submissions.firstOrNull { it.label=="已接收" && isSteerSend(it) }
+/** 11-27 S2: the kill button needs a running command it may end, and a computer whose table says kill_command. */
+internal fun canKillCommand(raw:JSONObject):Boolean {
+    val command=raw.optJSONObject("command") ?: return false
+    if(!command.optBoolean("running") || !command.optBoolean("can_kill")) return false
+    return raw.optJSONObject("capabilities_now")?.optBoolean("kill_command")==true
+}
+
 /** [focus] counts requests for the input to take the keyboard (继续修改 a Codex plan); [hint] then shows in the empty box.
  * [sent] counts sends from this page, so the page follows the bottom again (11-16). */
 data class ComposerState(val key:ChatKey?=null,val draft:String="",val ready:Boolean=false,val submitting:Boolean=false,val control:Control=Control(),val connection:String="实时连接未启动",val submissions:List<Submission> = emptyList(),val error:String?=null,val revision:Int=0,val draftReset:Int=0,val focus:Int=0,val hint:String="",val sent:Int=0,
     /** 核对 in progress for this request; then its one-line result [checkNote] for a few seconds ([checked]). */
-    val checking:String="",val checked:String="",val checkNote:String="")
+    val checking:String="",val checked:String="",val checkNote:String="",
+    /** 11-27 S5/S2: when each steer was accepted (S5's seconds start here), and the kill-command's one line. */
+    val steerSince:Map<String,Long> = emptyMap(),val killNote:String="",val killFailed:Boolean=false,val killBusy:Boolean=false,
+    /** 11-27 S3: what the last send measured, for the speed hint. */
+    val lastSpeed:SendSpeed?=null)
 
 /**
  * Kept in a send's local copy (its body), never sent: where Claude's record stood when the computer pressed Enter and
@@ -56,6 +80,9 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     private val inFlight=mutableSetOf<ChatKey>()
     private val draftVersions=mutableMapOf<ChatKey,Long>()
     private val confirming=mutableSetOf<String>()
+    /** 11-27 S3: the last timed request per conversation, and a counter so the speed hint is drawn for each one. */
+    private val timings=mutableMapOf<ChatKey,SendTiming>()
+    private var speedSerial=0L
     private fun update(k:ChatKey,f:(ComposerState)->ComposerState) { if(key==k) mutable.update(f) }
     fun bind(next:ChatKey?,service:ReadApi?,active:Boolean,synthetic:Boolean,onFrame:(LiveFrame)->Unit) {
         if(key==next && api===service && foreground==active && fixture==synthetic) return
@@ -70,6 +97,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                     val draft=if(synthetic) memory[next].orEmpty() else writes.withLock { persistent.draft(next) }
                     // The demo's 11-26 story: a send the computer never got, seeded once per demo conversation.
                     if(synthetic) FixtureSendStory.seed(demo,next)
+                    // 11-27: the steer that waits for Codex's running command, so the waiting line and kill button show.
+                    if(synthetic) FixtureSteerStory.seed(demo,next)
                     val records=if(synthetic) demo.values.filter { it.scope==next.scope && it.device==next.device && it.chat==next.chat && it.app==next.app } else persistent.submissions(next)
                     if(t!=token) return@launch
                     memory[next]=draft
@@ -273,7 +302,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
         val canSendNow=if(queue) ("queue" in caps.sendModes && caps.queue && s.control.queueAvailable) else if(s.control.running) ("steer" in caps.sendModes || "send" in caps.sendModes) else ("send" in caps.sendModes)
         if(action=="send" && !planned && (!canSendNow || (s.draft.isBlank() && !hasExtras) || s.draft.trim().length>info.params.maxText) || action=="stop" && (!caps.stop || !s.control.running) || promote && (!s.control.running || (!caps.steer && "steer" !in caps.sendModes)) || planned && (!canPlan || s.control.running)) { inFlight.remove(k);return }
         // 11-16: the page follows the bottom again as soon as you send (the bubble comes once its copy is written).
-        if(action=="send") update(k) { it.copy(sent=it.sent+1) }
+        if(action=="send") update(k) { it.copy(sent=it.sent+1,killNote="",killFailed=false) }
         val rid=UUID.randomUUID().toString()
         val body=JSONObject().put("id",k.chat)
         when(action) {
@@ -290,6 +319,14 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             "queue-action" -> { body.put("request_id",rid).put("message_id",message).put("action",if(promote) "promote" else "cancel");if(promote) body.put("expected_turn",s.control.turn) }
         }
         if(action=="send" && !planned) extra.keys().forEach { body.put(it,extra.get(it)) }
+        // 11-27 S3 (design §6.2): the phone's own time, and last request's numbers for the computer's log. A resend
+        // reuses its stored body instead, so these stay the first send's values.
+        if(action=="send") {
+            body.put("client_sent_ms",System.currentTimeMillis())
+            timings[k]?.let { t ->
+                body.put("client_prev",JSONObject().put("request_id",t.requestId).put("roundtrip_ms",t.roundtripMs).apply { t.serverMs?.let { put("server_ms",it) } })
+            }
+        }
         val text=when { planned -> "执行计划";action=="send" -> s.draft;action=="stop" -> "停止当前轮次";promote -> "立即补充";else -> "取消排队" }
         val record=Submission(rid,k.scope,k.device,app=k.app,chat=k.chat,text=text,action=action,turn=s.control.turn,body=body.toString())
         val synthetic=fixture
@@ -318,16 +355,24 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                 val clear=clearDraft && (draftVersions[k] ?: 0)==version
                 it.copy(draft=if(clear) "" else it.draft,draftReset=it.draftReset+if(clear) 1 else 0,submissions=listOf(record)+it.submissions)
             }
+            val clock=TimeSource.Monotonic.markNow()
             val result=service.command(k.device,action,body)
+            val roundtrip=clock.elapsedNow().inWholeMilliseconds
             if(action!="stop" && isCodexLayout(k.app)) { require(result.string("request_id")==record.request) { "回执身份不匹配" } }
+            // 11-27 S3: a send or 立即补充 is timed here, where the network really is. 重发 counts too, for the next one.
+            if(action=="send" || action=="queue-action" && body.string("action")=="promote") rememberTiming(k,record.request,roundtrip,result)
             if(action=="send" && isClaudeLayout(k.app) && result.optBoolean("pressed")) {
                 // The computer pressed Enter in Claude's box. Whether Claude read it is then looked for in its record (web chat/check).
                 val pressed=record.copy(label="已接收",body=JSONObject(record.body).put(ClaudeOffset,result.optLong("offset")).put(ClaudeCheckText,result.string("check_text").ifBlank { body.string("text") }).toString())
                 save(pressed,synthetic)
+                markSteerAccepted(k,pressed)
                 scope.launch { confirmClaude(pressed,service,synthetic) }
             } else {
                 val label=if(action=="stop" && result.optBoolean("ended")) "该轮已结束" else receiptLabel(result.string("delivery_state").ifBlank { if(result.optBoolean("accepted")) "accepted" else "unknown" },result,action)
-                save(record.copy(label=label),synthetic)
+                val saved=record.copy(label=label)
+                save(saved,synthetic)
+                // 11-27 S5: the waiting line's seconds start when the computer's answer says it took the steer.
+                markSteerAccepted(k,saved)
             }
             val control=runCatching { service.control(k.device,k.chat) }.getOrNull()
             if(control!=null && binding==token && foreground) { update(k) { it.copy(control=mergeControl(it.control,control)) };seen(k) }
@@ -341,6 +386,48 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             }
             else update(k) { it.copy(error="无法保存提交快照，尚未发送。") }
         } finally { inFlight.remove(k);update(k) { it.copy(submitting=false) } }
+    }
+    /** 11-27 S3: keeps the request's numbers for `client_prev` and hands the speed hint what it measured. */
+    private fun rememberTiming(k:ChatKey,request:String,roundtripMs:Long,result:JSONObject) {
+        val server=if(result.has("server_ms")) result.optLong("server_ms",-1).takeIf { it>=0 } else null
+        timings[k]=SendTiming(request,roundtripMs,server)
+        val speed=SendSpeed(++speedSerial,roundtripMs,server,server?.let { networkMs(roundtripMs,it) } ?: 0L)
+        update(k) { it.copy(lastSpeed=speed) }
+    }
+    /** 11-27 S5: an accepted steer starts its waiting seconds now; a new send clears an older kill-command line. */
+    private fun markSteerAccepted(k:ChatKey,record:Submission) {
+        if(record.label=="已接收" && isSteerSend(record)) update(k) { it.copy(steerSince=it.steerSince+(record.request to System.currentTimeMillis()),killNote="",killFailed=false) }
+    }
+    /**
+     * 11-27 S2 (design §6.4): ends only the command Codex is running, not its turn. The steer waiting behind it then goes
+     * in. A refusal shows the computer's own words; nothing is sent again.
+     */
+    fun killCommand(record:Submission) {
+        val k=key ?: return;val service=api ?: return
+        if(k!=ChatKey(record.scope,record.device,record.chat,record.app) || record.label!="已接收" || !isSteerSend(record)) return
+        val raw=runCatching { JSONObject(state.value.control.raw) }.getOrDefault(JSONObject())
+        if(!canKillCommand(raw) || state.value.killBusy) return
+        val body=JSONObject().put("id",k.chat)
+        if(record.turn.isNotBlank()) body.put("turn_id",record.turn)
+        val binding=token
+        update(k) { it.copy(killBusy=true,killNote="",killFailed=false) }
+        scope.launch {
+            try {
+                val clock=TimeSource.Monotonic.markNow()
+                val result=service.command(k.device,"kill-command",body)
+                val roundtrip=clock.elapsedNow().inWholeMilliseconds
+                if(!result.optBoolean("ok",true)) throw ServiceFailure(409,detail=result.string("text").ifBlank { "电脑没能结束这条命令" })
+                rememberTiming(k,record.request,roundtrip,result)
+                if(binding==token) update(k) { it.copy(killNote="已结束命令，正在插话…",killFailed=false) }
+                // The command is gone now: read the state again so the button goes with it.
+                val control=runCatching { service.control(k.device,k.chat) }.getOrNull()
+                if(control!=null && binding==token && foreground) { update(k) { it.copy(control=mergeControl(it.control,control)) };seen(k) }
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) {
+                val reason=if(e is ServiceFailure) e.detail.ifBlank { e.message.orEmpty() } else e.message.orEmpty()
+                if(binding==token) update(k) { it.copy(killNote=reason.ifBlank { "没能结束这条命令" },killFailed=true) }
+            } finally { if(binding==token) update(k) { it.copy(killBusy=false) } }
+        }
     }
     /** Looks for a Claude send in its record for up to 25 s, as the web does after Enter: read, queued, or still unconfirmed. */
     private suspend fun confirmClaude(record:Submission,service:ReadApi,synthetic:Boolean) {
@@ -366,7 +453,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     private suspend fun save(record:Submission,synthetic:Boolean) {
         try {
             writes.withLock { if(synthetic) demo[record.request]=record else persistent.submission(record) }
-            update(ChatKey(record.scope,record.device,record.chat,record.app)) { s -> s.copy(submissions=(listOf(record)+s.submissions.filter { it.request!=record.request }).sortedByDescending { it.created }) }
+            update(ChatKey(record.scope,record.device,record.chat,record.app)) { s -> s.copy(submissions=(listOf(record)+s.submissions.filter { it.request!=record.request }).sortedByDescending { it.created },steerSince=if(record.label=="已接收") s.steerSince else s.steerSince-record.request) }
         } catch(_:Exception) { update(ChatKey(record.scope,record.device,record.chat,record.app)) { it.copy(error="回执保存失败，请保留原请求并核对。") } }
     }
     /** 核对 (design 3.1 item 5): shows that it is running, then its one result for a few seconds. */

@@ -10,6 +10,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -47,6 +48,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -87,7 +89,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -121,9 +125,13 @@ fun InputArea(s: ReaderState, vm: ReaderViewModel, chat: ComposerState, ws: Work
             Column(Modifier.fillMaxWidth().animateContentSize()) {
                 AskBar(s.app, s.catalog, cards, saved, chat, vm, onAsk)
                 QueueTray(s.app, s.catalog, chat, raw, vm, ws)
+                // 11-27 S5/S2: a steer waiting for the current step, with 结束这条命令 when it can be ended.
+                SteerWaitBar(s, chat, raw, vm)
                 val last = chat.submissions.firstOrNull { it.label != RemovedLabel }
                 if (last != null && last.action == "send" && last.label == "未接收") RejectedBar(last, chat, vm)
                 SendStateBar(last, chat, vm)
+                // 11-27 S3: the phone→computer and computer parts of the last send.
+                SpeedNote(chat)
             }
             ComposerCard(s, vm, chat, ws, raw, saved)
         }
@@ -350,6 +358,83 @@ private fun StatusLine(chat: ComposerState, ws: WorkspaceState, saved: JSONObjec
 }
 
 /**
+ * 11-27 S1: what the send button does while the assistant works. Tap steers when the assistant can take a steer; the
+ * long press offers a queue only when both are offered, so an assistant with just one keeps that one. Not running is
+ * the old 发送.
+ */
+internal enum class SendRun { Send, Steer, Queue }
+internal data class ComposerSendPlan(val run:SendRun,val label:String,val longPressQueues:Boolean)
+internal fun composerSendPlan(running:Boolean,sendModes:List<String>,queueAvailable:Boolean):ComposerSendPlan {
+    val steer="steer" in sendModes
+    val plain="send" in sendModes
+    val queue="queue" in sendModes && queueAvailable
+    return when {
+        !running -> ComposerSendPlan(SendRun.Send,"发送",false)
+        steer && queue -> ComposerSendPlan(SendRun.Steer,"发送（插话）",true)
+        steer -> ComposerSendPlan(SendRun.Steer,"发送（插话）",false)
+        queue -> ComposerSendPlan(SendRun.Queue,"发送并排队",false)
+        plain -> ComposerSendPlan(SendRun.Send,"发送",false)
+        else -> ComposerSendPlan(SendRun.Send,"发送",false)
+    }
+}
+/** 11-27 S5: the grey line under a waiting steer, in the current assistant's own name. */
+internal fun steerWaitingText(assistant:String,seconds:Long) = "等 $assistant 做完这一步再插进去 · 已等 $seconds 秒"
+/** 11-27 S2: the confirmation's words, §4.3 of the design. */
+internal fun killCommandConfirmText(assistant:String) = "$assistant 正在跑的这条命令会被结束，它的结果作废；你的话会马上交给 $assistant。"
+/** 11-27 S3: "手机→电脑 0.6 秒 · 电脑处理 3.2 秒"; nothing when an older computer did not say its own part. */
+internal fun speedNetworkText(speed:SendSpeed):String? {
+    val server=speed.serverMs ?: return null
+    fun seconds(ms:Long)="%.1f".format(Locale.ROOT,ms/1000.0)
+    return "手机→电脑 ${seconds(speed.networkMs)} 秒 · 电脑处理 ${seconds(server)} 秒"
+}
+
+/**
+ * 11-27 S5/S2: while a steer waits for Codex's current step, say so with the phone's own seconds, and offer to end
+ * only the running command when the computer says that is possible. Its one result line stays under it.
+ */
+@Composable
+private fun SteerWaitBar(s:ReaderState,chat:ComposerState,raw:JSONObject,vm:ReaderViewModel) {
+    val p=LocalTeleply.current
+    val record=waitingSteer(chat.submissions) ?: return
+    val assistant=s.catalog.name(s.app)
+    val since=chat.steerSince[record.request] ?: record.created
+    var now by remember(record.request) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(record.request) { while(true) { now=System.currentTimeMillis();delay(1_000) } }
+    val seconds=((now-since)/1000).coerceAtLeast(0)
+    var confirm by remember(record.request) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(bottom=8.dp).clip(TeleplyShape.Tray).background(p.noteBg).padding(start=14.dp,end=6.dp,top=8.dp,bottom=4.dp)) {
+        Row(verticalAlignment=Alignment.CenterVertically) {
+            Text(
+                steerWaitingText(assistant,seconds),
+                style=MaterialTheme.typography.note,color=p.muted,
+                modifier=Modifier.weight(1f).padding(vertical=4.dp).semantics { liveRegion=LiveRegionMode.Polite },
+            )
+            if(canKillCommand(raw)) PillButton("结束这条命令，马上插话",{confirm=true},style=PillStyle.Text,minHeight=36.dp,enabled=!chat.killBusy,description="结束这条命令，马上插话")
+        }
+        if(chat.killNote.isNotBlank()) Text(chat.killNote,style=MaterialTheme.typography.note,color=if(chat.killFailed) p.error else p.muted,modifier=Modifier.padding(start=2.dp,bottom=4.dp).semantics { liveRegion=LiveRegionMode.Polite })
+    }
+    if(confirm) AlertDialog(
+        onDismissRequest={confirm=false},
+        title={Text("结束这条命令？")},
+        text={Text(killCommandConfirmText(assistant))},
+        confirmButton={TextButton(onClick={confirm=false;vm.composer.killCommand(record)}) { Text("结束命令",color=p.error) }},
+        dismissButton={TextButton(onClick={confirm=false}) { Text("取消") }},
+    )
+}
+/** 11-27 S3: the extra speed-hint segment, while 诊断测速 is on (never more often than the toast itself). */
+@Composable
+private fun SpeedNote(chat:ComposerState) {
+    val p=LocalTeleply.current
+    val speed=chat.lastSpeed ?: return
+    val enabled by Diagnostics.enabled.collectAsStateWithLifecycle()
+    val text=if(enabled) speedNetworkText(speed) else null
+    if(text==null) return
+    var shown by remember(speed.serial) { mutableStateOf(true) }
+    LaunchedEffect(speed.serial) { shown=true;delay(4_000);shown=false }
+    if(shown) Text(text,style=MaterialTheme.typography.note,color=p.muted,modifier=Modifier.fillMaxWidth().padding(start=10.dp,end=2.dp,bottom=4.dp).semantics { liveRegion=LiveRegionMode.Polite })
+}
+
+/**
  * The input card (spec 0.4 §4.3): glass, 26dp corners, no coloured edge. Status line on top, attachments, the text,
  * then ＋, the model and mode chips, voice and send. Solid mode is the web card: white (dark #1E1E1E with a #767676
  * edge), its shadow deepening on focus.
@@ -362,6 +447,7 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     val plus = remember { MenuAnchor() }
     val modelAnchor = remember { MenuAnchor() }
     val modeAnchor = remember { MenuAnchor() }
+    val sendAnchor = remember { MenuAnchor() }
     var note by remember(chat.key) { mutableStateOf("") }
     var confirm by remember { mutableStateOf<JSONObject?>(null) }
     val pickers = rememberAttachPickers(vm) { note = it }
@@ -388,14 +474,19 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
     // 此刻能力（第二批设计 A1）：发送方式、排队、插话、模型与模式按钮、「引用技能」都按最近一次控制态判断。
     val live = s.catalog.capsAt(s.app, raw)
     val layout = info.ui.cardLayout
-    val queue = chat.control.running && "queue" in live.sendModes && live.queue && chat.control.queueAvailable
-    val sendAllowed = if (queue) true else if (chat.control.running) ("steer" in live.sendModes || "send" in live.sendModes) else ("send" in live.sendModes)
+    // 11-27 S1: while the assistant works, a tap steers and a long press offers 排队 (when it offers both).
+    val plan = composerSendPlan(chat.control.running, live.sendModes, live.queue && chat.control.queueAvailable)
+    val sendAllowed = when (plan.run) {
+        SendRun.Queue -> true
+        SendRun.Steer -> "steer" in live.sendModes || "send" in live.sendModes
+        SendRun.Send -> "send" in live.sendModes
+    }
     // 此刻不能发时，输入卡片的状态行写 capability_notes 里的原因（没有就不写，保持现在的样子）。
     val sendNote = if (live.sendModes.isEmpty()) s.catalog.noteAt(s.app, raw, "send").ifBlank { null } else null
     // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
     val reachable = chat.control.available || sendsWhileAway(s.app, s.catalog)
     val canSend = chat.ready && sendAllowed && reachable && !chat.submitting && input.composition == null && (chat.draft.isNotBlank() || hasExtras) && chat.draft.trim().length <= info.params.maxText
-    val send = { if (canSend) controller.send(queue) }
+    val send = { if (canSend) controller.send(plan.run == SendRun.Queue) }
     val narrow = LocalConfiguration.current.screenWidthDp < 370
     val shape = TeleplyShape.Composer
     val surface = if (LocalGlassMode.current == GlassMode.Solid) {
@@ -464,7 +555,11 @@ private fun ComposerCard(s: ReaderState, vm: ReaderViewModel, chat: ComposerStat
             }
             }
             MicButton(vm, voice, s, { input.selection.min to input.selection.max }) { note = it }
-            if (!voice.active) SendButton(if (queue) "发送并排队" else "发送", canSend, chat.submitting, send)
+            if (!voice.active) SendButton(
+                plan.label, canSend, chat.submitting, send,
+                onLongPress = if (plan.longPressQueues) ({ menus?.show(MenuRequest(sendAnchor.bounds, MenuPlacement.BelowEnd, "发送方式", width = 260.dp) { MenuRow("排队到这一轮结束后再发", { controller.send(true) }) }) }) else null,
+                modifier = Modifier.menuAnchor(sendAnchor),
+            )
         }
     }
     confirm?.let { option ->
@@ -913,18 +1008,22 @@ fun PhotoViewer(path: String, onClose: () -> Unit) {
 
 /**
  * 40dp accent circle, 48dp target, bottom right; shrinks to 0.88 when pressed. [label] is what TalkBack reads:
- * "发送并排队" while running (B05), "创建并发送" in a new conversation.
+ * "发送（插话）" while the assistant works (11-27 S1), "发送并排队" when that is the only way, "创建并发送" in a new
+ * conversation. [onLongPress], when the assistant takes both, opens 排队 to this turn's end.
  */
 @Composable
-fun SendButton(label: String, enabled: Boolean, submitting: Boolean, onClick: () -> Unit) {
+fun SendButton(label: String, enabled: Boolean, submitting: Boolean, onClick: () -> Unit, onLongPress: (() -> Unit)? = null, modifier: Modifier = Modifier) {
     val p = LocalTeleply.current
     val interaction = remember { MutableInteractionSource() }
     Box(
-        Modifier.minimumInteractiveComponentSize().size(40.dp)
+        modifier.minimumInteractiveComponentSize().size(40.dp)
             .pressScale(interaction, 0.88f)
             .clip(CircleShape)
             .background(if (enabled) p.accent else p.control)
-            .clickable(interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+            .then(
+                if (onLongPress != null) Modifier.combinedClickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onLongClickLabel = "按住可排队", onLongClick = onLongPress, onClick = onClick)
+                else Modifier.clickable(interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+            )
             .semantics { contentDescription = label; if (submitting) stateDescription = "提交中" },
         contentAlignment = Alignment.Center,
     ) {
