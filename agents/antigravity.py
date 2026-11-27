@@ -56,7 +56,6 @@ LIST_SECONDS = 2.0        # at most one database read this often, even when it c
 CACHE_LIMIT = 8           # conversations kept parsed
 FULL_CACHE_LIMIT = 4      # full transcripts kept for cut answers
 EPOCH_1971 = 31536000     # 1971-01-01 00:00:00 UTC: a record's time before this is a placeholder, not a time
-LATEST_TIME = 4102444800  # 2100-01-01 00:00:00 UTC: nothing this program shows a timer from is later (11-27)
 
 # The app's own local service (the same one the user's ag.py drives).
 SERVICE = "exa.language_server_pb.LanguageServerService"
