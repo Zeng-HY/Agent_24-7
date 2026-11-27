@@ -42,6 +42,7 @@ from urllib.parse import quote, urlsplit
 import chats
 import machines
 import ntfy_feed
+import pc_clock
 from codex_control import native_approvals
 
 POLL_SECONDS = 5   # between looks while nothing runs (user 10-28: pushes felt slow at 10 s)
@@ -786,7 +787,10 @@ class Notifier:
             return
         try:
             self.relay.publish("", "", extra={"kind": "running", "app": item["app"], "chat": item["id"],
-                                              "since": int(since), "started": int(since), "started_source": source,
+                                              # 11-27: the island counts up from these against its own now.
+                                              "since": pc_clock.to_true_seconds(int(since)),
+                                              "started": pc_clock.to_true_seconds(int(since)),
+                                              "started_source": source,
                                               "title": chats.one_line(item.get("title") or "", 60),
                                               **agent_push_fields(item["app"])},
                                keep=True)
@@ -808,7 +812,8 @@ class Notifier:
             return
         try:
             self.relay.publish("", "", extra={"kind": "step", "app": item["app"], "chat": item["id"], "step": action,
-                                              "since": int(self.running.get(conv, {}).get("since") or self.clock()),
+                                              "since": pc_clock.to_true_seconds(
+                                                  int(self.running.get(conv, {}).get("since") or self.clock())),
                                               "title": chats.one_line(item.get("title") or "", 60),
                                               **agent_push_fields(item["app"])}, keep=False)
         except Exception:
@@ -826,13 +831,16 @@ class Notifier:
             return
         items = []
         for conv, info in self.running.items():
-            items.append({"app": conv[0], "chat": conv[1], "state": "working", "started": int(info["since"]),
-                          "since": int(info["since"]), "title": info.get("title", ""),
+            items.append({"app": conv[0], "chat": conv[1], "state": "working",
+                          # 11-27: the island counts up from these against its own now.
+                          "started": pc_clock.to_true_seconds(int(info["since"])),
+                          "since": pc_clock.to_true_seconds(int(info["since"])), "title": info.get("title", ""),
                           "step": (self.steps.get(conv) or ("", ""))[0],
                           **agent_push_fields(conv[0])})
         for conv, info in self.waiting.items():
-            items.append({"app": conv[0], "chat": conv[1], "state": "waiting", "started": int(info["since"]),
-                          "since": int(info["since"]), "title": info.get("title", ""),
+            items.append({"app": conv[0], "chat": conv[1], "state": "waiting",
+                          "started": pc_clock.to_true_seconds(int(info["since"])),
+                          "since": pc_clock.to_true_seconds(int(info["since"])), "title": info.get("title", ""),
                           "step": (self.steps.get(conv) or ("", ""))[0],
                           **agent_push_fields(conv[0])})
         if not items and self.last_snapshot_empty and not force:
@@ -967,8 +975,9 @@ class Notifier:
             kind = "failed" if end["state"] == "failed" else "waiting" if end.get("asks") else "done"
             event = {"kind": kind, "app": item["app"], "chat": item["id"],
                      "quiet": bool(why), "title": title,
-                     "started": int(end.get("started") or 0),
-                     "ended": int(end.get("ended") or self.clock()),
+                     # 11-27: the phone and its island count this turn up from these against their own now.
+                     "started": pc_clock.to_true_seconds(int(end.get("started") or 0)),
+                     "ended": pc_clock.to_true_seconds(int(end.get("ended") or self.clock())),
                      "started_source": end.get("started_source") or "不知道"}
             event.update(agent_push_fields(item["app"]))
             if automation:

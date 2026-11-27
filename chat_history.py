@@ -12,6 +12,7 @@ import answer_files
 import file_policy
 import file_renders
 import file_text
+import pc_clock
 
 class HistoryError(Exception):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -460,8 +461,9 @@ class History:
         for item in page:
             if item.get('kind'):out.append(self.child_row(item));continue
             info=chats.summary(item);row=chats.public(item)|{'status':info['status'],'preview':info['preview'],
-                'turn_started':info.get('turn_started') or item.get('turn_started',0),
-                'turn_ended':info.get('turn_ended',0),'step':info.get('step','') or item.get('step','')}
+                # 11-27: what the row's running timer is counted from against the phone's own now.
+                'turn_started':pc_clock.to_true_seconds(info.get('turn_started') or item.get('turn_started',0)),
+                'turn_ended':pc_clock.to_true_seconds(info.get('turn_ended',0)),'step':info.get('step','') or item.get('step','')}
             if item.get('group'):row['group']=True
             if item.get('children'):
                 kids=item['children']
@@ -689,13 +691,17 @@ class History:
             for m in page:
                 tr=turns.get(m.get('activity_turn')) or {}
                 enriched=self._with_client_request_id(m,req_map)
-                timed={**enriched,'turn_started':seconds(tr.get('started_at')),'turn_ended':seconds(tr.get('ended_at'))}
+                timed={**enriched,
+                       # 11-27: a running message's timer is counted from these against the phone's own now.
+                       'turn_started':pc_clock.to_true_seconds(seconds(tr.get('started_at'))),
+                       'turn_ended':pc_clock.to_true_seconds(seconds(tr.get('ended_at')))}
                 items.append(self.public_message(timed,item=item,entry=entry,lite=lite,app=app,tid=tid,
                                                  cache_on=m))
             return chats.public(item)|{'messages':items, 'status':chats._status(entry.state,entry.mtime/1e9),
                 'size':entry.size,'runtime':agent.runtime(entry.path),'modified':entry.mtime//1000000,
                 # 0.6.4: the turn's own times, Unix seconds; each message of that turn carries them too.
-                'turn_started':seconds(clock.get('started_at')),'turn_ended':seconds(clock.get('ended_at')),
+                'turn_started':pc_clock.to_true_seconds(seconds(clock.get('started_at'))),
+                'turn_ended':pc_clock.to_true_seconds(seconds(clock.get('ended_at'))),
                 'turn_status':clock.get('status',''),
                 'step':entry.state.get('step','') if chats._status(entry.state,entry.mtime/1e9)=='running' else '',
                 'activity_turns':{k:v for k,v in turns.items() if k == current or k in {m.get('activity_turn') for m in page}},

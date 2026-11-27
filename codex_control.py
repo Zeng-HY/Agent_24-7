@@ -29,6 +29,8 @@ from app_paths import DATA
 from datetime import datetime
 from contextlib import contextmanager
 
+import pc_clock
+
 import pywintypes
 import win32con
 import win32event
@@ -1139,6 +1141,11 @@ class Bridge:
         else:
             self._forget_open_failure(tid)
         self._note_sendable(tid, result)
+        # 11-27: the phone counts a running turn (and a compaction) down from these two against its own now; on this
+        # computer every comparison above used the record's own values.
+        for key in ("turn_started", "turn_ended", "compact_started"):
+            if key in result:
+                result[key] = pc_clock.to_true_seconds(result[key])
         return result
 
     def delivery_locations(self,tid,request_ids):

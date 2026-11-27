@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
+import pc_clock
 from .base import Agent, AgentError, NotFound, make_manifest
 
 # The island asks only for these four kinds of work; the tools that are not one of them say nothing.
@@ -1471,8 +1472,9 @@ class AntigravityAgent(Agent):
         out = {"app": self.id, "id": item["id"], "title": item["title"],
                "folder": item.get("folder", ""), "cwd": item.get("cwd", ""),
                "status": item.get("status", "unknown"), "runtime": {},
-               "turn_started": int(item.get("turn_started") or 0),
-               "turn_ended": int(item.get("turn_ended") or 0),
+               # 11-27: the page's own timer is counted from these against the phone's own now.
+               "turn_started": pc_clock.to_true_seconds(int(item.get("turn_started") or 0)),
+               "turn_ended": pc_clock.to_true_seconds(int(item.get("turn_ended") or 0)),
                "step": self.summary(item).get("step", "") if item.get("status") == "running" else "",
                "modified": int(item.get("updated") or 0), "size": 0,
                "messages": [], "has_more": False, "next_cursor": "", "has_newer": False,
@@ -1533,8 +1535,9 @@ class AntigravityAgent(Agent):
             if questions:
                 status = "waiting"
         return {"available": True, "running": running, "status": status, "turn_id": "",
-                "turn_started": int(item.get("turn_started") or 0),
-                "turn_ended": int(item.get("turn_ended") or 0), "step": step,
+                # 11-27: the phone counts this turn up from these against its own now.
+                "turn_started": pc_clock.to_true_seconds(int(item.get("turn_started") or 0)),
+                "turn_ended": pc_clock.to_true_seconds(int(item.get("turn_ended") or 0)), "step": step,
                 "settings": {}, "runtime": {}, "questions": questions, "tasks": [],
                 "queued": [], "queue_available": False, "stop_token": ""}
 

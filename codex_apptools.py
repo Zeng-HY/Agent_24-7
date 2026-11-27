@@ -31,6 +31,7 @@ from app_paths import DATA
 import chats
 import codex_control
 import composer_commands
+import pc_clock
 
 PIPE_DIR = "\\\\.\\pipe\\"
 LEGACY_PIPE = "codex-ipc"
@@ -103,7 +104,8 @@ def command_state(file_state: dict | None, hooks: Any, tid: str) -> dict[str, An
         can_kill = bool(active.get("command")) and is_full_access_permission(active.get("permission_mode"))
     return {
         "running": True,
-        "since_ms": int(command.get("since_ms") or 0),
+        # 11-27: the phone counts this command's timer from here against its own now.
+        "since_ms": pc_clock.to_true_ms(int(command.get("since_ms") or 0)),
         "can_kill": bool(can_kill),
     }
 
@@ -1549,8 +1551,9 @@ class AppToolsBridge:
                 "running": running,
                 "status": "waiting" if any(q.get("status") == "pending" for q in questions) else ("running" if running else kind),
                 "active_turn_id": active_turn_id,
-                "turn_started": file_state.get("turn_started", 0),
-                "turn_ended": 0 if running else file_state.get("turn_ended", 0),
+                # 11-27: the turn's times as the phone's clock reads them; the value above is the record's own.
+                "turn_started": pc_clock.to_true_seconds(file_state.get("turn_started", 0)),
+                "turn_ended": pc_clock.to_true_seconds(0 if running else file_state.get("turn_ended", 0)),
                 "step": step,
                 "compacting": False,
                 "compact_started": 0,

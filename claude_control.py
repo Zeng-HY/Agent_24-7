@@ -6,6 +6,7 @@ from pathlib import Path
 from app_paths import DATA
 from urllib.parse import urlsplit
 import chats
+import pc_clock
 import winctl
 try:
     from _ctypes import COMError  # what UI Automation raises through comtypes
@@ -766,7 +767,9 @@ class Controller:
     def _held(self,tid,data):
         """data with the question or permission Claude Code holds open for this conversation (claude_hooks.py) as its
         prompt, in place of what was read off the desktop's card: answered from here, nothing on the desktop is clicked,
-        and shown whichever conversation the PC shows (10-27)."""
+        and shown whichever conversation the PC shows (10-27). Its turn's times go out against the phone's own now
+        (11-27): the values this module keeps, and compares, are always the record's and the hook's own."""
+        data=self._true_times(data)
         hooks=self.hooks
         if hooks is None:return data
         held=hooks.layout(tid)
@@ -778,6 +781,15 @@ class Controller:
             do=part.pop('do');ready=part.pop('ready',True)
             part['token']=self._ticket(tid,'hook',{'ask':ask_id,'do':do},stamp) if ready else None
         return {**data,'prompt':prompt,'actions':[]}
+    @staticmethod
+    def _true_times(data):
+        """[data] with the turn's times as the phone's clock reads them; any other field stays as it is (11-27)."""
+        if not isinstance(data,dict):return data
+        out=dict(data)
+        for key in ('turn_started','turn_ended'):
+            if key in out:out[key]=pc_clock.to_true_seconds(out[key])
+        return out
+
     def _ticket(self,tid,kind,option,revision):
         with Controller.ticket_lock:  # a ticket taken by choose() must not come back with the trimmed copy (11-24)
             now=time.monotonic()

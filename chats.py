@@ -43,6 +43,7 @@ import win32gui
 import win32process
 
 import winctl
+import pc_clock
 
 HOME = Path.home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
@@ -1752,8 +1753,10 @@ def list_conversations(app: str = "all", limit: int = 40) -> list[dict]:
         item["step"] = s["step"]
         item["updated"] = max(item["updated"], s.get("modified") or 0)
     items.sort(key=lambda x: -x["updated"])
-    return [public(i) | {"status": i["status"], "preview": i["preview"], "turn_started": i["turn_started"],
-                        "turn_ended": i["turn_ended"], "step": i["step"]} for i in items[:limit]]
+    # 11-27: the two times a row's running timer is counted from go out against the phone's own now (see pc_clock).
+    return [public(i) | {"status": i["status"], "preview": i["preview"],
+                        "turn_started": pc_clock.to_true_seconds(i["turn_started"]),
+                        "turn_ended": pc_clock.to_true_seconds(i["turn_ended"]), "step": i["step"]} for i in items[:limit]]
 
 
 def conversation(app: str, conv_id: str, n: int = 60) -> dict:

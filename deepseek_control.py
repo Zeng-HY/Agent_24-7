@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from contextlib import contextmanager
 from deepseek_stream import public_messages,merge_row
 import composer_commands
+import pc_clock
 
 HOME = Path.home() / '.dsh'
 
@@ -465,8 +466,10 @@ class Bridge:
         compacting,compact_started=compaction(events)
         return {'available':True,'id':sid,'running':item.get('_running',False),'status':item['status'],
             'turn_id':str(outline[-1]['turn']) if outline else None,
-            'turn_started':started,'turn_ended':ended,'step':'compact' if compacting else step if item.get('_running') else '',
-            'compacting':compacting,'compact_started':compact_started,'runtime':runtime_of(v),
+            # 11-27: the phone counts a running turn (and a compaction) up from these against its own now.
+            'turn_started':pc_clock.to_true_seconds(started),'turn_ended':pc_clock.to_true_seconds(ended),
+            'step':'compact' if compacting else step if item.get('_running') else '',
+            'compacting':compacting,'compact_started':pc_clock.to_true_seconds(compact_started),'runtime':runtime_of(v),
             'settings':selection,'questions':(v.get('userQuestions') or {}).get('active',[]),
             'inbox':v.get('inbox',{}),'queued':queued_messages(v.get('inbox')),
             'permission':preset or '','permission_name':permission_name(preset),'permission_available':preset is not None,
@@ -536,7 +539,9 @@ class Bridge:
         started,ended,step=self._turn_times(sid,(outline[-1] or {}).get('seq') if outline else 0,
                                            records=page.get('records',[]))
         return {k:val for k,val in item.items() if not k.startswith('_')}|{'messages':rows,'subagents':subs,
-            'turn_started':started,'turn_ended':ended,'step':step if item.get('_running') else '',
+            # 11-27: the page's own timer is counted from these against the phone's own now.
+            'turn_started':pc_clock.to_true_seconds(started),'turn_ended':pc_clock.to_true_seconds(ended),
+            'step':step if item.get('_running') else '',
             'size':p['asOfSeq'],'modified':item.get('updated',0),'runtime':runtime_of(v),
             'has_more':bool(page['hasMore'] and seqs),'next_cursor':str(min(seqs)) if seqs and page['hasMore'] else None,
             'has_newer':bool(before),'reset':False,'total':len(rows)}
