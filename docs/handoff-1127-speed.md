@@ -178,7 +178,55 @@
 
 ### 8.1 线 A 电脑
 
-（待填）
+**结论**：S4、S5、S2、S3 都做完了，分 4 次提交（S4 `83dc704`、S5 `c513ff5`、S2 `6d8d61a`、S3 `ac4b3b6`）；相关测试 404 个通过、0 失败，`test_action_golden` 通过且记录没有变；全量 pytest 见下面的数字。没有改版本号和更新说明。
+
+**做了什么**
+
+S4（第 3.1 节）：
+1. `AppToolsBridge.send`、`queue_action`、`drain_if_idle` 给每次 `read_thread`、`send_message_to_thread` 调用计时；每次请求在日志写一行 `codex timing request=<编号前 8 位> read_ms=… send_ms=… other_ms=… total_ms=…`，只有数字和编号前 8 位。`other_ms` = 总数 − 管道两类，包含读设置、校验、存图片等。
+2. 发送前判断「在不在跑」改为：`_status_cache` 里 3 秒内读过的状态，并且记录文件的（大小、修改时间）和读状态时一样，就直接用；否则照旧调一次 `read_thread`。状态缓存现在带记录文件签名。
+3. `intent == "queue"` 不拿缓存里的「没在跑」下结论（那只可能把该排队的发出去），仍问管道；缓存里的「在跑」可以直接用来排队。
+4. 签名在 `status()` 里是**读记录文件之前**取的，之后文件一变缓存就失效，不会拿旧读数当新读数。
+5. `drain_if_idle` 只在真的取出一条排队消息去发送时写计时行，避免每 2.5 秒刷日志；`send`、`queue_action` 每次请求都写。
+
+S5（第 3.2 节）：
+1. 发送被接收（`delivery_state: accepted`，`result.evidence` 里没有 `message_id`）时，把这个对话登记进 `_pending_deliveries`，记下发送前的记录文件签名。一个共用的 `codex-apptools-delivered` 线程每 0.5 秒看一次：哪个对话的记录文件变了，就对它跑一次 `reconcile_deliveries(tid)`；找到证据就标「已送达」。没有待确认的发送时不启动线程、不扫文件。
+2. 登记发生在所有「已接收」的路：新开一轮/插话、把排队消息「立即补充」、空闲时自动发出排队消息、Stop 钩子把排队消息交接出去。排队中还没交出去的消息不登记。
+3. 每条 15 分钟；到点就停止自动找，之后有人读状态时仍按老路核对。
+4. `reconcile_deliveries` 改成返回还剩几条没找到证据（内部使用，其他调用方忽略返回值）。
+5. 测试用假记录文件追加消息来触发，不读真实记录，也不需要有人读状态；另有测试用真的共用线程等在 3 秒内标上。
+
+S2（第 3.3 节）：
+1. `latest_turn_state` 读记录文件尾部，跟踪最后一个 exec 类调用（`chats._step_of` 判成 `run` 的 exec/shell/js 等）和它的输出（`function_call_output` / `custom_tool_call_output`，以及 Codex 自己的 `CommandExecution` 完成记录）；没有输出就算正在跑命令，`since_ms` 用记录里的时间（电脑钟毫秒）。turn 开始/结束都清掉。
+2. 状态里加 `command`：没有正在跑的命令时为 `null`；有时是 `{running: true, since_ms: …, can_kill: bool}`。`can_kill` 要求钩子被信任、`_active_commands` 里有这条命令的文字、并且记录的权限模式不是已知的沙盒模式。
+3. `CodexHookServer.kill_command(tid, turn_id="")`：只调 `kill_running_command`，**不**设停止标记、不碰这一轮；返回 `{ok, killed, killed_pids, turn_id, text}`。
+4. 新接口 `POST /api/agents/codex/kill-command`，老地址 `/api/codex/kill-command` 也接上。拒绝都回 409、人话和 `not_submitted: true`：钩子没被信任、没有正在跑的命令、命令在沙盒里（`can_kill` 为假）、找不到匹配进程。
+5. `capabilities_now` 加 `kill_command`：apptools 路线按钩子信任给 true/false，不信任时把原因放进 `notes`；legacy 路线跟随静态能力表（true）；Codex 没在运行时 false 并给原因。`command` 字段只在 apptools 路线的状态里（新版 Codex）；老路线没有这个字段，手机据此不显示按钮（第 4.3.4 节）。
+
+S3（第 3.4 节）：
+1. Codex 的 `send`、`queue-action`、`kill-command` 成功回答加 `server_ms`；Claude、DeepSeek、Antigravity 的发送成功回答也加。只发给协议 2 的新手机：协议 1 的回答一字不变（因此 golden 不变）。计时从处理函数入口到回答写出之前，用单调钟，负数记 0。
+2. `remote.py` 收到 `client_prev`（字典里有数字 `roundtrip_ms`、`server_ms`、`request_id`）时写一行 `phone timing request=<上一条编号前 8 位> roundtrip_ms=… server_ms=… network_ms=…`；`network_ms = max(0, roundtrip_ms − server_ms)`。不拿手机的钟做任何判断。值不是数字或没有 `client_prev` 时不写。
+3. 所有日志只有数字和编号前 8 位，没有消息文字、命令文字或文件名。
+
+**改了哪些文件**：`codex_apptools.py`、`codex_hooks.py`、`agents/codex.py`、`agents/claude.py`、`agents/deepseek.py`、`agents/antigravity.py`、`remote.py`、`tests/test_codex_apptools.py`、`tests/test_codex_hooks.py`、`tests/test_unified_routes.py`、`tests/test_antigravity.py`、本文件第 8.1 节。没有改 `codex_control.py` 和 `agents/base.py`；Codex 的 `http_post` 在 `agents/codex.py` 里覆写，把 `kill-command` 接到新处理函数，其余照旧走 `base`。
+
+**测试**（都在本工作树、用任务里给的环境变量）：
+- S4 后：`test_codex_apptools`、`test_codex_hooks`、`test_unified_routes`、`test_action_golden`、`test_agent_lifecycle` 共 106 通过。新增：计时行格式和编号截断；3 秒内读过状态且文件没变时不再调 `read_thread`；文件一变/缓存过期就重新调；排队时缓存里的「没在跑」不算数；排队与 drain 各写一行。
+- S5 后：`test_codex_apptools` 66 通过；`test_codex_hooks`、`test_unified_routes`、`test_action_golden`、`test_agent_lifecycle`、`test_codex_delivery` 共 78 通过。新增：记录文件一变就标上且不读状态、共用线程自己会标、排队消息交接后才监视、15 分钟到点不再自动找、记录再变会再看一次、没有待确认发送时什么都不扫。
+- S2 后：上面文件和 `test_codex_delivery`、`test_agent_lifecycle` 共 165 通过；`test_agents`、`test_generic_cards`、`test_no_hardcoded_agents`、`test_read_compat`、`test_web_agents` 共 60 通过、14 个子项通过。新增：命令有输出才算结束（含 `CommandExecution` 完成记录）、编辑/发消息不算命令、新一轮替换旧命令、状态字段、只杀目标进程且不置停止标记、钩子不信任/没在跑/沙盒/找不到进程四种拒绝、能力表的 `kill_command`。
+- S3 后：`test_action_golden`、`test_codex_apptools`、`test_codex_hooks`、`test_unified_routes`、`test_antigravity`、`test_claude_send`、`test_deepseek_control`、`test_agents` 共 404 通过、5 个子项通过。新增：三种回答有 `server_ms`、协议 1 没有；Claude/DeepSeek/Antigravity 的发送回答有 `server_ms`；`client_prev` 日志行的内容、负网络时间记 0、无效值不写、日志里没有消息文字。
+- 全量 pytest：1668 通过、3 失败、7 跳过；3 个失败就是任务里说的老失败（`test_mobile_polish` 的 snippet 测试 webkit 和 chromium 各一个、`test_relay_mobile_layout` 的 account home），`test_action_golden` 通过。
+
+**golden**：没有变，也没有重新生成。原因：`server_ms` 只加在协议 2 的回答里，`tests/action_golden_fixtures.py` 的请求都不带 `X-Teleply-Protocol`（按协议 1 处理）；`command` 字段只加在 apptools 路线的状态里，golden 的状态用例走 legacy 路线（`codex-ipc`）；`reconcile_deliveries` 的返回值只有新加的监视线程用。
+
+**要我看的地方**
+1. `can_kill` 的权限判断：已知沙盒模式（`default`、`read-only`、`workspace-write`、`plan`、`acceptEdits`、`on-request`、`on-failure`、`untrusted` 等）一律不给按钮；`permission_mode` 为空或不认识时按「可结束」处理，真正的安全边界仍是 `kill_running_command` 只杀当前用户的、挂在 `codex.exe` 下、命令行带 `codex-primary-runtime` 的 `pwsh.exe`，沙盒账号（`CodexSandboxOffline`）本来就不碰。如果真实 Codex 的完全访问标志是别的字符串，需要补进 `codex_apptools.SANDBOX_PERMISSION_MODES`。
+2. `command` 只在新版（apptools）路线的状态里；legacy 路线没有，手机不显示「结束这条命令」按钮，但接口本身仍能用（钩子被信任并有正在跑的命令时）。这是按第 4.3.4 节「老电脑没有 command 就不显示」处理的；如果希望老路线也显示，需要在 `http_state` 里补算，那会改 golden 的 `codex_state`。
+3. S5 只登记本进程里新接收的发送；服务重启前就已经 `accepted` 的记录仍靠有人读状态时核对（和原来一样），没有在启动时扫全表。
+4. `server_ms` 只在成功回答里；409 拒绝的回答不带，手机只对成功的发送算网络时间。协议 1 的老手机完全看不到这个字段。
+5. `drain_if_idle` 的计时行只在真的取出排队消息时写；轮询时「还在跑、先不发」不写，避免日志每 2.5 秒一行。
+6. 没有在真机上核对；没有碰正在运行的 Codex、Claude 桌面程序或遥应电脑端，也没有读真实 Codex 记录、送达记录和日志。测试全部用假管道、假记录文件、假进程列表。
+
 
 ### 8.2 线 B iPhone
 

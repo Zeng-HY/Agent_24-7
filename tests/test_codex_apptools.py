@@ -1177,6 +1177,18 @@ class LatestTurnCommandTests(unittest.TestCase):
         self._output("call-run-3")
         self.assertTrue(ca.latest_turn_state(self.path)["command"]["running"])  # the newer one is still open
 
+    def test_codex_command_execution_record_closes_the_open_command(self) -> None:
+        self._start_turn()
+        self._call("exec", "call-run-5", "dir")
+        self._append({
+            "timestamp": TS2,
+            "type": "event_msg",
+            "payload": {"type": "item_completed", "item": {
+                "type": "CommandExecution", "id": "cmd-1", "command": "dir", "exit_code": 0, "aggregated_output": "",
+            }},
+        })
+        self.assertIsNone(ca.latest_turn_state(self.path)["command"])
+
 
 class _FakeHooks:
     def __init__(self, *, trusted: bool = True, permission_mode: str = "bypassPermissions",

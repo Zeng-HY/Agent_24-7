@@ -696,6 +696,9 @@ def latest_turn_state(path: Path | None) -> dict[str, Any]:
                     )
                 elif item_type in ("FunctionCallOutput", "CustomToolCallOutput"):
                     close_call(item.get("call_id") or item.get("id"))
+                elif item_type == "CommandExecution":
+                    # Codex's own record of a finished command (exit code and output included).
+                    close_call(None)
         elif kind == "response_item":
             item_type = str(payload.get("type") or "")
             if item_type in ("function_call", "custom_tool_call"):
@@ -1512,6 +1515,9 @@ class AppToolsBridge:
         try:
             item = chats.find("codex", tid)
             path = Path(item["path"]) if item.get("path") else None
+            # 11-27 S4: the signature is taken before the file state and pipe reading, so any later
+            # change invalidates this cached answer instead of being hidden by a newer signature.
+            status_sig = self._file_signature(path)
             file_state = latest_turn_state(path)
             thread_data = self.client.read_thread(tid, include_turns=False, turn_id=file_state.get("turn_id"))
             running, active_flags, kind = self._parse_pipe_status(thread_data, file_state)
@@ -1567,7 +1573,7 @@ class AppToolsBridge:
                 prog = self.hooks.latest_progress(tid)
                 if prog:
                     result["hook_progress"] = prog
-            self._status_cache[tid] = (self._clock(), result, self._file_signature(path))
+            self._status_cache[tid] = (self._clock(), result, status_sig)
             return dict(result)
         except (codex_control.ControlError, chats.ChatError, OSError) as exc:
             return {

@@ -1214,7 +1214,12 @@ class CodexAgent(Agent):
                     code="hooks_not_trusted",
                     not_submitted=True,
                 )
-            item = chats.find("codex", tid)
+            try:
+                item = chats.find("codex", tid)
+            except chats.ChatError as exc:
+                raise codex_apptools.AppToolsError(
+                    "找不到这个对话（可能已归档或删掉了）", 404, code="thread_not_found", not_submitted=True
+                ) from exc
             path = Path(item["path"]) if isinstance(item, dict) and item.get("path") else None
             state = codex_apptools.latest_turn_state(path)
             command = codex_apptools.command_state(state, hooks, tid)
