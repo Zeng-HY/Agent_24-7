@@ -235,6 +235,7 @@
 - 3 秒回执轮询（审后补的）：回执先答 accepted（`app_tools_ack`）、再答 accepted（`conversation_record`），标签变「已送达」、`steerWait` 变空、问过两次（一次只问一条），之后再怎么让出都不再问；也验了问的间隔是 3 秒。
 - `kill-command` 按钮的条件：能杀、不能杀、命令没在跑、状态里没有 `command`（老电脑）、没有 `kill_command`、`kill_command` 为假，共六种；确认那句的原话。模型上：请求打到 `/api/agents/codex/kill-command`、带 `id` 和 `turn_id`、成功后说「已结束命令，正在插话…」且按钮消失、这一轮还在；409 时显示电脑那句话、命令没被杀、按钮还在。
 - `client_prev` 和网络时间：820 减 310 等于 510、「0.5 秒 / 0.3 秒」的说法、电脑比来回还长时记 0、老电脑没有 `server_ms` 时不算也不带 `client_prev`；模型上第一次发送带 `client_sent_ms` 不带 `client_prev`，第二次带上第一次的请求编号和 `server_ms`；「重发」原样带第一次的 `client_sent_ms`/`client_prev`。
+- 编译通过后有一项没过（`aResendKeepsTheFirstRequestsNumbers`，四个期望全空）：**是测试自己的错，不是重发的问题**。它只等到 `ready` 和「电脑没收到」的标签就去点重发，而 `resend` 的条件里还要 `control.available`（进对话读到状态之后才为真），于是它静默返回，一次请求都没发出去。改成等 `control.available` 再点，并在没有发出请求时用 `Issue.record` 明确报出来；重发本来就原样带 `request_id`/`client_sent_ms`/`client_prev`（后两项不是 `SendNote` 的备注，`resend` 只去备注），改完这四项仍逐项验。
 - 演示：`DemoWorld(steerDemo: true)` 的那个对话状态有 `command` 和 `kill_command`、列表行只在开关打开时出现、`kill-command` 打过去之后命令没了而这一轮还在、别的对话被 409 拒。
 
 **演示**：启动参数 `-TeleplyDemoSteer`（只在 DEBUG 有效，默认关）。打开本地示例 → 列表里多一行「插话等待示例」：这一轮在跑一条命令，输入框上方是「等 Codex 做完这一步再插进去 · 已等 12 秒」（会自己往上数）和「结束这条命令，马上插话」；点按钮、确认之后显示「已结束命令，正在插话…」，按钮消失，这一轮继续。关掉开关时列表、记录和截图组都与原来一样（现有截图组没改）。

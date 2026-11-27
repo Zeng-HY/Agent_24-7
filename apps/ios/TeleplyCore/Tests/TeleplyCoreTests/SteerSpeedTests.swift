@@ -366,7 +366,9 @@ struct SteerSpeedTests {
                               now: { 12_000 })
         model.bind(key, client: RelayClient(origin: .default, transport: computer), clientGeneration: 0, active: true,
                    synthetic: false) { _, _ in }
-        await until { model.ready && model.submissions.first?.label == missingLabel }
+        // 重发 needs `control.available` (its own guard), and that only becomes true once the conversation's state has
+        // been read: waiting for `ready` and the label alone came too early, so 重发 returned without sending anything.
+        await until { model.ready && model.control.available && model.submissions.first?.label == missingLabel }
         guard let kept = model.submissions.first else {
             Issue.record("the copy should still be on the list")
             return
@@ -374,7 +376,11 @@ struct SteerSpeedTests {
         model.resend(kept)
         await model.settleSends()
         let requests = await computer.log.items
-        let sent = posted(requests, "/api/codex/send")
+        guard let again = requests.first(where: { $0.url.path.hasSuffix("/api/codex/send") }) else {
+            Issue.record("重发 did not go out: no request to /api/codex/send")
+            return
+        }
+        let sent = (try? JSONValue.parse(again.body ?? Data())) ?? [:]
         #expect(sent["request_id"].string() == "sent-before")
         #expect(sent["client_sent_ms"].int64() == 1_700_000_000_123)
         #expect(sent["client_prev"]["request_id"].string() == "earlier")
