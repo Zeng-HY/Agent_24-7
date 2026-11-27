@@ -47,6 +47,10 @@ STATUS_CACHE_TTL = 1.5
 # 11-27 S4: the pre-send "is it running" reading may reuse a pipe status read this recently,
 # but only while the rollout file has not changed since that reading.
 SEND_STATUS_CACHE_TTL = 3.0
+# 11-27 S5: accepted sends without delivery evidence are watched for this long, then left to the
+# ordinary receipt path (someone reading the state) as before.
+PENDING_DELIVERY_WINDOW = 15 * 60
+PENDING_DELIVERY_POLL = 0.5
 
 INCOMPATIBLE_REASON = "电脑上的 Codex 升级了，遥应暂时不能从手机发给 Codex"
 NOT_RUNNING_REASON = "Codex 没在运行，请先在电脑上打开 Codex"
@@ -1110,6 +1114,7 @@ class AppToolsBridge:
         hooks: Any = None,
         clock: Callable[[], float] = time.monotonic,
         enable_background_drain: bool = True,
+        enable_background_watch: bool = True,
     ) -> None:
         self.legacy = legacy_bridge
         self.client = client or AppToolsClient(log=getattr(legacy_bridge, "log", None))
@@ -1126,6 +1131,11 @@ class AppToolsBridge:
         self._drain_wake = threading.Event()
         self._drain_thread: threading.Thread | None = None
         self._enable_background_drain = enable_background_drain
+        self._enable_background_watch = enable_background_watch
+        # 11-27 S5: conversations with accepted sends that have no delivery evidence yet.
+        self._pending_deliveries: dict[str, dict[str, Any]] = {}
+        self._reconcile_wake = threading.Event()
+        self._reconcile_thread: threading.Thread | None = None
 
     def _log(self, text: str) -> None:
         log = getattr(self.legacy, "log", None)
@@ -1172,6 +1182,7 @@ class AppToolsBridge:
     def close(self) -> None:
         self._stop.set()
         self._drain_wake.set()
+        self._reconcile_wake.set()
 
     def _thread_file(self, tid: str) -> Path | None:
         try:
@@ -1266,6 +1277,71 @@ class AppToolsBridge:
         thread_data = self._timed_read_thread(tid, turn_id=file_state.get("turn_id"), times=times)
         running, _, _ = self._parse_pipe_status(thread_data, file_state)
         return running
+
+    # -- 11-27 S5: mark accepted sends delivered when their rollout entry appears
+
+    def _watch_delivery(self, tid: str, signature: tuple[int, int] | None = None) -> None:
+        """Watch one conversation's rollout for an accepted send still lacking delivery evidence.
+
+        One shared thread handles every conversation (no thread per conversation). The signature is
+        the file state *before* the send, so any later write is noticed; None means "from now on".
+        """
+        if not tid:
+            return
+        with self._lock:
+            if signature is None:
+                signature = self._file_signature(self._thread_file(tid))
+            self._pending_deliveries[tid] = {
+                "deadline": self._clock() + PENDING_DELIVERY_WINDOW,
+                "signature": signature,
+            }
+            thread = self._reconcile_thread
+            if self._enable_background_watch and (thread is None or not thread.is_alive()):
+                self._reconcile_thread = threading.Thread(
+                    target=self._reconcile_loop, name="codex-apptools-delivered", daemon=True
+                )
+                self._reconcile_thread.start()
+        self._reconcile_wake.set()
+
+    def _reconcile_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._reconcile_pending_once()
+            except Exception:
+                pass
+            self._reconcile_wake.wait(PENDING_DELIVERY_POLL)
+            self._reconcile_wake.clear()
+
+    def _reconcile_pending_once(self) -> int:
+        """One poll: for each watched conversation whose file changed, reconcile its deliveries.
+
+        Returns how many still lack evidence. Does nothing at all when nothing is being watched.
+        """
+        now = self._clock()
+        with self._lock:
+            pending = list(self._pending_deliveries.items())
+            if not pending:
+                return 0
+            for tid, entry in pending:
+                if now >= float(entry.get("deadline") or 0):
+                    self._pending_deliveries.pop(tid, None)
+            pending = list(self._pending_deliveries.items())
+        for tid, entry in pending:
+            if self._stop.is_set():
+                break
+            signature = self._file_signature(self._thread_file(tid))
+            if signature is None or signature == entry.get("signature"):
+                continue
+            entry["signature"] = signature  # record first: a failed reconcile must not spin
+            try:
+                remaining = self.reconcile_deliveries(tid)
+            except Exception:
+                continue
+            if remaining == 0:
+                with self._lock:
+                    self._pending_deliveries.pop(tid, None)
+        with self._lock:
+            return len(self._pending_deliveries)
 
     def _read_settings(self, path: Path | None) -> dict:
         model, effort = None, None
@@ -1578,6 +1654,7 @@ class AppToolsBridge:
                     return result
 
                 turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+                delivery_sig = self._file_signature(path)
                 try:
                     self._timed_send_message(
                         tid,
@@ -1615,6 +1692,7 @@ class AppToolsBridge:
                 }
                 self.legacy._finish(rid, response)
                 self._status_cache.pop(tid, None)
+                self._watch_delivery(tid, delivery_sig)
                 return response
         finally:
             self._log_request_timing(rid, started, times)
@@ -1642,6 +1720,7 @@ class AppToolsBridge:
                 if first is None:
                     return False
                 turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+                delivery_sig = self._file_signature(path)
                 try:
                     self._timed_send_message(
                         tid,
@@ -1675,6 +1754,7 @@ class AppToolsBridge:
                     },
                 )
                 self._status_cache.pop(tid, None)
+                self._watch_delivery(tid, delivery_sig)
                 return True
             finally:
                 # One line per queued message that was actually taken out to be dispatched.
@@ -1701,6 +1781,7 @@ class AppToolsBridge:
                 },
             )
             self._status_cache.pop(tid, None)
+            self._watch_delivery(tid)
             return first
 
     def queue_action(self, body: dict) -> dict:
@@ -1737,6 +1818,7 @@ class AppToolsBridge:
                 path = self._thread_file(tid)
                 file_state = latest_turn_state(path)
                 turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+                delivery_sig = self._file_signature(path)
                 try:
                     self._timed_send_message(
                         tid,
@@ -1769,6 +1851,7 @@ class AppToolsBridge:
                 if rid and rid != mid:
                     self.legacy._finish(rid, result)
                 self._status_cache.pop(tid, None)
+                self._watch_delivery(tid, delivery_sig)
                 return result
         finally:
             self._log_request_timing(rid or mid, started, times)
@@ -1823,10 +1906,13 @@ class AppToolsBridge:
         by_source = self.delivery_links.source_to_request(tid)
         return {sid for sid, owner in by_source.items() if owner != rid}
 
-    def reconcile_deliveries(self, tid: str) -> None:
-        """Match recently accepted/dispatched new-route sends to their transcript source_id and persist links."""
+    def reconcile_deliveries(self, tid: str) -> int:
+        """Match recently accepted/dispatched new-route sends to their transcript source_id and persist links.
+
+        Returns how many accepted sends still have no delivery evidence (used by the S5 watcher).
+        """
         if not tid or not (self.legacy.data_root / "delivery.sqlite").exists():
-            return
+            return 0
         with self._lock:
             with self.legacy._db() as con:
                 rows = con.execute(
@@ -1834,7 +1920,7 @@ class AppToolsBridge:
                     (tid,),
                 ).fetchall()
             if not rows:
-                return
+                return 0
             queued_ids = {v["id"] for v in self.queues.list_items(tid)}
             by_req = self.delivery_links.request_to_source(tid)
             claimed = set(self.delivery_links.source_to_request(tid).keys())
@@ -1862,18 +1948,20 @@ class AppToolsBridge:
                 if prompt:
                     pending.append((rid, result, body, prompt))
             if not pending:
-                return
+                return 0
             path = self._thread_file(tid)
             if path is None:
-                return
+                return 0
             try:
                 st = path.stat()
                 file_sig = (st.st_size, st.st_mtime_ns)
             except OSError:
-                return
+                return 0
+            remaining = 0
             for rid, result, _body, prompt in pending:
                 key = (tid, rid)
                 if self._reconcile_seen.get(key) == file_sig:
+                    remaining += 1
                     continue
                 evidence = find_delegation_delivery(path, tid, prompt, exclude_message_ids=claimed)
                 if evidence:
@@ -1892,9 +1980,11 @@ class AppToolsBridge:
                         claimed.add(str(evidence["message_id"]))
                     self._reconcile_seen.pop(key, None)
                 else:
+                    remaining += 1
                     self._reconcile_seen[key] = file_sig
                     if len(self._reconcile_seen) > 256:
                         self._reconcile_seen.pop(next(iter(self._reconcile_seen)))
+            return remaining
 
     def message_images(self, tid: str) -> list[dict]:
         """Return control-state image records enriched with confirmed transcript message_id."""

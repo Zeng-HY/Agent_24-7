@@ -446,7 +446,8 @@ class AppToolsBridgeTests(unittest.TestCase):
         self.addCleanup(ca.set_default_data_dir_override, None)
         self.client = ca.AppToolsClient(transport_factory=lambda p, t: FakeTransport(rpc_handler, p))
         self.bridge = ca.AppToolsBridge(
-            self.legacy, client=self.client, data_dir=self.data_dir, enable_background_drain=False
+            self.legacy, client=self.client, data_dir=self.data_dir,
+            enable_background_drain=False, enable_background_watch=False,
         )
         self.addCleanup(self.bridge.close)
 
@@ -561,7 +562,8 @@ class AppToolsBridgeTests(unittest.TestCase):
 
         # Recreate AppToolsBridge from same data_dir to verify persistence across restarts
         restarted = ca.AppToolsBridge(
-            self.legacy, client=self.client, data_dir=self.root / "data", enable_background_drain=False
+            self.legacy, client=self.client, data_dir=self.root / "data",
+            enable_background_drain=False, enable_background_watch=False,
         )
         self.addCleanup(restarted.close)
         st = restarted.status(TID, fresh=True)
@@ -997,6 +999,124 @@ class TimingAndStatusCacheTests(AppToolsBridgeTests):
         self.assertIn("request=req-q-dr", drain_lines[0])
 
 
+class DeliveryWatcherTests(AppToolsBridgeTests):
+    """11-27 S5: an accepted send is marked 已送达 on the next rollout change, without anyone reading state."""
+
+    def _raw_delivery(self, rid: str) -> tuple[str, dict]:
+        with self.legacy._db() as con:
+            row = con.execute(
+                "SELECT state,result FROM deliveries WHERE id=? AND thread=?", (rid, TID)
+            ).fetchone()
+        return row[0], json.loads(row[1] or "{}")
+
+    def _append_delegation(self, message_id: str, text: str) -> None:
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "timestamp": TS2,
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "FunctionCallOutput",
+                        "id": message_id,
+                        "name": "send_message_to_thread",
+                        "namespace": "codex_app",
+                        "output": f"<codex_delegation><source_thread_id>{TID}</source_thread_id><input>{text}</input></codex_delegation>",
+                    },
+                },
+            }, ensure_ascii=False) + "\n")
+
+    def test_next_rollout_change_marks_delivered_without_reading_state(self) -> None:
+        rid = "req-watch-0001"
+        res = self.bridge.send({"id": TID, "request_id": rid, "text": "插话一下", "intent": "steer"})
+        self.assertEqual(res["delivery_state"], "accepted")
+        self.assertIn(TID, self.bridge._pending_deliveries)
+
+        self._append_delegation("call-watch-1", "插话一下")
+        self.bridge._reconcile_pending_once()
+
+        state, result = self._raw_delivery(rid)
+        self.assertEqual(state, "accepted")
+        self.assertEqual(result["text"], "已送达")
+        self.assertEqual(result["evidence"]["message_id"], "call-watch-1")
+        self.assertNotIn(TID, self.bridge._pending_deliveries)
+
+    def test_no_pending_sends_means_nothing_is_scanned(self) -> None:
+        self.assertEqual(self.bridge._reconcile_pending_once(), 0)
+        self.assertIsNone(self.bridge._reconcile_thread)
+        with patch.object(self.bridge, "reconcile_deliveries", side_effect=AssertionError("must not scan")):
+            self.assertEqual(self.bridge._reconcile_pending_once(), 0)
+
+    def test_queued_send_alone_is_not_watched_until_it_is_handed_over(self) -> None:
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        res = self.bridge.send({"id": TID, "request_id": "req-watch-q001", "text": "排队", "intent": "queue"})
+        self.assertEqual(res["delivery_state"], "queued")
+        self.assertEqual(self.bridge._pending_deliveries, {})
+
+        popped = self.bridge.pop_queued_for_stop_hook(TID)
+        self.assertIsNotNone(popped)
+        self.assertIn(TID, self.bridge._pending_deliveries)
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "timestamp": TS2,
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": "um-watch-q001",
+                        "content": [{"type": "text", "text": f'<hook_prompt id="hp1">{popped["prompt"]}</hook_prompt>'}],
+                    },
+                },
+            }, ensure_ascii=False) + "\n")
+        self.bridge._reconcile_pending_once()
+        _state, result = self._raw_delivery("req-watch-q001")
+        self.assertEqual(result["evidence"]["message_id"], "um-watch-q001")
+        self.assertNotIn(TID, self.bridge._pending_deliveries)
+
+    def test_fifteen_minutes_without_evidence_stops_the_automatic_scan(self) -> None:
+        rid = "req-watch-1501"
+        self.bridge.send({"id": TID, "request_id": rid, "text": "插话超时", "intent": "steer"})
+        entry = self.bridge._pending_deliveries[TID]
+        entry["deadline"] = self.bridge._clock() - 1.0
+
+        self._append_delegation("call-watch-late", "插话超时")
+        self.bridge._reconcile_pending_once()
+
+        _state, result = self._raw_delivery(rid)
+        self.assertNotIn("message_id", result.get("evidence") or {})
+        self.assertNotIn(TID, self.bridge._pending_deliveries)
+
+    def test_the_shared_watcher_marks_it_on_its_own(self) -> None:
+        watched = ca.AppToolsBridge(
+            self.legacy, client=self.client, data_dir=self.data_dir, enable_background_drain=False,
+        )
+        self.addCleanup(watched.close)
+        rid = "req-watch-auto1"
+        watched.send({"id": TID, "request_id": rid, "text": "自动标上", "intent": "steer"})
+        self._append_delegation("call-auto-1", "自动标上")
+        deadline = time.monotonic() + 3.0
+        result: dict = {}
+        while time.monotonic() < deadline:
+            _state, result = self._raw_delivery(rid)
+            if (result.get("evidence") or {}).get("message_id") == "call-auto-1":
+                break
+            time.sleep(0.05)
+        self.assertEqual((result.get("evidence") or {}).get("message_id"), "call-auto-1")
+        self.assertNotIn(TID, watched._pending_deliveries)
+
+    def test_a_rollout_that_changes_again_is_scanned_again(self) -> None:
+        rid = "req-watch-2001"
+        self.bridge.send({"id": TID, "request_id": rid, "text": "插话两次", "intent": "steer"})
+        self._append_delegation("call-watch-unrelated", "别的消息")
+        self.bridge._reconcile_pending_once()
+        self.assertIn(TID, self.bridge._pending_deliveries)
+        self._append_delegation("call-watch-2", "插话两次")
+        self.bridge._reconcile_pending_once()
+        _state, result = self._raw_delivery(rid)
+        self.assertEqual(result["evidence"]["message_id"], "call-watch-2")
+
+
 class ChatsDisplayStep1Tests(unittest.TestCase):
     def test_self_delegation_counts_as_own_message_and_other_chat_keeps_origin(self) -> None:
         def make_line(source_id: str, ident: str, text: str) -> bytes:
@@ -1288,7 +1408,8 @@ class ImageCompressionAndPairingTests(AppToolsBridgeTests):
 
         # Survives restart (fresh AppToolsBridge + fresh History reading from disk)
         restarted = ca.AppToolsBridge(
-            self.legacy, client=self.client, data_dir=self.data_dir, enable_background_drain=False
+            self.legacy, client=self.client, data_dir=self.data_dir,
+            enable_background_drain=False, enable_background_watch=False,
         )
         self.addCleanup(restarted.close)
         st2 = restarted.status(TID, fresh=True)
