@@ -10,16 +10,12 @@ import org.json.JSONObject
 
 /** 11-27 S3: the last request's numbers, kept so the next send can carry them in `client_prev` (design §6.2). */
 data class SendTiming(val requestId:String, val roundtripMs:Long, val serverMs:Long?)
-/** What the phone measured for the last send, promote or kill-command: the whole round trip, and the computer's own part. */
-data class SendSpeed(val serial:Long, val roundtripMs:Long, val serverMs:Long?, val networkMs:Long)
-/** The network and relay part: the whole round trip less what the computer says it spent (never below zero). */
-fun networkMs(roundtripMs:Long, serverMs:Long):Long = (roundtripMs-serverMs).coerceAtLeast(0)
 /** A send whose body asks for a steer (4.2: the waiting line is for these only). */
 internal fun isSteerSend(record:Submission):Boolean = record.action=="send" &&
     runCatching { JSONObject(record.body).string("intent") }.getOrDefault("")=="steer"
-/** The one steer the computer has taken and not yet delivered; its waiting line shows above the input card. */
+/** The newest steer the computer has taken and not yet delivered; its waiting line shows above the input card. */
 internal fun waitingSteer(submissions:List<Submission>):Submission? =
-    submissions.firstOrNull { it.label=="已接收" && isSteerSend(it) }
+    submissions.filter { it.label=="已接收" && isSteerSend(it) }.maxByOrNull { it.created }
 /** 11-27 S2: the kill button needs a running command it may end, and a computer whose table says kill_command. */
 internal fun canKillCommand(raw:JSONObject):Boolean {
     val command=raw.optJSONObject("command") ?: return false
@@ -33,9 +29,7 @@ data class ComposerState(val key:ChatKey?=null,val draft:String="",val ready:Boo
     /** 核对 in progress for this request; then its one-line result [checkNote] for a few seconds ([checked]). */
     val checking:String="",val checked:String="",val checkNote:String="",
     /** 11-27 S5/S2: when each steer was accepted (S5's seconds start here), and the kill-command's one line. */
-    val steerSince:Map<String,Long> = emptyMap(),val killNote:String="",val killFailed:Boolean=false,val killBusy:Boolean=false,
-    /** 11-27 S3: what the last send measured, for the speed hint. */
-    val lastSpeed:SendSpeed?=null)
+    val steerSince:Map<String,Long> = emptyMap(),val killNote:String="",val killFailed:Boolean=false,val killBusy:Boolean=false)
 
 /**
  * Kept in a send's local copy (its body), never sent: where Claude's record stood when the computer pressed Enter and
@@ -80,9 +74,8 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
     private val inFlight=mutableSetOf<ChatKey>()
     private val draftVersions=mutableMapOf<ChatKey,Long>()
     private val confirming=mutableSetOf<String>()
-    /** 11-27 S3: the last timed request per conversation, and a counter so the speed hint is drawn for each one. */
+    /** 11-27 S3: the last timed request per conversation. */
     private val timings=mutableMapOf<ChatKey,SendTiming>()
-    private var speedSerial=0L
     private fun update(k:ChatKey,f:(ComposerState)->ComposerState) { if(key==k) mutable.update(f) }
     fun bind(next:ChatKey?,service:ReadApi?,active:Boolean,synthetic:Boolean,onFrame:(LiveFrame)->Unit) {
         if(key==next && api===service && foreground==active && fixture==synthetic) return
@@ -130,6 +123,14 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                                     if(isClaudeLayout(next.app)) claudePending(next).forEach { runCatching { reconcile(it,service,synthetic) } }
                                 }
                             } else null
+                            // 11-27 S5: while a steer waits, its receipt is asked every 3 s, so a computer that
+                            // records the delivery at once turns 已接收 into 已送达 and the waiting line goes.
+                            val steerWatch=if(!synthetic) launch {
+                                while(isActive) {
+                                    delay(3_000)
+                                    if(foreground) pollWaitingSteer(next,service,synthetic)
+                                }
+                            } else null
                             try { service.events(next.device,next.chat).collect { frame ->
                             if(t==token) {
                                 onFrame(frame)
@@ -139,7 +140,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
                                 }.forEach { reconcile(it,service,synthetic) }
                                 retry=1000L
                             }
-                            } } finally { polling?.cancel() }
+                            } } finally { polling?.cancel();steerWatch?.cancel() }
                         }
                         // Fixtures with no stream do not spin forever in tests.
                         update(next) { it.copy(connection=if(synthetic) "本地固定场景" else "实时连接已结束") }
@@ -155,6 +156,26 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             } catch(e:CancellationException) { throw e }
             catch(_:Exception) { update(next) { it.copy(ready=false,error="无法恢复草稿或提交记录，请重新进入会话。") } }
         }
+    }
+    /**
+     * 11-27 S5: asks the newest waiting steer's receipt, three seconds apart, while this conversation and the app are
+     * in front. The turn ending or fifteen minutes of waiting stops it; a failed read is simply tried again next time.
+     * Claude is left to [confirmClaude], which reads its own record.
+     */
+    private suspend fun pollWaitingSteer(k:ChatKey,service:ReadApi,synthetic:Boolean) {
+        if(!foreground || key!=k) return
+        val record=waitingSteer(state.value.submissions) ?: return
+        if(isClaudeLayout(record.app) || !state.value.control.running) return
+        val since=state.value.steerSince[record.request] ?: record.created
+        if(System.currentTimeMillis()-since>=15*60_000) return
+        val receipt=try { service.receipt(k.device,k.chat,record.request) }
+            catch(e:CancellationException) { throw e }
+            catch(_:Exception) { return }
+        // An older computer answers unknown: keep the waiting line as it is rather than turning it into 待确认.
+        if(receipt.string("state")=="unknown" && !receipt.optBoolean("missing")) return
+        try { reconcile(record,service,synthetic,receipt=receipt) }
+        catch(e:CancellationException) { throw e }
+        catch(_:Exception) { }
     }
     /** Claude sends of the last half hour still queued or unconfirmed, newest eight. */
     private fun claudePending(k:ChatKey)=state.value.submissions.filter { r ->
@@ -387,12 +408,10 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             else update(k) { it.copy(error="无法保存提交快照，尚未发送。") }
         } finally { inFlight.remove(k);update(k) { it.copy(submitting=false) } }
     }
-    /** 11-27 S3: keeps the request's numbers for `client_prev` and hands the speed hint what it measured. */
+    /** 11-27 S3: keeps the request's numbers for `client_prev`. */
     private fun rememberTiming(k:ChatKey,request:String,roundtripMs:Long,result:JSONObject) {
         val server=if(result.has("server_ms")) result.optLong("server_ms",-1).takeIf { it>=0 } else null
         timings[k]=SendTiming(request,roundtripMs,server)
-        val speed=SendSpeed(++speedSerial,roundtripMs,server,server?.let { networkMs(roundtripMs,it) } ?: 0L)
-        update(k) { it.copy(lastSpeed=speed) }
     }
     /** 11-27 S5: an accepted steer starts its waiting seconds now; a new send clears an older kill-command line. */
     private fun markSteerAccepted(k:ChatKey,record:Submission) {
@@ -474,7 +493,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             }
         }
     }
-    private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean,report:Boolean=false):String? {
+    private suspend fun reconcile(record:Submission,service:ReadApi,synthetic:Boolean,report:Boolean=false,receipt:JSONObject?=null):String? {
         if(isClaudeLayout(record.app) && record.action=="send") {
             // 11-26: Claude's sends share the computer's delivery record with Codex. Ask the receipt first: missing means
             // the computer never got it (and it can be sent again with the same request id); a broken receipt read is no
@@ -493,7 +512,7 @@ class ChatController(private val scope:CoroutineScope,private val persistent:Rea
             if(label!=record.label) save(record.copy(label=label),synthetic)
             return if(report) claudeCheckResultText(r.optBoolean("delivered"),r.optBoolean("queued")) else null
         }
-        val response=service.receipt(record.device,record.chat,record.request)
+        val response=receipt ?: service.receipt(record.device,record.chat,record.request)
         require(response.string("request_id").let { it==record.request || it.isBlank() && response.string("state")=="unknown" })
         val state=response.string("state")
         var label=receiptLabel(state,response.optJSONObject("result") ?: JSONObject(),record.action,response.optBoolean("missing"))

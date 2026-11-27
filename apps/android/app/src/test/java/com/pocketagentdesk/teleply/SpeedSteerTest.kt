@@ -1,7 +1,10 @@
 package com.pocketagentdesk.teleply
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
@@ -78,13 +81,16 @@ class SpeedSteerTest {
         )
     }
 
-    // 11-27 S3: the network part is the round trip less the computer's own time, never negative.
-    @Test fun networkAndSpeedTextSubtractTheComputersOwnTime() {
-        assertEquals(600L, networkMs(3_800L, 3_200L))
-        assertEquals(0L, networkMs(100L, 300L))
-        assertEquals("手机→电脑 0.6 秒 · 电脑处理 3.2 秒", speedNetworkText(SendSpeed(1, 3_800L, 3_200L, 600L)))
-        assertEquals("手机→电脑 0.0 秒 · 电脑处理 0.3 秒", speedNetworkText(SendSpeed(1, 100L, 300L, 0L)))
-        assertNull("an older computer gives no computer time, so no network time", speedNetworkText(SendSpeed(1, 800L, null, 0L)))
+    // 11-27 S3: 诊断测速's toast gains the phone→computer and computer parts, never a popup of its own.
+    @Test fun speedTextAddsThePhoneAndComputerParts() {
+        assertEquals("手机→电脑 0.6 秒 · 电脑处理 3.2 秒", speedSegment(3_800L, 3_200L))
+        assertEquals("手机→电脑 0.0 秒 · 电脑处理 0.3 秒", speedSegment(100L, 300L))
+        assertEquals(
+            "消息提交：3.800 秒 · 1.20 MB · 请求完成 · 手机→电脑 0.6 秒 · 电脑处理 3.2 秒",
+            speedText(SpeedRecord(1, "12:00:00", "消息提交", 3_800, 1_200_000, "请求完成", false, true, 3_200)),
+        )
+        // An older computer without server_ms keeps the old line exactly.
+        assertEquals("消息提交：0.800 秒 · 请求完成", speedText(SpeedRecord(1, "12:00:00", "消息提交", 800, 0, "请求完成", false, true)))
     }
 
     // 11-27 S3 (design §6.2): the first send carries the phone's time; the next carries the first one's numbers.
@@ -108,8 +114,6 @@ class SpeedSteerTest {
         assertTrue(first.has("client_sent_ms"))
         assertFalse(first.has("client_prev"))
         assertEquals("已接收", c.state.value.submissions.single().label)
-        assertEquals(250L, c.state.value.lastSpeed?.serverMs)
-        assertTrue((c.state.value.lastSpeed?.networkMs ?: -1) >= 0)
 
         c.edit("second")
         runCurrent()
@@ -145,6 +149,45 @@ class SpeedSteerTest {
         assertEquals(900L, sent.getJSONObject("client_prev").getLong("roundtrip_ms"))
         assertEquals(300L, sent.getJSONObject("client_prev").getLong("server_ms"))
     }
+
+    // 11-27 S5: the waiting steer's receipt is asked every 3 s; 已送达 ends the line and the asking.
+    @Test fun waitingSteerPollsItsReceiptUntilDeliveredThenStops() = runTest {
+        val store = SpeedStore()
+        store.records["r1"] = steerRecord("r1", System.currentTimeMillis())
+        val api = SteerWatchApi()
+        val c = ChatController(backgroundScope, store)
+        c.bind(key, api, true, false) { }
+        runCurrent()
+        // The recovery read at bind sees app_tools_ack: still accepted, still waiting.
+        assertEquals("已接收", c.state.value.submissions.single().label)
+        advanceTimeBy(3_100)
+        runCurrent()
+        assertEquals("已送达", c.state.value.submissions.single().label)
+        assertNull(waitingSteer(c.state.value.submissions))
+        assertEquals(2, api.receipts)
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals("once delivered, no more receipt reads", 2, api.receipts)
+    }
+
+    // 11-27 S5: a steer waiting longer than fifteen minutes is no longer asked about.
+    @Test fun waitingSteerStopsPollingAfterFifteenMinutes() = runTest {
+        val store = SpeedStore()
+        store.records["r1"] = steerRecord("r1", System.currentTimeMillis() - 16 * 60_000)
+        val api = SteerWatchApi(deliver = false)
+        val c = ChatController(backgroundScope, store)
+        c.bind(key, api, true, false) { }
+        runCurrent()
+        assertEquals("只有进入对话时那一次恢复核对", 1, api.receipts)
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(1, api.receipts)
+    }
+
+    private fun steerRecord(request: String, created: Long) = Submission(
+        request, key.scope, key.device, app = "codex", chat = key.chat, text = "插话", action = "send",
+        turn = "t", body = JSONObject().put("intent", "steer").toString(), label = "已接收", created = created,
+    )
 
     // 11-27 S2: kill-command goes to the computer's route, shows its fixed success line, and its refusal's reason.
     @Test fun killCommandShowsItsSuccessOrTheComputersReason() = runTest {
@@ -213,6 +256,20 @@ class SpeedSteerTest {
         override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
             bodies += JSONObject(body.toString())
             return JSONObject().put("request_id", body.string("request_id")).put("delivery_state", "accepted")
+        }
+    }
+
+    private class SteerWatchApi(private val deliver: Boolean = true) : TestApi() {
+        var receipts = 0
+        override suspend fun control(device: String, chat: String, fresh: Boolean) = parseControl(
+            JSONObject("""{"available":true,"running":true,"active_turn_id":"t"}"""),
+        )
+        override fun events(device: String, chat: String) = flow<LiveFrame> { awaitCancellation() }
+        override suspend fun receipt(device: String, chat: String, request: String): JSONObject {
+            receipts++
+            val source = if (deliver && receipts >= 2) "conversation_record" else "app_tools_ack"
+            return JSONObject().put("request_id", request).put("state", "accepted")
+                .put("result", JSONObject().put("evidence", JSONObject().put("source", source)))
         }
     }
 

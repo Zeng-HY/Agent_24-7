@@ -89,7 +89,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -130,8 +129,6 @@ fun InputArea(s: ReaderState, vm: ReaderViewModel, chat: ComposerState, ws: Work
                 val last = chat.submissions.firstOrNull { it.label != RemovedLabel }
                 if (last != null && last.action == "send" && last.label == "未接收") RejectedBar(last, chat, vm)
                 SendStateBar(last, chat, vm)
-                // 11-27 S3: the phone→computer and computer parts of the last send.
-                SpeedNote(chat)
             }
             ComposerCard(s, vm, chat, ws, raw, saved)
         }
@@ -381,12 +378,6 @@ internal fun composerSendPlan(running:Boolean,sendModes:List<String>,queueAvaila
 internal fun steerWaitingText(assistant:String,seconds:Long) = "等 $assistant 做完这一步再插进去 · 已等 $seconds 秒"
 /** 11-27 S2: the confirmation's words, §4.3 of the design. */
 internal fun killCommandConfirmText(assistant:String) = "$assistant 正在跑的这条命令会被结束，它的结果作废；你的话会马上交给 $assistant。"
-/** 11-27 S3: "手机→电脑 0.6 秒 · 电脑处理 3.2 秒"; nothing when an older computer did not say its own part. */
-internal fun speedNetworkText(speed:SendSpeed):String? {
-    val server=speed.serverMs ?: return null
-    fun seconds(ms:Long)="%.1f".format(Locale.ROOT,ms/1000.0)
-    return "手机→电脑 ${seconds(speed.networkMs)} 秒 · 电脑处理 ${seconds(server)} 秒"
-}
 
 /**
  * 11-27 S5/S2: while a steer waits for Codex's current step, say so with the phone's own seconds, and offer to end
@@ -420,18 +411,6 @@ private fun SteerWaitBar(s:ReaderState,chat:ComposerState,raw:JSONObject,vm:Read
         confirmButton={TextButton(onClick={confirm=false;vm.composer.killCommand(record)}) { Text("结束命令",color=p.error) }},
         dismissButton={TextButton(onClick={confirm=false}) { Text("取消") }},
     )
-}
-/** 11-27 S3: the extra speed-hint segment, while 诊断测速 is on (never more often than the toast itself). */
-@Composable
-private fun SpeedNote(chat:ComposerState) {
-    val p=LocalTeleply.current
-    val speed=chat.lastSpeed ?: return
-    val enabled by Diagnostics.enabled.collectAsStateWithLifecycle()
-    val text=if(enabled) speedNetworkText(speed) else null
-    if(text==null) return
-    var shown by remember(speed.serial) { mutableStateOf(true) }
-    LaunchedEffect(speed.serial) { shown=true;delay(4_000);shown=false }
-    if(shown) Text(text,style=MaterialTheme.typography.note,color=p.muted,modifier=Modifier.fillMaxWidth().padding(start=10.dp,end=2.dp,bottom=4.dp).semantics { liveRegion=LiveRegionMode.Polite })
 }
 
 /**

@@ -148,7 +148,12 @@ class FixtureApi(private val source: String = "codex", val world: FixtureWorld =
     // 诊断测速 times these where the network would: the demo's sends show its record too.
     override suspend fun command(device: String, route: String, body: JSONObject): JSONObject {
         val timer = if (route == "send") Diagnostics.start("消息提交") else null
-        return try { net(); world.command(source, route, body).also { lost(); Diagnostics.finish(timer, 0, speedOutcome(it)) } }
+        return try {
+            net(); world.command(source, route, body).also { answer ->
+                val server = if (answer.has("server_ms")) answer.optLong("server_ms", -1).takeIf { it >= 0 } else null
+                lost(); Diagnostics.finish(timer, 0, speedOutcome(answer), serverMs = server)
+            }
+        }
         catch (e: Exception) { Diagnostics.finish(timer, 0, if (e is ServiceFailure) "HTTP ${e.status}" else "网络失败"); throw e }
     }
 

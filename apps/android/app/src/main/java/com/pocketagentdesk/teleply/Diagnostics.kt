@@ -10,11 +10,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
 /** One timed operation of 诊断测速; [notify] ones are also shown for a moment where the user is. */
-data class SpeedRecord(val serial: Long, val time: String, val label: String, val ms: Long, val bytes: Long, val result: String, val background: Boolean, val notify: Boolean)
+data class SpeedRecord(val serial: Long, val time: String, val label: String, val ms: Long, val bytes: Long, val result: String, val background: Boolean, val notify: Boolean, val serverMs: Long? = null)
 
-/** "消息提交：0.412 秒 · 1.20 MB · 请求完成（切过后台）", as the web writes it. */
+/** "手机→电脑 0.6 秒 · 电脑处理 3.2 秒": the whole round trip less the computer's own part (never below zero). */
+fun speedSegment(roundtripMs: Long, serverMs: Long): String {
+    fun seconds(ms: Long) = "%.1f".format(Locale.ROOT, ms / 1000.0)
+    return "手机→电脑 ${seconds((roundtripMs - serverMs).coerceAtLeast(0))} 秒 · 电脑处理 ${seconds(serverMs)} 秒"
+}
+
+/** "消息提交：0.412 秒 · 1.20 MB · 请求完成（切过后台）", as the web writes it; with the phone→computer part when the computer said its own time (11-27 S3). */
 fun speedText(r: SpeedRecord): String = r.label + "：" + "%.3f".format(Locale.ROOT, r.ms / 1000.0) + " 秒" +
-    (if (r.bytes > 0) " · " + "%.2f".format(Locale.ROOT, r.bytes / 1_000_000.0) + " MB" else "") + " · " + r.result + if (r.background) "（切过后台）" else ""
+    (if (r.bytes > 0) " · " + "%.2f".format(Locale.ROOT, r.bytes / 1_000_000.0) + " MB" else "") + " · " + r.result +
+    (r.serverMs?.let { " · " + speedSegment(r.ms, it) } ?: "") + if (r.background) "（切过后台）" else ""
 
 /** What a timed request came to, by the web's rules: not done on the computer, delivery unconfirmed, or done. */
 fun speedOutcome(json: JSONObject): String = when {
@@ -72,11 +79,11 @@ object Diagnostics {
     /** Starts timing [label]; null when the switch is off or the request is not one that is timed. */
     fun start(label: String?): Timer? = if (on.value && label != null) Timer(label, System.nanoTime(), generation, hidden) else null
 
-    fun finish(timer: Timer?, bytes: Long, result: String, notify: Boolean = true) {
+    fun finish(timer: Timer?, bytes: Long, result: String, notify: Boolean = true, serverMs: Long? = null) {
         if (timer == null || timer.generation != generation || !on.value) return
         val ms = (System.nanoTime() - timer.start) / 1_000_000
         val record = synchronized(this) {
-            SpeedRecord(++serial, SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(Date()), timer.label, ms, bytes, result, timer.hidden != hidden, notify)
+            SpeedRecord(++serial, SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(Date()), timer.label, ms, bytes, result, timer.hidden != hidden, notify, serverMs)
         }
         synchronized(this) { list.value = (listOf(record) + list.value).take(10) }
     }

@@ -196,6 +196,7 @@
 
 **S5 插话等待时说清楚在等什么**
 - 一条标签为「已接收」、请求体 `intent` 是 `steer` 的发送，在输入卡上方显示「等 Codex 做完这一步再插进去 · 已等 N 秒」；N 从收到电脑回答那一刻起算，每秒更新。变成「已送达」或移除后消失。
+- 有一条插话在等时，每 3 秒问一次**最新那条**的回执，照现有 `reconcile` 规则更新标签；只在这个对话在前台、App 在前台时问。这一轮结束、或者等满 15 分钟就停；回执读失败不报错，下一个 3 秒再问。电脑这一批的 S5 在 Codex 一收到时就把送达记录改成带 `conversation_record` 证据的 accepted，回执变「已送达」后等待行消失，也不再问。
 - 助手名字取当前助手的名字（Codex / Claude / …）。
 
 **S2 结束命令，马上插话**
@@ -206,20 +207,20 @@
 **S3 手机这一半**
 - 发送、「立即补充」、`kill-command` 都用单调时钟记来回总时间；回答里有 `server_ms` 时算出「网络和中转」= 来回 − `server_ms`（不小于 0）。
 - 每次发送带 `client_sent_ms`；下一次发送把上一次的 `{request_id, roundtrip_ms, server_ms}` 放进 `client_prev`。重发沿用第一次请求体里存下的这两个字段，不换成新值（第 6.2 节）。
-- 诊断测速开启时，输入卡上方在测速提示处多显示一行「手机→电脑 0.6 秒 · 电脑处理 3.2 秒」，出现时机和原来的测速提示相同，不会更常弹出。`Diagnostics.kt`/`SettingsUi.kt` 不在第 5 节列出的文件里，所以没有改原来的 toast；这一段放在 `ComposerUi.kt` 的输入卡上方。
+- 诊断测速开启时，并入原来的速度提示（`Diagnostics` 的 toast）多显示一段「手机→电脑 0.6 秒 · 电脑处理 3.2 秒」；弹出的频率和原来一样。输入卡上方不再常驻这一行。
 
 **演示数据**
 - 新建 `FixtureSteerStory.kt`：对话「插话等待示例」。Codex 正在跑「列下载目录」，一条插话标签「已接收」，打开就能看到等待行和「结束这条命令，马上插话」；确认结束后命令字段变 `null`，显示「已结束命令，正在插话…」，按钮消失。演示列表因此多一条对话（分页后的测试期望从 13/14 改为 14/15）。
 
 **改了哪些文件**
-- 代码：`ChatController.kt`（发送/派发/插话等待/`kill-command`/计时与 `client_prev`）、`ComposerUi.kt`（发送键点按与长按、等待行、确认框、测速那一段）、`RelayApi.kt`（允许 `kill-command` 路由）、`FixtureApi.kt`（演示场景的控制态、回执和 `kill-command`）；新建 `FixtureSteerStory.kt`。
-- 测试：新建 `SpeedSteerTest.kt`（8 条）；`ReaderUiScenarios.kt` 新增一条等待行/结束命令的界面场景，并把演示列表条数从 13/14 改为 14/15。
+- 代码：`ChatController.kt`（发送/派发/插话等待与回执轮询/`kill-command`/计时与 `client_prev`）、`ComposerUi.kt`（发送键点按与长按、等待行、确认框）、`RelayApi.kt`（允许 `kill-command` 路由、把 `server_ms` 交给测速）、`Diagnostics.kt`（测速记录和文字多一段手机→电脑 / 电脑处理）、`FixtureApi.kt`（演示场景的控制态、回执和 `kill-command`）；新建 `FixtureSteerStory.kt`。
+- 测试：新建 `SpeedSteerTest.kt`（10 条，含回执从 `app_tools_ack` 变 `conversation_record` 的轮询、15 分钟停止）；`ReaderUiScenarios.kt` 新增一条等待行/结束命令的界面场景，并把演示列表条数从 13/14 改为 14/15。
 - 文档：本节。
 - 没改 `Models.kt`（`Control.command` 直接从控制态原文读，够了）；没有改版本号。
 
 **测试数字**
 - 开工前基线：`gradlew.bat --offline testDebugUnitTest`，370 个测试全部通过（34 个结果文件，0 失败）。
-- 做完：`gradlew.bat --offline testDebugUnitTest`，379 个测试全部通过（35 个结果文件，0 失败，新增 9 条）；`gradlew.bat --offline assembleDebug` 通过。
+- 做完：`gradlew.bat --offline testDebugUnitTest`，381 个测试全部通过（35 个结果文件，0 失败，新增 11 条）；`gradlew.bat --offline assembleDebug` 通过。
 
 **模拟器**
 - AVD `AgentRemoteFresh`（`-no-window -gpu swiftshader_indirect`），debug 包 `com.pocketagentdesk.teleply.dev`：设置 → 开发者选项 → 打开本地示例 → 进入示例 → 测试电脑 A → 插话等待示例。
@@ -229,5 +230,5 @@
 **没做什么、要看的**
 - 没有推送、合并、打包、签名、上传；没有连真手机；没有读真实对话记录，没有调用真实电脑端。演示内容全部编造。
 - 没有改版本号。
-- S3 的数字只在 `Diagnostics` 开启时显示；因为文件限制没有并进原来的 toast，而是输入卡上方单独一行。如果希望并进 toast，需要允许改 `Diagnostics.kt`/`SettingsUi.kt`。
+- 复审后改了两处：等待中的插话每 3 秒问一次回执（这一轮结束或满 15 分钟停，变成「已送达」后消失）；计时并入原来的测速 toast，输入卡上方那行已去掉。
 - 重发时的请求体沿用第一次存下的 `client_sent_ms`/`client_prev`；这一点有测试覆盖（`resendKeepsTheOriginalTimingFields`）。

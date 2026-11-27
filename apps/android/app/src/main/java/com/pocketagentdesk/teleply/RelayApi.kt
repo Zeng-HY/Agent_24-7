@@ -138,7 +138,11 @@ class RelayApi(origin: String, private val vault: CookieVault, baseClient: OkHtt
         // 诊断测速 times the requests that carry a message or a file (web: the same routes, POST only).
         val timer = if(body!=null || bytes!=null || stream!=null) Diagnostics.start(Diagnostics.labelFor(path.replace(DevicePrefix,""))) else null
         val size = bytes?.size?.toLong() ?: stream?.contentLength() ?: 0L
-        try { timed(call).also { Diagnostics.finish(timer,size,speedOutcome(it)) } }
+        try { timed(call).also { answer ->
+            // 11-27 S3: the computer's own part of the answer, when it says; the toast then shows 手机→电脑 and 电脑处理.
+            val server=if (answer.has("server_ms")) answer.optLong("server_ms",-1).takeIf { it>=0 } else null
+            Diagnostics.finish(timer,size,speedOutcome(answer),serverMs=server)
+        } }
         catch(e:Exception) {
             Diagnostics.finish(timer,size,when(e) { is ServiceFailure -> "HTTP ${e.status}"; is kotlinx.coroutines.CancellationException,is java.io.InterruptedIOException -> "已取消或超时"; else -> "网络失败" })
             throw e
