@@ -89,6 +89,8 @@ public final class DemoWorld: Sendable {
         var testingSends: [String: JSONValue] = [:]
         var testingCreates: [String: JSONValue] = [:]
         var testingNew = 0
+        // 11-27: 插话等待示例's one command was ended by 结束这条命令，马上插话.
+        var steerKilled = false
     }
 
     let state = Mutex(State())
@@ -101,11 +103,15 @@ public final class DemoWorld: Sendable {
     /// 文件预览示例 is listed too (file-preview design §6.1): off by default, so the screenshot tour's rows stay as they
     /// were. `-TeleplyDemoFiles` turns it on.
     public let filesDemo: Bool
+    /// 插话等待示例 is listed too (design 11-27 §4.2, §4.3): off by default, so the screenshot tour's rows stay as they
+    /// were. `-TeleplyDemoSteer` turns it on; a test may say so itself.
+    public let steerDemo: Bool
 
-    public init(site: DemoSite? = nil, testingAgent: Bool = false, filesDemo: Bool = false) {
+    public init(site: DemoSite? = nil, testingAgent: Bool = false, filesDemo: Bool = false, steerDemo: Bool = SteerDemo.on) {
         self.site = site
         self.testingAgent = testingAgent
         self.filesDemo = filesDemo
+        self.steerDemo = steerDemo
         if let site { state.withLock { $0.devices = site.computers } }
     }
 
@@ -136,10 +142,11 @@ public final class DemoWorld: Sendable {
 
     /// A source's state as /api/{app}/state reports it, with the turn, queue and settings that sending changed.
     func control(app: String, chat: String) -> JSONValue {
-        state.withLock { state in Self.control(state, app: app, chat: chat, site: site) }
+        state.withLock { state in Self.control(state, app: app, chat: chat, site: site, steer: steerDemo) }
     }
 
-    private static func control(_ state: State, app: String, chat: String, site: DemoSite? = nil) -> JSONValue {
+    private static func control(_ state: State, app: String, chat: String, site: DemoSite? = nil,
+                                steer: Bool = false) -> JSONValue {
         let queued = state.queues[app] ?? []
         let fixtureRunning = chat == "running-demo"  // 0.6.4: the list's running row, also on its page
         let run = state.running[app] == true || fixtureRunning
@@ -148,7 +155,7 @@ public final class DemoWorld: Sendable {
         // The cards as far as they have been answered; a conversation the demo just made has nothing waiting.
         let made = state.created.contains { $0.row["id"].string() == chat }
         switch app {
-        case _ where made || fixtureRunning || chat == SendDemo.chat:
+        case _ where made || fixtureRunning || chat == SendDemo.chat || chat == SteerDemo.chat:
             fields["prompt"] = nil
             fields["interactions"] = []
             fields["questions"] = []
@@ -200,7 +207,41 @@ public final class DemoWorld: Sendable {
         default:
             fields["queued"] = .array(queued.map { ["id": .string($0.id), "text": .string($0.text), "status": .string($0.status)] })
         }
+        // 11-27 (design §4.2, §4.3; handoff 11-27 §6.3): 插话等待示例's turn runs one command, and its state is the one
+        // that says a command may be ended (`kill_command`, and `command` itself). Once the demo ended that command the
+        // state has none, and the turn goes on — the line keeps waiting, the button is gone. 停止这一轮 turns it off as on
+        // any other demo conversation.
+        if steer, chat == SteerDemo.chat {
+            let runs = state.running["codex"] != false
+            fields["running"] = .bool(runs)
+            fields["active_turn_id"] = .string(runs ? "steer-turn" : "")
+            fields["turn_id"] = "steer-turn"
+            fields["turn_started"] = .number(Double(DemoData.startedSeconds))
+            fields["step"] = .string(runs ? "run" : "")
+            fields["recent_turns"] = [["id": "steer-turn", "status": .string(runs ? "inProgress" : "interrupted")]]
+            var caps = fields["capabilities_now"]?.object ?? [:]
+            caps["kill_command"] = .bool(true)
+            fields["capabilities_now"] = .object(caps)
+            if runs, !state.steerKilled {
+                fields["command"] = ["running": true, "since_ms": .number(Double(DemoData.now)), "can_kill": true]
+            } else {
+                fields["command"] = nil
+            }
+        }
         return .object(fields)
+    }
+
+    /// 结束这条命令，马上插话 (design §4.3; the demo's own answer): 插话等待示例's one command is ended and its turn goes on.
+    /// Any other conversation is refused the way the computer refuses — 409, no command, `not_submitted`.
+    func killCommand(_ body: JSONValue) -> (status: Int, reply: JSONValue) {
+        state.withLock { state in
+            guard steerDemo, body["id"].string() == SteerDemo.chat, !state.steerKilled else {
+                return (409, ["error": "这个对话没有正在跑的命令，不能结束", "not_submitted": true, "server_ms": .number(3)])
+            }
+            state.steerKilled = true
+            return (200, ["ok": true, "killed": true, "killed_pids": .array([.number(4_242)]),
+                          "text": "已结束命令，这一轮继续", "server_ms": .number(12)])
+        }
     }
 
     /// A send, stop or queue action, with the status the computer answers. Claude takes a message by Enter in its
@@ -479,6 +520,7 @@ public final class DemoWorld: Sendable {
                 return .object(fields)
             }
             let extra: [JSONValue] = (site == nil && filesDemo ? [DemoData.previewRow] : []) + (SendDemo.on ? [SendDemo.row] : [])
+                + (steerDemo ? [SteerDemo.row] : [])
             return (Array(state.created.map(\.row).reversed()) + listed + extra).filter { row in
                 let key = row["app"].string() + ":" + row["id"].string()
                 return !state.archived.contains(key) && !state.deleted.contains(key)
@@ -1030,12 +1072,14 @@ enum DemoData {
     }
 
     /// [nextPressed]: the next-step button pressed so far; the box then keeps its recap and the words show as sent.
-    static func messages(app: String, chat: String, nextPressed: String = "") -> [JSONValue] {
+    static func messages(app: String, chat: String, nextPressed: String = "", steer: Bool = false) -> [JSONValue] {
         // 文件预览示例 (file-preview design §6.1), listed only with -TeleplyDemoFiles: names, paths and contents all
         // made up.
         if chat == "file-preview" { return previewMessages }
         // 发送恢复示例, listed only with -TeleplyDemoSend (handoff 11-26 §3.2): a message with pictures of its own.
         if chat == SendDemo.chat, SendDemo.on { return SendDemo.messages }
+        // 插话等待示例, listed only with -TeleplyDemoSteer (design 11-27 §4.2): a turn running one command.
+        if chat == SteerDemo.chat, steer { return SteerDemo.messages }
         if app == "claude" && chat == "claude-next" {
             let plan: JSONValue = .array([("读现有测试", "completed"), ("补发布说明的测试", "completed"), ("跑一遍全部测试", "in_progress"), ("更新说明文档", "pending")]
                 .map { ["text": .string($0.0), "status": .string($0.1)] })

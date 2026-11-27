@@ -18,6 +18,9 @@ struct InputArea: View {
         VStack(spacing: 8) {
             AskBar(model: model, onAsk: onAsk)
             QueueTray(model: model)
+            // 11-27 (design §4.2): what an interjection the computer took is waiting for, and the button that ends just
+            // the command so it goes in as soon as it stops (§4.3).
+            SteerWaitBar(model: model)
             if let last, last.action == "send", last.label == "未接收" {
                 RejectedBar(model: model, record: last)
             }
@@ -203,6 +206,65 @@ private struct QueueTray: View {
     }
 }
 
+/// 11-27 (design §4.2, §4.3): while an interjection the computer took (已接收, `intent: steer`) still waits for the step
+/// the source is on, a grey line over the input says what it waits for — 等 Codex 做完这一步再插进去 · 已等 N 秒 — with N the
+/// phone's own seconds from the computer's answer. When that step is a command the store may end (`command.can_kill` and
+/// `kill_command`, handoff 11-27 §6.3), the same row offers 结束这条命令，马上插话, which asks first. The line goes when the
+/// send is delivered or taken off the list, and the button goes once nothing runs.
+private struct SteerWaitBar: View {
+    let model: AppModel
+    @State private var confirming = false
+    /// A fixed origin, so the seconds tick without restarting the schedule at each redraw.
+    private static let start = Date(timeIntervalSince1970: 0)
+
+    var body: some View {
+        let chat = model.conversation
+        let app = chat.key?.app ?? model.app
+        let name = Labels.sourceName(app, catalog: model.catalog)
+        // The note of a tap stays a few seconds even when the line it belonged to is already gone (the words may go in
+        // the moment the command stops).
+        if chat.steerWait != nil || chat.killNote != nil {
+            VStack(alignment: .leading, spacing: 2) {
+                if let waiting = chat.steerWait {
+                    HStack(spacing: 4) {
+                        TimelineView(.periodic(from: Self.start, by: 1)) { _ in
+                            Text(verbatim: steerWaitingText(name: name, seconds: chat.steerWaitSeconds(waiting)))
+                                .noteFont()
+                                .foregroundStyle(Palette.muted)
+                                .lineLimit(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if chat.control.canKillCommand {
+                            Button("结束这条命令，马上插话") { confirming = true }
+                                .buttonStyle(PillStyle(kind: .text, minHeight: 36))
+                                .disabled(chat.killing)
+                        }
+                    }
+                }
+                if let note = chat.killNote {
+                    Text(note)
+                        .noteFont()
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(3)
+                        .padding(.leading, 2)
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.panel, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .alert("结束这条命令？", isPresented: $confirming) {
+                Button("取消", role: .cancel) {}
+                Button("结束命令", role: .destructive) { chat.killCommand() }
+            } message: {
+                Text(verbatim: killCommandConfirmText(name: name))
+            }
+        }
+    }
+}
+
 /// A send the computer turned away (web: 没发出去 ›): why, and what can be done. Claude's box on the computer
 /// holding other text offers to send again replacing exactly that text; 恢复草稿 puts the message back in the box;
 /// 移除 takes the record away. Nothing is sent again by itself.
@@ -274,8 +336,10 @@ struct ComposerCard: View {
         let chat = model.conversation
         let saved = model.workspace.saved
         let app = chat.key?.app ?? model.app
-        // The three keep exactly the buttons they had; only a new assistant goes by what it can do now (handoff 3.4).
-        let queue = chat.control.running && chat.control.queueAvailable && model.offersQueue(app)
+        // 11-27 (design §4.1): while the source runs, a tap sends an interjection (插话) when the assistant takes one; a
+        // hold on the key may queue instead when it takes both. Off a running turn both are false and the key is as it
+        // always was. The three keep exactly the buttons they had; only a new assistant goes by what it can do now.
+        let key = chat.sendKey
         let words = chat.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let extras = !saved["uploads"].array.isEmpty || !saved["references"].array.isEmpty
         // Claude's message goes while the computer shows another conversation: the computer opens it (web sendConv).
@@ -322,7 +386,8 @@ struct ComposerCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 MicButton(model: model, voice: voice, cursor: cursor)
                 if !voice.active {
-                    sendButton(queue: queue && !newPage, enabled: canSend && !newPage)
+                    sendButton(tapQueues: key.tapQueues && !newPage, steers: key.steers && !newPage,
+                               queues: key.queues && !newPage, enabled: canSend && !newPage)
                 }
             }
         }
@@ -460,9 +525,13 @@ struct ComposerCard: View {
         .accessibilityValue(Text(labels.plan ? "计划模式" : ""))
     }
 
-    private func sendButton(queue: Bool, enabled: Bool) -> some View {
-        Button {
-            if enabled { model.conversation.send(queue: queue) }
+    /// 11-27 (design §4.1, S1): a tap sends an interjection while the source runs, unless the assistant only queues; a
+    /// hold on the key offers 排队到这一轮结束后再发 only when it takes both (SendKeyModes). Off a running turn the label
+    /// and the menu are exactly what they always were.
+    @ViewBuilder
+    private func sendButton(tapQueues: Bool, steers: Bool, queues: Bool, enabled: Bool) -> some View {
+        let button = Button {
+            if enabled { model.conversation.send(queue: tapQueues) }
         } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: 17, weight: .semibold))
@@ -476,8 +545,16 @@ struct ComposerCard: View {
         .buttonStyle(PressScaleStyle(scale: 0.88))
         .disabled(!enabled)
         .keyboardShortcut(.return, modifiers: .command)
-        .accessibilityLabel(Text(queue ? "发送并排队" : "发送"))
+        .accessibilityLabel(Text(steers ? "发送（插话）" : tapQueues ? "发送并排队" : "发送"))
+        .accessibilityHint(Text(steers && queues ? "按住可排队" : ""))
         .accessibilityValue(Text(model.conversation.submitting ? "提交中" : ""))
+        if steers && queues {
+            button.contextMenu {
+                Button("排队到这一轮结束后再发") { model.conversation.send(queue: true) }
+            }
+        } else {
+            button
+        }
     }
 
     private var confirmTitle: String {

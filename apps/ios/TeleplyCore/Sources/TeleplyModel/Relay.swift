@@ -495,6 +495,16 @@ public struct RelayClient: Sendable {
         return .object(fields)
     }
 
+    /// 11-27 (S2; design §4.3, handoff 11-27 §6.4): 结束这条命令，马上插话 — the one command the source runs now is ended, and
+    /// its turn goes on, so an interjection waiting for that command goes in as soon as it stops. Only Codex answers it
+    /// yet, at the assistant's own address (`/api/agents/codex/kill-command`); the computer also keeps the old
+    /// `/api/codex/kill-command`. A refusal is a 409 with the computer's own sentence and `not_submitted`, and then
+    /// nothing was ended. Posted once, like a send.
+    public func killCommand(device: String, app: String, chat: String, turn: String) async throws -> JSONValue {
+        let body: JSONValue = ["id": .string(chat), "turn_id": .string(turn)]
+        return try await json(post(Self.devicePath(device, try Self.agentPath(app, "kill-command")), json: body))
+    }
+
     // MARK: Files and voice
 
     /// Pictures go up to 20 MB (the computer's limit), other files to 64 MiB: the relay takes no request bigger

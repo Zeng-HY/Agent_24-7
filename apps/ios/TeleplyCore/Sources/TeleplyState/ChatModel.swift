@@ -90,6 +90,11 @@ public final class ChatModel {
     public internal(set) var checking: Set<String> = []
     /// 11-26: 核对's result for each send (已核对：…), gone again a few seconds later (handoff 11-26 §3.1 point 5).
     public internal(set) var checkNotes: [String: String] = [:]
+    /// 11-27 (design §4.3): 结束这条命令，马上插话 is waiting on the computer now, so its button cannot be pressed twice.
+    public internal(set) var killing = false
+    /// 11-27 (design §4.3 point 3): what that tap came to — 已结束命令，正在插话… or the computer's own reason — kept a few
+    /// seconds under the waiting line.
+    public internal(set) var killNote: String?
 
     /// True while a tap waits on the computer (web claude-ui.js `choosing`): no state poll then.
     @ObservationIgnored public var pollPaused: () -> Bool = { false }
@@ -136,6 +141,12 @@ public final class ChatModel {
     @ObservationIgnored var flushing: Task<Void, Never>?
     /// The local demo keeps its sends here, never in the store.
     @ObservationIgnored var demo: [String: Submission] = [:]
+    /// 11-27 (S3; handoff 11-27 §6.2): the last send's, 立即补充's or 结束命令's own numbers, which the next send carries on
+    /// as `client_prev` for the computer's log only.
+    @ObservationIgnored var lastTiming: PhoneTiming?
+    /// 11-27 (design §4.2): when the computer took each interjection, in the phone's own milliseconds, for the seconds a
+    /// waiting one shows; gone once it is delivered or off the list.
+    @ObservationIgnored var steerSince: [String: Int64] = [:]
     @ObservationIgnored var inFlight: Set<ChatKey> = []
     @ObservationIgnored var confirming: Set<String> = []
     @ObservationIgnored var sends: [String: Task<Void, Never>] = [:]
@@ -187,6 +198,8 @@ public final class ChatModel {
         self.onFrame = onFrame
         // -TeleplyDemoSend: the demo's 发送恢复示例 conversation starts with a send the computer says it never got.
         if synthetic, let next { seedSendDemo(next) }
+        // -TeleplyDemoSteer: 插话等待示例 starts with an interjection the computer took and has not delivered.
+        if synthetic, let next { seedSteerDemo(next) }
         if changed {
             control = Control()
             connection = "实时连接未启动"
@@ -197,6 +210,8 @@ public final class ChatModel {
             submissions = []
             error = nil
             hint = ""
+            steerSince = [:]
+            killNote = nil
         }
         guard let next else { return }
         let restore = changed || !ready
@@ -486,6 +501,79 @@ public final class ChatModel {
     /// 立即补充: hands a queued send to the running turn (B05). Claude does this with a desktop token instead.
     public func promote(_ message: String) { submit("queue-action", message: message, promote: true) }
 
+    /// 11-27 (design §4.1, S1): what the send key does now. While the source runs, a tap sends an interjection when the
+    /// assistant's send modes say `steer`; a hold may queue when the state takes a queue — a new assistant's `queue`
+    /// among its send modes, the three's own capability table, which is where Claude says it takes none (§4.1 point 5).
+    /// Off a running turn both are false, and the key is what it always was.
+    public var sendKey: SendKeyModes {
+        guard let key, control.running else { return SendKeyModes() }
+        let modes = Self.sendModes(of: control, app: key.app, catalog: catalog)
+        let takesQueue = catalog.isLegacy(key.app) ? catalog.caps(key.app).queue : modes.contains("queue")
+        return SendKeyModes(steers: modes.contains("steer"), queues: control.queueAvailable && takesQueue)
+    }
+
+    /// 11-27 (design §4.2, S5): the newest interjection the computer took that still waits for the step the source is on,
+    /// so the grey line can say what it waits for. Nothing waits once the turn is over: for Codex the phone does not ask
+    /// for a receipt again after 已接收, so the words go with the turn rather than counting on forever.
+    public var steerWait: Submission? {
+        guard control.running else { return nil }
+        return submissions.first { steerWaiting($0) }
+    }
+
+    /// 11-27 (design §4.2 point 1): how long that interjection has waited, in whole seconds on the phone's own clock,
+    /// from the computer's answer. A copy already waiting when the app opened (no answer seen yet) counts from when it
+    /// was sent, which is never later than the answer.
+    public func steerWaitSeconds(_ record: Submission) -> Int {
+        let since = steerSince[record.request] ?? record.created
+        return max(0, Int((now() - since) / 1_000))
+    }
+
+    /// 结束这条命令，马上插话 (design §4.3; handoff 11-27 §6.4): ends the one command the source runs now, and its turn goes
+    /// on, so the interjection waiting for that command goes in as soon as it stops. Only a tap does this; the computer
+    /// may refuse (409) with its own words, and then nothing is ended.
+    public func killCommand() {
+        guard let key, let client, !killing, control.canKillCommand else { return }
+        killing = true
+        killNote = nil
+        let turn = control.turn
+        // 11-27 (design §4.4.2): 结束命令 is measured like a send, and its numbers are what the next send carries on. It
+        // has no request id of its own, so the waiting interjection's stands for it in the computer's log.
+        let waiting = steerWait?.request ?? "kill-command"
+        let started = ContinuousClock.now
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let reply = try await client.killCommand(device: key.device, app: key.app, chat: key.chat, turn: turn)
+                self.lastTiming = phoneTiming(request: waiting, elapsed: ContinuousClock.now - started, reply: reply)
+                let said = reply["text"].string()
+                if reply["ok"].bool(or: true) {
+                    self.noteKill(killCommandStartedText)
+                } else {
+                    self.noteKill(said.isEmpty ? "电脑没有结束这条命令" : said)
+                }
+            } catch {
+                self.noteKill(describe(error))
+            }
+            self.killing = false
+            // The command as the state has it now: gone once it stopped, so the button goes with it while the turn and
+            // the line stay.
+            if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat, catalog: self.catalog),
+               self.key == key {
+                self.take(fresh, key)
+            }
+        }
+    }
+
+    /// 11-27 (design §4.3 point 3): the one line that tap leaves for a few seconds, then gone.
+    func noteKill(_ text: String) {
+        killNote = text
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, self.killNote == text else { return }
+            self.killNote = nil
+        }
+    }
+
     func submit(_ action: String, queue: Bool = false, message: String = "", promote: Bool = false, plan: String? = nil) {
         guard let key, let client else { return }
         let planned = plan != nil
@@ -566,6 +654,14 @@ public final class ChatModel {
             body["action"] = .string(promote ? "promote" : "cancel")
             if promote { body["expected_turn"] = .string(control.turn) }
         }
+        // 11-27 (S3; design §4.4.2, handoff 11-27 §6.2): the phone's own time of sending, and the numbers of the request
+        // before it, which the computer only writes into its log. They stay in the copy's body exactly as they went out,
+        // so 重发 sends the very same request: the computer de-duplicates by the body's fingerprint, and new numbers
+        // there would make it a different one.
+        if action == "send" {
+            body["client_sent_ms"] = .number(Double(now()))
+            if let previous = clientPrev(lastTiming) { body["client_prev"] = previous }
+        }
         let text = planned ? "执行计划" : action == "send" ? draft : action == "stop" ? "停止当前轮次" : promote ? "立即补充" : "取消排队"
         let record = Submission(request: rid, key: key, text: text, action: action, turn: control.turn, body: jsonText(.object(body)), created: now())
         // The draft version and the binding are taken now: edits made while the request starts are newer than it.
@@ -645,7 +741,17 @@ public final class ChatModel {
                 if action == "send" { timed("消息提交", ContinuousClock.now - started, (error as? ServiceFailure).map { "HTTP \($0.status)" } ?? "网络失败") }
                 throw error
             }
-            if action == "send" { timed("消息提交", ContinuousClock.now - started, speedOutcome(result)) }
+            // 11-27 (S3; design §4.4.1): the round trip this answer took, and — when the computer said how long it took
+            // itself (handoff 11-27 §6.1) — the network between them. 立即补充 is measured the same way; the numbers are
+            // what the next send carries on (`client_prev`).
+            let elapsed = ContinuousClock.now - started
+            let timing = phoneTiming(request: record.request, elapsed: elapsed, reply: result)
+            if action == "send" || action == "queue-action" && body["action"].string() == "promote" { lastTiming = timing }
+            if action == "send" {
+                // 11-27 (design §4.4.3): the toast says the extra numbers too, and shows no more often than it did.
+                let extra = timingWords(timing)
+                timed("消息提交", elapsed, extra.isEmpty ? speedOutcome(result) : speedOutcome(result) + " · " + extra)
+            }
             try await applyReply(result, record, action: action, key: key, client: client, synthetic: synthetic)
             if let fresh = try? await client.control(device: key.device, app: key.app, chat: key.chat, catalog: catalog), binding == token, foreground, self.key == key {
                 take(fresh, key)
@@ -764,6 +870,14 @@ public final class ChatModel {
         // sees them (the removed copy stays removed).
         if key == record.key {
             let before = submissions.first { $0.request == record.request }?.label
+            // 11-27 (design §4.2): an interjection the computer has just taken starts the seconds its line shows. One
+            // that was already 已接收 (after a restart, or a 核对 that changed nothing but its notes) keeps counting from
+            // when it was taken — or, if the phone never saw that moment, from when it was sent.
+            if steerWaiting(record) {
+                if before != Hints.text("已接收") { steerSince[record.request] = now() }
+            } else {
+                steerSince[record.request] = nil
+            }
             submissions = ([record] + submissions.filter { $0.request != record.request }).sorted { $0.created > $1.created }
             if before == "提交中" || before == nil, ["已接收", "已送达", "已排队"].contains(record.label), record.action == "send" {
                 acknowledged += 1
@@ -976,6 +1090,10 @@ public final class ChatModel {
         for note in SendNote.all { body[note] = nil }
         body["request_id"] = .string(rid)
         body["replace_draft"] = .string(String(box.prefix(2_000)))
+        // 11-27 (S3; handoff 11-27 §6.2): this is a new request, so it carries its own numbers, not the turned-away
+        // send's. 重发, which keeps the old request id, keeps the old ones instead.
+        body["client_sent_ms"] = .number(Double(now()))
+        body["client_prev"] = clientPrev(lastTiming)
         let next = Submission(request: rid, key: key, text: record.text, action: "send", turn: control.turn, body: jsonText(.object(body)), created: now())
         submitting = true
         error = nil

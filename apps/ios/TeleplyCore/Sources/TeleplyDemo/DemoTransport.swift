@@ -360,6 +360,10 @@ public struct DemoTransport: RelayFileTransport {
             reply = world.command(app: "deepseek", route: "queue-action", body: fields)
         case "/api/chat/check":
             reply = (200, world.claudeCheck(offset: body["offset"].int64()))
+        // 11-27 (design §4.3; handoff 11-27 §6.4): 结束这条命令，马上插话, at the assistant's own address (the computer also
+        // keeps the old /api/codex/kill-command).
+        case "/api/agents/codex/kill-command", "/api/codex/kill-command":
+            reply = world.killCommand(body)
         case "/api/usage/codex-reset":  // one reset credit, after the phone said yes
             reply = world.usageReset(body)
         case "/api/claude/choose":
@@ -462,7 +466,7 @@ public struct DemoTransport: RelayFileTransport {
         } else if before != nil {
             page["messages"] = [DemoData.message("m0", "user", "更早的测试消息。")]
         } else {
-            page["messages"] = .array(DemoData.messages(app: app, chat: chat, nextPressed: world.nextPressed))
+            page["messages"] = .array(DemoData.messages(app: app, chat: chat, nextPressed: world.nextPressed, steer: world.steerDemo))
             page["next_cursor"] = "m1"
             page["has_more"] = .bool(app == "codex")
         }

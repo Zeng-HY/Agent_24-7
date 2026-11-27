@@ -536,7 +536,9 @@ final class SpeedLog {
         records = Array(([time + " " + text] + records).prefix(10))
         if notify {
             serial += 1
-            shown = (serial, text, ["成功", "请求完成"].contains(result))
+            // 11-27 (design 11-27 §4.4.3): a send's outcome may carry the phone→computer and computer times after it
+            // ("请求完成 · 手机→电脑 0.6 秒 · 电脑处理 3.2 秒"), so the first words decide what colour the toast is.
+            shown = (serial, text, ["成功", "请求完成"].contains { result.hasPrefix($0) })
         }
     }
 
