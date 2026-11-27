@@ -425,11 +425,13 @@ class AppToolsBridgeTests(unittest.TestCase):
 
         self.pipe_status = {"type": "idle"}
         self.sent_calls: list[dict] = []
+        self.tool_calls: list[str] = []
 
         def rpc_handler(path, req):
             if req["method"] == "tools/list":
                 return {"jsonrpc": "2.0", "id": req["id"], "result": {"tools": VALID_TOOLS}}
             params = req["params"]
+            self.tool_calls.append(params["tool"])
             if params["tool"] == "read_thread":
                 return _ok_tool({"thread": {"id": TID, "status": self.pipe_status}}, req["id"])
             if params["tool"] == "send_message_to_thread":
@@ -899,6 +901,100 @@ class AppToolsBridgeTests(unittest.TestCase):
             self.assertEqual(st_legacy["state"], "accepted")
             self.assertEqual(st_legacy["message"], "首条消息已送达")
             self.assertNotIn(ca.PLAN_MODE_IGNORED_NOTE, st_legacy["message"])
+
+
+class TimingAndStatusCacheTests(AppToolsBridgeTests):
+    """11-27 S4: one numbers-only timing line per request, and no second read_thread when a fresh
+    pipe reading and an unchanged rollout file already answer "is it running"."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.logs: list[str] = []
+        self.legacy.log = self.logs.append
+
+    def _send(self, rid: str, text: str = "你好", intent: str | None = None) -> dict:
+        body = {"id": TID, "request_id": rid, "text": text}
+        if intent:
+            body["intent"] = intent
+        return self.bridge.send(body)
+
+    def _timing_lines(self) -> list[str]:
+        return [line for line in self.logs if line.startswith("codex timing request=")]
+
+    def _read_calls(self) -> int:
+        return self.tool_calls.count("read_thread")
+
+    def test_timing_line_has_the_agreed_shape_and_a_truncated_request_id(self) -> None:
+        self._send("req-send-000001")
+        lines = self._timing_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(
+            lines[0],
+            r"^codex timing request=req-send read_ms=\d+ send_ms=\d+ other_ms=\d+ total_ms=\d+$",
+        )
+
+    def test_recent_status_reading_and_unchanged_file_skip_the_send_read(self) -> None:
+        self.assertTrue(self.bridge.status(TID, fresh=True)["running"] is False)
+        before = self._read_calls()
+        self._send("req-send-skip01")
+        self.assertEqual(self._read_calls(), before)  # reused the status read
+        self.assertEqual(len(self.sent_calls), 1)
+
+    def test_rollout_change_after_the_cached_reading_asks_the_pipe_again(self) -> None:
+        self.bridge.status(TID, fresh=True)
+        with self.rollout.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"timestamp": TS2, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-2"}}) + "\n")
+        before = self._read_calls()
+        self._send("req-send-ask001")
+        self.assertEqual(self._read_calls(), before + 1)
+
+    def test_no_recent_status_reading_asks_the_pipe(self) -> None:
+        self._send("req-send-ask002")
+        self.assertEqual(self._read_calls(), 1)
+
+    def test_queue_decision_never_trusts_a_cached_not_running_reading(self) -> None:
+        self.bridge.status(TID, fresh=True)  # caches running=False
+        before = self._read_calls()
+        res = self._send("req-queue-safe1", intent="queue")
+        self.assertEqual(self._read_calls(), before + 1)
+        self.assertEqual(res["delivery_state"], "accepted")  # the pipe still said idle, so it sent
+
+    def test_queue_decision_may_reuse_a_cached_running_reading(self) -> None:
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        self.bridge.status(TID, fresh=True)
+        before = self._read_calls()
+        res = self._send("req-queue-safe2", intent="queue")
+        self.assertEqual(self._read_calls(), before)
+        self.assertEqual(res["delivery_state"], "queued")
+        self.assertEqual(len(self.sent_calls), 0)
+
+    def test_expired_status_reading_asks_the_pipe(self) -> None:
+        self.bridge.status(TID, fresh=True)
+        cached = self.bridge._status_cache[TID]
+        self.bridge._status_cache[TID] = (cached[0] - ca.SEND_STATUS_CACHE_TTL - 1.0, cached[1], cached[2])
+        before = self._read_calls()
+        self._send("req-send-old01")
+        self.assertEqual(self._read_calls(), before + 1)
+
+    def test_queue_promote_and_drain_each_write_one_timing_line(self) -> None:
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        self._send("req-q-timing1", intent="queue")
+        self.logs.clear()
+        self.bridge.queue_action({
+            "id": TID, "request_id": "req-act-00001", "message_id": "req-q-timing1", "action": "promote",
+        })
+        promote_lines = self._timing_lines()
+        self.assertEqual(len(promote_lines), 1)
+        self.assertIn("request=req-act-", promote_lines[0])
+
+        self.pipe_status = {"type": "active", "activeFlags": []}
+        self._send("req-q-drain1", intent="queue")
+        self.logs.clear()
+        self.pipe_status = {"type": "idle"}
+        self.assertTrue(self.bridge.drain_if_idle(TID))
+        drain_lines = self._timing_lines()
+        self.assertEqual(len(drain_lines), 1)
+        self.assertIn("request=req-q-dr", drain_lines[0])
 
 
 class ChatsDisplayStep1Tests(unittest.TestCase):

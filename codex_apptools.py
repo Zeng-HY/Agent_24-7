@@ -44,6 +44,9 @@ CODEX_IMAGE_MAX_BYTES = 400 * 1024
 _CODEX_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 DEFAULT_WAKE_DELAY = 2.0
 STATUS_CACHE_TTL = 1.5
+# 11-27 S4: the pre-send "is it running" reading may reuse a pipe status read this recently,
+# but only while the rollout file has not changed since that reading.
+SEND_STATUS_CACHE_TTL = 3.0
 
 INCOMPATIBLE_REASON = "电脑上的 Codex 升级了，遥应暂时不能从手机发给 Codex"
 NOT_RUNNING_REASON = "Codex 没在运行，请先在电脑上打开 Codex"
@@ -53,6 +56,22 @@ PLAN_MODE_IGNORED_NOTE = "新版 Codex 从手机发的消息跟着电脑上当�
 
 def _is_plan_mode_requested(settings: Any) -> bool:
     return isinstance(settings, dict) and str(settings.get("mode") or "").strip().lower() == "plan"
+
+
+def _log_request_tag(request_id: Any) -> str:
+    """First 8 safe characters of a request id; the log carries no message text, command or file name."""
+    return re.sub(r"[^0-9A-Za-z-]", "", str(request_id or ""))[:8]
+
+
+class _CallTimes:
+    """Milliseconds spent inside each kind of pipe call during one request (11-27 S4)."""
+
+    __slots__ = ("read", "send")
+
+    def __init__(self) -> None:
+        self.read = 0.0
+        self.send = 0.0
+
 
 _ROUTE_LOCK = threading.Lock()
 _ROUTE_CACHE: tuple[float, str, str | None] | None = None
@@ -1101,7 +1120,7 @@ class AppToolsBridge:
         self.hooks = hooks
         self._clock = clock
         self._lock = threading.RLock()
-        self._status_cache: dict[str, tuple[float, dict]] = {}
+        self._status_cache: dict[str, tuple[float, dict, tuple[int, int] | None]] = {}
         self._reconcile_seen: dict[tuple[str, str], tuple[int, int]] = {}
         self._stop = threading.Event()
         self._drain_wake = threading.Event()
@@ -1161,6 +1180,92 @@ class AppToolsBridge:
             return None
         path = Path(item["path"]) if item.get("path") else None
         return path if path is not None and path.is_file() else None
+
+    # -- 11-27 S4: pipe call timing and the pre-send status reading
+
+    def _file_signature(self, path: Path | None) -> tuple[int, int] | None:
+        """(size, mtime_ns) of the rollout file, or None when it cannot be read."""
+        if path is None:
+            return None
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        return (st.st_size, st.st_mtime_ns)
+
+    def _timed_read_thread(self, tid: str, *, turn_id: str | None, times: _CallTimes) -> dict:
+        started = time.monotonic()
+        try:
+            return self.client.read_thread(tid, include_turns=False, turn_id=turn_id)
+        finally:
+            times.read += time.monotonic() - started
+
+    def _timed_send_message(
+        self,
+        tid: str,
+        prompt: str,
+        *,
+        turn_id: str,
+        model: str | None,
+        thinking: str | None,
+        times: _CallTimes,
+    ) -> dict:
+        started = time.monotonic()
+        try:
+            return self.client.send_message_to_thread(
+                tid, prompt, turn_id=turn_id, model=model, thinking=thinking
+            )
+        finally:
+            times.send += time.monotonic() - started
+
+    def _log_request_timing(self, request_id: Any, started: float, times: _CallTimes) -> None:
+        """One line with numbers only: how long this request spent in each kind of pipe call."""
+        total_ms = max(0, int(round((time.monotonic() - started) * 1000)))
+        read_ms = max(0, int(round(times.read * 1000)))
+        send_ms = max(0, int(round(times.send * 1000)))
+        other_ms = max(0, total_ms - read_ms - send_ms)
+        self._log(
+            f"codex timing request={_log_request_tag(request_id)} "
+            f"read_ms={read_ms} send_ms={send_ms} other_ms={other_ms} total_ms={total_ms}"
+        )
+
+    def _cached_running_for_send(
+        self, tid: str, path: Path | None, intent: str
+    ) -> bool | None:
+        """A pipe reading from the last 3 s, still valid because the rollout file has not changed.
+
+        Returns None when there is no trustworthy cached answer and the pipe must be asked again.
+        """
+        cached = self._status_cache.get(tid)
+        if not cached or len(cached) < 3:
+            return None
+        when, result, signature = cached[0], cached[1], cached[2]
+        if self._clock() - when > SEND_STATUS_CACHE_TTL:
+            return None
+        current = self._file_signature(path)
+        if signature is None or current != signature:
+            return None
+        running = bool(result.get("running"))
+        # A queue decision must never send instead of queue: a cached "not running" is only a
+        # reading, so ask the pipe again. A cached "running" can only queue, which is the safe side.
+        if intent == "queue" and not running:
+            return None
+        return running
+
+    def _running_for_send(
+        self,
+        tid: str,
+        path: Path | None,
+        file_state: dict,
+        intent: str,
+        times: _CallTimes,
+    ) -> bool:
+        cached = self._cached_running_for_send(tid, path, intent)
+        if cached is not None:
+            return cached
+        thread_data = self._timed_read_thread(tid, turn_id=file_state.get("turn_id"), times=times)
+        running, _, _ = self._parse_pipe_status(thread_data, file_state)
+        return running
 
     def _read_settings(self, path: Path | None) -> dict:
         model, effort = None, None
@@ -1293,7 +1398,7 @@ class AppToolsBridge:
                 prog = self.hooks.latest_progress(tid)
                 if prog:
                     result["hook_progress"] = prog
-            self._status_cache[tid] = (self._clock(), result)
+            self._status_cache[tid] = (self._clock(), result, self._file_signature(path))
             return dict(result)
         except (codex_control.ControlError, chats.ChatError, OSError) as exc:
             return {
@@ -1408,102 +1513,111 @@ class AppToolsBridge:
         if intent not in ("auto", "steer", "queue"):
             raise AppToolsError("无效的发送方式", 400, code="invalid_intent", not_submitted=True)
 
-        with self._lock:
-            prior = self.receipt(tid, rid)
-            if prior["state"] != "unknown":
-                return self.legacy._begin(rid, tid, body)
+        started = time.monotonic()
+        times = _CallTimes()
+        try:
+            with self._lock:
+                prior = self.receipt(tid, rid)
+                if prior["state"] != "unknown":
+                    return self.legacy._begin(rid, tid, body)
 
-            item = chats.find("codex", tid)
-            path = Path(item["path"]) if item.get("path") else None
-            file_state = latest_turn_state(path)
-            thread_data = self.client.read_thread(tid, include_turns=False, turn_id=file_state.get("turn_id"))
-            running, _, _ = self._parse_pipe_status(thread_data, file_state)
+                item = chats.find("codex", tid)
+                path = Path(item["path"]) if item.get("path") else None
+                file_state = latest_turn_state(path)
+                running = self._running_for_send(tid, path, file_state, intent, times)
 
-            current_settings = self._read_settings(path)
-            desired = self._validate_settings(body.get("settings"), current_settings)
+                current_settings = self._read_settings(path)
+                desired = self._validate_settings(body.get("settings"), current_settings)
 
-            images = [self.legacy.attachment(ident, tid) for ident in ids]
-            if sum(v["original_size"] for v in images) > 50 << 20:
-                raise AppToolsError("图片合计不能超过 50 MB", 413, code="images_too_large", not_submitted=True)
+                images = [self.legacy.attachment(ident, tid) for ident in ids]
+                if sum(v["original_size"] for v in images) > 50 << 20:
+                    raise AppToolsError("图片合计不能超过 50 MB", 413, code="images_too_large", not_submitted=True)
 
-            prompt = self._build_prompt(tid, text, images, references)
-            if not prompt:
-                raise AppToolsError("请填写消息或添加图片", 400, code="empty_prompt", not_submitted=True)
+                prompt = self._build_prompt(tid, text, images, references)
+                if not prompt:
+                    raise AppToolsError("请填写消息或添加图片", 400, code="empty_prompt", not_submitted=True)
 
-            # Only send model/thinking when explicitly selected or known
-            wanted = body.get("settings") or {}
-            plan_mode_ignored = _is_plan_mode_requested(wanted)
-            send_model = desired.get("model") if wanted.get("model") else None
-            send_thinking = desired.get("effort") if wanted.get("effort") else None
+                # Only send model/thinking when explicitly selected or known
+                wanted = body.get("settings") or {}
+                plan_mode_ignored = _is_plan_mode_requested(wanted)
+                send_model = desired.get("model") if wanted.get("model") else None
+                send_thinking = desired.get("effort") if wanted.get("effort") else None
 
-            self.legacy._begin(rid, tid, body)
-            for v in images:
-                v["used"] = True
-                self.legacy._write_meta(v)
+                self.legacy._begin(rid, tid, body)
+                for v in images:
+                    v["used"] = True
+                    self.legacy._write_meta(v)
 
-            if intent == "queue" and running:
-                entry = {
-                    "id": rid,
-                    "thread_id": tid,
-                    "text": text or (f"{len(images)} 张图片" if images else "附带的内容"),
-                    "prompt": prompt,
-                    "model": send_model,
-                    "thinking": send_thinking,
-                    "attachments": list(ids),
-                    "created_at": int(time.time() * 1000),
-                    "status": "queued",
-                }
-                self.queues.enqueue(tid, entry)
-                result = {
+                if intent == "queue" and running:
+                    entry = {
+                        "id": rid,
+                        "thread_id": tid,
+                        "text": text or (f"{len(images)} 张图片" if images else "附带的内容"),
+                        "prompt": prompt,
+                        "model": send_model,
+                        "thinking": send_thinking,
+                        "attachments": list(ids),
+                        "created_at": int(time.time() * 1000),
+                        "status": "queued",
+                    }
+                    self.queues.enqueue(tid, entry)
+                    result = {
+                        "ok": True,
+                        "accepted": True,
+                        "delivery_state": "queued",
+                        "request_id": rid,
+                        "queue_message_id": rid,
+                        "intent": "queue",
+                        "text": f"已排队。{PLAN_MODE_IGNORED_NOTE}" if plan_mode_ignored else "已排队",
+                        "compiled_prompt": prompt,
+                        "evidence": {"source": "teleply_queue"},
+                    }
+                    self.legacy._finish(rid, result)
+                    self._status_cache.pop(tid, None)
+                    self._ensure_drainer()
+                    return result
+
+                turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+                try:
+                    self._timed_send_message(
+                        tid,
+                        prompt,
+                        turn_id=turn_id,
+                        model=send_model,
+                        thinking=send_thinking,
+                        times=times,
+                    )
+                except AppToolsError as exc:
+                    if exc.not_submitted:
+                        self.legacy._finish(
+                            rid,
+                            {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)},
+                        )
+                    raise
+
+                if self.hooks is not None:
+                    try:
+                        self.hooks.note_phone_turn(tid)
+                    except Exception:
+                        pass
+
+                actual_intent = "steer" if running else "start"
+                response = {
                     "ok": True,
                     "accepted": True,
-                    "delivery_state": "queued",
+                    "delivery_state": "accepted",
+                    "intent": actual_intent,
                     "request_id": rid,
-                    "queue_message_id": rid,
-                    "intent": "queue",
-                    "text": f"已排队。{PLAN_MODE_IGNORED_NOTE}" if plan_mode_ignored else "已排队",
+                    "text": f"已交给 Codex。{PLAN_MODE_IGNORED_NOTE}" if plan_mode_ignored else "已交给 Codex",
+                    "settings": desired,
                     "compiled_prompt": prompt,
-                    "evidence": {"source": "teleply_queue"},
+                    "evidence": {"source": "app_tools_ack"},
                 }
-                self.legacy._finish(rid, result)
+                self.legacy._finish(rid, response)
                 self._status_cache.pop(tid, None)
-                self._ensure_drainer()
-                return result
-
-            turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
-            try:
-                self.client.send_message_to_thread(
-                    tid, prompt, turn_id=turn_id, model=send_model, thinking=send_thinking
-                )
-            except AppToolsError as exc:
-                if exc.not_submitted:
-                    self.legacy._finish(
-                        rid,
-                        {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)},
-                    )
-                raise
-
-            if self.hooks is not None:
-                try:
-                    self.hooks.note_phone_turn(tid)
-                except Exception:
-                    pass
-
-            actual_intent = "steer" if running else "start"
-            response = {
-                "ok": True,
-                "accepted": True,
-                "delivery_state": "accepted",
-                "intent": actual_intent,
-                "request_id": rid,
-                "text": f"已交给 Codex。{PLAN_MODE_IGNORED_NOTE}" if plan_mode_ignored else "已交给 Codex",
-                "settings": desired,
-                "compiled_prompt": prompt,
-                "evidence": {"source": "app_tools_ack"},
-            }
-            self.legacy._finish(rid, response)
-            self._status_cache.pop(tid, None)
-            return response
+                return response
+        finally:
+            self._log_request_timing(rid, started, times)
 
     def drain_if_idle(self, tid: str, *, already_checked_idle: bool = False) -> bool:
         """If thread is confirmed idle and has queued items, dispatch the first item via app-tools."""
@@ -1511,50 +1625,61 @@ class AppToolsBridge:
             items = self.queues.list_items(tid)
             if not items:
                 return False
-            path = self._thread_file(tid)
-            file_state = latest_turn_state(path)
-            if not already_checked_idle:
-                thread_data = self.client.read_thread(tid, include_turns=False, turn_id=file_state.get("turn_id"))
-                running, _, kind = self._parse_pipe_status(thread_data, file_state)
-                if running or kind != "idle":
-                    return False
-            first = self.queues.pop_first(tid)
-            if first is None:
-                return False
-            turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+            started = time.monotonic()
+            times = _CallTimes()
+            first: dict | None = None
             try:
-                self.client.send_message_to_thread(
-                    tid,
-                    first["prompt"],
-                    turn_id=turn_id,
-                    model=first.get("model"),
-                    thinking=first.get("thinking"),
-                )
-            except Exception:
-                # Re-insert at front so nothing is lost on transient error
-                rest = self.queues.list_items(tid)
-                self.queues._save(tid, [first] + rest)
-                return False
-            if self.hooks is not None:
+                path = self._thread_file(tid)
+                file_state = latest_turn_state(path)
+                if not already_checked_idle:
+                    thread_data = self._timed_read_thread(
+                        tid, turn_id=file_state.get("turn_id"), times=times
+                    )
+                    running, _, kind = self._parse_pipe_status(thread_data, file_state)
+                    if running or kind != "idle":
+                        return False
+                first = self.queues.pop_first(tid)
+                if first is None:
+                    return False
+                turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
                 try:
-                    self.hooks.note_phone_turn(tid)
+                    self._timed_send_message(
+                        tid,
+                        first["prompt"],
+                        turn_id=turn_id,
+                        model=first.get("model"),
+                        thinking=first.get("thinking"),
+                        times=times,
+                    )
                 except Exception:
-                    pass
-            self.legacy._finish(
-                first["id"],
-                {
-                    "ok": True,
-                    "accepted": True,
-                    "delivery_state": "accepted",
-                    "intent": "start",
-                    "request_id": first["id"],
-                    "text": "已交给 Codex",
-                    "compiled_prompt": first["prompt"],
-                    "evidence": {"source": "app_tools_queue_dispatch"},
-                },
-            )
-            self._status_cache.pop(tid, None)
-            return True
+                    # Re-insert at front so nothing is lost on transient error
+                    rest = self.queues.list_items(tid)
+                    self.queues._save(tid, [first] + rest)
+                    return False
+                if self.hooks is not None:
+                    try:
+                        self.hooks.note_phone_turn(tid)
+                    except Exception:
+                        pass
+                self.legacy._finish(
+                    first["id"],
+                    {
+                        "ok": True,
+                        "accepted": True,
+                        "delivery_state": "accepted",
+                        "intent": "start",
+                        "request_id": first["id"],
+                        "text": "已交给 Codex",
+                        "compiled_prompt": first["prompt"],
+                        "evidence": {"source": "app_tools_queue_dispatch"},
+                    },
+                )
+                self._status_cache.pop(tid, None)
+                return True
+            finally:
+                # One line per queued message that was actually taken out to be dispatched.
+                if first is not None:
+                    self._log_request_timing(first["id"], started, times)
 
     def pop_queued_for_stop_hook(self, tid: str) -> dict | None:
         """Called by the Stop hook to hand off the next queued prompt directly into the continuing turn."""
@@ -1588,59 +1713,65 @@ class AppToolsBridge:
         if action not in ("promote", "cancel"):
             raise AppToolsError("无效队列操作", 400, code="invalid_queue_action", not_submitted=True)
 
-        with self._lock:
-            if rid and self.receipt(tid, rid)["state"] != "unknown":
-                return self.legacy._begin(rid, tid, body)
-            removed = self.queues.remove(tid, mid)
-            if removed is None:
-                raise AppToolsError("消息已离开队列或正在发送，请刷新核对", 409, code="queue_item_missing", not_submitted=True)
-            if rid:
-                self.legacy._begin(rid, tid, body)
-            cancelled = {"ok": True, "delivery_state": "cancelled", "request_id": mid, "text": "已取消排队"}
-            if action == "cancel":
-                self.legacy._finish(mid, cancelled)
-                result = {**cancelled, "request_id": rid or mid, "queue_message_id": mid}
+        started = time.monotonic()
+        times = _CallTimes()
+        try:
+            with self._lock:
+                if rid and self.receipt(tid, rid)["state"] != "unknown":
+                    return self.legacy._begin(rid, tid, body)
+                removed = self.queues.remove(tid, mid)
+                if removed is None:
+                    raise AppToolsError("消息已离开队列或正在发送，请刷新核对", 409, code="queue_item_missing", not_submitted=True)
                 if rid:
+                    self.legacy._begin(rid, tid, body)
+                cancelled = {"ok": True, "delivery_state": "cancelled", "request_id": mid, "text": "已取消排队"}
+                if action == "cancel":
+                    self.legacy._finish(mid, cancelled)
+                    result = {**cancelled, "request_id": rid or mid, "queue_message_id": mid}
+                    if rid:
+                        self.legacy._finish(rid, result)
+                    self._status_cache.pop(tid, None)
+                    return result
+
+                # promote -> send immediately (steers if active, starts turn if idle)
+                path = self._thread_file(tid)
+                file_state = latest_turn_state(path)
+                turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
+                try:
+                    self._timed_send_message(
+                        tid,
+                        removed["prompt"],
+                        turn_id=turn_id,
+                        model=removed.get("model"),
+                        thinking=removed.get("thinking"),
+                        times=times,
+                    )
+                except AppToolsError as exc:
+                    if exc.not_submitted:
+                        # Put back at front of queue so user doesn't lose the message
+                        rest = self.queues.list_items(tid)
+                        self.queues._save(tid, [removed] + rest)
+                        if rid:
+                            self.legacy._finish(rid, {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)})
+                    raise
+                result = {
+                    "ok": True,
+                    "accepted": True,
+                    "delivery_state": "accepted",
+                    "request_id": rid or mid,
+                    "client_id": mid,
+                    "intent": "steer",
+                    "text": "已交给 Codex",
+                    "compiled_prompt": removed["prompt"],
+                    "evidence": {"source": "app_tools_promote"},
+                }
+                self.legacy._finish(mid, {**result, "request_id": mid})
+                if rid and rid != mid:
                     self.legacy._finish(rid, result)
                 self._status_cache.pop(tid, None)
                 return result
-
-            # promote -> send immediately (steers if active, starts turn if idle)
-            path = self._thread_file(tid)
-            file_state = latest_turn_state(path)
-            turn_id = file_state.get("turn_id") or f"teleply-turn-{uuid.uuid4()}"
-            try:
-                self.client.send_message_to_thread(
-                    tid,
-                    removed["prompt"],
-                    turn_id=turn_id,
-                    model=removed.get("model"),
-                    thinking=removed.get("thinking"),
-                )
-            except AppToolsError as exc:
-                if exc.not_submitted:
-                    # Put back at front of queue so user doesn't lose the message
-                    rest = self.queues.list_items(tid)
-                    self.queues._save(tid, [removed] + rest)
-                    if rid:
-                        self.legacy._finish(rid, {"ok": False, "delivery_state": "rejected", "request_id": rid, "text": str(exc)})
-                raise
-            result = {
-                "ok": True,
-                "accepted": True,
-                "delivery_state": "accepted",
-                "request_id": rid or mid,
-                "client_id": mid,
-                "intent": "steer",
-                "text": "已交给 Codex",
-                "compiled_prompt": removed["prompt"],
-                "evidence": {"source": "app_tools_promote"},
-            }
-            self.legacy._finish(mid, {**result, "request_id": mid})
-            if rid and rid != mid:
-                self.legacy._finish(rid, result)
-            self._status_cache.pop(tid, None)
-            return result
+        finally:
+            self._log_request_timing(rid or mid, started, times)
 
     def stop_turn(self, body: dict) -> dict:
         tid = str(body.get("id", ""))
